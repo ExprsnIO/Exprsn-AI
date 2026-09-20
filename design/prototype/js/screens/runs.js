@@ -27,11 +27,12 @@
   const DIVIDERS = { 1: 'Policy allowed, tool ceiling confidential, confirmed by M. Okafor' };
   const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
   const fmt = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const statusPill = (s) => UI.pill(s, s === 'succeeded' ? 'ok' : s === 'failed step' ? 'danger' : s === 'waiting on approval' ? 'info' : s === 'budget stop' ? 'warn' : s === 'running' ? 'info' : '');
 
   App.register({
     id: 'runs', title: 'Runs', summary: 'Agent run timeline by worker class, step inspector, budget, replay',
-    crumb: (st) => ['Runs', st.run || '7f3a'],
-    label: (st) => (RUNS.find((r) => r.id === (st.run || '7f3a')) || RUNS[0]).label,
+    crumb: (st, params) => ['Runs', (params && params.run) || st.run || '7f3a'],
+    label: (st, params) => (RUNS.find((r) => r.id === ((params && params.run) || st.run || '7f3a')) || RUNS[0]).label,
     commands: [{ label: 'Replay a run from a step', sub: 'Runs', run(app) { app.stateFor('runs').openReplay = true; app.render(); } }],
     states: [
       { title: 'Proposal denied', tone: 'danger', text: 'Cedar denied the tool call: the tool\'s egress ceiling is internal and the run is confidential. The thinking step receives the denial as data.', apply(ctx) { ctx.state.run = '7f3a'; ctx.state.denied = true; ctx.state.sel = 2; ctx.rerender(); } },
@@ -66,7 +67,7 @@
       const laneSum = Object.assign({}, run.sum);
       if (denied) laneSum.do = '1 call denied, 1 call 1.1 s';
 
-      const card = (s) => '<div class="runs-card' + (s.failed ? ' failed' : '') + (s.waiting ? ' waiting' : '') + (st.sel === s.n ? ' selected' : '') + '" data-step="' + s.n + '" role="button" tabindex="0"><div class="hstack" style="justify-content:space-between"><span style="font-size:13px;font-weight:600">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.meta) + '</span></div><div class="mono fg2" style="overflow-wrap:anywhere">' + esc(s.body) + '</div></div>';
+      const card = (s) => '<div class="runs-card' + (s.failed ? ' failed' : '') + (s.waiting ? ' waiting' : '') + (st.sel === s.n ? ' selected' : '') + '" data-step="' + s.n + '" role="button" tabindex="0"><div class="runs-ch"><span style="font-size:13px;font-weight:600">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.meta) + '</span></div><div class="mono fg2" style="overflow-wrap:anywhere">' + esc(s.body) + '</div></div>';
       const rows = steps.map((s) => {
         let h = '<div class="runs-row"><div class="runs-n num">' + s.n + '</div>' + ['think', 'do', 'calc'].map((l) => '<div>' + (s.lane === l ? card(s) : '') + '</div>').join('') + '</div>';
         if (DIVIDERS[s.n]) h += '<div class="runs-div"><div></div><div class="runs-divline' + (denied ? ' danger' : '') + '"><span class="rule"></span><span>' + (denied ? 'Policy denied: tool egress ceiling internal, run is confidential. The denial goes back to the thinking step as data.' : esc(DIVIDERS[s.n])) + '</span><span class="rule"></span></div></div>';
@@ -88,25 +89,25 @@
       const stepsUsed = run.budget.steps[0], stepsMax = st.resumed && run.budgetStop ? 40 : run.budget.steps[1];
 
       root.innerHTML = '<style>'
-        + '.runs-list{display:flex;flex-direction:column;gap:2px}'
+        + '.runs-list{display:flex;flex-direction:column;gap:2px}.runs-page > *{flex-shrink:0}'
         + '.runs-lanes,.runs-row{display:grid;grid-template-columns:28px repeat(3,minmax(0,1fr));gap:10px;align-items:start}'
-        + '.runs-lane{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--line)}'
+        + '.runs-lane{display:flex;justify-content:space-between;align-items:center;gap:4px 8px;flex-wrap:wrap;padding-bottom:6px;border-bottom:1px solid var(--line)}'
         + '.runs-lane .ln{display:inline-flex;align-items:center;gap:4px;padding:1px 8px 1px 5px;border:1px solid var(--line);border-radius:4px;font-size:12px;font-weight:600;color:var(--fg2);background:var(--panel);white-space:nowrap}.runs-lane .ls{font-size:12px;color:var(--fg2)}'
-        + '.runs-n{font-size:12px;color:var(--muted);padding-top:9px}'
+        + '.runs-n{font-size:12px;color:var(--muted);padding-top:9px}.runs-ch{display:flex;justify-content:space-between;align-items:baseline;gap:2px 8px;flex-wrap:wrap}.runs-ch > span:first-child{overflow-wrap:anywhere;min-width:0}'
         + '.runs-card{display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;min-width:0;cursor:pointer}.runs-card:hover{border-color:var(--muted)}.runs-card.selected{background:var(--accent-tint);border-color:var(--accent)}.runs-card.failed{border-color:var(--danger-fg)}.runs-card.waiting{border-color:var(--info-fg);border-style:dashed}'
         + '.runs-div{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px}.runs-divline{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}.runs-divline .rule{flex-grow:1;height:1px;background:var(--line)}.runs-divline.danger{color:var(--danger-fg)}.runs-divline.info{color:var(--info-fg)}'
         + '.runs-fig{font:inherit;font-family:var(--sans);font-size:13px;font-weight:600;padding:0 5px;border:1px solid var(--line);border-radius:4px;background:var(--panel);cursor:pointer;color:var(--fg)}.runs-fig:hover,.runs-fig.on{border-color:var(--ok-fg);background:var(--ok-bg);color:var(--ok-fg)}'
         + '@media (max-width:900px){.runs-lanes{display:none}.runs-row{grid-template-columns:28px 1fr}.runs-row > div:empty{display:none}}'
         + '</style>'
         + '<div class="leftpane"><div class="hstack"><div class="eyebrow grow">Recent runs</div>' + UI.iconbtn('refresh', 'Refresh', { cls: 'sm ghost', attrs: 'data-refresh' }) + '</div>' + UI.search('Filter runs', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
-        + '<div class="runs-list">' + allRuns.filter((r) => !st.query || (r.id + ' ' + r.agent + ' ' + r.status + ' ' + r.by).toLowerCase().includes(st.query.toLowerCase())).map((r) => UI.listItem('<span class="mono">' + esc(r.id) + '</span> ' + esc(r.agent), esc(r.started) + ', ' + esc(r.by) + ', ' + esc(r.dur), { active: r.id === run.id, attrs: 'data-run="' + esc(r.id) + '"', right: UI.pill(r.id === run.id ? status : r.status, r.id === run.id && status === 'succeeded' ? 'ok' : undefined) })).join('') + '</div>'
+        + '<div class="runs-list">' + allRuns.filter((r) => !st.query || (r.id + ' ' + r.agent + ' ' + r.status + ' ' + r.by).toLowerCase().includes(st.query.toLowerCase())).map((r) => UI.listItem('<span class="mono">' + esc(r.id) + '</span>', esc(r.agent) + ' · ' + esc(r.started) + ', ' + esc(r.by), { active: r.id === run.id, attrs: 'data-run="' + esc(r.id) + '"', right: statusPill(r.id === run.id ? status : r.status) })).join('') + '</div>'
         + '<div class="muted" style="font-size:12px;margin-top:auto">Runs from agents, workflows and background jobs in Finance Ops. Cost and latency break down by worker class.</div></div>'
-        + '<div class="page">'
-        + UI.pagehead('Run ' + run.id + ', ' + run.agent, 'Started ' + esc(run.started) + ' by ' + esc(run.by) + ', ' + esc(run.dur) + ' · ' + UI.pill(status) + ' · from <a href="#" data-goconvo="' + esc(run.convo) + '">' + esc(run.convoTitle) + '</a>', UI.btn('Open trace', { attrs: 'data-opentrace' }) + UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find((s) => s.failed) || { n: 1 }).n + '"' }))
+        + '<div class="page runs-page">'
+        + UI.pagehead('Run ' + run.id + ', ' + run.agent, 'Started ' + esc(run.started) + ' by ' + esc(run.by) + ', ' + esc(run.dur) + ' · ' + statusPill(status) + ' · from <a href="#" data-goconvo="' + esc(run.convo) + '">' + esc(run.convoTitle) + '</a>', UI.btn('Open trace', { attrs: 'data-opentrace' }) + UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find((s) => s.failed) || { n: 1 }).n + '"' }))
         + budgetNotice
         + '<div class="runs-lanes"><div></div>' + ['think', 'do', 'calc'].map((l) => '<div class="runs-lane"><span class="ln">' + UI.icon(l === 'think' ? 'brain' : l === 'do' ? 'play' : 'calc', 12) + esc(LANES[l]) + '</span><span class="ls">' + esc(laneSum[l]) + '</span></div>').join('') + '</div>'
         + rows
-        + (budgetStop ? '<div class="runs-row"><div class="runs-n">…</div><div style="grid-column:2/-1" class="muted" style="font-size:12px">Steps 8 to 20 collapsed. The run reached its step limit while looping on ledger.query pagination.</div></div>' : '')
+        + (budgetStop ? '<div class="runs-row"><div class="runs-n">…</div><div class="muted" style="grid-column:2/-1;font-size:12px">Steps 8 to 20 collapsed. The run reached its step limit while looping on ledger.query pagination.</div></div>' : '')
         + answer
         + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div>'

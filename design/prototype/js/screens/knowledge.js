@@ -49,8 +49,8 @@
 
   App.register({
     id: 'knowledge', title: 'Knowledge', summary: 'Knowledge bases, sources, documents and labels, index, access, test search',
-    crumb: (st) => ['Knowledge', (KBS.find((k) => k.id === (st.kb || 'finance')) || KBS[0]).name],
-    label: (st) => (KBS.find((k) => k.id === (st.kb || 'finance')) || KBS[0]).label,
+    crumb: (st, params) => ['Knowledge', (KBS.find((k) => k.id === ((params && params.kb) || st.kb || 'finance')) || KBS[0]).name],
+    label: (st, params) => (KBS.find((k) => k.id === ((params && params.kb) || st.kb || 'finance')) || KBS[0]).label,
     commands: [{ label: 'Add a knowledge source', sub: 'Knowledge', run(app) { app.stateFor('knowledge').openAdd = true; app.render(); } }],
     states: [
       { title: 'Index swap pending', tone: 'info', text: 'Index v8 is building beside v7 with a new embedding model: 71% complete. Retrieval keeps using v7 until the atomic switch.', apply(ctx) { ctx.state.kb = 'finance'; ctx.state.swap = true; ctx.state.tab = 'index'; ctx.rerender(); } },
@@ -92,10 +92,10 @@
       else if (st.tab === 'access') body = UI.table(['Principal', 'Access', 'Via', 'State'], ACCESS, { clickable: false, minWidth: '0' }) + UI.notice('Retrieval filters chunks above the reader\'s clearance inside the query, so a search never sees a chunk it may not return. Restricted chunks are returned only to principals with restricted clearance.', 'info') + (member ? '' : '<div>' + UI.btn('Add principal', { icon: 'plus', attrs: 'data-addprincipal' }) + '</div>');
       else body = testSearch();
 
-      root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}</style>'
+      root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}.kb-page > *{flex-shrink:0}</style>'
         + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Knowledge bases</div>' + (member ? '' : UI.btn('New', { size: 'sm', attrs: 'data-newkb' })) + '</div>' + UI.search('Filter', 'data-filter', st.filter).replace('class="search"', 'class="search" style="width:100%"')
         + '<div class="kb-list">' + kbList.map((k) => UI.listItem(esc(k.name), esc(k.sub), { active: k.id === kb.id, attrs: 'data-kb="' + k.id + '"', right: UI.label(k.label, { sm: true }) })).join('') + (kbList.length ? '' : UI.empty('No knowledge base matches', 'Try another word.')) + '</div></div>'
-        + '<div class="page">'
+        + '<div class="page kb-page">'
         + (member ? UI.notice('You are viewing as a member. Sources and documents are read-only; relabel, reindex and source changes need the knowledge curator role.', 'info', '<a href="#" data-leavemember>Back to curator view</a>') : '')
         + UI.pagehead(kb.name, 'Embedding ' + esc(kb.embed) + ', index ' + esc(kb.index) + ', HNSW plus full-text · ' + UI.pill(kb.status, 'ok'), member ? '' : UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }))
         + (swap && st.tab !== 'index' ? UI.notice('Index ' + (kb.id === 'finance' ? 'v8' : 'v6') + ' is building beside ' + esc(kb.index) + ' with a new embedding model: 71% complete. Retrieval keeps using ' + esc(kb.index) + ' until the atomic switch.', 'info', '<a href="#" data-tab="index">Index</a>') : '')
@@ -112,7 +112,7 @@
       ctx.on('click', '[data-tab]', (e, t) => { e.preventDefault(); st.tab = t.dataset.tab; ctx.rerender(); });
       ctx.on('input', '#kb-q', (e, t) => { st.query = t.value; });
       ctx.on('keydown', '#kb-q', (e) => { if (e.key === 'Enter') { e.preventDefault(); st.searched = true; ctx.rerender(); } });
-      ctx.on('click', '[data-search]', () => { st.searched = true; ctx.rerender(); ctx.toast(visible.length ? '' : 'Searched ' + esc(kb.name) + ' as Mara Okafor, clearance confidential.'); });
+      ctx.on('click', '[data-search]', () => { st.searched = true; ctx.rerender(); });
       ctx.on('click', '[data-leavemember]', (e) => { e.preventDefault(); st.member = false; ctx.rerender(); });
       ctx.on('click', '[data-dismissfail]', () => { st.failedOpen = false; ctx.rerender(); });
       ctx.on('click', 'tr[data-chunk]', (e, t) => { const c = CHUNKS.find((x) => x.doc === t.dataset.chunk); ctx.drawer({ title: esc(c.doc), body: UI.kv([['Vector', c.v.toFixed(2)], ['Full-text', c.ft.toFixed(2)], ['Reranker', c.rr.toFixed(2)], ['Label', UI.label(c.label, { sm: true })]], 2) + UI.ctx('Chunk text', c.doc.startsWith('Q3') ? 'Field Sales exceeded its travel allocation in each month of the quarter. The Lisbon onboarding programme carried an approved exception of 38,000 EUR, agreed by the CFO on 2 July.' : c.doc.startsWith('Travel budget') ? 'Q3 travel: budget 361,500.00, actual 412,880.00, variance 51,380.00 (14.2%). LIS-ONBOARD 96,310.00 against 60,000.00.' : 'Taxis after 22:00 need no pre-approval where public transport has stopped running. A receipt is still required.', c.label) + '<div class="muted" style="font-size:12px">Headings and page are kept as chunk metadata and cited as the source ID in answers.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) }); });
