@@ -99,7 +99,7 @@
         + (!checksOk && sel.egressNote ? '<div style="font-size:12px;color:var(--danger-fg)">' + esc(sel.egressNote) + '</div>' : '') + '</div>'
         + (sel.id === 'mail.send_internal' && !st.egressFixed ? '<div class="hstack wrap gap6">' + UI.btn('Declare ldap.northwind.internal', { size: 'sm', attrs: 'data-declare' }) + UI.btn('Ask owner', { size: 'sm', kind: 'ghost', attrs: 'data-askowner' }) + '</div>' : '')
         + (st.lastHarness && st.lastHarness.id === sel.id ? '<div class="eyebrow">Test harness results</div>' + UI.kv([['Last run', esc(st.lastHarness.when)], ['Result', UI.pill('typed result, ' + sel.label, 'ok')]], 2) : '')
-        + '<div class="hstack" style="margin-top:auto;flex-wrap:wrap">'
+        + '<div class="hstack wrap">'
         + (selStatus === 'in review' ? UI.btn('Reject', { attrs: 'data-reject' }) + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve', disabled: !checksOk, title: checksOk ? '' : 'Approve stays disabled until the checks pass' })
           : selStatus === 'draft' ? UI.btn('Edit', { attrs: 'data-editentry' }) + UI.btn('Submit for review', { kind: 'primary', attrs: 'data-submitreview' })
             : selStatus === 'published' ? UI.btn('Deprecate', { attrs: 'data-deprecate' }) + UI.btn('Publish to more', { kind: 'primary', attrs: 'data-publishmore' })
