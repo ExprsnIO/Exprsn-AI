@@ -39,7 +39,7 @@
       if (ctx.params.id) {
         const id = ctx.params.id; delete ctx.params.id;
         if (id === 'F-2297' && !st.queue.some((f) => f.id === 'F-2297') && !(st.decided || []).some((d) => d.id === 'F-2297')) {
-          st.queue.push({ id: 'F-2297', rule: 'Reported from chat: Q3 travel overrun', ruleRef: null, profile: 'Reported from chat', checkpoint: 'user report', cpLabel: 'user-report', left: 235, of: 240, sev: 'medium', when: 'just now', convo: 'Q3 travel overrun', convoId: 'c1', label: 'confidential', actor: 'Reported by Mara Okafor', prior: '9 confirmed, 14 dismissed', sub: '"Wrong or unsupported figure", 4 h left',
+          st.queue.push({ id: 'F-2297', rule: 'Reported from chat: Q3 travel overrun', ruleRef: null, profile: 'no guardrail rule', checkpoint: 'user report', cpLabel: 'user-report', left: 235, of: 240, sev: 'medium', when: 'just now', convo: 'Q3 travel overrun', convoId: 'c1', label: 'confidential', actor: 'Reported by Mara Okafor', prior: '9 confirmed, 14 dismissed', sub: '"Wrong or unsupported figure", 4 h left',
             before: 'The approved exception for Lisbon covers 38,000 EUR of the difference, so the unexplained overrun is closer to ', span: '13,380 EUR', after: '.', note: 'Reporter chose "Wrong or unsupported figure". The figure has no calc result in this turn. Reviewers see the conversation only up to this turn.' });
           st.open += 1;
         }
@@ -51,7 +51,7 @@
         if (st.breached || st.sort === 'time') { const ao = a.left < 0 ? 0 : 1, bo = b.left < 0 ? 0 : 1; if (ao !== bo) return ao - bo; }
         if (st.sort === 'severity') return (SEV_RANK[a.sev] - SEV_RANK[b.sev]) || (a.left - b.left);
         if (st.sort === 'time') return a.left - b.left;
-        return a.when === 'just now' ? 1 : b.when === 'just now' ? -1 : a.when < b.when ? -1 : 1;
+        return 0; // oldest first: the queue is already in arrival order
       });
       if (!st.sel || !st.queue.some((f) => f.id === st.sel)) st.sel = list.length ? list[0].id : null;
       const f = st.queue.find((x) => x.id === st.sel) || null;
