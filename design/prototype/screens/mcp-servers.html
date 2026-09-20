@@ -114,6 +114,7 @@ button,input,select,textarea{font-family:inherit;font-size:13px;color:inherit}
 .main{flex-grow:1;min-height:0;display:flex;overflow:hidden}
 .main > .page{flex-grow:1;min-width:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
 .main > .page.tight{padding:0;gap:0}
+.main > .page > *{flex-shrink:0}
 .inspector{width:320px;flex-shrink:0;display:flex;flex-direction:column;gap:14px;padding:14px;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto}
 .inspector.w360{width:360px}.inspector.w300{width:300px}
 .leftpane{width:260px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;padding:10px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
