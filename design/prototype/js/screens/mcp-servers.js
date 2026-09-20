@@ -100,18 +100,10 @@
       on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); cur.ctx.navigate('profiles', { profile: t.dataset.goprofile === 'coder-32b' ? 'coder' : t.dataset.goprofile }); });
       on('click', '[data-diff]', () => {
         const ctx = cur.ctx;
-        ctx.modal({ title: 'Schema change: create_merge_request ' + UI.pill('disabled, re-review', 'danger'), body: diffHtml(DIFF) + UI.kv([['Approved hash', '<span class="mono">1f3d7a20</span>'], ['Announced hash', '<span class="mono">e90a44c1</span>'], ['Side-effect class', sidePill('write') + ' <span class="muted">annotation destructiveHint: false, untrusted</span>'], ['Disabled in', 'analyst, coder-32b']], 2) + UI.notice('Approving records the new hash and re-enables the tool in both profiles. Arguments are validated against the new schema from the next call.', 'info'), actions: UI.btn('Reject change', { attrs: 'data-close data-rejectchange' }) + UI.btn('Approve new schema', { kind: 'primary', attrs: 'data-close data-approvechange' }), cls: 'wide' });
+        ctx.modal({ title: 'Schema change: create_merge_request ' + UI.pill('disabled, re-review', 'danger'), body: diffHtml(DIFF) + UI.kv([['Approved hash', '<span class="mono">1f3d7a20</span>'], ['Announced hash', '<span class="mono">e90a44c1</span>'], ['Side-effect class', sidePill('write') + ' <span class="muted">annotation destructiveHint: false, untrusted</span>'], ['Disabled in', 'analyst, coder-32b']], 2) + UI.notice('Approving records the new hash and re-enables the tool in both profiles. Arguments are validated against the new schema from the next call.', 'info'), actions: UI.btn('Reject change', { attrs: 'data-mreject' }) + UI.btn('Approve new schema', { kind: 'primary', attrs: 'data-mapprove' }), cls: 'wide', onMount(m) { m.querySelector('[data-mapprove]').addEventListener('click', () => { App.closeOverlay(); approveChange(ctx); }); m.querySelector('[data-mreject]').addEventListener('click', () => { App.closeOverlay(); rejectChange(ctx); }); } });
       });
-      on('click', '[data-approvechange]', async () => {
-        const ctx = cur.ctx;
-        const ok = await ctx.confirm({ title: 'Approve new schema for create_merge_request', tag: 'write', tone: 'warn', body: '<p class="fg2" style="margin:0">Hash <span class="mono">e90a44c1</span> becomes the approved hash. The tool is re-enabled in analyst and coder-32b with confirmation still <b>always</b>.</p>', kv: [['Reviewer', 'Mara Okafor'], ['Audit', 'written']], ok: 'Approve' });
-        if (ok) { cur.st.over['gitlab-onprem/create_merge_request'] = { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', approval: 'approved', confirm: 'always' }; cur.st.health['gitlab-onprem'] = 'healthy'; ctx.rerender(); ctx.toast('create_merge_request approved with hash e90a44c1 and re-enabled in 2 profiles.', 'ok', 5000); }
-      });
-      on('click', '[data-rejectchange]', async () => {
-        const ctx = cur.ctx;
-        const ok = await ctx.confirm({ title: 'Reject schema change', tag: 'disable', tone: 'danger', body: '<p class="fg2" style="margin:0">The tool stays disabled and the server owner is asked to restore the approved schema or submit the new one for review.</p>', ok: 'Reject and notify owner' });
-        if (ok) { cur.st.over['gitlab-onprem/create_merge_request'] = { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', was: '1f3d7a20', approval: 'disabled, rejected', confirm: 'always' }; ctx.rerender(); ctx.toast('Change rejected. create_merge_request stays disabled; owner notified.', 'warn'); }
-      });
+      on('click', '[data-approvechange]', () => approveChange(cur.ctx));
+      on('click', '[data-rejectchange]', () => rejectChange(cur.ctx));
       on('click', '[data-review]', async (e, t) => {
         const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); const tool = s.tools.find((x) => x.name === t.dataset.review);
         ctx.modal({ title: 'Review ' + esc(tool.name) + ' ' + sidePill(tool.side), body: UI.kv([['Schema hash', '<span class="mono">' + esc(tool.hash) + '</span>'], ['Annotations', tool.side === 'destructive' ? '<span class="mono">destructiveHint: true</span> <span class="muted">untrusted hint</span>' : '<span class="mono">readOnlyHint: false</span> <span class="muted">untrusted hint</span>']], 2) + UI.field('Side-effect class (final)', UI.select(['read-only', 'write', 'destructive', 'external-comms'], tool.side, 'data-side'), 'The annotation pre-fills the class; the review sets it.') + UI.field('Confirmation', UI.select(['always', 'never'], tool.side === 'read-only' ? 'never' : 'always', 'data-confirm')) + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'confidential')) + (tool.side === 'destructive' ? UI.notice('Destructive tools require confirmation on every call and are hidden from profiles in lower-trust zones.', 'warn') : ''), actions: UI.btn('Keep hidden', { attrs: 'data-close' }) + UI.btn('Approve tool', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const side = m.querySelector('[data-side]').value; const conf = m.querySelector('[data-confirm]').value; App.closeOverlay(); cur.st.over[s.id + '/' + tool.name] = { name: tool.name, side, hash: tool.hash, approval: 'approved', confirm: conf === 'always' ? 'always' : undefined }; ctx.rerender(); ctx.toast(esc(tool.name) + ' approved as ' + esc(side) + ', hash ' + esc(tool.hash) + ' recorded.', 'ok'); }); } });
@@ -146,6 +138,15 @@
       on('click', '[data-register]', () => registerModal(cur.ctx));
     }
   });
+
+  async function approveChange(ctx) {
+    const ok = await ctx.confirm({ title: 'Approve new schema for create_merge_request', tag: 'write', tone: 'warn', body: '<p class="fg2" style="margin:0">Hash <span class="mono">e90a44c1</span> becomes the approved hash. The tool is re-enabled in analyst and coder-32b with confirmation still <b>always</b>.</p>', kv: [['Reviewer', 'Mara Okafor'], ['Audit', 'written']], ok: 'Approve' });
+    if (ok) { ctx.state.over['gitlab-onprem/create_merge_request'] = { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', approval: 'approved', confirm: 'always' }; ctx.state.health['gitlab-onprem'] = 'healthy'; ctx.rerender(); ctx.toast('create_merge_request approved with hash e90a44c1 and re-enabled in 2 profiles.', 'ok', 5000); }
+  }
+  async function rejectChange(ctx) {
+    const ok = await ctx.confirm({ title: 'Reject schema change', tag: 'disable', tone: 'danger', body: '<p class="fg2" style="margin:0">The tool stays disabled and the server owner is asked to restore the approved schema or submit the new one for review.</p>', ok: 'Reject and notify owner' });
+    if (ok) { ctx.state.over['gitlab-onprem/create_merge_request'] = { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', was: '1f3d7a20', approval: 'disabled, rejected', confirm: 'always' }; ctx.rerender(); ctx.toast('Change rejected. create_merge_request stays disabled; owner notified.', 'warn'); }
+  }
 
   function openTool(ctx, name) {
     const s = find(ctx.state.sel) || ctx.state.added.find((x) => x.id === ctx.state.sel); const t = ctx.state.over[s.id + '/' + name] || s.tools.find((x) => x.name === name);

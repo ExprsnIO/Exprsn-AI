@@ -153,7 +153,7 @@
       }
       insp += '<div class="divider"></div><div class="eyebrow">Quota, Finance Ops</div>' + UI.meter('Tokens today', '3.1M of 5M', 62) + UI.meter('GPU-seconds this month', '16,380 of 18,000', 91, 'warn') + UI.meter('Training GPU-hours', '136 of 200', 68);
 
-      root.innerHTML = '<style>'
+      root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}'
         + '.ua-chart svg .ua-bar{cursor:pointer}.ua-chart svg .ua-bar:hover path,.ua-chart svg .ua-bar:focus path{fill:var(--accent)}.ua-chart svg .ua-bar:focus{outline:none}'
         + '.ua-top{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}@media (max-width:1100px){.ua-top{grid-template-columns:1fr}}'
         + '</style>'

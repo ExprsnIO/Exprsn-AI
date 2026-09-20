@@ -89,7 +89,7 @@
       const deprecatedNote = selStatus === 'deprecated' ? UI.notice('<b>Deprecated.</b> Still callable; every run that uses it shows a warning in run details. Replacement: <a href="#" data-replacement>' + esc(sel.replacement || (sel.id.split(' ')[0] + ' ' + (parseInt(sel.version, 10) + 1) + '.0')) + '</a>', 'warn', UI.btn('Retire', { size: 'sm', attrs: 'data-retire' })) : '';
       const retiredNote = selStatus === 'retired' ? UI.notice('<b>Retired.</b> Removed from routing; the entry stays resolvable for audit.', 'danger') : '';
 
-      const inspector = '<aside class="inspector w360">'
+      const inspector = '<aside class="inspector w360 registry-insp">'
         + '<div class="mono" style="font-size:14px">' + esc(sel.id) + '</div>'
         + '<div class="hstack wrap gap6">' + (sel.side ? sidePill(sel.side) : UI.pill(sel.kind, 'outline')) + statusPill(selStatus) + UI.label(sel.label, { sm: true }) + '</div>'
         + deprecatedNote + retiredNote
@@ -107,7 +107,7 @@
         + UI.btn('Test harness', { kind: 'ghost', icon: 'play', attrs: 'data-harness-open' }) + '</div>'
         + harness + '</aside>';
 
-      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
+      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
         + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit' }))
         + (st.showEgress && !st.egressFixed ? UI.notice('<b>Undeclared egress.</b> mail.send_internal opened a connection to <span class="mono">ldap.northwind.internal</span> during checks. Approve stays disabled until the owner declares or removes the destination.', 'danger', UI.btn('Declare destination', { size: 'sm', attrs: 'data-declare' })) : '')
         + UI.tabs([{ id: 'tools', label: 'Tools', count: entries.filter((e) => e.kind === 'tool').length }, { id: 'skills', label: 'Skills', count: entries.filter((e) => e.kind === 'skill').length }, { id: 'agents', label: 'Agents', count: entries.filter((e) => e.kind === 'agent').length }, { id: 'review', label: 'Review queue', count: review.length }], st.tab)
