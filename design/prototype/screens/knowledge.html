@@ -532,7 +532,7 @@ table.dt .actions{white-space:nowrap}
       const h = location.hash.replace(/^#\/?/, '');
       const [path, qs] = h.split('?');
       const params = {};
-      (qs || '').split('&').filter(Boolean).forEach((p) => { const [k, v] = p.split('='); params[k] = decodeURIComponent(v || ''); });
+      (qs || '').split('&').filter(Boolean).forEach((p) => { const i = p.indexOf('='); const k = i < 0 ? p : p.slice(0, i), v = i < 0 ? '' : p.slice(i + 1); params[k] = decodeURIComponent(v); });
       return { route: path || App.defaultRoute || (state.signedIn ? 'chat' : 'signin'), params };
     },
     stateFor(id) { return state.screenState[id] || (state.screenState[id] = {}); },
@@ -549,38 +549,58 @@ table.dt .actions{white-space:nowrap}
     },
 
     // ----- modal / confirm / drawer -----
-    modal(opts) {
+    // Shared by modal() and drawer(): the overlay closes on backdrop click, Esc (see the keydown handler below) and any
+    // [data-close] inside it; Tab stays inside it; focus goes back where it was when it closes; opts.onClose runs once on close.
+    openOverlay(ov, opts) {
       App.closeOverlay();
-      const ov = document.createElement('div'); ov.className = 'overlay' + (opts.center ? ' center' : ''); ov.id = 'overlay';
-      ov.innerHTML = '<div class="modal ' + (opts.cls || '') + '" role="dialog" aria-modal="true" aria-label="' + esc(opts.title || 'Dialog') + '">' + (opts.title ? '<h2>' + opts.title + '</h2>' : '') + '<div class="vstack gap12">' + (opts.body || '') + '</div>' + (opts.actions ? '<div class="mfoot">' + opts.actions + '</div>' : '') + '</div>';
+      ov.id = 'overlay'; ov._onClose = opts.onClose || null; ov._returnTo = document.activeElement;
       document.body.appendChild(ov);
       ov.addEventListener('click', (e) => { if (e.target === ov) App.closeOverlay(); });
       on(ov, 'click', '[data-close]', () => App.closeOverlay());
+      ov.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab') return;
+        const f = $$('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])', ov).filter((el) => el.offsetParent !== null);
+        if (!f.length) { e.preventDefault(); return; }
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !ov.contains(document.activeElement))) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+      });
       if (opts.onMount) opts.onMount(ov.firstChild, ov);
       const f = ov.querySelector('input,select,textarea,button'); if (f) f.focus();
       return ov.firstChild;
     },
+    modal(opts) {
+      const ov = document.createElement('div'); ov.className = 'overlay' + (opts.center ? ' center' : '');
+      ov.innerHTML = '<div class="modal ' + (opts.cls || '') + '" role="dialog" aria-modal="true" aria-label="' + esc(opts.title || 'Dialog') + '">' + (opts.title ? '<h2>' + opts.title + '</h2>' : '') + '<div class="vstack gap12">' + (opts.body || '') + '</div>' + (opts.actions ? '<div class="mfoot">' + opts.actions + '</div>' : '') + '</div>';
+      return App.openOverlay(ov, opts);
+    },
     confirm(opts) {
       return new Promise((resolve) => {
+        let ok = false;
         App.modal({
           title: esc(opts.title) + (opts.tag ? ' ' + UI.pill(opts.tag, opts.tone || 'danger') : ''),
           body: (opts.body || '') + (opts.kv ? UI.kv(opts.kv, 2) : ''),
           actions: UI.btn(opts.cancel || 'Cancel', { attrs: 'data-close' }) + UI.btn(opts.ok || 'Confirm', { kind: opts.tone === 'danger' ? 'danger' : 'primary', attrs: 'data-ok' }),
-          onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { App.closeOverlay(); resolve(true); }); }
+          onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { ok = true; App.closeOverlay(); }); },
+          onClose() { resolve(ok); }
         });
       });
     },
     drawer(opts) {
-      App.closeOverlay();
-      const ov = document.createElement('div'); ov.className = 'overlay'; ov.id = 'overlay'; ov.style.padding = '0';
+      const ov = document.createElement('div'); ov.className = 'overlay'; ov.style.padding = '0';
       ov.innerHTML = '<aside class="drawer" role="dialog" aria-modal="true" aria-label="' + esc(opts.title || 'Panel') + '"><div class="hstack"><h2 class="grow">' + (opts.title || '') + '</h2>' + UI.iconbtn('x', 'Close', { attrs: 'data-close', cls: 'ghost' }) + '</div>' + (opts.body || '') + (opts.actions ? '<div class="hstack wrap" style="margin-top:auto">' + opts.actions + '</div>' : '') + '</aside>';
-      document.body.appendChild(ov);
-      ov.addEventListener('click', (e) => { if (e.target === ov) App.closeOverlay(); });
-      on(ov, 'click', '[data-close]', () => App.closeOverlay());
-      if (opts.onMount) opts.onMount(ov.firstChild, ov);
-      return ov.firstChild;
+      return App.openOverlay(ov, opts);
     },
-    closeOverlay() { const o = $('#overlay'); if (o) o.remove(); $$('.popover').forEach((p) => p.remove()); },
+    closeOverlay() {
+      const o = $('#overlay');
+      if (o) {
+        const back = o._returnTo, done = o._onClose; o._onClose = null;
+        o.remove();
+        if (back && back.focus && document.contains(back)) back.focus({ preventScroll: true });
+        if (done) done();
+      }
+      $$('.popover').forEach((p) => p.remove());
+    },
 
     // ----- command palette -----
     palette() {
@@ -682,7 +702,9 @@ table.dt .actions{white-space:nowrap}
       const s = screens[state.route] || screens['not-found'];
       const app = $('#app'); app.classList.toggle('signed-out', state.route === 'signin'); app.classList.remove('nav-open'); state.navOpen = false;
       App.closeOverlay();
-      const main = $('#main'); main.innerHTML = ''; main.className = 'main';
+      // A fresh element each render: listeners a screen attached through ctx.on (or directly on root) go with the old one,
+      // so a re-render or a route change never leaves a previous render's handlers running.
+      const main = document.createElement('div'); main.id = 'main'; main.className = 'main'; $('#main').replaceWith(main);
       document.title = (s.title || 'Exprsn-AI') + ' · Exprsn-AI';
       if (state.route !== 'signin') { App.renderSidebar(); App.renderHeader(); }
       try { s.render(main, App.ctx(s)); } catch (err) { main.innerHTML = '<div class="page">' + UI.problem('This screen failed to render', String(err && err.message || err)) + '</div>'; console.error(err); }
