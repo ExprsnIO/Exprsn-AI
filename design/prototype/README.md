@@ -1,6 +1,6 @@
 # Exprsn-AI console — clickable prototype
 
-A single-page, click-through prototype of the Exprsn-AI console, built from the design boards in `exprsn-ai-design-dc` and the *Platform Architecture & Delivery Plan*. It is plain HTML, CSS and JavaScript with no build step, so it opens straight from disk and runs inside the air gap.
+A single-page, click-through prototype of the Exprsn-AI console, built from the design boards in `exprsn-ai-design-dc` and the *Platform Architecture & Delivery Plan*. It is plain HTML, CSS and JavaScript with no build step, so it opens straight from disk. The only outside request is for the web fonts in `shell.html`; without a connection the browser's fallback fonts are used and everything else works, so it runs inside the air gap too.
 
 ## Run it
 
@@ -30,9 +30,11 @@ css/app.css         design tokens (light + dark) and shared components
 js/app.js           router, sidebar, header, palette, toasts, modals, UI helpers
 js/screens/*.js     one module per board (see CONTRACT.md for the module contract)
 build.mjs           regenerates index.html and screens/ from the sources
-shot.mjs, smoke.mjs Playwright helpers used while building (need `npm i playwright`)
+shot.mjs, smoke.mjs Playwright helpers used while building (`npm install`, then `npm run smoke` / `npm run shot -- <route>`)
 CONTRACT.md         how a screen module is written
 ```
+
+`smoke.mjs` and `shot.mjs` use Playwright's own Chromium; set `CHROME=/path/to/chrome` to use another build.
 
 To change a screen, edit its file under `js/screens/` (or `css/app.css`, `js/app.js`) and run `node build.mjs` to regenerate `index.html` and `screens/`. Opening `shell.html` runs the sources directly without regenerating.
 

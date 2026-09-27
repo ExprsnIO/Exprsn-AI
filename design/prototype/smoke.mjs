@@ -4,7 +4,7 @@ import { chromium } from 'playwright';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = dirname(fileURLToPath(import.meta.url));
-const browser = await chromium.launch({ executablePath: process.env.CHROME || '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell' });
+const browser = await chromium.launch({ executablePath: process.env.CHROME || undefined });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error' && !/ERR_CERT|fonts\.g/.test(m.text())) errors.push('[console] ' + m.text()); });
