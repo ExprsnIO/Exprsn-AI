@@ -1,0 +1,14 @@
+{
+  "name": "exprsn-ai-prototype",
+  "private": true,
+  "description": "Clickable prototype of the Exprsn-AI console. No runtime dependencies; Playwright is only for the checks.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "smoke": "node smoke.mjs",
+    "shot": "node shot.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  }
+}
