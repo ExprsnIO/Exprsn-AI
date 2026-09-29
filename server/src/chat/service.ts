@@ -287,7 +287,17 @@ export class ChatService {
   // ---------- sending ----------
 
   private async resolveFor(p: Principal, profile: string, label: Label): Promise<ResolvedProfile> {
-    const r = await this.gateway.resolve(p.tenantId, profile);
+    let r: ResolvedProfile;
+    try {
+      r = await this.gateway.resolve(p.tenantId, profile);
+    } catch (err) {
+      // Name the profile, so a client comparing several can tell which one is unavailable.
+      if (err instanceof HttpProblem) Object.assign(err.extensions, { profile });
+      throw err;
+    }
+    if (r.model.state !== 'approved' && r.model.state !== 'deprecated') {
+      throw new HttpProblem(409, 'Profile unavailable', `Profile ${r.profile.name} routes to ${r.model.name}, which is ${r.model.state}.`, { extensions: { profile } });
+    }
     if (!clears(p.clearance, r.profile.label)) throw forbidden(`Profile ${r.profile.name} needs ${r.profile.label} clearance.`, { step: 'clearance' });
     const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label });
     if (!d.allow) throw forbidden(d.step === 'zone' ? `This conversation is ${label}; profile ${r.profile.name} only handles data up to ${r.profile.label}.` : d.reason, { step: d.step, action: 'inference:invoke' });

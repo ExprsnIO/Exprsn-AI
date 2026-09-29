@@ -226,6 +226,12 @@ describe('chat', () => {
     expect(usage.map((u: { kind: string }) => u.kind)).toEqual(['compare', 'compare']);
     expect(new Set(usage.map((u: { model: string }) => u.model))).toEqual(new Set(['llama3.1:8b', 'qwen3:8b']));
     await m.post('/api/compare', { prompt: 'x', profiles: ['general'] }).expect(400);
+    const missing = await m.post('/api/compare', { prompt: 'x', profiles: ['general', 'nope'] }).expect(404);
+    expect(missing.body.profile).toBe('nope');
+    const llama = (await h.s.gateway.repo.modelByName('llama3.1:8b'))!;
+    await h.s.gateway.repo.updateModel(llama.id, { state: 'retired' });
+    const retired = await m.post('/api/compare', { prompt: 'x', profiles: ['general', 'thinker'] }).expect(409);
+    expect(retired.body).toMatchObject({ title: 'Profile unavailable', profile: 'general' });
     const list = (await m.agent.get('/api/conversations?kind=compare').expect(200)).body;
     expect(list).toHaveLength(1);
   });

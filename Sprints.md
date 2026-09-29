@@ -11,19 +11,20 @@ from prototype data to live only when every control on it is backed by the serve
 | --- | --- | --- | --- |
 | 0 | Foundations | — | **Done** |
 | 1 | Identity and access | Sign in, Settings, User stores (new) | **Done** |
-| 2 | Tenancy, audit, platform services | Tenants, Usage and audit | **Next** |
-| 3 | Ollama gateway, models, pools, profiles | Models, Pools, Profiles | Planned |
-| 4 | Chat, compare, metering | Chat, Compare | Planned |
-| 5 | Guardrails, classifiers, flags | Guardrails, Classifiers, Flags | Planned |
+| 2 | Tenancy, audit, platform services | Tenants, Usage and audit | **Done** |
+| 3 | Ollama gateway, models, pools, profiles | Models, Pools, Profiles | **Done** |
+| 4 | Chat, compare, metering | Chat, Compare | **Done** |
+| 5 | Guardrails, classifiers, flags | Guardrails, Classifiers, Flags | **Next** |
 | 6 | Knowledge, memory, connections | Knowledge, Memory, Connections | Planned |
 | 7 | Registry, MCP servers, agent runs, scripts | Registry, MCP servers, Runs, Scripts | Planned |
 | 8 | Workflows, media, images | Workflows, Media, Images | Planned |
 | 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | Planned |
 | 10 | Hardening and release | all | Planned |
 
-Current codebase: Sign in, Settings and User stores are live, and the other 24 sidebar screens show prototype data;
-one database migration (`001_core`); 71 unit and API tests plus the integration suite against PostgreSQL, MySQL and
-OpenLDAP.
+Current codebase: Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools, Profiles, Chat and Compare
+are live, and the other 17 sidebar screens show prototype data; four database migrations (`001_core` to `004_chat`);
+120 unit and API tests (against a fake Ollama for the gateway and chat) plus the integration suite against
+PostgreSQL, MySQL, OpenLDAP and Redis.
 
 ---
 
@@ -76,43 +77,105 @@ screens `signin.js`, `settings.js` and `directories.js`. Details in [docs/identi
   API keys, sessions) and the new **User stores** screen (stores: add, edit, order, enable, test connection; group
   mappings; users: roles, clearance, disable, reset factors, local accounts; sessions: revoke; "Test a login").
 
-Carried forward to Sprint 2 (listed in `docs/security.md` under known gaps): directory sync, the Socket.io Redis
-adapter, and replacing `DATA_KEY` with the KMS.
+Carried forward to Sprint 2 (and delivered there): directory sync, the Socket.io Redis adapter, and replacing
+`DATA_KEY` with the KMS.
 
-## Sprint 2: Tenancy, audit and platform services (next)
+## Sprint 2: Tenancy, audit and platform services (done)
 
-- Tenants and workspaces CRUD with the workspace switcher.
-- Per-tenant and per-workspace quotas (tokens/day, GPU-seconds/month, training GPU-hours) enforced with 429 and
-  `Retry-After`.
-- Usage and audit screen: filters, full event view, chain verification, signed checkpoints, CSV export gated by
-  clearance, corrections, SIEM stream.
-- `Kms` (local and OpenBao transit) with per-tenant data keys, replacing `DATA_KEY`.
-- `BlobStore` (filesystem, S3-compatible); `JobQueue` (BullMQ and database polling) with job progress to socket rooms.
-- Notifications over the socket and SMTP (the console's bell is empty until then).
-- Redis adapter for Socket.io when running more than one instance.
-- Directory sync job: disable users removed from every mapped group; LDAP hourly.
+Delivered in `server/src/platform`, `server/src/tenancy`, `server/src/audit`, `server/src/identity/sync.ts`,
+`server/src/routes/admin/{tenants,usage,audit}.ts` and the live console screens `tenants.js` and `usage-audit.js`.
+API in [docs/api.md](docs/api.md).
+
+- Tenants and workspaces: system admins create, rename, disable and offboard tenants; tenant admins create, edit and
+  archive workspaces (label ceiling, tenant-wide or members-only), add and remove members, and map directory groups
+  to a workspace. The shell's workspace switcher stores the choice in the session (`X-Workspace` for API keys).
+- Quotas per tenant and per workspace (tokens per day, GPU-seconds per month, training GPU-hours per month), nested
+  under the tenant's, enforced on every chat and compare request with `429`, `Retry-After` and a problem naming the
+  limit and who can raise it. Usage is metered per tenant, workspace, user, model and profile.
+- Usage and audit: usage by user, model, workspace, profile and tenant; daily tokens; audit filters (kind, action,
+  actor, label, time); the full event; chain verification against signed checkpoints (KMS HMAC, copy in the blob
+  store; hourly and on demand) with notification of tenant admins and auditors when it breaks; corrections as linked
+  rows; CSV exports produced by a job, sealed, never above the requester's clearance (blocked with the count, or
+  filtered); the SIEM stream (NDJSON over HTTPS).
+- `Kms` with local and OpenBao transit adapters and per-tenant envelope data keys: versioned, rotatable
+  (`exprsn-ai kms:rotate`), destroyed at offboarding with every instance dropping cached copies. TOTP seeds moved from
+  `DATA_KEY` to the platform data key (older seeds still open).
+- `BlobStore` (filesystem, and S3-compatible with SigV4 over fetch); `JobQueue` (database polling, or BullMQ on
+  Redis) with retries, cancellation, stale-lock recovery and progress pushed to the submitter's sockets; a
+  deduplicating scheduler so several instances enqueue a recurring job once.
+- Notifications stored per user, pushed over the socket (the console's bell), and emailed over SMTP when configured.
+- Redis: the Socket.io adapter and a cross-instance bus (session revocation, job cancellation, chat stop,
+  notifications), so several instances can run behind a load balancer.
+- Directory sync (hourly by default, or on demand per store): disables users removed from the store or from every
+  mapped group and revokes their sessions and keys, refreshes roles, workspaces and clearance for the rest, never
+  disables anyone when the store cannot be read, and stops if a run would disable more than half of a store's users.
+- Offboarding in three steps: export, destroy the tenant key, then a purge job for conversations, attachments,
+  exports and notifications (the audit chain and usage stay); the tenant ends `offboarded` and cannot be re-enabled.
+- `/readyz` also checks the KMS and the blob store; the effective-permission explainer
+  (`POST /api/admin/authz/evaluate`) shows every step of the policy for a user.
 
 **Done when:** a tenant admin can create a workspace, set a quota and watch a request get 429; an auditor can verify
-the chain and export only what their clearance allows.
+the chain and export only what their clearance allows. Both are covered by tests (`tenancy.test.ts`,
+`chat.test.ts`).
 
-## Sprint 3: Ollama gateway, models, pools, profiles
+## Sprint 3: Ollama gateway, models, pools, profiles (done)
 
-Pool and instance registry for Docker and bare-metal Ollama endpoints (optional mTLS); poller of `/api/ps` and
-`/api/tags` every 5 s with health; load, pin, unload and drain through `keep_alive`; memory planner and anti-thrash
-limit; model catalogue with lifecycle, licence record, digest verification, pickle refusal and import requests;
-profiles (pinned model, pool, `num_ctx`, thinking ceiling, fallback chain, aliases, canary and rollback); rolling
-Ollama upgrade.
+Delivered in `server/src/gateway`, `server/src/routes/admin/gateway.ts` and the live console screens `models.js`,
+`pools.js` and `profiles.js`.
 
-**Done when:** a model admin approves a model, places it on a pool, and a profile routes to it.
+- Pools (accelerator, zone, label ceiling) and instances for Docker and bare-metal Ollama, with optional mutual TLS
+  (CA, client certificate and key per instance) and the node's settings (memory, parallel requests, maximum loaded
+  models, context, KV cache type, keep-alive).
+- A poller of `/api/version`, `/api/ps` and `/api/tags` (every 5 s by default) keeping health (healthy, degraded,
+  unreachable), versions, residency and what is pulled, and recording models that disappear without an unload as
+  evicted; `pools.state` socket updates for the Pools screen.
+- Load, pin, unload and drain through `keep_alive`; a memory planner (fits, fits after evicting warm models, never
+  evicts pinned ones) and estimate drift against measured memory; an anti-thrash limit of loads per instance per ten
+  minutes; slot accounting per instance with a queue (and the caller's place in it); load and eviction history
+  ("why is this cold?").
+- The model catalogue with lifecycle draft → evaluated → approved → deprecated → retired: import requests (pickle
+  sources refused), pulls by job with progress, digest verification against the digest pinned in the request (the
+  blob is deleted on a mismatch), GGUF/safetensors only, a conformance run (chat smoke test and tool calling;
+  failing tool calling withholds tools), a recorded licence, and dual-control approval. Retiring removes a model
+  from routing.
+- Placements of models on pools with residency (pinned, warm, cold), refused above the pool's label ceiling.
+- Profiles per tenant: model, pool, `num_ctx`, temperature, system prompt, thinking default and ceiling, a fallback
+  chain after a queue wait, the built-in calculate tool, a label, aliases, a canary share of requests to another
+  approved model (promote or stop), and every change as a version with rollback. Publishing checks the model's
+  approval and capabilities and that a pool cleared for the profile's label runs it.
+- Rolling Ollama upgrade by job: one instance at a time is drained, waited for until it reports the target version,
+  given back its pinned models and returned to service.
 
-## Sprint 4: Chat, compare, metering
+**Done when:** a model admin approves a model, places it on a pool, and a profile routes to it (`gateway.test.ts`).
 
-Conversations, messages and branches (content sealed with the tenant key); profile picker filtered by clearance; token
-streaming over Socket.io with sequence numbers and resume; stop, regenerate, edit and branch; cold-start queueing;
-thinking levels; attachments (quarantine → scan → classify); usage rows metered on the final chunk; compare with 2–4
-parallel streams metered per column; the exact-calculation worker.
+## Sprint 4: Chat, compare, metering (done)
 
-## Sprint 5: Guardrails, classifiers, flags
+Delivered in `server/src/chat`, `server/src/routes/chat.ts` and the live console screens `chat.js` and `compare.js`.
+
+- Conversations as message trees (edits and regenerations are branches; the head is the leaf being viewed), scoped to
+  the author and the current workspace; titles, content, thinking and calculation steps sealed with the tenant key.
+- The profile picker lists published profiles the user is cleared for; a conversation's label (a high-water mark,
+  raised by attachments) must not exceed the profile's label.
+- Token streaming over Socket.io with per-message sequence numbers; `chat.status` (queued with position, loading
+  on a cold start, fallback, streaming) and `chat.done` with usage; catch-up and resume through the stream endpoint.
+- Stop (partial answers kept and metered by estimate), regenerate (optionally with another profile or thinking
+  level), edit, and branch switching.
+- Thinking levels capped by the profile's ceiling, streamed separately from the answer.
+- Attachments: raw upload into sealed quarantine, a scan job (type detected from the bytes, ClamAV when configured,
+  classification for payment cards, IBANs, national identifiers, emails and phone numbers), then ready or rejected;
+  text is given to the model as labelled context, images to vision models.
+- Usage recorded once per answer on the final chunk (prompt, output and thinking tokens, calculator calls,
+  GPU-milliseconds); quotas checked before every request.
+- Compare: one prompt to 2–4 profiles in parallel, each column streamed, stoppable, regenerable and metered on its
+  own.
+- The exact-calculation worker: a rational-arithmetic evaluator in a worker thread with memory and time limits,
+  offered to models as the `calculate` tool and at `POST /api/calculate`.
+
+Left for later sprints (see `docs/security.md`, known gaps): guardrails on prompts and answers (Sprint 5); knowledge,
+memory and tool bindings in chat (Sprints 6 and 7); continuing a stream on another instance after the serving
+instance stops.
+
+## Sprint 5: Guardrails, classifiers, flags (next)
 
 The eleven checkpoints; RE2 patterns, PII detectors and the guard model through Ollama; shadow and enforce; precedence
 platform > tenant > workspace > agent; fail closed; versioned rule sets with diff, shadow replay and dual control;

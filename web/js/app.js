@@ -135,17 +135,17 @@
   // `live` marks screens backed by the server; the rest still show prototype data (see docs/PLAN.md for their sprint).
   const NAV = [
     { group: null, items: [
-      { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', sprint: 4 }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', sprint: 4 }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', sprint: 7 },
+      { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', sprint: 7 },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', sprint: 6 }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', sprint: 6 }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', sprint: 8 },
       { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'tools:invoke', sprint: 7 }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', sprint: 8 }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', sprint: 8 }
     ] },
     { group: 'Admin', items: [
-      { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', sprint: 3 }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', sprint: 3 }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', sprint: 3 },
+      { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },
       { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', sprint: 7 }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', sprint: 7 }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', sprint: 5 },
       { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', sprint: 5 }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', sprint: 5 }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', sprint: 6 },
-      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', sprint: 9 }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', sprint: 2 },
+      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', sprint: 9 }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', sprint: 9 },
-      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', sprint: 9 }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', sprint: 2 }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', sprint: 9 }
+      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', sprint: 9 }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', sprint: 9 }
     ] }
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));

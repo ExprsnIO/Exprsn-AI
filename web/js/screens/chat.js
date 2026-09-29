@@ -622,15 +622,17 @@
         + '.ch-atts{display:flex;flex-direction:column;gap:6px}.ch-att{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px}.ch-att.bad{border-color:var(--danger-fg)}.ch-attwhy{color:var(--danger-fg)}'
         + '.ch-actions{display:flex;align-items:center;gap:12px}.ch-hint{font-size:12px}'
         + '.ch-dd{max-height:320px;overflow:auto;min-width:260px}.ch-dd button{height:auto;min-height:28px;padding:4px 10px}.ch-dd .sub{display:block;font-size:11px;color:var(--muted);font-weight:400}'
-        + '@media (max-width:900px){.ch-side{display:none}}@media (max-width:640px){.ch-left{display:none}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
+        + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
         + '</style>'
-        + '<div class="leftpane ch-left">' + UI.btn('New conversation', { icon: 'plus', cls: 'block', attrs: 'data-new' + (canSend ? '' : ' disabled') })
+        + '<div class="leftpane ch-left' + (st.showList ? ' ch-open' : '') + '">' + UI.btn('New conversation', { icon: 'plus', cls: 'block', attrs: 'data-new' + (canSend ? '' : ' disabled') })
         + UI.search('Search conversations', 'data-search', st.query || '').replace('class="search"', 'class="search" style="width:100%"')
         + '<div class="hstack gap6">' + UI.chip(st.archived ? 'Showing archived' : 'Show archived', !!st.archived, 'data-archived') + '<span class="muted" style="font-size:12px">' + esc(App.DATA.tenant.workspace || '') + '</span></div>'
         + '<div class="ch-list" data-region="list">' + listHtml(st) + '</div></div>'
         + '<div class="page tight ch-page">'
-        + (conv ? '<div class="ch-head"><span class="t grow">' + esc(conv.title || 'Untitled conversation') + '</span>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
-          + (App.can('chat:write') ? UI.iconbtn('edit', 'Rename', { cls: 'sm ghost', attrs: 'data-rename' }) + UI.btn(conv.archived ? 'Unarchive' : 'Archive', { kind: 'ghost', size: 'sm', attrs: 'data-archive' }) + UI.iconbtn('trash', 'Delete conversation', { cls: 'sm ghost', attrs: 'data-delete' }) : '') + '</div>' : '')
+        + '<div class="ch-head">' + UI.iconbtn('menu', 'Conversations', { cls: 'sm ghost ch-listbtn', attrs: 'data-showlist' })
+          + (conv ? '<span class="t grow">' + esc(conv.title || 'Untitled conversation') + '</span>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
+            + (App.can('chat:write') ? UI.iconbtn('edit', 'Rename', { cls: 'sm ghost', attrs: 'data-rename' }) + UI.btn(conv.archived ? 'Unarchive' : 'Archive', { kind: 'ghost', size: 'sm', attrs: 'data-archive' }) + UI.iconbtn('trash', 'Delete conversation', { cls: 'sm ghost', attrs: 'data-delete' }) : '')
+            : '<span class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</span>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
         + '<div class="ch-scroll"><div class="ch-thread" data-region="thread">' + threadHtml(st) + '</div></div>'
         + '<div class="ch-composer"><div class="ch-inner">'
         + '<div data-region="notice">' + noticeHtml(st) + '</div>'
@@ -657,8 +659,9 @@
       ctx.on('input', '#ch-composer', (e, t) => { st.draft = t.value; });
       ctx.on('keydown', '#ch-composer', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
       ctx.on('click', '[data-send]', () => send());
-      ctx.on('click', '[data-new]', () => { syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; rerender(true); });
-      ctx.on('click', '[data-convo]', (e, t) => openConv(t.dataset.convo));
+      ctx.on('click', '[data-new]', () => { st.showList = false; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; rerender(true); });
+      ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; openConv(t.dataset.convo); });
+      ctx.on('click', '[data-showlist]', () => { st.showList = !st.showList; const l = ctx.$('.ch-left'); if (l) l.classList.toggle('ch-open', st.showList); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
       ctx.on('click', '[data-archived]', async () => { st.archived = !st.archived; await loadList(); rerender(); });
       ctx.on('click', '[data-dismiss]', () => { st.notice = null; rerender(); });

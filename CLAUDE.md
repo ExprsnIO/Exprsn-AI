@@ -13,12 +13,14 @@ has three parts:
 | `web/` | The console the server serves: the prototype's screen modules, wired to the API screen by screen |
 | `design/prototype/` | The clickable design prototype. It is the specification for behaviour and copy, with example data only |
 | `deploy/` | Dockerfile, Compose (production, development, GPU), bare-metal systemd unit and installer, example identity YAML |
-| `docs/` | `PLAN.md` (decisions and rules), `identity.md`, `security.md`, `deploy.md` |
+| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
 
-Sprints 0 (foundations) and 1 (identity and access) are done. Only **Sign in**, **Settings** and **User stores** are
-live in the console; every other screen shows a "Prototype data" banner naming the sprint that connects it. Check
-`Sprints.md` before starting work so you build the next sprint's scope, not a later one.
+Sprints 0 to 4 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
+models, pools and profiles; chat, compare and metering). Live in the console: **Sign in**, **Settings**, **User
+stores**, **Tenants**, **Usage and audit**, **Models**, **Pools**, **Profiles**, **Chat** and **Compare**; every other
+screen shows a "Prototype data" banner naming the sprint that connects it. Check `Sprints.md` before starting work so
+you build the next sprint's scope, not a later one.
 
 ## Commands
 
@@ -32,8 +34,9 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate | admin:create | audit:verify>
-npm run test:integration -w server           # needs TEST_PG_URL, TEST_MYSQL_URL, TEST_LDAP_URL, TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW
+npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate>
+npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
+                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
 for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 ```
 
@@ -43,7 +46,11 @@ MySQL user stores is `docker compose -f deploy/docker/compose.dev.yml up --build
 that file).
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, build and the console parse check; integration tests
-against real PostgreSQL 17, MySQL 8.4 and OpenLDAP; and a container build that must answer `/readyz`.
+against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; and a container build that must answer `/readyz`.
+
+Tests never need a real Ollama: `server/test/fake-ollama.ts` speaks enough of its API (version, tags, ps, show, pull,
+delete, generate, streamed chat with thinking and tool calls) and is also handy for driving the console by hand
+(start it from a small `npx tsx` script and register its URL as a pool instance).
 
 Prototype commands, run from `design/prototype/`:
 
@@ -58,30 +65,50 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 
 ## Server architecture (`server/src`)
 
-- **`index.ts`** starts the HTTP server, Socket.io and graceful shutdown; **`cli.ts`** is the `exprsn-ai` CLI;
-  **`bootstrap.ts`** seeds the default tenant and identity YAML; **`services.ts`** builds the `Services` object
-  (config, db, logger, metrics, audit, repos, identity chain, sessions, API keys, MFA) passed to every route factory.
-- **`config/`**: zod-validated environment. `SESSION_SECRET`, `DATA_KEY`, `DATABASE_URL`, `METRICS_TOKEN` may be given
-  as `<NAME>_FILE`. Production refuses non-HTTPS cookies.
+- **`index.ts`** starts the HTTP server, Socket.io, the job workers and schedules, the gateway poller and graceful
+  shutdown; **`cli.ts`** is the `exprsn-ai` CLI; **`bootstrap.ts`** seeds the default tenant and identity YAML;
+  **`services.ts`** builds the `Services` object (config, db, logger, metrics, bus, KMS and data keys, blob store,
+  jobs, notifications, audit with checkpoints, exports and SIEM, repos, identity chain, sessions, API keys, MFA,
+  directory sync, quotas, offboarding, gateway, attachments, calculator, chat) passed to every route factory.
+- **`config/`**: zod-validated environment. Secrets (`SESSION_SECRET`, `DATA_KEY`, `DATABASE_URL`, `METRICS_TOKEN`,
+  `OPENBAO_TOKEN`, `REDIS_URL`, `SMTP_URL`, `S3_SECRET_ACCESS_KEY`, `SIEM_TOKEN`) may be given as `<NAME>_FILE`; empty
+  variables count as unset. Production refuses non-HTTPS cookies.
 - **`http/app.ts`** composes the app: trace ids, pino-http, Helmet (CSP `script-src 'self'`), compression, health
-  routes, then `/api` (JSON 256 kB limit → `authenticate` → `csrfProtection` → rate limits → routers), then the static
-  console with SPA fallback. **`http/middleware.ts`** has `authenticate`, `csrfProtection`, `requireAuth`,
-  `requirePermission`, `parseBody`; **`http/problem.ts`** has the RFC 9457 `HttpProblem` helpers.
-- **`routes/`**: `auth.ts` (`/api/auth`: login, MFA steps, logout), `me.ts` (`/api/me`: profile, sessions, API keys,
-  factor enrolment), `admin/identity.ts` (user stores, test login, group mappings), `admin/users.ts` (roles, users,
-  sessions), `admin/audit.ts` (read and verify), `health.ts` (`/healthz`, `/readyz`, `/metrics`).
-- **`identity/`**: the per-tenant store chain (`chain.ts`), adapters in `providers/` (`ldap.ts`, `sql.ts`,
-  `local.ts`), JIT provisioning, sessions, MFA (TOTP, WebAuthn, recovery codes), lockout, API keys, secret sealing.
-- **`authz/`**: `permissions.ts` (permission catalogue and the 13 built-in roles), `labels.ts` (clearance labels
-  `public < internal < confidential < restricted`), `policy.ts` (the single decision pipeline: role → scopes →
-  tenant → clearance → zone ceiling).
-- **`audit/chain.ts`**: append-only per-tenant SHA-256 hash chain. **`repos/`**: tenant-scoped data access.
+  routes, then `/api` (JSON 256 kB limit except the raw attachment upload → `authenticate` (which also resolves the
+  current workspace) → `csrfProtection` → rate limits → routers), then the static console with SPA fallback.
+  **`http/middleware.ts`** has `authenticate`, `csrfProtection`, `requireAuth`, `requirePermission`, `parseBody`,
+  `workspacesFor`; **`http/problem.ts`** has the RFC 9457 `HttpProblem` helpers.
+- **`routes/`**: `auth.ts`, `me.ts` (profile, workspace switch, notifications, own jobs, sessions, API keys, factors),
+  `chat.ts` (conversations, messages, stream catch-up, compare, attachments, calculate), `admin/identity.ts`,
+  `admin/users.ts`, `admin/audit.ts` (events, verify, checkpoints, corrections, exports, SIEM status),
+  `admin/tenants.ts` (tenants, workspaces, members, quotas, offboarding, policy explainer), `admin/usage.ts`,
+  `admin/gateway.ts` (pools, instances, placements, models, profiles), `health.ts`. The full list is `docs/api.md`.
+- **`identity/`**: the per-tenant store chain, adapters in `providers/`, JIT provisioning (roles, clearance and
+  workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys.
+- **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
+  pipeline: role → scopes → tenant → clearance → zone ceiling, plus `explain` for the step-by-step view).
+- **`audit/`**: `chain.ts` (append-only per-tenant SHA-256 hash chain, `onAppend` listeners), `checkpoints.ts`
+  (KMS-signed checkpoints, verification), `exports.ts` (clearance-gated CSV by job), `siem.ts`.
+- **`platform/`**: the infrastructure interfaces from `docs/PLAN.md`: `kms.ts` (local, OpenBao transit),
+  `datakeys.ts` (per-tenant envelope encryption, `Sealer`), `blob.ts` (filesystem, S3 SigV4), `jobs.ts` (`JobQueue`
+  on the database or BullMQ, `Scheduler`), `bus.ts` (in-process events fanned out over Redis), `notifications.ts`.
+- **`tenancy/`**: `quotas.ts` (limits, `admit` → 429, metering, usage reports), `offboarding.ts`.
+- **`gateway/`**: `ollama.ts` (client, NDJSON streaming, mTLS), `repo.ts` (pools, instances, models, placements,
+  profiles and versions), `gateway.ts` (poller, memory planner, anti-thrash, slot leases and queue, alias and canary
+  resolution, pull, evaluate and rolling-upgrade jobs).
+- **`chat/`**: `service.ts` (conversation trees, sealed content, generation with streaming, tools, fallback and
+  metering), `attachments.ts` (quarantine, type sniffing, ClamAV, classifier), `calc.ts` (the exact-calculation
+  worker thread).
+- **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
-  on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic.
-- **`realtime/socket.ts`**: Socket.io with the cookie-session handshake; the server joins each socket to its user,
-  tenant and session rooms.
-- Tests live in `server/test/` (`helpers.ts` builds an app on in-memory SQLite and signs users in, including TOTP);
-  `server/test/integration/` runs the stores against real servers.
+  on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
+  (use `text(…, 'mediumtext')` for anything that can exceed 64 KB, which is MySQL's `TEXT` limit).
+- **`realtime/socket.ts`**: Socket.io with the cookie-session handshake and the Redis adapter when `REDIS_URL` is set.
+  The server joins each socket to its user, tenant and session rooms and to permission rooms for live admin updates;
+  bus topics (job progress, notifications, chat events, pool state, revocations) are relayed to those rooms.
+- Tests live in `server/test/` (`helpers.ts` builds an app on in-memory SQLite with a temporary blob directory and
+  signs users in, including TOTP; `fake-ollama.ts`); `server/test/integration/` runs the stores and platform paths
+  against real servers.
 
 ### Rules for server code (from `docs/PLAN.md`)
 
@@ -91,7 +118,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - Secrets are shown once and stored hashed or sealed. Dual control where the boards require it.
 - Socket rooms are decided by the server from the principal; revoking a session closes its sockets.
 - The prototype's infrastructure maps to interfaces (`JobQueue`, `Kms`, `BlobStore`, `VectorStore`) with a
-  single-node adapter plus a scalable one; see the table in `docs/PLAN.md`.
+  single-node adapter plus a scalable one; see the table in `docs/PLAN.md`. Long work runs as a job
+  (`s.jobs.register` / `enqueue`), reports progress with `ctx.progress`, and is idempotent enough to retry.
+- Tenant content at rest (conversation text, attachments, export files) is sealed with `s.keys` under the tenant's
+  scope with the row id as associated data. Only the gateway talks to Ollama.
+- Cross-instance effects go through `s.bus` (`publish` for every instance, `emitLocal` for this one), never through
+  module state.
 
 ## Console (`web/`)
 
@@ -99,8 +131,13 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   build step. `web/index.html` lists every screen's `<script>` tag by hand (there is no `build.mjs` here) and loads
   `/socket.io/socket.io.min.js`. No inline scripts (CSP).
 - `web/js/app.js` extends the prototype shell with the API client (`App.get/post/patch/del`, CSRF header, problem
-  details as `ApiError`, `App.fail` toast), `App.me` and `App.can(perm)`, and the `NAV` entries' `perm`, `live` and
-  `sprint` fields. A screen without `live: true` gets the "Prototype data" banner.
+  details as `ApiError`, `App.fail` toast), `App.me` and `App.can(perm)`, the socket (`App.socket`), the notification
+  bell and the workspace switcher (`App.switchWorkspace`), and the `NAV` entries' `perm`, `live` and `sprint` fields.
+  A screen without `live: true` (on its `NAV` entry or its `App.register` definition) gets the "Prototype data"
+  banner.
+- Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
+  changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
+  streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.
 - To make a screen live: copy or adapt it from `design/prototype/js/screens/<id>.js` into `web/js/screens/<id>.js`,
   replace `DATA` with API calls, set `live: true` on its `NAV` entry (or on the `App.register` definition), and only do
   so when every control on it is backed by the server. `directories.js` (User stores) exists only in `web/`.

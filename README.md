@@ -2,21 +2,23 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** Sprints 0 (foundations) and 1 (identity and access) are done. The server signs users in against their
-directories, enforces roles, clearance and second factors, and keeps a tamper-evident audit chain. In the console,
-**Sign in**, **Settings** and **User stores** are live; the other screens show example data with a "Prototype data"
-banner until their sprint connects them. Next is Sprint 2: tenancy, quotas, audit and platform services. See
-[Sprints.md](Sprints.md).
+**Status:** Sprints 0 to 4 are done: identity and access; tenancy, quotas, audit and platform services (KMS with
+per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync); the Ollama gateway (pools,
+instances, the model catalogue with dual-control approval, profiles with canary and rollback); and chat and compare
+with streaming, branches, attachments, exact calculation and metering. In the console, **Sign in**, **Settings**,
+**User stores**, **Tenants**, **Usage and audit**, **Models**, **Pools**, **Profiles**, **Chat** and **Compare** are
+live; the other screens show example data with a "Prototype data" banner until their sprint connects them. Next is
+Sprint 5: guardrails, classifiers and flags. See [Sprints.md](Sprints.md).
 
 ## What's in the repository
 
 | Path | Contents |
 | --- | --- |
-| [`server/`](server) | Node.js 22, TypeScript, Express 5 and Socket.io. Users sign in against a per-tenant chain of user stores (OpenLDAP, PostgreSQL / MySQL / SQLite user tables, local accounts), with TOTP, passkeys and recovery codes, role and clearance based access, API keys, and a per-tenant SHA-256 audit chain. The application database is PostgreSQL, MySQL or SQLite (Knex) |
+| [`server/`](server) | Node.js 22, TypeScript, Express 5 and Socket.io. Users sign in against a per-tenant chain of user stores (OpenLDAP, PostgreSQL / MySQL / SQLite user tables, local accounts), with TOTP, passkeys and recovery codes, role and clearance based access, API keys, and a per-tenant SHA-256 audit chain with signed checkpoints. It is the only component that talks to Ollama. The application database is PostgreSQL, MySQL or SQLite (Knex); Redis, OpenBao, S3 and SMTP are optional |
 | [`web/`](web) | The user workspace and admin console, served by the server. Plain HTML, CSS and JavaScript with no build step and a strict CSP |
 | [`design/prototype/`](design/prototype/README.md) | The clickable specification (27 screens, example data). Open `design/prototype/index.html` in a browser |
 | [`deploy/`](deploy) | Dockerfile; Compose for production, development and GPU hosts; systemd unit and installer for bare metal; an example identity YAML |
-| [`docs/`](docs) | [Plan and decisions](docs/PLAN.md), [identity](docs/identity.md), [deployment](docs/deploy.md), [security](docs/security.md) |
+| [`docs/`](docs) | [Plan and decisions](docs/PLAN.md), [API](docs/api.md), [identity](docs/identity.md), [deployment](docs/deploy.md), [security](docs/security.md) |
 
 ## Run it locally
 

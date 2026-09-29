@@ -496,7 +496,7 @@
         + '<span>Before sending: ' + n + ' of ' + cols.length + ' columns run, ' + n + ' usage rows. Each column is streamed and metered on its own; thinking is capped per profile.</span>'
         + (st.metered ? '' : '<a href="#" class="right" data-showusage>Show usage rows</a>') + '</div></div>'
         + problemHtml(st)
-        + (st.run ? '<div class="muted" style="font-size:12px">Showing the comparison of ' + esc(st.run.prompt.length > 120 ? st.run.prompt.slice(0, 120) + '…' : st.run.prompt) + '. Sending again starts a new comparison.</div>' : '')
+        + (st.run ? '<div class="muted" style="font-size:12px">Showing the answers to <span class="fg2">' + esc(st.run.prompt.length > 120 ? st.run.prompt.slice(0, 120) + '…' : st.run.prompt) + '</span> · Sending again starts a new comparison.</div>' : '')
         + grid
         + '<div id="cp-usage-wrap">' + usageHtml(st) + '</div>'
         + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
