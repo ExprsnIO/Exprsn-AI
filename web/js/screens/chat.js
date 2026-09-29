@@ -124,6 +124,7 @@
     if (!m) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; return; }
     applyDone(st, m, d);
     if (d.state === 'failed') App.toast('<b>The answer failed</b> ' + esc(d.error || ''), 'danger', 6000);
+    refreshProfiles();
     schedule();
   }
   function onAttachment(st, d) {
@@ -184,6 +185,7 @@
     set('atts', attsHtml(st));
     set('actions', actionsHtml(st));
     set('side', sideHtml(st));
+    set('cold', coldHtml(st));
     if (scroller && near) scroller.scrollTop = scroller.scrollHeight;
   }
   function rerender(focusComposer) {
@@ -225,7 +227,8 @@
     }
     if (m.state !== 'streaming') return '';
     if (s.state === 'loading' && !m.content && !m.thinking) return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
-    return '<div class="ch-status">' + (m.content ? 'Answering' : m.thinking ? 'Thinking at level ' + esc(m.think || '') : 'Starting') + ' with ' + esc(m.profile || '') + '…</div>';
+    if (m.thinking && !m.content) return '';
+    return '<div class="ch-status">' + (m.content ? 'Answering' : 'Starting') + ' with ' + esc(m.profile || '') + '…</div>';
   }
   function usageLine(m) {
     const u = m.usage; const parts = [esc(m.profile || ''), '<span class="mono">' + esc(m.model || '') + '</span>'];
@@ -243,7 +246,8 @@
     if (!m.tools || !m.tools.length) return '';
     return '<div class="ch-calc"><div class="eyebrow">' + UI.icon('calc', 12) + ' Calculated exactly</div>' + m.tools.map((t) => '<div class="ch-calcrow"><span class="mono">' + esc(t.expression) + '</span>'
       + (t.error ? ' <span class="ch-err">' + esc(t.error) + '</span>'
-        : t.result ? ' = <b class="mono">' + esc(t.result.decimal) + '</b>' + (t.result.fraction && t.result.fraction !== t.result.decimal ? ' <span class="muted mono">(' + esc(t.result.fraction) + ')</span>' : '') + (t.result.exact ? '' : ' <span class="muted">rounded decimal</span>') : '')
+        : t.result ? (t.result.exact ? ' = <b class="mono">' + esc(t.result.decimal) + '</b>' + (t.result.fraction && t.result.fraction !== t.result.decimal ? ' <span class="muted mono">(' + esc(t.result.fraction) + ')</span>' : '')
+          : ' ≈ <b class="mono">' + esc(t.result.decimal) + '</b> <span class="muted">exactly <span class="mono">' + esc(t.result.fraction) + '</span></span>') : '')
       + (t.name !== 'calculate' ? ' <span class="muted">' + esc(t.name) + '</span>' : '') + '</div>').join('') + '<div class="muted" style="font-size:11px">Computed by the calculation worker, not by the model.</div></div>';
   }
   function aiHtml(st, conv, m) {
@@ -322,7 +326,7 @@
     if (n.kind === 'quota') {
       const what = p.limit === 'gpu_seconds_per_month' ? 'GPU-seconds per month' : p.limit === 'tokens_per_day' ? 'tokens per day' : (p.limit || 'a usage limit');
       const reset = p.resets_at ? new Date(p.resets_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-      return UI.notice('<b>Over quota: ' + esc(what) + (p.scope ? ' for this ' + esc(p.scope) : '') + '.</b> ' + esc(p.detail || '') + (p.max != null ? ' Used ' + num(p.used) + ' of ' + num(p.max) + '.' : '') + (reset ? ' Resets ' + esc(reset) + '.' : '') + (p.raised_by ? ' ' + esc(p.raised_by.charAt(0).toUpperCase() + p.raised_by.slice(1)) + ' can raise it.' : '') + (n.example ? ' <span class="muted">(example)</span>' : ''), 'warn', close);
+      return UI.notice('<b>Over quota: ' + esc(what) + (p.scope ? ' for this ' + esc(p.scope) : '') + '.</b> ' + (p.detail ? esc(p.detail) : (p.max != null ? 'Used ' + num(p.used) + ' of ' + num(p.max) + '.' : '') + (p.raised_by ? ' ' + esc(p.raised_by.charAt(0).toUpperCase() + p.raised_by.slice(1)) + ' can raise it.' : '')) + (reset ? ' Resets ' + esc(reset) + '.' : '') + (n.example ? ' <span class="muted">(example)</span>' : ''), 'warn', close);
     }
     if (n.kind === 'forbidden') return UI.notice('<b>' + (p.step === 'zone' ? 'Label above this profile' : 'Above your clearance') + '.</b> ' + esc(p.detail || '') + (p.step === 'zone' ? ' Pick a profile cleared for this label.' : ''), 'danger', close);
     return '';
@@ -361,6 +365,15 @@
       + (list.length ? '' : UI.empty(q ? 'No conversations match' : st.archived ? 'No archived conversations' : 'No conversations yet', q ? 'Try another word or start a new conversation.' : st.archived ? 'Archived conversations show here.' : 'Ask something to start one in this workspace.'));
   }
 
+  /** Keeps the open conversation in the address bar (so a reload reopens it) without a hashchange re-render. */
+  function syncUrl(id) {
+    const h = '#/chat' + (id ? '?id=' + enc(id) : '');
+    if (!visible() || location.hash === h) return;
+    try { history.replaceState(null, '', h); } catch (e) { return; }
+    App.state.lastHash = location.hash; App.state.params = id ? { id } : {};
+    S().paramId = id || null;
+  }
+
   // ---------- data ----------
   const listReq = (st) => App.get('/api/conversations?kind=chat' + (st.archived ? '&archived=true' : ''));
   function load() {
@@ -376,9 +389,15 @@
       .catch((err) => { st.loadError = err; })
       .finally(() => {
         st.loading = false;
+        if (!st.convId && App.state.params.id) { syncUrl(null); App.toast('That conversation is not in this workspace or no longer exists.', 'warn'); }
         rerender();
         if (st.conv) st.conv.messages.filter(active).forEach((m) => catchUp(m.id, true));
       });
+  }
+  /** Residency changes once a model has loaded; picked up after each answer. */
+  function refreshProfiles() {
+    const st = S();
+    App.get('/api/chat/profiles').then((list) => { if (S() !== st) return; st.profiles = list; pickProfile(st, st.profile); schedule(); }).catch(() => { /* keeps the last list */ });
   }
   async function loadList() {
     const st = S();
@@ -401,6 +420,7 @@
     const st = S();
     if (st.convId === id && st.conv) return;
     st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false;
+    syncUrl(id);
     rerender();
     await loadConv(true);
     if (st.conv) pickProfile(st, st.conv.profileId);
@@ -426,7 +446,7 @@
     try {
       if (!st.convId) {
         const r = await App.post('/api/chat', body);
-        st.convId = r.conversationId;
+        st.convId = r.conversationId; syncUrl(st.convId);
       } else {
         await App.post(cUrl(st.convId) + '/messages', body);
       }
@@ -556,7 +576,7 @@
         const st = ctx.state;
         if (!st.notice || st.notice.kind !== 'quota') {
           const t = new Date(); t.setUTCHours(24, 0, 0, 0);
-          st.notice = { kind: 'quota', example: true, problem: { limit: 'tokens_per_day', scope: 'workspace', used: 500000, max: 500000, resets_at: t.toISOString(), raised_by: 'a tenant admin', detail: 'Requests are refused until the daily reset.' } };
+          st.notice = { kind: 'quota', example: true, problem: { limit: 'tokens_per_day', scope: 'workspace', used: 500000, max: 500000, resets_at: t.toISOString(), raised_by: 'a tenant admin' } };
         }
         ctx.rerender();
       } },
@@ -637,7 +657,7 @@
       ctx.on('input', '#ch-composer', (e, t) => { st.draft = t.value; });
       ctx.on('keydown', '#ch-composer', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
       ctx.on('click', '[data-send]', () => send());
-      ctx.on('click', '[data-new]', () => { st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; rerender(true); });
+      ctx.on('click', '[data-new]', () => { syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; rerender(true); });
       ctx.on('click', '[data-convo]', (e, t) => openConv(t.dataset.convo));
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
       ctx.on('click', '[data-archived]', async () => { st.archived = !st.archived; await loadList(); rerender(); });
@@ -671,7 +691,7 @@
         const c = st.conv; if (!c) return;
         const ok = await ctx.confirm({ title: 'Delete this conversation?', tone: 'danger', body: 'Every branch, answer and its thinking is deleted. Usage already metered stays in the usage records. This cannot be undone.', kv: [['Title', esc(c.title || 'Untitled conversation')], ['Messages', num(c.messages.length)]], ok: 'Delete' });
         if (!ok) return;
-        try { await App.del(cUrl(c.id)); st.convId = null; setConv(st, null); ctx.toast('Conversation deleted.', 'ok'); await loadList(); rerender(); } catch (err) { handleError(err, 'Could not delete'); }
+        try { await App.del(cUrl(c.id)); syncUrl(null); st.convId = null; setConv(st, null); ctx.toast('Conversation deleted.', 'ok'); await loadList(); rerender(); } catch (err) { handleError(err, 'Could not delete'); }
       });
       ctx.on('click', '[data-raise]', async () => {
         const c = st.conv; const sel = ctx.$('[data-raiseto]'); if (!c || !sel) return;

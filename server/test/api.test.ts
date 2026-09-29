@@ -1,6 +1,5 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { authenticator } from 'otplib';
 import request from 'supertest';
 import { io as ioClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,7 +17,7 @@ describe('HTTP API', () => {
     it('answers liveness and readiness', async () => {
       await request(h.app).get('/healthz').expect(200, { status: 'ok' });
       const r = await request(h.app).get('/readyz').expect(200);
-      expect(r.body.checks).toMatchObject({ database: 'ok', migrations: 'ok' });
+      expect(r.body.checks).toMatchObject({ database: 'ok', migrations: 'ok', kms: 'ok', blobs: 'ok' });
     });
 
     it('sends security headers and a trace id', async () => {
@@ -122,13 +121,13 @@ describe('HTTP API', () => {
 
     it('requires TOTP on later sign-ins and rejects a replayed code', async () => {
       await localUser(h, 'root', ['system-admin'], 'restricted');
-      const { totpSecret } = await loginAdmin(h, 'root');
+      const { enrolCode } = await loginAdmin(h, 'root');
       const { agent, res } = await login(h, 'root');
       expect(res.body).toMatchObject({ stage: 'mfa', mfa: { methods: ['totp', 'recovery'] } });
       await agent.get('/api/admin/users').expect(401);
-      // The code used at enrolment is spent: the same time step is refused.
-      const code = authenticator.generate(totpSecret);
-      const replay = await agent.post('/api/auth/mfa/totp').set('x-csrf-token', res.body.csrf).send({ code });
+      // The code used at enrolment is spent: replaying it is refused (reusing the exact code, not regenerating it,
+      // keeps this true when the test crosses a 30-second step).
+      const replay = await agent.post('/api/auth/mfa/totp').set('x-csrf-token', res.body.csrf).send({ code: enrolCode });
       expect(replay.status).toBe(401);
     });
 

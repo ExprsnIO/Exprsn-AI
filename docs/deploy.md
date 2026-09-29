@@ -88,7 +88,7 @@ Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forw
 
 ## Operations
 
-- **Health:** `/healthz` (process up), `/readyz` (database reachable and migrated; 503 while draining).
+- **Health:** `/healthz` (process up), `/readyz` (database reachable and migrated, KMS and blob store answering; 503 while draining).
 - **Metrics:** `/metrics` with `Authorization: Bearer $METRICS_TOKEN`.
 - **Logs:** JSON on stdout; every line carries the request's trace id, which is also in every error response.
 - **Shutdown:** SIGTERM stops accepting connections, closes sockets and the database, and exits within 25 s.

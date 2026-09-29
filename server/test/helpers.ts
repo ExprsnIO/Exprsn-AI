@@ -87,14 +87,12 @@ export async function login(h: Harness, username: string, password = PASSWORD) {
 }
 
 /** Signs in an admin: password, then TOTP enrolment on first sign-in. Returns an active, MFA-verified client. */
-export async function loginAdmin(h: Harness, username: string): Promise<Client & { totpSecret: string }> {
+export async function loginAdmin(h: Harness, username: string): Promise<Client & { totpSecret: string; enrolCode: string }> {
   const { agent, res } = await login(h, username);
   if (res.body.stage !== 'enroll') throw new Error(`expected enroll stage, got ${JSON.stringify(res.body)}`);
   const begin = await agent.post('/api/me/mfa/totp').set('x-csrf-token', res.body.csrf).send({});
-  const confirm = await agent
-    .post(`/api/me/mfa/totp/${begin.body.id}/confirm`)
-    .set('x-csrf-token', res.body.csrf)
-    .send({ code: authenticator.generate(begin.body.secret) });
+  const enrolCode = authenticator.generate(begin.body.secret);
+  const confirm = await agent.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', res.body.csrf).send({ code: enrolCode });
   if (confirm.status !== 201) throw new Error(`enrol failed: ${JSON.stringify(confirm.body)}`);
-  return { agent, csrf: confirm.body.csrf, cookie: cookieOf(confirm), totpSecret: begin.body.secret };
+  return { agent, csrf: confirm.body.csrf, cookie: cookieOf(confirm), totpSecret: begin.body.secret, enrolCode };
 }

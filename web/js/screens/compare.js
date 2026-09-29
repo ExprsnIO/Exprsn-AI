@@ -32,7 +32,7 @@
     if (!st.profiles) return null;
     const p = profileOf(st, name);
     if (!p) return name + ' is not offered to you: it is not published, its model is retired, or it needs a higher clearance.';
-    if (RANK[p.label] < RANK[st.label]) return name + ' is disabled for a ' + st.label + ' conversation: its ceiling is ' + p.label + '.';
+    if (RANK[p.label] < RANK[st.label]) return name + ' is disabled for ' + (st.label === 'internal' ? 'an ' : 'a ') + st.label + ' conversation: its ceiling is ' + p.label + '.';
     return null;
   }
   const colFor = (st, name) => (st.run ? st.run.columns.find((c) => c.requested === name) : null);
@@ -267,12 +267,12 @@
     return add + UI.btn(st.sending ? 'Sending…' : 'Send to ' + n, { kind: 'primary', icon: 'send', attrs: 'data-send', disabled: n < 2 || !!st.sending, title: n < 2 ? 'Compare needs at least two available profiles' : '' });
   }
 
-  function usageRow(c, label, replaced) {
+  function usageRow(c, replaced) {
     const u = c.usage;
     const settled = u && !ACTIVE[c.state];
     return ['<span class="mono" title="' + esc(c.messageId) + '">' + esc(c.messageId.slice(-8)) + '</span>', esc(c.profile), '<span class="mono">' + esc(c.model) + '</span>', esc(c.think),
       replaced ? UI.pill('replaced', 'outline') : ACTIVE[c.state] ? UI.pill('running', 'info') : UI.pill(c.state),
-      settled ? fmt(u.promptTokens) : '—', settled ? fmt(u.outputTokens) : ACTIVE[c.state] ? '≈' + fmt(approxTokens(c)) : '—', settled ? fmt(u.thinkingTokens) : '—', settled ? esc(gpuS(u.gpuMs)) : '—', settled ? esc(secs(u.firstTokenMs)) : '—', UI.label(label, { sm: true })];
+      settled ? fmt(u.promptTokens) : '—', settled ? fmt(u.outputTokens) : ACTIVE[c.state] ? '≈' + fmt(approxTokens(c)) : '—', settled ? fmt(u.thinkingTokens) : '—', settled ? esc(gpuS(u.gpuMs)) : '—', settled ? esc(secs(u.firstTokenMs)) : '—'];
   }
   function usageHtml(st) {
     if (!st.metered) return '';
@@ -284,9 +284,9 @@
     const gpu = settled.reduce((a, x) => a + x.c.usage.gpuMs, 0);
     const metered = settled.filter((x) => x.c.usage.promptTokens + x.c.usage.outputTokens > 0).length;
     return '<section class="panel" id="cp-usage">' + head
-      + UI.table(['Message', 'Profile', 'Model', 'Thinking', 'State', { label: 'Tokens in', right: true }, { label: 'Tokens out', right: true }, { label: 'Thinking tokens', right: true }, { label: 'GPU-s', right: true }, { label: 'First token', right: true }, 'Label'],
-        all.map((x) => usageRow(x.c, st.run.label, x.replaced)), { clickable: false, minWidth: '0' })
-      + '<div class="muted" style="font-size:12px">Combined for this comparison: ' + fmt(tokens) + ' tokens, ' + (gpu / 1000).toFixed(1) + ' GPU-s, ' + metered + ' usage row' + (metered === 1 ? '' : 's') + (all.length > settled.length ? ' so far' : '') + '. Rows appear under Usage and audit.</div></section>';
+      + UI.table(['Message', 'Profile', 'Model', 'Thinking', 'State', { label: 'Tokens in', right: true }, { label: 'Tokens out', right: true }, { label: 'Thinking tokens', right: true }, { label: 'GPU-s', right: true }, { label: 'First token', right: true }],
+        all.map((x) => usageRow(x.c, x.replaced)), { clickable: false, minWidth: '0' })
+      + '<div class="muted" style="font-size:12px">Combined for this comparison: ' + fmt(tokens) + ' tokens, ' + (gpu / 1000).toFixed(1) + ' GPU-s, ' + metered + ' usage row' + (metered === 1 ? '' : 's') + (all.length > settled.length ? ' so far' : '') + '. Every row carries the ' + esc(st.run.label) + ' label and appears under Usage and audit.</div></section>';
   }
 
   function problemHtml(st) {
@@ -464,9 +464,10 @@
         + '.cp-model{font-size:12px;overflow-wrap:anywhere}.cp-note{font-size:12px;margin-top:2px}'
         + '.cp-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:8px 0;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}'
         + '.cp-metrics > div{display:flex;flex-direction:column;min-width:0}.cp-metrics .k{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}.cp-metrics .v{font-size:15px;font-weight:600}.cp-live .v{color:var(--fg2)}'
+        + '.cp-grid[data-n="3"] .cp-metrics,.cp-grid[data-n="4"] .cp-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.cp-metrics .v{white-space:nowrap}'
         + '.cp-answer{font-size:15px;line-height:1.6;flex-grow:1;white-space:pre-wrap;overflow-wrap:anywhere}.cp-grid[data-n="2"] .cp-answer{max-width:72ch;font-size:16px}'
         + '.cp-think{border:1px solid var(--line2);border-radius:6px;background:var(--panel2)}'
-        + '.cp-thinkbtn{display:flex;align-items:center;gap:6px;width:100%;border:0;background:transparent;color:var(--fg2);font:inherit;font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer;text-align:left}'
+        + '.cp-thinkbtn .muted{font-weight:400}.cp-thinkbtn{display:flex;align-items:center;flex-wrap:wrap;gap:6px;width:100%;border:0;background:transparent;color:var(--fg2);font:inherit;font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer;text-align:left}'
         + '.cp-thinktext{padding:0 10px 8px;font-size:13px;line-height:1.5;color:var(--fg2);white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto}'
         + '.cp-tool{font-size:12px;padding:4px 8px;border-radius:4px;background:var(--panel2)}'
         + '.cp-acts{margin-top:auto}'
@@ -539,8 +540,8 @@
         if (!ok) return;
         try {
           const r = await App.post('/api/chat', { content: run.prompt, profile: col.profile, think: col.think, label: run.label });
-          ctx.toast('Started a new chat with <b>' + esc(col.profile) + '</b> from the same prompt. The comparison is kept in Compare.', 'ok');
-          ctx.navigate('chat', { convo: r.conversationId });
+          ctx.toast('Started a new chat with ' + esc(col.profile) + ' from the same prompt. The comparison is kept in Compare.', 'ok');
+          ctx.navigate('chat', { id: r.conversationId, convo: r.conversationId });
         } catch (err) {
           if (err && err.status === 429) { st.problem = { kind: 'quota', err }; if (App.state.route === 'compare') ctx.rerender(); } else App.fail(err, 'Could not start the chat');
         }

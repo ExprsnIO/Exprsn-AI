@@ -13,7 +13,7 @@ export function healthRoutes(s: Services, state: { shuttingDown: boolean }): Rou
     res.json({ status: 'ok' });
   });
 
-  /** Readiness: database reachable and fully migrated, and not draining. */
+  /** Readiness: database reachable and fully migrated, KMS and blob store answering, and not draining. */
   r.get('/readyz', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const checks: Record<string, string> = {};
@@ -29,6 +29,11 @@ export function healthRoutes(s: Services, state: { shuttingDown: boolean }): Rou
       checks.database = (err as Error).message;
       ok = false;
     }
+    // Without the KMS nothing sealed opens; without the blob store exports, attachments and checkpoints fail.
+    const [kms, blobs] = await Promise.all([s.kms.health(), s.blobs.health()]);
+    checks.kms = kms.ok ? 'ok' : kms.detail;
+    checks.blobs = blobs.ok ? 'ok' : blobs.detail;
+    if (!kms.ok || !blobs.ok) ok = false;
     res.status(ok ? 200 : 503).json({ status: ok ? 'ready' : 'not ready', checks });
   });
 
