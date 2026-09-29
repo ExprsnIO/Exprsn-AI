@@ -1,8 +1,12 @@
 import type { Server as HttpServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { Redis } from 'ioredis';
 import { loadPrincipal, sessionTokenFrom } from '../http/middleware.js';
-import type { Principal } from '../authz/policy.js';
-import { EVENTS, type Services } from '../services.js';
+import { effectivePermissions, type Principal } from '../authz/policy.js';
+import { TOPICS } from '../platform/bus.js';
+import type { JobProgressEvent } from '../platform/jobs.js';
+import type { Services } from '../services.js';
 
 export interface SocketData {
   principal: Principal;
@@ -15,8 +19,15 @@ export type Realtime = Server<Record<string, never>, Record<string, never>, Reco
 export const rooms = {
   user: (id: string) => `user:${id}`,
   tenant: (id: string) => `tenant:${id}`,
-  session: (id: string) => `session:${id}`
+  session: (id: string) => `session:${id}`,
+  /** Holders of a permission in a tenant, for admin-screen updates (pool state, job queues). */
+  perm: (tenantId: string, perm: string) => `perm:${tenantId}:${perm}`,
+  /** Holders of a permission in any tenant, for platform-wide resources such as pools. */
+  platformPerm: (perm: string) => `perm:*:${perm}`
 };
+
+/** Permissions whose holders receive live admin updates. */
+const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage'] as const;
 
 /**
  * Socket.io on the same HTTP server (path /socket.io), authenticated by the session cookie at handshake.
@@ -35,6 +46,17 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     pingTimeout: 20_000
   });
 
+  // More than one instance: rooms and broadcasts span instances through Redis.
+  let pub: Redis | null = null;
+  let sub: Redis | null = null;
+  if (s.cfg.REDIS_URL) {
+    pub = new Redis(s.cfg.REDIS_URL);
+    sub = pub.duplicate();
+    pub.on('error', (err) => s.log.warn({ err: err.message }, 'socket.io redis error'));
+    sub.on('error', (err) => s.log.warn({ err: err.message }, 'socket.io redis error'));
+    io.adapter(createAdapter(pub, sub));
+  }
+
   io.use(async (socket, next) => {
     try {
       const token = sessionTokenFrom(socket.handshake.headers.cookie, s.cfg.COOKIE_SECURE);
@@ -52,20 +74,37 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
 
   io.on('connection', (socket: Socket) => {
     const d = socket.data as SocketData;
-    void socket.join([rooms.user(d.principal.userId), rooms.tenant(d.principal.tenantId), rooms.session(d.sessionId)]);
+    const perms = effectivePermissions(d.principal);
+    const permRooms = LIVE_PERMS.filter((x) => perms.has(x)).flatMap((x) => [rooms.perm(d.principal.tenantId, x), rooms.platformPerm(x)]);
+    void socket.join([rooms.user(d.principal.userId), rooms.tenant(d.principal.tenantId), rooms.session(d.sessionId), ...permRooms]);
     s.metrics.socketConnections.inc();
     socket.on('disconnect', () => s.metrics.socketConnections.dec());
     // Clients may not choose rooms: membership is decided on the server from the principal.
     socket.emit('ready' as never, { user: d.principal.userId, tenant: d.principal.tenantSlug } as never);
   });
 
-  const onRevoked = (ids: string[]) => {
-    for (const id of ids) {
-      io.to(rooms.session(id)).emit('session.revoked' as never);
-      io.in(rooms.session(id)).disconnectSockets(true);
-    }
-  };
-  s.events.on(EVENTS.sessionsRevoked, onRevoked);
+  // Every instance hears revocations through the bus and closes the sockets it holds.
+  const offs = [
+    s.bus.on<string[]>(TOPICS.sessionsRevoked, (ids) => {
+      for (const id of ids) {
+        io.local.to(rooms.session(id)).emit('session.revoked' as never);
+        io.local.in(rooms.session(id)).disconnectSockets(true);
+      }
+    }),
+    // Job progress goes to the submitter's sockets; the adapter carries it to other instances.
+    s.bus.on<JobProgressEvent>(TOPICS.jobProgress, (e) => {
+      if (e.createdBy) io.to(rooms.user(e.createdBy)).emit('job.progress' as never, e as never);
+    }),
+    s.bus.on<{ userId: string; notification: unknown }>(TOPICS.notification, (e) => {
+      io.local.to(rooms.user(e.userId)).emit('notification' as never, e.notification as never);
+    }),
+    s.bus.on<{ userId: string; event: string; data: unknown }>(TOPICS.chatEvent, (e) => {
+      io.local.to(rooms.user(e.userId)).emit(e.event as never, e.data as never);
+    }),
+    s.bus.on<{ tenantId: string | null; perm: string; event: string; data: unknown }>(TOPICS.poolState, (e) => {
+      io.local.to(e.tenantId ? rooms.perm(e.tenantId, e.perm) : rooms.platformPerm(e.perm)).emit(e.event as never, e.data as never);
+    })
+  ];
 
   const sweep = setInterval(async () => {
     for (const [, socket] of io.of('/').sockets) {
@@ -81,9 +120,10 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     io,
     close: async () => {
       clearInterval(sweep);
-      s.events.off(EVENTS.sessionsRevoked, onRevoked);
+      for (const off of offs) off();
       io.disconnectSockets(true);
       await new Promise<void>((resolve) => io.close(() => resolve()));
+      await Promise.all([pub?.quit().catch(() => undefined), sub?.quit().catch(() => undefined)]);
     }
   };
 }

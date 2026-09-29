@@ -4,7 +4,7 @@ import { createDb, migrate, pendingMigrations } from './db/knex.js';
 import { createApp, type AppState } from './http/app.js';
 import { createLogger } from './observability/index.js';
 import { attachRealtime } from './realtime/socket.js';
-import { createServices } from './services.js';
+import { createServices, startSchedules } from './services.js';
 import { bootstrap } from './bootstrap.js';
 
 async function main(): Promise<void> {
@@ -29,6 +29,10 @@ async function main(): Promise<void> {
   server.requestTimeout = 120_000;
   server.keepAliveTimeout = 61_000;
   const realtime = attachRealtime(server, services);
+  if (cfg.WORKERS_ENABLED) {
+    services.jobs.start();
+    startSchedules(services);
+  }
 
   const housekeeping = setInterval(() => {
     void Promise.all([services.sessions.purge(), services.throttle.purge()]).catch((err) => log.warn({ err }, 'housekeeping failed'));
@@ -52,7 +56,7 @@ async function main(): Promise<void> {
     clearInterval(housekeeping);
     server.closeIdleConnections();
     await realtime.close(); // also stops the HTTP server accepting new connections
-    await services.chain.close();
+    await services.close();
     await db.destroy();
     log.info('stopped');
     process.exit(0);

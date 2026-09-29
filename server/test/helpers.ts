@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { authenticator } from 'otplib';
 import request from 'supertest';
 import type { Express } from 'express';
@@ -23,6 +26,8 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
     DATA_KEY: randomBytes(32).toString('base64'),
     PUBLIC_URL: 'http://localhost:8080',
     WEB_ROOT: '/nonexistent',
+    BLOB_DIR: mkdtempSync(path.join(tmpdir(), 'exprsn-blobs-')),
+    JOB_QUEUE: 'db',
     ...overrides
   } as NodeJS.ProcessEnv);
 }
@@ -46,7 +51,7 @@ export async function harness(overrides: Record<string, string> = {}): Promise<H
     app: createApp(s),
     tenantId: tenant!.id,
     close: async () => {
-      await s.chain.close();
+      await s.close();
       await db.destroy();
     }
   };

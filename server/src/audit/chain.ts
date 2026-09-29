@@ -75,14 +75,49 @@ export function actorFrom(p: Principal | null | undefined, ip?: string | null): 
  * (tenant_id, seq) unique key makes concurrent writers from other instances fail and retry rather than fork.
  * Rows are never updated or deleted; a mistake is fixed by appending a correction that references it.
  */
+export interface AuditQuery {
+  limit?: number;
+  before?: number;
+  kind?: AuditKind;
+  action?: string;
+  from?: number;
+  to?: number;
+  label?: Label;
+  /** Username or user id of the actor. */
+  actor?: string;
+  corrects?: string;
+}
+
 export class AuditLog {
   private readonly tails = new Map<string, Promise<unknown>>();
+  private readonly listeners: ((e: AuditEvent) => void)[] = [];
 
   constructor(private readonly db: Db) {}
 
+  /** Called after every append commits (the SIEM stream and the realtime layer listen here). */
+  onAppend(fn: (e: AuditEvent) => void): () => void {
+    this.listeners.push(fn);
+    return () => {
+      const i = this.listeners.indexOf(fn);
+      if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+
   append(input: AuditInput): Promise<AuditEvent> {
     const prev = this.tails.get(input.tenantId) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(() => this.appendWithRetry(input));
+    const next = prev
+      .catch(() => undefined)
+      .then(() => this.appendWithRetry(input))
+      .then((e) => {
+        for (const fn of this.listeners) {
+          try {
+            fn(e);
+          } catch {
+            // listeners never break an append
+          }
+        }
+        return e;
+      });
     this.tails.set(input.tenantId, next);
     void next.finally(() => {
       if (this.tails.get(input.tenantId) === next) this.tails.delete(input.tenantId);
@@ -133,17 +168,49 @@ export class AuditLog {
     });
   }
 
-  async list(
-    tenantId: string,
-    opts: { limit?: number; before?: number; kind?: AuditKind; action?: string } = {}
-  ): Promise<AuditEvent[]> {
-    const q = this.db('audit_events').where({ tenant_id: tenantId });
+  async list(tenantId: string, opts: AuditQuery = {}): Promise<AuditEvent[]> {
+    const q = this.query(tenantId, opts);
     if (opts.before) q.andWhere('seq', '<', opts.before);
+    const rows = await q.orderBy('seq', 'desc').limit(Math.min(opts.limit ?? 100, 500));
+    return rows.map(rowToEvent);
+  }
+
+  /** The filtered query without ordering or paging (shared by list, counts and exports). */
+  query(tenantId: string, opts: AuditQuery = {}) {
+    const q = this.db('audit_events').where({ tenant_id: tenantId });
     if (opts.kind) q.andWhere({ kind: opts.kind });
     // Prefix match as a range, which needs no LIKE escaping and uses the (tenant_id, action) index.
     if (opts.action) q.andWhere('action', '>=', opts.action).andWhere('action', '<', opts.action + '\uffff');
-    const rows = await q.orderBy('seq', 'desc').limit(Math.min(opts.limit ?? 100, 500));
-    return rows.map(rowToEvent);
+    if (opts.from) q.andWhere('ts', '>=', opts.from);
+    if (opts.to) q.andWhere('ts', '<', opts.to);
+    if (opts.label) q.andWhere({ label: opts.label });
+    if (opts.corrects) q.andWhere({ corrects: opts.corrects });
+    if (opts.actor) {
+      // The actor is stored as canonical JSON; match its user or username field exactly.
+      const v = JSON.stringify(opts.actor).replace(/[%_!]/g, '!$&');
+      q.andWhere((w) => w.whereRaw("actor LIKE ? ESCAPE '!'", [`%"user":${v}%`]).orWhereRaw("actor LIKE ? ESCAPE '!'", [`%"username":${v}%`]));
+    }
+    return q;
+  }
+
+  async get(tenantId: string, id: string): Promise<AuditEvent | undefined> {
+    const row = await this.db('audit_events').where({ tenant_id: tenantId, id }).first();
+    return row ? rowToEvent(row) : undefined;
+  }
+
+  async head(tenantId: string): Promise<{ seq: number; hash: string; ts: number } | null> {
+    const row = await this.db('audit_events').where({ tenant_id: tenantId }).orderBy('seq', 'desc').first('seq', 'hash', 'ts');
+    return row ? { seq: Number(row.seq), hash: String(row.hash), ts: Number(row.ts) } : null;
+  }
+
+  async countSince(tenantId: string, ts: number): Promise<number> {
+    const [r] = await this.db('audit_events').where({ tenant_id: tenantId }).andWhere('ts', '>=', ts).count({ n: '*' });
+    return Number(r?.n ?? 0);
+  }
+
+  async hashAt(tenantId: string, seq: number): Promise<string | null> {
+    const row = await this.db('audit_events').where({ tenant_id: tenantId, seq }).first('hash');
+    return row ? String(row.hash) : null;
   }
 
   /** Recomputes every hash from genesis to head. Read-only: a break is reported, never repaired. */

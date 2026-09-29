@@ -19,6 +19,7 @@ export interface SessionRow {
   last_seen_at: number;
   expires_at: number;
   revoked_at: number | null;
+  workspace_id?: string | null;
 }
 
 export interface SessionSettings {
@@ -172,6 +173,10 @@ export class SessionService {
   }
 
   /** Revokes every session of a user, optionally keeping one (sign out everywhere else). */
+  async setWorkspace(id: string, workspaceId: string | null): Promise<void> {
+    await this.db('sessions').where({ id }).update({ workspace_id: workspaceId });
+  }
+
   async revokeAllForUser(userId: string, exceptId?: string): Promise<number> {
     const q = this.db('sessions').where({ user_id: userId, revoked_at: null });
     if (exceptId) q.andWhereNot({ id: exceptId });

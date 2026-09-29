@@ -17,6 +17,8 @@ export interface Principal {
   sessionId: string | null;
   apiKeyId: string | null;
   mfa: boolean;
+  /** The workspace the request acts in (the session's current one, or X-Workspace for API keys). */
+  workspaceId?: string | null;
 }
 
 export interface Resource {
@@ -63,4 +65,38 @@ export function authorize(p: Principal, action: Permission, resource: Resource =
     return deny('zone', `Zone ceiling ${resource.zoneCeiling} is below the data label ${resource.label}`);
   }
   return { allow: true, step: null, reason: 'allowed', action, policy: POLICY_VERSION };
+}
+
+export interface ExplainedStep {
+  step: DecisionStep;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * Every step of the pipeline for one request, evaluated in order and reported even after a failure, for the
+ * "effective permission" panel. The decision itself is authorize()'s: the first failing step.
+ */
+export function explain(p: Principal, action: Permission, resource: Resource = {}): { decision: Decision; steps: ExplainedStep[] } {
+  const perms = permissionsFor(p.roles);
+  const steps: ExplainedStep[] = [
+    { step: 'role', ok: perms.has(action), detail: perms.has(action) ? `A role held grants ${action}` : `No role held grants ${action}` },
+    { step: 'scope', ok: !p.scopes || p.scopes.includes(action), detail: !p.scopes ? 'Session credential: no scope narrowing' : p.scopes.includes(action) ? `Credential scopes include ${action}` : `Credential scopes do not include ${action}` },
+    {
+      step: 'tenant',
+      ok: !resource.tenantId || resource.tenantId === p.tenantId || p.roles.includes('system-admin'),
+      detail: !resource.tenantId || resource.tenantId === p.tenantId ? 'Same tenant' : p.roles.includes('system-admin') ? 'Another tenant; system admin' : 'Resource belongs to another tenant'
+    },
+    {
+      step: 'clearance',
+      ok: !resource.label || clears(p.clearance, resource.label),
+      detail: resource.label ? `Clearance ${p.clearance}, data ${resource.label}` : 'No data label'
+    },
+    {
+      step: 'zone',
+      ok: !resource.label || !resource.zoneCeiling || labelRank(resource.label) <= labelRank(resource.zoneCeiling),
+      detail: resource.zoneCeiling ? `Zone ceiling ${resource.zoneCeiling}, data ${resource.label ?? 'unlabelled'}` : 'No zone ceiling applies'
+    }
+  ];
+  return { decision: authorize(p, action, resource), steps };
 }
