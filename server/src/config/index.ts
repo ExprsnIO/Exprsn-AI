@@ -97,6 +97,28 @@ const schema = z
     CLAMD_HOST: z.string().optional(),
     CLAMD_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
 
+    /** Workflows: HTTP steps only call internal (private) addresses; this comma list narrows the hosts further. */
+    WORKFLOW_HTTP_HOSTS: z.string().default(''),
+    WORKFLOW_HTTP_ALLOW_LOOPBACK: bool.default(false),
+
+    /** Media: ffmpeg and ffprobe binaries, encoder choice, caps, and whisper.cpp for transcripts. */
+    MEDIA_FFMPEG: z.string().default('ffmpeg'),
+    MEDIA_FFPROBE: z.string().default('ffprobe'),
+    MEDIA_ENCODER: z.enum(['auto', 'nvenc', 'cpu']).default('auto'),
+    MEDIA_WORK_DIR: z.string().optional(),
+    MEDIA_MAX_BYTES: z.coerce.number().int().min(1024).max(16 * 1024 ** 3).default(512 * 1024 ** 2),
+    MEDIA_MAX_DURATION_S: z.coerce.number().int().min(1).max(24 * 3600).default(7200),
+    MEDIA_MAX_WIDTH: z.coerce.number().int().min(16).max(16_384).default(1920),
+    MEDIA_MAX_HEIGHT: z.coerce.number().int().min(16).max(16_384).default(1080),
+    MEDIA_MAX_STREAMS: z.coerce.number().int().min(1).max(64).default(4),
+    MEDIA_WHISPER_BIN: z.string().optional(),
+    MEDIA_WHISPER_MODEL: z.string().optional(),
+
+    /** Images: generation backends as JSON ([{id, kind: comfyui|diffusers, url, label?, model?, workflow?, concurrency?}]). */
+    IMAGE_BACKENDS: z.string().default('[]'),
+    IMAGE_SAFETY_URL: z.url().optional(),
+    IMAGE_SAFETY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
     SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
