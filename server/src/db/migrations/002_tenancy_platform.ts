@@ -158,7 +158,11 @@ export async function down(knex: Knex): Promise<void> {
     await knex.schema.dropTableIfExists(table);
   }
   await knex.schema.alterTable('sessions', (t) => t.dropColumn('workspace_id'));
-  await knex.schema.alterTable('group_mappings', (t) => t.dropColumn('workspace_id'));
+  await knex.schema.alterTable('group_mappings', (t) => {
+    // MySQL refuses to drop a column that a foreign key still uses.
+    t.dropForeign(['workspace_id']);
+    t.dropColumn('workspace_id');
+  });
   await knex.schema.alterTable('workspaces', (t) => {
     t.dropColumn('slug');
     t.dropColumn('description');
