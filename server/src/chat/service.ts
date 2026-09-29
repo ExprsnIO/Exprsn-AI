@@ -532,15 +532,22 @@ export class ChatService {
     this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', profile: r.profile.name, model: r.model.name });
     try {
       const onPosition = (position: number) => this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', position });
-      try {
-        lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: st.ac.signal, ...(r.profile.fallback ? { waitMs: r.profile.fallback.afterQueueWaitMs } : {}), onPosition });
-      } catch (err) {
-        if (!(err instanceof QueueTimeout) || !r.profile.fallback) throw err;
-        const fb = await this.resolveFor(p, r.profile.fallback.profileId, c.label);
-        this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'fallback', from: r.profile.name, profile: fb.profile.name, model: fb.model.name });
-        r = fb;
-        lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: st.ac.signal, onPosition });
-        await this.db('messages').where({ id: m.id }).update({ profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, canary: r.canary });
+      // The fallback chain: when every slot for a profile stays busy past its queue wait, try its fallback, whose own
+      // fallback applies in turn (at most three hops, never revisiting a profile).
+      const tried = new Set<string>([r.profile.id]);
+      for (let hop = 0; ; hop++) {
+        const fallback = hop < 3 && r.profile.fallback && !tried.has(r.profile.fallback.profileId) ? r.profile.fallback : null;
+        try {
+          lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: st.ac.signal, ...(fallback ? { waitMs: fallback.afterQueueWaitMs } : {}), onPosition });
+          break;
+        } catch (err) {
+          if (!(err instanceof QueueTimeout) || !fallback) throw err;
+          const fb = await this.resolveFor(p, fallback.profileId, c.label);
+          tried.add(fb.profile.id);
+          this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'fallback', from: r.profile.name, profile: fb.profile.name, model: fb.model.name });
+          r = fb;
+          await this.db('messages').where({ id: m.id }).update({ profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, canary: r.canary });
+        }
       }
       st.state = 'streaming';
       await this.db('messages').where({ id: m.id }).update({ state: 'streaming', instance_id: lease.instance.id, model: r.model.name });

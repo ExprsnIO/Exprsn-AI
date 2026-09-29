@@ -20,6 +20,7 @@ services:
       TRUST_PROXY: "false"
       DB_CLIENT: pg
       DATABASE_URL: postgres://exprsn:exprsn@postgres:5432/exprsn_ai
+      REDIS_URL: redis://redis:6379
       IDENTITY_CONFIG: /etc/exprsn-ai/identity.yaml
       DEV_LDAP_ADMIN_PASSWORD: dev-ldap-admin
       DEV_HR_PG_URL: postgres://hr_readonly:hr_readonly_dev@postgres:5432/hr
@@ -30,6 +31,11 @@ services:
       postgres: { condition: service_healthy }
       mysql: { condition: service_healthy }
       openldap: { condition: service_started }
+      redis: { condition: service_started }
+
+  redis:
+    image: redis:7-bookworm
+    ports: ["6379:6379"]
 
   postgres:
     image: postgres:17-bookworm

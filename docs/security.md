@@ -1,6 +1,6 @@
 # Security model
 
-This page lists the controls in place as of Sprint 1 and what later sprints add. Report vulnerabilities privately to
+This page lists the controls in place as of Sprint 4 and what later sprints add. Report vulnerabilities privately to
 the maintainers rather than in issues.
 
 ## Authentication
@@ -41,13 +41,47 @@ the maintainers rather than in issues.
 
 Per-tenant SHA-256 hash chain over canonical JSON (every field, including the previous hash). Rows are never updated
 or deleted by the application; verification is read-only. Events above the reader's clearance are returned without
-content. Sprint 2 adds signed checkpoints in write-once storage and streaming to a SIEM.
+content.
+
+- **Signed checkpoints:** hourly (and on demand) the head of each chain is HMAC-signed by the KMS, with a key the
+  database never holds, and a copy is written to the blob store. Verification recomputes the chain and checks every
+  checkpoint, so history rewritten consistently (every hash recomputed) still fails at the first checkpoint after
+  the change. A failed verification notifies tenant admins and auditors in the console and by email.
+- **Corrections** are new rows that reference the row they correct; the original stays.
+- **Exports** never contain rows above the requester's clearance: a selection that would is refused with the count,
+  and the filtered export records how many rows it left out. Export files are sealed with the tenant key; downloads
+  are audited.
+- **SIEM:** every event is streamed as it is appended (NDJSON over HTTPS, bearer token).
 
 ## Secrets
 
 Configuration holds references (`env:`, `file:`), never values. The server reads secret files at use time. Container
 and systemd deployments pass secrets as files (Docker secrets, systemd credentials), not environment variables.
-Sprint 2 replaces `DATA_KEY` with a KMS (OpenBao transit) and per-tenant data keys.
+
+## Encryption at rest
+
+Envelope encryption with a data key per tenant (and one for platform secrets such as TOTP seeds). Data keys are
+random AES-256 keys stored only wrapped by a key-encryption key in the KMS: OpenBao/Vault transit, or locally a key
+derived from `DATA_KEY`. Conversation titles, message content, thinking and calculation steps, attachments and export
+files are sealed with AES-256-GCM under the tenant's data key, with the row's identity as associated data, so a
+ciphertext moved to another row or tenant does not open. Keys rotate by version (`exprsn-ai kms:rotate`); old
+versions stay readable. Offboarding destroys every version of the tenant's key, in OpenBao too, and every instance
+drops its cached copies at once, so the tenant's sealed data is unreadable before the purge job deletes it.
+
+## Model serving
+
+- Only the gateway talks to Ollama, over internal networks, optionally with mutual TLS per instance.
+- Models enter through an import request: pickle checkpoints are refused, the pulled blob's digest must match the
+  digest pinned in the request (the blob is deleted otherwise), and only GGUF and safetensors formats are accepted.
+- Approval is dual control (not the requester), needs a recorded licence and a passing conformance run; a model
+  that fails the tool-calling test has its tools capability withheld.
+- A profile carries a label: users need that clearance to pick it, and a conversation labelled above it cannot use
+  it (the zone step of the policy). Pools carry a label ceiling, and requests are only routed to pools cleared for
+  the conversation's label.
+- Chat attachments are quarantined, type-checked from their bytes, scanned with ClamAV when configured, and
+  classified for payment cards, IBANs, national identifiers, emails and phone numbers before a chat can use them;
+  a file classified above its owner's clearance or the workspace ceiling is rejected.
+- Model output is rendered as text in the console, never as HTML.
 
 ## Deployment hardening
 
@@ -60,8 +94,12 @@ filter, private `/tmp`, only the state directory writable.
 - First-factor enrolment: an admin with no second factor enrols one at first sign-in, so until then the account is
   protected by its password alone. Have new admins sign in and enrol promptly; an identity admin can reset factors
   (which forces re-enrolment) if an account may have been enrolled by someone else.
-- Kerberos SPNEGO, OIDC/SAML federation and device flow: Sprint 9.
-- Directory sync that disables users removed from every mapped group between sign-ins: Sprint 2. Until then, removal
-  from a group takes effect at the user's next sign-in; disable the user in the console to act immediately.
-- Multi-instance Socket.io fan-out (Redis adapter): Sprint 2. Until then run one instance, or pin sessions.
+- Kerberos SPNEGO, OIDC/SAML federation, device flow and service accounts with client credentials: Sprint 9.
+- Guardrails (input and output checkpoints, the guard model, PII redaction in prompts and answers) arrive in Sprint 5.
+  Until then attachments are classified, but typed prompts and model output are not inspected.
+- The attachment classifier is pattern-based (with checksums for cards and IBANs); Sprint 5 adds trained
+  classifiers.
+- A chat stream lives on the instance that runs it: if that instance stops, the answer ends where it was and is
+  kept as stored so far. Resume after a restart shows the stored text, not a continuation.
+- Rate limits are per instance (in memory); quotas are shared through the database.
 - Screens still showing prototype data change nothing on the server; their APIs arrive in the sprint shown on each.

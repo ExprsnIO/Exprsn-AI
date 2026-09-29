@@ -9,6 +9,8 @@ const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN'
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...env };
+  // An empty variable means "not set" (Compose passes ${VAR:-} through as an empty string).
+  for (const k of Object.keys(out)) if (out[k] === '') delete out[k];
   for (const name of FILE_VARS) {
     const file = env[`${name}_FILE`];
     if (file) out[name] = readFileSync(file, 'utf8').trim();
