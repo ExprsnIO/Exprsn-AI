@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Console scripts parse
+        run: for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done
+
+  integration:
+    name: User stores against PostgreSQL, MySQL and OpenLDAP
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_USER: exprsn, POSTGRES_PASSWORD: exprsn, POSTGRES_DB: exprsn_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U exprsn" --health-interval 3s --health-timeout 3s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: exprsn_test, MYSQL_USER: exprsn, MYSQL_PASSWORD: exprsn }
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -proot" --health-interval 3s --health-timeout 3s --health-retries 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - name: Start OpenLDAP with the development seed
+        run: |
+          docker run -d --name openldap -p 389:389 \
+            -e LDAP_ORGANISATION=Northwind -e LDAP_DOMAIN=northwind.local -e LDAP_ADMIN_PASSWORD=dev-ldap-admin -e LDAP_TLS=false \
+            -v "$PWD/deploy/docker/ldap/seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-seed.ldif:ro" \
+            osixia/openldap:1.5.0 --copy-service
+          for i in $(seq 1 40); do
+            docker exec openldap ldapsearch -x -H ldap://localhost -b ou=people,dc=northwind,dc=local -D cn=admin,dc=northwind,dc=local -w dev-ldap-admin uid=mokafor >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          docker logs openldap; exit 1
+      - run: npm ci
+      - run: npm run test:integration -w server
+        env:
+          TEST_PG_URL: postgres://exprsn:exprsn@127.0.0.1:5432/exprsn_test
+          TEST_MYSQL_URL: mysql://exprsn:exprsn@127.0.0.1:3306/exprsn_test
+          TEST_LDAP_URL: ldap://127.0.0.1:389
+          TEST_LDAP_INSECURE: "true"
+          TEST_LDAP_BIND_PW: dev-ldap-admin
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/docker/Dockerfile -t exprsn-ai:ci .
+      - name: Starts and answers health checks
+        run: |
+          docker run -d --name app -p 8080:8080 \
+            -e NODE_ENV=development -e PUBLIC_URL=http://localhost:8080 -e DB_CLIENT=sqlite \
+            -e SESSION_SECRET="$(openssl rand -hex 32)" -e DATA_KEY="$(openssl rand -base64 32)" exprsn-ai:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 1; done
+          docker logs app; exit 1

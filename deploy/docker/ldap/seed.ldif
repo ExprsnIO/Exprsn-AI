@@ -1,0 +1,37 @@
+# Development directory for Exprsn-AI (base DN dc=northwind,dc=local, created by the container).
+# Passwords: mokafor / Northwind-Dev-Password-1, jlee / Northwind-Dev-Password-2. Development only.
+
+dn: ou=people,dc=northwind,dc=local
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=northwind,dc=local
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=mokafor,ou=people,dc=northwind,dc=local
+objectClass: inetOrgPerson
+uid: mokafor
+cn: Mara Okafor
+sn: Okafor
+mail: mokafor@northwind.local
+userPassword: {SSHA}UwhuWNiSgKOz17zZC1Apv+0RgUu3kCxm
+
+dn: uid=jlee,ou=people,dc=northwind,dc=local
+objectClass: inetOrgPerson
+uid: jlee
+cn: Jun Lee
+sn: Lee
+mail: jlee@northwind.local
+userPassword: {SSHA}kUlUF9NMGyfweQmKsbfgYmOmNUtPR7Z5
+
+dn: cn=finance-ops,ou=groups,dc=northwind,dc=local
+objectClass: groupOfNames
+cn: finance-ops
+member: uid=mokafor,ou=people,dc=northwind,dc=local
+member: uid=jlee,ou=people,dc=northwind,dc=local
+
+dn: cn=ai-admins,ou=groups,dc=northwind,dc=local
+objectClass: groupOfNames
+cn: ai-admins
+member: uid=mokafor,ou=people,dc=northwind,dc=local

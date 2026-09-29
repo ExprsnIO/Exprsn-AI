@@ -1,0 +1,189 @@
+import { Router, type Request, type Response } from 'express';
+import { z } from 'zod';
+import { actorFrom } from '../audit/chain.js';
+import { LoginThrottle } from '../identity/lockout.js';
+import { provision } from '../identity/provisioning.js';
+import type { SessionRow } from '../identity/sessions.js';
+import { rolesRequireMfa } from '../authz/permissions.js';
+import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
+import { forbidden, HttpProblem, tooManyRequests, unauthorized } from '../http/problem.js';
+import type { Services } from '../services.js';
+
+const loginSchema = z.object({
+  tenant: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
+  username: z.string().trim().min(1).max(190),
+  password: z.string().min(1).max(1024)
+});
+
+const REFUSALS: Record<string, string> = {
+  disabled: 'This account is disabled. Ask an identity admin.',
+  no_mapped_group: 'Your account is not in a group mapped to this tenant. Ask an identity admin.',
+  identity_conflict: 'This username is already linked to a different user store. Ask an identity admin.'
+};
+
+const invalidCredentials = (remaining: number) =>
+  new HttpProblem(401, 'Invalid credentials', remaining > 0 && remaining <= 2 ? `The username or password is wrong. ${remaining === 1 ? 'One attempt' : 'Two attempts'} left before lockout.` : 'The username or password is wrong.', {
+    extensions: { attempts_remaining: remaining }
+  });
+
+export function authRoutes(s: Services): Router {
+  const r = Router();
+  r.use(noStore);
+
+  const sessionBody = async (session: SessionRow) => {
+    const user = await s.users.get(session.tenant_id, session.user_id);
+    const methods = session.stage === 'mfa' ? await s.mfa.methods(session.user_id) : [];
+    return {
+      authenticated: session.stage === 'active',
+      stage: session.stage,
+      csrf: s.sessions.csrfFor(session.id),
+      mfa: { methods },
+      user: user ? { id: user.id, username: user.username, displayName: user.display_name } : null,
+      expiresAt: session.expires_at
+    };
+  };
+
+  /** Completes a pending-MFA session: new token, stage active. */
+  const completeMfa = async (req: Request, res: Response, method: string) => {
+    const session = req.authSession as SessionRow;
+    const { token, session: next } = await s.sessions.rotate(session, { stage: 'active', method: `${session.method}, ${method}`, mfaVerified: true });
+    setSessionCookie(res, s, token, next.expires_at);
+    await s.throttle.succeed(`mfa:${session.id}`);
+    await s.audit.append({ tenantId: session.tenant_id, action: 'auth.mfa.verified', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { method }, traceId: req.traceId });
+    s.metrics.logins.inc({ result: 'ok', kind: method });
+    res.json(await sessionBody(next));
+  };
+
+  /** Counts a failed second factor; five failures end the pending session. */
+  const failMfa = async (req: Request, res: Response, method: string) => {
+    const session = req.authSession as SessionRow;
+    const state = await s.throttle.fail([`mfa:${session.id}`]);
+    await s.audit.append({ tenantId: session.tenant_id, action: 'auth.mfa.failed', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { method }, traceId: req.traceId });
+    s.metrics.logins.inc({ result: 'mfa_failed', kind: method });
+    if (state.remaining <= 0 || state.locked) {
+      await s.sessions.revoke(session.tenant_id, session.id);
+      clearSessionCookie(res, s);
+      throw unauthorized('Too many wrong codes. Sign in again.');
+    }
+    throw new HttpProblem(401, 'Invalid code', 'That code did not work. Try the next one from your authenticator.', { extensions: { attempts_remaining: state.remaining } });
+  };
+
+  r.get('/session', async (req, res) => {
+    if (!req.authSession) return void res.json({ authenticated: false, stage: null });
+    res.json(await sessionBody(req.authSession));
+  });
+
+  r.post('/login', async (req, res) => {
+    const body = parseBody(loginSchema, req.body);
+    const tenant = await s.tenants.bySlug(body.tenant ?? s.cfg.DEFAULT_TENANT);
+    const keys = LoginThrottle.keys(tenant?.id ?? 'unknown', body.username, ip(req));
+    const throttleKeys = [keys.account, ...(keys.ip ? [keys.ip] : [])];
+
+    const state = await s.throttle.check(throttleKeys);
+    if (state.locked) throw tooManyRequests(`Too many failed sign-ins. Try again in ${Math.ceil(state.retryAfterSeconds / 60)} minutes.`, state.retryAfterSeconds);
+
+    if (!tenant || tenant.state !== 'active') {
+      const after = await s.throttle.fail(throttleKeys);
+      throw invalidCredentials(after.remaining);
+    }
+
+    const result = await s.chain.authenticate(tenant.id, body.username, body.password);
+    if (result.status !== 'ok') {
+      const after = await s.throttle.fail(throttleKeys);
+      await s.audit.append({
+        tenantId: tenant.id,
+        action: 'auth.login.failed',
+        kind: 'auth',
+        actor: { username: body.username.toLowerCase(), ip: ip(req) },
+        target: { provider: 'provider' in result ? result.provider.name : null },
+        detail: { reason: result.status, attemptsRemaining: after.remaining, ...(result.status === 'not_found' && result.errors.length ? { storeErrors: result.errors } : {}) },
+        traceId: req.traceId
+      });
+      s.metrics.logins.inc({ result: result.status, kind: 'password' });
+      if (after.locked) throw tooManyRequests(`Too many failed sign-ins. Try again in ${Math.ceil(after.retryAfterSeconds / 60)} minutes.`, after.retryAfterSeconds);
+      throw invalidCredentials(after.remaining);
+    }
+
+    const prov = await provision(s.users, tenant.id, result.provider, result.user);
+    if (prov.status === 'refused') {
+      await s.audit.append({
+        tenantId: tenant.id,
+        action: 'auth.login.refused',
+        kind: 'auth',
+        actor: { username: result.user.username, user: prov.user?.id, ip: ip(req) },
+        target: { provider: result.provider.name, groups: result.user.groups.length },
+        detail: { reason: prov.reason },
+        traceId: req.traceId
+      });
+      s.metrics.logins.inc({ result: prov.reason, kind: 'password' });
+      throw forbidden(REFUSALS[prov.reason] ?? 'Sign-in refused.', { reason: prov.reason });
+    }
+    await s.throttle.succeed(keys.account);
+
+    const methods = await s.mfa.methods(prov.user.id);
+    const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);
+    const stage = methods.length ? 'mfa' : needsMfa ? 'enroll' : 'active';
+    const { token, session } = await s.sessions.create({
+      userId: prov.user.id,
+      tenantId: tenant.id,
+      stage,
+      method: `${result.provider.kind === 'ldap' ? 'LDAP' : result.provider.kind === 'sql' ? 'SQL' : 'Local'} password`,
+      providerId: result.provider.id,
+      ip: ip(req),
+      userAgent: req.header('user-agent') ?? null
+    });
+    setSessionCookie(res, s, token, session.expires_at);
+    await s.audit.append({
+      tenantId: tenant.id,
+      action: stage === 'active' ? 'auth.login' : 'auth.login.pending_mfa',
+      kind: 'auth',
+      actor: { user: prov.user.id, username: prov.user.username, name: prov.user.display_name, session: session.id, roles: prov.roles, ip: ip(req) },
+      target: { provider: result.provider.name, kind: result.provider.kind },
+      detail: { jit: prov.created, stage },
+      traceId: req.traceId
+    });
+    s.metrics.logins.inc({ result: stage === 'active' ? 'ok' : stage, kind: 'password' });
+    res.json(await sessionBody(session));
+  });
+
+  const pending = requireAuth({ stages: ['mfa'], sessionOnly: true });
+
+  r.post('/mfa/totp', pending, async (req, res) => {
+    const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/) }), req.body);
+    if (await s.mfa.verifyTotp(req.authSession!.user_id, code)) return completeMfa(req, res, 'TOTP');
+    await failMfa(req, res, 'TOTP');
+  });
+
+  r.post('/mfa/recovery', pending, async (req, res) => {
+    const { code } = parseBody(z.object({ code: z.string().trim().min(8).max(20) }), req.body);
+    if (await s.mfa.useRecoveryCode(req.authSession!.user_id, code)) return completeMfa(req, res, 'recovery code');
+    await failMfa(req, res, 'recovery code');
+  });
+
+  r.post('/mfa/webauthn/options', pending, async (req, res) => {
+    const options = await s.mfa.authenticationOptions(req.authSession!.user_id);
+    await s.sessions.setChallenge(req.authSession!.id, options.challenge);
+    res.json(options);
+  });
+
+  r.post('/mfa/webauthn', pending, async (req, res) => {
+    const { response } = parseBody(z.object({ response: z.looseObject({ id: z.string(), type: z.literal('public-key') }) }), req.body);
+    const challenge = await s.sessions.takeChallenge(req.authSession!.id);
+    if (!challenge) throw unauthorized('The passkey challenge expired. Try again.');
+    const ok = await s.mfa.verifyAuthentication(req.authSession!.user_id, challenge, response as never).catch(() => false);
+    if (ok) return completeMfa(req, res, 'passkey');
+    await failMfa(req, res, 'passkey');
+  });
+
+  r.post('/logout', async (req, res) => {
+    if (req.authSession) {
+      await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
+      const p = req.principal ?? (await loadPrincipal(s, req.authSession.tenant_id, req.authSession.user_id, { session: req.authSession }));
+      await s.audit.append({ tenantId: req.authSession.tenant_id, action: 'auth.logout', kind: 'auth', actor: actorFrom(p, ip(req)), traceId: req.traceId });
+    }
+    clearSessionCookie(res, s);
+    res.status(204).end();
+  });
+
+  return r;
+}

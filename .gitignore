@@ -145,3 +145,10 @@ vite.config.ts.timestamp-*
 # prototype tooling
 design/prototype/node_modules
 design/prototype/dist/
+
+# application data
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+server/dist/

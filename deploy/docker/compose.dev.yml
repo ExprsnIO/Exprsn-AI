@@ -1,0 +1,59 @@
+# Development stack: the app against PostgreSQL, plus every kind of user store with seed users.
+#   docker compose -f deploy/docker/compose.dev.yml up --build
+#   open http://localhost:8080 and sign in as mokafor / Northwind-Dev-Password-1 (OpenLDAP, system admin),
+#   jlee / Northwind-Dev-Password-2 (OpenLDAP member), apatel / Northwind-Dev-Password-3 (PostgreSQL table),
+#   partner1 / Northwind-Dev-Password-4 (MySQL table).
+# All passwords and keys here are for development only.
+name: exprsn-ai-dev
+
+x-dev-secrets: &dev-secrets
+  SESSION_SECRET: dev-only-session-secret-0123456789abcdef0123456789abcdef
+  DATA_KEY: ZGV2LW9ubHktZGF0YS1rZXktMzItYnl0ZXMtbG9uZyE=
+
+services:
+  app:
+    build: { context: ../.., dockerfile: deploy/docker/Dockerfile }
+    environment:
+      <<: *dev-secrets
+      NODE_ENV: development
+      PUBLIC_URL: http://localhost:8080
+      TRUST_PROXY: "false"
+      DB_CLIENT: pg
+      DATABASE_URL: postgres://exprsn:exprsn@postgres:5432/exprsn_ai
+      IDENTITY_CONFIG: /etc/exprsn-ai/identity.yaml
+      DEV_LDAP_ADMIN_PASSWORD: dev-ldap-admin
+      DEV_HR_PG_URL: postgres://hr_readonly:hr_readonly_dev@postgres:5432/hr
+      DEV_PARTNER_MYSQL_URL: mysql://portal_readonly:portal_readonly_dev@mysql:3306/portal
+    volumes: ["./identity.dev.yaml:/etc/exprsn-ai/identity.yaml:ro"]
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      mysql: { condition: service_healthy }
+      openldap: { condition: service_started }
+
+  postgres:
+    image: postgres:17-bookworm
+    environment: { POSTGRES_USER: exprsn, POSTGRES_PASSWORD: exprsn, POSTGRES_DB: exprsn_ai }
+    volumes:
+      - ./sql/pg-init.sh:/docker-entrypoint-initdb.d/00-init.sh:ro
+      - ./sql/pg-hr.sql:/seed/pg-hr.sql:ro
+    ports: ["5432:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U exprsn"], interval: 3s, timeout: 3s, retries: 30 }
+
+  mysql:
+    image: mysql:8.4
+    environment: { MYSQL_ROOT_PASSWORD: dev-root, MYSQL_DATABASE: portal, MYSQL_USER: exprsn, MYSQL_PASSWORD: exprsn }
+    volumes: ["./sql/mysql-partner.sql:/docker-entrypoint-initdb.d/10-partner.sql:ro"]
+    ports: ["3306:3306"]
+    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pdev-root"], interval: 3s, timeout: 3s, retries: 40 }
+
+  openldap:
+    image: osixia/openldap:1.5.0
+    command: --copy-service
+    environment:
+      LDAP_ORGANISATION: Northwind
+      LDAP_DOMAIN: northwind.local
+      LDAP_ADMIN_PASSWORD: dev-ldap-admin
+      LDAP_TLS: "false"
+    volumes: ["./ldap/seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-seed.ldif:ro"]
+    ports: ["389:389"]

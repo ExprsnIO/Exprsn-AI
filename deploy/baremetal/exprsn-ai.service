@@ -1,0 +1,57 @@
+# /etc/systemd/system/exprsn-ai.service — Exprsn-AI application server on bare metal.
+# Installed by install.sh. Secrets come in as systemd credentials (never environment variables):
+#   /etc/exprsn-ai/credentials/{session_secret,data_key,database_url}  root:root 0600
+[Unit]
+Description=Exprsn-AI application server
+Documentation=file:///opt/exprsn-ai/docs/deploy.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exprsn-ai
+Group=exprsn-ai
+WorkingDirectory=/opt/exprsn-ai
+EnvironmentFile=/etc/exprsn-ai/exprsn-ai.env
+LoadCredential=session_secret:/etc/exprsn-ai/credentials/session_secret
+LoadCredential=data_key:/etc/exprsn-ai/credentials/data_key
+LoadCredential=database_url:/etc/exprsn-ai/credentials/database_url
+Environment=NODE_ENV=production WEB_ROOT=/opt/exprsn-ai/web
+Environment=SESSION_SECRET_FILE=%d/session_secret DATA_KEY_FILE=%d/data_key DATABASE_URL_FILE=%d/database_url
+ExecStart=/usr/bin/node /opt/exprsn-ai/server/dist/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+ReadWritePaths=/var/lib/exprsn-ai
+StateDirectory=exprsn-ai
+StateDirectoryMode=0700
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
