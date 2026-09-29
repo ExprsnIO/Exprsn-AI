@@ -27,7 +27,7 @@ export const rooms = {
 };
 
 /** Permissions whose holders receive live admin updates. */
-const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage'] as const;
+const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage', 'flags:review'] as const;
 
 /**
  * Socket.io on the same HTTP server (path /socket.io), authenticated by the session cookie at handshake.

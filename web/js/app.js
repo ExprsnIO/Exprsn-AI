@@ -141,8 +141,8 @@
     ] },
     { group: 'Admin', items: [
       { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },
-      { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', sprint: 7 }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', sprint: 7 }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', sprint: 5 },
-      { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', sprint: 5 }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', sprint: 5 }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', sprint: 6 },
+      { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', sprint: 7 }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', sprint: 7 }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', live: true },
+      { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', live: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', live: true }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', sprint: 6 },
       { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', sprint: 9 }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', sprint: 9 },
       { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', sprint: 9 }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', sprint: 9 }

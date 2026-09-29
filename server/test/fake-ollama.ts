@@ -38,6 +38,11 @@ export class FakeOllama {
   requests: { path: string; body: Record<string, unknown> }[] = [];
   chatDelayMs = 5;
   reply: (messages: Msg[], opts: { think: unknown; tools: unknown[]; model: string }) => Reply = (messages) => ({ content: `You said: ${messages[messages.length - 1]?.content ?? ''}` });
+  /**
+   * Guard models (any model whose name contains "guard") answer like Llama Guard: "safe", or "unsafe" and a line of
+   * hazard categories. By default the last turn is unsafe (S1) when it contains "UNSAFE-TEST".
+   */
+  guard: (messages: Msg[]) => string = (messages) => (/UNSAFE-TEST/.test(messages[messages.length - 1]?.content ?? '') ? 'unsafe\nS1' : 'safe');
   /** When set, requests hang until released (to test queueing and stop). */
   hold: Promise<void> | null = null;
   down = false;
@@ -148,7 +153,7 @@ export class FakeOllama {
     this.loaded.set(name, { size: m.size, expires: Date.now() + 30 * 60_000 });
     res.writeHead(200, { 'content-type': 'application/x-ndjson' });
     const messages = body.messages as Msg[];
-    const r = this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
+    const r = name.includes('guard') ? { content: this.guard(messages) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
     const send = (o: unknown) => res.write(JSON.stringify(o) + '\n');
     const sleep = () => new Promise((x) => setTimeout(x, this.chatDelayMs));
     let evalCount = 0;
