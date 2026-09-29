@@ -15,6 +15,7 @@ import { userAdminRoutes } from '../routes/admin/users.js';
 import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
+import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -100,6 +101,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', auditAdminRoutes(s));
   api.use('/admin', tenantAdminRoutes(s));
   api.use('/admin', usageAdminRoutes(s));
+  api.use('/admin', gatewayAdminRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

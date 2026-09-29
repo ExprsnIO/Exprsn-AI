@@ -89,7 +89,6 @@ const schema = z
     OLLAMA_MAX_INFLIGHT: z.coerce.number().int().min(1).max(256).default(4),
     OLLAMA_MAX_LOADS_PER_10_MIN: z.coerce.number().int().min(1).max(1000).default(6),
     OLLAMA_QUEUE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(3_600_000).default(120_000),
-    OLLAMA_ALLOWED_HOSTS: z.string().default(''),
 
     /** Chat. */
     ATTACHMENT_MAX_BYTES: z.coerce.number().int().min(1024).max(512 * 1024 * 1024).default(10 * 1024 * 1024),

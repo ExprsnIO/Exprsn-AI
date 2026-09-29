@@ -7,7 +7,7 @@ export interface Tenant {
   slug: string;
   name: string;
   directory_dn: string | null;
-  state: 'active' | 'offboarding' | 'disabled';
+  state: 'active' | 'offboarding' | 'offboarded' | 'disabled';
   created_at: number;
   updated_at: number;
 }

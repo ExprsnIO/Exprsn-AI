@@ -52,7 +52,7 @@ export class Offboarding {
       out[`blobs:${prefix}`] = await this.blobs.deletePrefix(`${prefix}/${tenantId}`);
       await progress((++i / steps) * 100, `Deleted ${prefix} objects`);
     }
-    await this.db('tenants').where({ id: tenantId }).update({ state: 'disabled', updated_at: Date.now() });
+    await this.db('tenants').where({ id: tenantId }).update({ state: 'offboarded', updated_at: Date.now() });
     return out;
   }
 }

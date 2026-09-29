@@ -23,6 +23,8 @@ import { JobQueue, Scheduler } from './platform/jobs.js';
 import { Notifications } from './platform/notifications.js';
 import { QuotaService } from './tenancy/quotas.js';
 import { Offboarding } from './tenancy/offboarding.js';
+import { Gateway } from './gateway/gateway.js';
+import { GatewayRepo } from './gateway/repo.js';
 
 export interface Services {
   cfg: Config;
@@ -51,6 +53,7 @@ export interface Services {
   sync: DirectorySync;
   quotas: QuotaService;
   offboarding: Offboarding;
+  gateway: Gateway;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -108,8 +111,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     sync: new DirectorySync(db, providers, users, chain, sessions, apiKeys, audit, notifications, log),
     quotas: new QuotaService(db),
     offboarding: new Offboarding(db, keys, blobs, jobs),
+    gateway: new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS }, jobs),
     close: async () => {
       scheduler.stop();
+      await s.gateway.stop();
       siem.close();
       await jobs.stop();
       await chain.close();

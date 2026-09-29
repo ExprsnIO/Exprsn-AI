@@ -129,7 +129,7 @@ export function tenantAdminRoutes(s: Services): Router {
     if (body.state !== undefined) {
       systemOnly(req);
       if (t.id === p.tenantId) throw forbidden('You cannot disable your own tenant.', { step: 'self' });
-      if (t.state === 'offboarding') throw conflict('This tenant is being offboarded.');
+      if (t.state === 'offboarding' || t.state === 'offboarded') throw conflict('This tenant is offboarded; its key is destroyed and it cannot be re-enabled.');
     }
     const updated = await s.tenants.update(t.id, body);
     if (body.state === 'disabled') {
@@ -150,7 +150,7 @@ export function tenantAdminRoutes(s: Services): Router {
     const body = parseBody(z.object({ confirm: z.string() }), req.body);
     if (body.confirm !== t.name) throw badRequest('Type the tenant name exactly to confirm.');
     if (t.id === p.tenantId) throw forbidden('You cannot offboard your own tenant.', { step: 'self' });
-    if (t.state === 'offboarding' || t.state === 'disabled') throw conflict('This tenant is already offboarded or being offboarded.');
+    if (t.state === 'offboarding' || t.state === 'offboarded') throw conflict('This tenant is already offboarded or being offboarded.');
     const result = await s.offboarding.start(t.id, p.userId);
     s.bus.publish('sessions.revoked', await s.offboarding.revokedSessionIds(t.id));
     await audit(req, t.id, 'tenant.offboarded', { slug: t.slug }, { ...result, steps: ['key destroyed', 'sessions and API keys revoked', 'deletion job queued'] });
@@ -240,6 +240,14 @@ export function tenantAdminRoutes(s: Services): Router {
     }
     await audit(req, t.id, body.state === 'archived' ? 'workspace.archived' : 'workspace.updated', { workspace: w.id, name: w.name }, { before: { name: w.name, labelCeiling: w.label_ceiling, visibility: w.visibility, state: w.state }, after: body });
     res.json(workspaceView(updated!));
+  });
+
+  /** Users of a tenant, for picking workspace members (system admins may be in another tenant). */
+  r.get('/tenants/:tid/users', manage, async (req, res) => {
+    const t = await loadTenant(req);
+    const q = parseBody(z.object({ q: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), req.query);
+    const rows = await s.users.list(t.id, q);
+    res.json(rows.map((u) => ({ id: u.id, username: u.username, displayName: u.display_name, clearance: u.clearance, state: u.state })));
   });
 
   r.get('/tenants/:tid/workspaces/:wid/members', manage, async (req, res) => {

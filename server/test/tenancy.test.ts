@@ -104,7 +104,9 @@ describe('tenants, workspaces and quotas', () => {
     await expect(h.s.keys.open(tid, sealed, 'm1')).rejects.toThrow(/destroyed/);
     await h.s.jobs.runDue();
     expect(await h.s.blobs.get(`exports/${tid}/x.csv.sealed`)).toBeNull();
-    expect((await h.s.tenants.byId(tid))?.state).toBe('disabled');
+    expect((await h.s.tenants.byId(tid))?.state).toBe('offboarded');
+    await a.agent.patch(`/api/admin/tenants/${tid}`).set('x-csrf-token', a.csrf).send({ state: 'active' }).expect(409);
+    expect((await a.agent.get(`/api/admin/tenants/${tid}/users`).expect(200)).body).toEqual([]);
     await a.agent.post(`/api/admin/tenants/${h.tenantId}/offboard`).set('x-csrf-token', a.csrf).send({ confirm: 'Default' }).expect(403);
   });
 

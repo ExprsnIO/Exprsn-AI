@@ -76,7 +76,7 @@ export function auditAdminRoutes(s: Services): Router {
       const rows = await s.notifications.notify({ tenantId: p.tenantId, userIds: people, kind: 'audit.broken', title: `Audit chain verification failed at sequence ${result.brokenAt?.seq}`, body: result.brokenAt?.reason, route: 'usage-audit', email: true });
       notified = (await s.db('users').whereIn('id', rows.map((x) => x.user_id)).select('username')).map((u: { username: string }) => u.username);
     }
-    await audit(req, 'audit.chain.verified', 'system', {}, { status: result.status, checked: result.checked, checkpoints: result.checkpoints.checked, ...(result.brokenAt ? { brokenAt: result.brokenAt, notified } : {}) });
+    await audit(req, 'audit.chain.verified', 'system', {}, { status: result.status, checked: result.checked, checkpoints: result.checkpoints.checked, lastGoodCheckpoint: result.lastGoodCheckpoint, ...(result.brokenAt ? { brokenAt: result.brokenAt, notified } : {}) });
     res.json({ ...result, notified });
   });
 
