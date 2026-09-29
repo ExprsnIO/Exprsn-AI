@@ -22,6 +22,9 @@ import { registryAdminRoutes } from '../routes/admin/registry.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
 import { scriptRoutes } from '../routes/scripts.js';
+import { workflowRoutes } from '../routes/workflows.js';
+import { mediaRoutes } from '../routes/media.js';
+import { imageRoutes } from '../routes/images.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -63,6 +66,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
           // The console sets element style attributes for layout; no inline <style> or script is needed.
           styleSrc: ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", 'data:'],
+          mediaSrc: ["'self'"],
           fontSrc: ["'self'"],
           connectSrc: ["'self'"],
           objectSrc: ["'none'"],
@@ -85,7 +89,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   const api = express.Router();
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && req.path === '/attachments' ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets') ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -116,6 +120,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', mcpAdminRoutes(s));
   api.use(agentRoutes(s));
   api.use(scriptRoutes(s));
+  api.use(workflowRoutes(s));
+  api.use(mediaRoutes(s));
+  api.use(imageRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

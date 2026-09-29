@@ -136,8 +136,8 @@
   const NAV = [
     { group: null, items: [
       { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', live: true },
-      { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', sprint: 6 }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', sprint: 6 }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', sprint: 8 },
-      { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'scripts:run', live: true }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', sprint: 8 }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', sprint: 8 }
+      { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', sprint: 6 }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', sprint: 6 }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', live: true },
+      { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'scripts:run', live: true }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', live: true }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', live: true }
     ] },
     { group: 'Admin', items: [
       { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },

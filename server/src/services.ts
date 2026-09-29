@@ -37,6 +37,12 @@ import { ScriptService } from './scripts/service.js';
 import { createScriptRunner } from './scripts/runner.js';
 import { AgentService } from './agents/service.js';
 import { loadPrincipal } from './http/middleware.js';
+import { WorkflowService } from './workflows/service.js';
+import { MediaService } from './media/service.js';
+import { FfmpegRunner, type MediaRunner } from './media/runner.js';
+import { ImageService } from './images/service.js';
+import { createBackends, type ImageBackend } from './images/backends.js';
+import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 
 export interface Services {
   cfg: Config;
@@ -79,6 +85,14 @@ export interface Services {
   scripts: ScriptService;
   tools: ToolDispatcher;
   agents: AgentService;
+  /** Workflow graphs, versions and durable runs (Sprint 8). */
+  workflows: WorkflowService;
+  /** Media assets, presets and ffmpeg jobs (Sprint 8). */
+  media: MediaService;
+  /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
+  images: ImageService;
+  /** The image-safety classifier for generated images and sampled video frames. */
+  imageSafety: ImageSafety;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -86,6 +100,9 @@ export interface Services {
 export interface ServiceOverrides {
   kms?: Kms;
   blobs?: BlobStore;
+  mediaRunner?: MediaRunner;
+  imageBackends?: ImageBackend[];
+  imageSafety?: ImageSafety;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -125,6 +142,20 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     if (p) p.workspaceId = workspaceId;
     return p;
   }, log);
+  // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK } });
+  const media = new MediaService({
+    db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
+    runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),
+    safety: () => s.imageSafety,
+    safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD,
+    guardrails: () => s.guardrails,
+    caps: { maxBytes: cfg.MEDIA_MAX_BYTES, maxDurationMs: cfg.MEDIA_MAX_DURATION_S * 1000, maxWidth: cfg.MEDIA_MAX_WIDTH, maxHeight: cfg.MEDIA_MAX_HEIGHT, maxStreams: cfg.MEDIA_MAX_STREAMS },
+    encoder: cfg.MEDIA_ENCODER,
+    ...(cfg.MEDIA_WORK_DIR ? { workDir: cfg.MEDIA_WORK_DIR } : {}),
+    ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
+  });
+  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
   const s: Services = {
     cfg,
     db,
@@ -163,6 +194,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     scripts,
     tools,
     agents,
+    workflows,
+    media,
+    images,
+    imageSafety: overrides.imageSafety ?? (cfg.IMAGE_SAFETY_URL ? new HttpSafety(cfg.IMAGE_SAFETY_URL) : noSafety),
     close: async () => {
       scheduler.stop();
       chat.close();

@@ -400,3 +400,94 @@ tmpfs, the nobody user, all capabilities dropped, and memory, CPU, process, time
 | `POST /scripts/:id/promote` `{toolName, version, description, sideEffect, label?, inputSchema, outputSchema?}` (also `workflows:manage` or `tools:manage`) | A tested script becomes a script-backed registry tool, submitted for review; published, the script is `promoted`. The tool pins the script version, takes its arguments as JSON on stdin and returns the JSON on stdout |
 
 Socket event to the script's runner: `script.run {runId, scriptId, state, exitCode?, error?}`.
+
+## Sprint 8: Workflows, media and images
+
+### Workflows
+
+Workflows belong to the session's current workspace and are hidden above the caller's clearance. Editing and
+publishing need `workflows:manage`; reading, starting runs of the published version, replaying and cancelling one's
+own runs need `agents:run`. Approvals are decided by holders of the role the step names (and by the person who
+started a dry run), with clearance for the run's label.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /workflows` | `[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt…}]` (`waiting`: runs paused on an approval) |
+| `POST /workflows` `{name, description?, label?, graph?}` | A new workflow; the draft starts with a manual trigger |
+| `GET /workflows/:id` | `{…, draft: graph, dirty, validation, limits, versions: [{version, state: published\|deprecated, note, publishedBy, publishedAt, graph}]}` |
+| `PUT /workflows/:id/draft` `{graph?, rev?, description?, label?}` | Saves the draft; `rev` is the revision the editor loaded (`409` when someone saved since) |
+| `POST /workflows/:id/validate` `{graph?}` | Validates the given graph (or the draft) without saving |
+| `POST /workflows/:id/publish` `{note?}` | Publishes the draft as the next version; `422` with `errors` when it is invalid |
+| `DELETE /workflows/:id` | Refused (`409`) while runs are queued, running or waiting |
+| `POST /workflows/:id/runs` `{input}` | Starts a run of the published version: `202 {id, state, version, mode: run, label}`; `input` must match the trigger's output schema |
+| `POST /workflows/:id/dry-run` `{input}` | Runs the draft with model and HTTP steps mocked, guardrails not consulted and nothing metered (`workflows:manage`) |
+| `GET /workflows/:id/runs?limit` | Run history (everyone's for workflow admins, one's own otherwise) with each step's state |
+| `GET /workflow-runs/:id` | `{…, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}`; outputs above the caller's clearance are withheld |
+| `POST /workflow-runs/:id/replay` `{from}` | A new run from step `from`: upstream checkpoints are reused, the step and everything after it run again |
+| `POST /workflow-runs/:id/cancel` | Cancels a queued, running or waiting run (its owner or a workflow admin) |
+| `GET /workflow-approvals` | Approvals waiting on the caller: `[{id, runId, nodeId, role, state, shown, dueAt, canDecide, workflow, step, label, mode}]` |
+| `POST /workflow-approvals/:id` `{decision: approve\|reject, reason?}` | Decides; the run resumes (approve) or ends `rejected`. Undecided approvals expire at `dueAt` and the run fails |
+
+A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?}], edges: [{from, to,
+branch?: true|false}], limits: {timeoutMs?, tokens?}}`. `input` and `output` are port schemas
+`{type: string|number|integer|boolean|array|object|any, properties?, required?, items?}`. Step kinds:
+
+| Kind | Config | Output |
+| --- | --- | --- |
+| `trigger` | `{source: manual\|api}` | the run input (checked against `output`) |
+| `model` | `{profile, prompt, think?, format: text\|json}` | `{text}`, or the parsed JSON (checked against `output`) |
+| `transform` | `{fields: {name: template}}` | the fields |
+| `branch` | `{left, op: eq\|ne\|gt\|gte\|lt\|lte\|contains\|truthy\|exists, right?}` | input plus `{result}`; outgoing edges carry `branch` |
+| `guardrail` | `{checkpoint, text, approverRole}` | input plus `{text, action}`; block fails the step, require-approval pauses for `approverRole` |
+| `approval` | `{role, timeoutMs, show}` | input plus `{approved, by}` |
+| `http` | `{method: GET\|POST\|PUT, url, body?, headers?}` | `{status, body}`; private addresses only, never link-local |
+| `calc` | `{expression}` | `{value, fraction, exact}` |
+| `wait` | `{ms}` | its input, after the wait |
+| `tool` | `{tool, args?}` | not available until the registry ships (publishing refuses it) |
+
+Templates read `{{input.path}}` and `{{steps.<id>.path}}` of upstream steps; a template that is a single placeholder
+keeps the value's type, and URL placeholders are percent-encoded. Validation errors are `{code: structure|cycle|config|
+schema|label|limit|reference|unavailable|unreachable, message, nodeId?, edge?, expected?, actual?}`. Limits: 40 steps,
+fan-out 10, 30 minutes per step, 2 hours and 200,000 tokens per run.
+
+Socket events to the run's owner: `workflow.run {runId, workflowId, state, mode, error}` and `workflow.step {runId,
+workflowId, nodeId, state: running|passed|failed|skipped|waiting|blocked, error, label, attempts, detail}`.
+
+### Media (`chat:read` to read, `chat:write` to upload and run)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /media/caps` | `{caps: {maxBytes, maxDurationMs, maxWidth, maxHeight, maxStreams}, presets: [{id, sub, kinds, fields: [{name, label, type: time\|select, options, default}], encodes, available, reason, model}], encoder: {setting, video: nvenc\|cpu}}` |
+| `GET /media/assets` | Assets in the workspace up to the caller's clearance |
+| `PUT /media/assets?name=&label=` (body: the file) | `202` asset in quarantine; an ingest job probes it, refuses it above a cap, strips metadata and draws previews (`media.asset` socket event); `413` above the size cap |
+| `GET /media/assets/:id` | `{id, name, kind: video\|audio\|image, format, size, durationMs, width, height, streams, previews, state: quarantined\|probing\|ready\|refused, label, reason, uploadedByName, jobs}` |
+| `GET /media/assets/:id/content` | The file (supports `Range`) |
+| `GET /media/assets/:id/previews/:i` | Frame-strip thumbnails (video), the waveform (audio) or a preview (image) |
+| `POST /media/assets/:id/jobs` `{preset, params}` | Queues a preset; parameters are validated against its schema and times against the media (`400`): `202` job |
+| `GET /media/jobs/:id` | `{id, assetId, preset, params, encoder: nvenc\|cpu, state, stage, progress, node, outputs: [{index, name, type, size}], result: {words?, frames?, withheld?, withheldAt?, masked?}, label, error}` |
+| `POST /media/jobs/:id/cancel` | Cancels the caller's own job |
+| `GET /media/jobs/:id/outputs/:i?download=1` | An output (a download is audited) |
+| `POST /media/caps/request` `{assetId, note?}` | Asks the system admins for a higher cap, with the probe result |
+
+Presets: `clip-720p` `{start, end, height: 720|480|1080, crop}`, `transcribe-srt` `{language}` (needs whisper.cpp),
+`frames-1fps` `{start, end, fps: 1|0.5|2, maxFrames: 48|96|200}` (frames pass the image-safety classifier) and
+`normalise-audio` `{loudness, truePeak}`. Transcripts pass the `media` guardrail checkpoint. Socket event:
+`media.job {id, assetId, preset, state, stage, progress, encoder, error, result}`.
+
+### Images (`images:generate`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /images/backends` | `{backends: [{id, kind, label, model, concurrency, steps}], safety: {classifier, threshold}}` |
+| `GET /images/quota` | `{scope: workspace\|tenant, used, limit, resetsAt, raisedBy}` in GPU-seconds this month |
+| `GET /images` | The caller's images in the workspace, newest first |
+| `POST /images` `{prompt, backend, width, height, count: 1–8, seed?, steps?, label?}` | Checks the prompt at the `image` guardrail checkpoint (`422 Prompt blocked` with `rule`) and the GPU-second quota (`429`), then queues one job per image: `202 {batch, redacted, images}` |
+| `GET /images/:id` | `{id, state: queued\|running\|succeeded\|withheld\|failed\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, …}` |
+| `POST /images/:id/cancel`, `POST /images/:id/vary` | Cancel; a variation with the next seed |
+| `GET /images/:id/image`, `GET /images/:id/download` | The PNG with its provenance chunk (`exprsn-provenance`); downloads are audited |
+| `GET /images/:id/provenance` | `{verified, signature, bytesMatch, embedded, manifest}` (HMAC by the KMS) |
+| `POST /images/:id/attach` | Sends the image to chat as an attachment (also needs `chat:write`) |
+| `POST /images/report` `{kind: prompt\|output, imageId?, rule?, note?}` | Reports a possible false positive to flag reviewers and guardrail admins |
+
+Unsafe outputs (a score at or above `IMAGE_SAFETY_THRESHOLD`) are discarded, still metered, audited and raised to
+reviewers. Socket event: `image.job {id, state, stage, step, steps, node, error}`.
