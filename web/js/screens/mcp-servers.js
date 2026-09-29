@@ -1,181 +1,227 @@
 (function () {
   const { UI, esc } = App;
 
-  // ---------- data ----------
-  const SERVERS = [
-    { id: 'kb-search', mode: 'built-in, in-process', hosting: 'Built-in', transport: 'In-process', url: 'in-process, platform instance', zone: 'platform', health: 'healthy', auth: 'Exprsn IdP token exchange (RFC 8693)', audience: 'urn:exprsn:mcp:kb-search', sdk: 'passed against pinned MCP SDK 1.18', profiles: ['analyst', 'chat-default', 'fast', 'coder'], latency: '38 ms', scopes: 'kb:read, classify:run', vault: false, budgetTools: 3, budgetTokens: 620,
-      tools: [{ name: 'search', side: 'read-only', hash: '1a9e0c44', approval: 'approved' }, { name: 'get_document', side: 'read-only', hash: '5d3b7f20', approval: 'approved' }, { name: 'classify_text', side: 'read-only', hash: 'ce02a17b', approval: 'approved' }],
-      changes: [{ title: 'Registered as built-in', text: 'Ships with the platform image. Tools published to all tenants.', meta: 'Phase 1, platform', tone: 'ok' }] },
-    { id: 'jira-internal', mode: 'remote internal, streamable HTTP', hosting: 'Remote (internal)', transport: 'Streamable HTTP', url: 'https://jira-mcp.northwind.internal/mcp', zone: 'app-internal', health: 'healthy', auth: 'Exprsn IdP, audience-bound token (RFC 8707)', audience: 'https://jira-mcp.northwind.internal', sdk: 'passed against pinned MCP SDK 1.18', profiles: ['analyst', 'Data analyst agent'], latency: '120 ms', scopes: 'jira:read, jira:write', vault: false, budgetTools: 3, budgetTokens: 910,
-      tools: [{ name: 'search_issues', side: 'read-only', hash: '8c1d22e0', approval: 'approved' }, { name: 'get_issue', side: 'read-only', hash: '41ab90f3', approval: 'approved' }, { name: 'create_issue', side: 'write', hash: 'e2b84d10', approval: 'approved', confirm: 'always' }, { name: 'transition_issue', side: 'write', hash: '9f0c3a71', approval: 'not approved' }],
-      changes: [{ title: 'create_issue approved with confirm: always', text: 'Reviewer Mara Okafor. destructiveHint: false was not applied; class set to write.', meta: '12 Sep 10:05', tone: 'ok' }, { title: 'Registered', text: 'Remote internal, streamable HTTP. Compatibility passed.', meta: '3 Sep 15:22', tone: '' }] },
-    { id: 'gitlab-onprem', mode: 'remote internal, streamable HTTP', hosting: 'Remote (internal)', transport: 'Streamable HTTP', url: 'https://gitlab-mcp.northwind.internal/mcp', zone: 'app-internal', health: 'changed', auth: 'Per-user token vault, GitLab OAuth', audience: 'https://gitlab-mcp.northwind.internal', sdk: 'passed against pinned MCP SDK 1.18', profiles: ['analyst', 'coder-32b'], latency: '96 ms', scopes: 'api (GitLab), read_repository', vault: true, budgetTools: 4, budgetTokens: 1480,
-      tools: [{ name: 'search_projects', side: 'read-only', hash: 'b41c9e02', approval: 'approved' }, { name: 'get_merge_request', side: 'read-only', hash: '77b013fd', approval: 'approved' }, { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', was: '1f3d7a20', approval: 'disabled, re-review', confirm: 'always' }, { name: 'delete_branch', side: 'destructive', hash: '0c55ab91', approval: 'not approved' }],
-      changes: [{ title: 'tools/list_changed announced', text: 'create_merge_request schema hash e90a44c1 differs from approved 1f3d7a20. Tool disabled in analyst and coder-32b.', meta: 'today 11:52', tone: 'danger' }, { title: 'delete_branch offered by server', text: 'destructiveHint: true. Not approved; hidden from every profile.', meta: '15 Sep 09:30', tone: 'warn' }, { title: 'search_projects, get_merge_request, create_merge_request approved', text: 'Reviewer Mara Okafor. Hashes recorded.', meta: '8 Sep 14:12', tone: 'ok' }, { title: 'Registered', text: 'Remote internal, streamable HTTP. Compatibility passed against SDK 1.18.', meta: '8 Sep 13:40', tone: '' }] },
-    { id: 'report-tools', mode: 'managed shared, sandbox zone', hosting: 'Managed shared', transport: 'Streamable HTTP in the sandbox zone', url: 'https://report-tools.sandbox.northwind.internal/mcp', zone: 'sandbox', health: 'healthy', auth: 'Exprsn IdP, audience-bound token (RFC 8707)', audience: 'https://report-tools.sandbox.northwind.internal', sdk: 'passed against pinned MCP SDK 1.18', profiles: ['analyst'], latency: '210 ms', scopes: 'reports:run', vault: false, budgetTools: 2, budgetTokens: 540, image: 'registry.northwind.internal/mcp/report-tools@sha256:7c1e…',
-      tools: [{ name: 'render_report', side: 'write', hash: 'd04e5b19', approval: 'approved', confirm: 'always' }, { name: 'list_templates', side: 'read-only', hash: '2e7f01aa', approval: 'approved' }],
-      changes: [{ title: 'Container image rotated', text: 'Import bundle 2026-38 verified; image digest updated, tool hashes unchanged.', meta: '17 Sep 08:00', tone: 'ok' }, { title: 'Registered as managed shared', text: 'One instance per tenant in the sandbox zone.', meta: '2 Sep 11:10', tone: '' }] },
-    { id: 'erp-bridge', mode: 'remote internal', hosting: 'Remote (internal)', transport: 'Streamable HTTP', url: 'https://erp-mcp.northwind.internal/mcp', zone: 'data', health: 'unreachable', auth: 'Exprsn IdP, audience-bound token (RFC 8707)', audience: 'https://erp-mcp.northwind.internal', sdk: 'passed against pinned MCP SDK 1.18', profiles: ['analyst'], latency: 'timeout', scopes: 'erp:read', vault: false, budgetTools: 2, budgetTokens: 700,
-      tools: [{ name: 'get_purchase_order', side: 'read-only', hash: '6b2c9d0e', approval: 'approved' }, { name: 'list_vendors', side: 'read-only', hash: 'f81a3c55', approval: 'approved' }],
-      changes: [{ title: 'Health check failing', text: 'Connection timed out on 6 consecutive checks. Bound profiles hide its tools; runs receive a typed error.', meta: 'today 11:48', tone: 'danger' }, { title: 'Registered', text: 'Remote internal, zone data.', meta: '10 Sep 16:00', tone: '' }] }
-  ];
-  const find = (id) => SERVERS.find((s) => s.id === id);
-  const sidePill = (s) => UI.pill(s, s === 'read-only' ? 'ok' : s === 'write' ? 'warn' : s === 'destructive' ? 'danger' : 'info');
-  const healthPill = (h) => UI.pill(h, h === 'healthy' ? 'ok' : h === 'changed' || h === 'unreachable' ? 'danger' : h === 'registering' ? 'info' : '');
-  const approvalPill = (a) => UI.pill(a, a === 'approved' ? 'ok' : a.startsWith('disabled') ? 'danger' : 'outline');
-  const DIFF = '"properties": {\n    "source_branch": { "type": "string" },\n+   "squash": { "type": "boolean", "default": true },\n-   "assignee": { "type": "string" }\n+   "assignee_ids": { "type": "array", "items": { "type": "integer" } }\n}';
-  const diffHtml = (d) => '<pre class="codebox" data-lang="json">' + d.split('\n').map((l) => l.startsWith('+') ? '<span style="color:var(--ok-fg)">' + esc(l) + '</span>' : l.startsWith('-') ? '<span style="color:var(--danger-fg)">' + esc(l) + '</span>' : esc(l)).join('\n') + '</pre>';
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const SIDE = { read: 'read-only', write: 'write', destructive: 'destructive' };
+  const AUTH = { none: 'No credentials (network isolation only)', service: 'Service token, sealed on the server', user: 'Per-user token vault' };
+  const sidePill = (s, hint) => UI.pill((SIDE[s] || s) + (hint ? ' (hint)' : ''), s === 'read' ? 'ok' : s === 'write' ? 'warn' : s === 'destructive' ? 'danger' : 'outline');
+  const healthPill = (h) => UI.pill(h, h === 'healthy' ? 'ok' : h === 'changed' || h === 'unreachable' || h === 'incompatible' || h === 'deregistered' ? 'danger' : h === 'registering' ? 'info' : '');
+  const APPROVAL = { pending: 'not approved', approved: 'approved', changed: 'disabled, re-review', rejected: 'disabled, rejected', removed: 'no longer offered' };
+  const approvalPill = (s) => UI.pill(APPROVAL[s] || s, s === 'approved' ? 'ok' : s === 'changed' || s === 'rejected' ? 'danger' : 'outline');
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');
+  const short = (h) => (h ? String(h).slice(0, 8) : '');
+  const pretty = (v) => JSON.stringify(v, null, 2);
 
-  let bound = false; const cur = {};
+  /** A line diff of two texts (longest common subsequence), as +/- lines. */
+  function diffLines(a, b) {
+    const x = a.split('\n'), y = b.split('\n');
+    const n = x.length, m = y.length;
+    const t = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) t[i][j] = x[i] === y[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    const out = [];
+    let i = 0, j = 0;
+    while (i < n && j < m) { if (x[i] === y[j]) { out.push('  ' + x[i]); i++; j++; } else if (t[i + 1][j] >= t[i][j + 1]) out.push('- ' + x[i++]); else out.push('+ ' + y[j++]); }
+    while (i < n) out.push('- ' + x[i++]);
+    while (j < m) out.push('+ ' + y[j++]);
+    return out;
+  }
+  const diffHtml = (lines) => '<pre class="codebox" data-lang="json">' + lines.map((l) => l.startsWith('+') ? '<span style="color:var(--ok-fg)">' + esc(l) + '</span>' : l.startsWith('-') ? '<span style="color:var(--danger-fg)">' + esc(l) + '</span>' : esc(l)).join('\n') + '</pre>';
+  const announcement = (t) => pretty({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: t.annotations });
 
   App.register({
-    id: 'mcp-servers', title: 'MCP servers', summary: 'Remote and platform-run servers, profile bindings, schema-hash alerts, authorization', section: 'admin',
-    crumb(st) { return ['Admin', 'MCP servers', st.sel || 'gitlab-onprem']; },
+    id: 'mcp-servers', title: 'MCP servers', live: true, section: 'admin',
+    summary: 'Internal MCP servers, tool review with schema hashes, change detection, credentials and profile bindings',
+    crumb(st) { const s = (st.servers || []).find((x) => x.id === st.sel); return ['Admin', 'MCP servers'].concat(s ? [s.name] : []); },
     commands: [{ label: 'Register an MCP server', sub: 'MCP servers', run(app) { app.stateFor('mcp-servers').openRegister = true; app.render(); } }],
     states: [
-      { title: 'Server unreachable', tone: 'danger', text: 'erp-bridge has failed health checks for 6 minutes. Bound profiles hide its tools and runs receive a typed error.', apply(ctx) { ctx.state.sel = 'erp-bridge'; ctx.state.tab = 'health'; ctx.rerender(); } },
-      { title: 'Vault connection needed', tone: 'info', text: 'A user who has not connected GitLab sees a one-time connect prompt. Tokens never enter model context.', apply(ctx) { ctx.state.sel = 'gitlab-onprem'; ctx.state.tab = 'authorization'; ctx.state.vaultPrompt = true; ctx.rerender(); } },
-      { title: 'Internal only', tone: 'neutral', text: 'Registration accepts internal hostnames only. Hosting modes offered: built-in, remote internal, managed shared.', apply(ctx) { registerModal(ctx, 'https://mcp.vendor-saas.com/mcp'); } },
-      { title: 'Compatibility failed', tone: 'warn', text: 'The server speaks a transport the pinned SDK does not support. Registration is blocked with the version detail.', apply(ctx) { ctx.state.compatFailed = true; ctx.state.sel = 'gitlab-onprem'; ctx.rerender(); } }
+      { title: 'Server unreachable', tone: 'danger', text: 'A server that fails its health check has its tools hidden from bound profiles; runs receive a typed error tool_unavailable.', apply(ctx) { ctx.state.demo = 'unreachable'; ctx.rerender(); } },
+      { title: 'Vault connection needed', tone: 'info', text: 'A server that acts with each user\'s own token hides its tools from anyone who has not connected one. Tokens never enter model context.', apply(ctx) { ctx.state.demo = 'vault'; ctx.rerender(); } },
+      { title: 'Internal only', tone: 'neutral', text: 'Registration accepts hosts that resolve to internal addresses only, unless the platform allow-list names them.', apply(ctx) { ctx.state.openRegister = 'https://mcp.vendor-saas.com/mcp'; ctx.rerender(); } },
+      { title: 'Compatibility failed', tone: 'warn', text: 'A server that speaks only the older HTTP+SSE transport (protocol 2024-11-05) is marked incompatible and its tools are hidden.', apply(ctx) { ctx.state.demo = 'incompatible'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.server) { st.sel = ctx.params.server; delete ctx.params.server; }
-      st.sel = st.sel || 'gitlab-onprem'; st.tab = st.tab || 'tools'; st.query = st.query || ''; st.over = st.over || {}; st.added = st.added || []; st.health = st.health || {};
-      cur.ctx = ctx; cur.st = st;
-      const servers = SERVERS.concat(st.added);
-      const health = (s) => st.health[s.id] || s.health;
-      const s = servers.find((x) => x.id === st.sel) || SERVERS[2];
-      const toolState = (t) => st.over[s.id + '/' + t.name] || t;
-      const tools = s.tools.map(toolState);
-      const disabledCount = tools.filter((t) => t.approval.startsWith('disabled')).length;
-      const list = servers.filter((x) => !st.query || (x.id + ' ' + x.mode).toLowerCase().includes(st.query.toLowerCase()));
-
-      let body = '';
-      if (st.tab === 'tools') {
-        body = UI.table(['Tool', 'Side effect', 'Schema hash', 'Approval', ''], tools.map((t) => ({ cells: ['<span class="mono" style="color:var(--fg)">' + esc(t.name) + '</span>' + (t.confirm ? ' <span class="muted" style="font-size:12px">confirm: ' + esc(t.confirm) + '</span>' : ''), sidePill(t.side), '<span class="mono">' + esc(t.hash) + '</span>' + (t.was ? ' <span class="muted" style="font-size:12px">was</span> <span class="mono">' + esc(t.was) + '</span>' : ''), approvalPill(t.approval), '<span class="actions">' + (t.was ? UI.btn('View diff', { size: 'sm', attrs: 'data-diff="' + esc(t.name) + '"' }) : t.approval === 'not approved' ? UI.btn('Review', { size: 'sm', attrs: 'data-review="' + esc(t.name) + '"' }) : t.approval === 'approved' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-revoke="' + esc(t.name) + '"' }) : '') + '</span>'], attrs: 'data-tool="' + esc(t.name) + '"', selected: st.tool === t.name })), { emptyTitle: 'No tools announced', emptyText: 'The server has not answered tools/list yet.' })
-          + (s.id === 'gitlab-onprem' && tools.some((t) => t.was) ? UI.panel('Schema change: create_merge_request', diffHtml(DIFF) + '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Approved hash <span class="mono">1f3d7a20</span>, announced <span class="mono">e90a44c1</span>. The tool stays disabled until a tool admin approves the new schema.</span>' + UI.btn('Reject change', { size: 'sm', attrs: 'data-rejectchange' }) + UI.btn('Approve new schema', { kind: 'primary', size: 'sm', attrs: 'data-approvechange' }) + '</div>') : '')
-          + UI.kv([['Authorization', esc(s.auth)], ['Audience', '<span class="mono">' + esc(s.audience) + '</span>'], ['SDK compatibility', st.compatFailed && s.id === 'gitlab-onprem' ? '<span style="color:var(--warn-fg)">failed: server offers HTTP+SSE 2024-11-05 only; pinned SDK 1.18 requires streamable HTTP</span>' : esc(s.sdk)], ['Bound by profiles', s.profiles.map((p) => '<a href="#" data-goprofile="' + esc(p) + '">' + esc(p) + '</a>').join(', ')]], 4)
-          + UI.panel('Bindings and tool budgets', '<div class="fg2" style="font-size:12px">Servers bind to model profiles. Each profile carries a tool-count and schema-token budget; when bindings exceed it the profile exposes <span class="mono">find_tools</span> instead. Models without the tools capability cannot be bound.</div>'
-            + UI.table(['Profile', 'Model', 'Tools from this server', 'Tool budget', 'Schema tokens', 'Ceiling'], s.profiles.map((p) => { const model = p === 'coder-32b' || p === 'coder' ? 'qwen2.5-coder:32b-q4_K_M' : p === 'fast' || p === 'chat-default' ? 'llama3.1:8b-q5_K_M' : 'qwen2.5:32b-q4_K_M'; const used = p === 'analyst' ? 19 : p === 'coder-32b' ? 11 : 8; const tok = p === 'analyst' ? 5120 : p === 'coder-32b' ? 3300 : 1900; return ['<a href="#" data-goprofile="' + esc(p) + '">' + esc(p) + '</a>', '<span class="mono">' + model + '</span>', tools.filter((t) => t.approval === 'approved').length + ' of ' + tools.length, UI.meter('', used + ' of 24', used / 24 * 100, used > 18 ? 'warn' : ''), UI.meter('', tok.toLocaleString() + ' of 6,000', tok / 60, tok > 4800 ? 'warn' : ''), UI.label(p === 'fast' ? 'internal' : 'confidential', { sm: true })]; }), { clickable: false, cls: 'bare', minWidth: '0' })
-            + '<div>' + UI.btn('Bind to a profile', { size: 'sm', icon: 'plus', attrs: 'data-bind' }) + '</div>');
-      } else if (st.tab === 'authorization') {
-        body = (s.vault && st.vaultPrompt ? UI.notice('<b>Connect your GitLab account.</b> gitlab-onprem uses a per-user token vault. You have not connected GitLab, so its tools are hidden for you until you do. Tokens are stored in OpenBao and never enter model context.', 'info', UI.btn('Connect GitLab', { kind: 'primary', size: 'sm', attrs: 'data-connectvault' })) : '')
-          + UI.kv([['Authorization server', s.vault ? 'GitLab OAuth (internal), tokens in the OpenBao per-user vault' : 'Exprsn IdP (OAuth 2.1)'], ['Audience binding', '<span class="mono">' + esc(s.audience) + '</span> <span class="muted">resource indicator, RFC 8707</span>'], ['Discovery', s.hosting === 'Built-in' ? 'not applicable' : '<span class="mono">' + esc(s.audience) + '/.well-known/oauth-protected-resource</span> <span class="muted">RFC 9728</span>'], ['Token subject', 'the user; <span class="mono">act</span> claim carries the agent or model profile'], ['Scopes granted', '<span class="mono">' + esc(s.scopes) + '</span>'], ['Token lifetime', '10 min, refreshed per turn through token exchange (RFC 8693)'], ['Token passthrough', UI.pill('never', 'ok') + ' <span class="muted">the server never receives the user session or another server\'s token</span>'], ['Connected users', s.vault ? (st.vaultConnected ? '42 of 61 members, including you' : '41 of 61 members; you are not connected') : 'not applicable']], 2)
-          + (s.vault ? UI.panel('Per-user token vault', UI.table(['User', 'Connected', 'Scopes', 'Expires', ''], [['Mara Okafor', st.vaultConnected ? UI.pill('connected', 'ok') : UI.pill('not connected', 'outline'), '<span class="mono">api, read_repository</span>', st.vaultConnected ? '19 Oct' : '', st.vaultConnected ? UI.btn('Disconnect', { size: 'sm', kind: 'ghost', attrs: 'data-disconnectvault' }) : UI.btn('Connect', { size: 'sm', attrs: 'data-connectvault' })], ['J. Lindqvist', UI.pill('connected', 'ok'), '<span class="mono">api, read_repository</span>', '2 Oct', ''], ['R. Adeyemi', UI.pill('expired', 'danger'), '<span class="mono">read_repository</span>', '14 Sep', UI.btn('Notify', { size: 'sm', kind: 'ghost', attrs: 'data-notify' })]], { clickable: false, cls: 'bare', minWidth: '0' })) : '');
-      } else if (st.tab === 'health') {
-        const h = health(s); const failing = h === 'unreachable';
-        body = (failing ? UI.notice('<b>Unreachable.</b> ' + esc(s.id) + ' has failed health checks for 6 minutes. Bound profiles hide its tools and runs receive a typed error <span class="mono">tool_unavailable</span>.', 'danger', UI.btn('Check now', { size: 'sm', attrs: 'data-checknow' })) : '')
-          + '<div class="stats">' + UI.stat(failing ? '0%' : '99.8%', 'Availability, 7 days', failing ? '6 checks failed' : '1 failed check') + UI.stat(esc(s.latency), 'Latency p50', failing ? 'last success 11:42' : 'p95 ' + (parseInt(s.latency, 10) * 3) + ' ms') + UI.stat(failing ? '0' : '184', 'Calls today', failing ? 'hidden from profiles' : (tools.length) + ' tools') + UI.stat(failing ? '6' : '0', 'Typed errors today', failing ? 'tool_unavailable' : '') + '</div>'
-          + UI.table(['Check', 'Result', 'Detail', 'When'], [['Initialize handshake', failing ? UI.pill('timeout', 'danger') : UI.pill('passed', 'ok'), failing ? 'no response in 5 s' : 'protocol 2025-06-18, SDK ' + (s.hosting === 'Built-in' ? 'in-process' : '1.18'), '11:54'], ['tools/list', failing ? UI.pill('skipped', 'outline') : h === 'changed' ? UI.pill('changed', 'danger') : UI.pill('passed', 'ok'), failing ? '' : tools.length + ' tools, ' + (h === 'changed' ? '1 hash differs' : 'hashes match'), '11:54'], ['Egress proxy', failing ? UI.pill('refused', 'danger') : UI.pill('passed', 'ok'), 'zone ' + esc(s.zone) + (failing ? ', upstream connection refused' : ', allow-listed'), '11:54'], ['Protected-resource metadata', s.hosting === 'Built-in' ? UI.pill('not applicable', 'outline') : failing ? UI.pill('skipped', 'outline') : UI.pill('passed', 'ok'), s.hosting === 'Built-in' ? '' : 'RFC 9728 document present', '11:54']], { clickable: false })
-          + (s.image ? UI.kv([['Container image', '<span class="mono">' + esc(s.image) + '</span>'], ['Launcher', 'sandbox controller, short-lived pod in sandbox namespace'], ['Instance scope', 'one per tenant'], ['Restarts, 7 days', '1 (image rotation)']], 2) : '');
-      } else {
-        body = UI.timeline(s.changes) + '<div class="fg2" style="font-size:12px">Every approval, hash change and health transition is written to the audit chain.</div>';
+      const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
+      st.tab = st.tab || 'tools'; st.query = st.query || ''; st.details = st.details || {}; st.reports = st.reports || {};
+      const later = () => { if (App.state.route !== 'mcp-servers') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
+      const load = () => {
+        if (st.loading) return;
+        st.loading = true;
+        Promise.all([App.get('/api/admin/mcp-servers'), App.can('profiles:manage') ? App.get('/api/admin/profiles').catch(() => null) : Promise.resolve(null)])
+          .then(([servers, profiles]) => { st.servers = servers; st.profiles = profiles; st.loaded = true; st.loadError = null; st.details = {}; })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; later(); });
+      };
+      if (!st.loaded && !st.loadError) load();
+      const act = async (fn, okMsg, kind) => {
+        try { const r = await fn(); st.problem = null; if (okMsg) toast(okMsg, kind || 'ok', 5000); st.loaded = false; load(); return r || true; }
+        catch (err) { const pr = err.problem || {}; if (err.status >= 400 && err.status < 500) st.problem = { title: pr.title || 'Refused', detail: err.message, trace: pr.trace_id }; App.fail(err); ctx.rerender(); return null; }
+      };
+      if (st.loadError || !st.loaded) {
+        root.innerHTML = '<div class="page">' + UI.pagehead('MCP servers', 'Internal servers only; every tool is reviewed before a profile can use it', '')
+          + (st.loadError ? UI.problem('MCP servers could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        ctx.on('click', '[data-reload]', () => { st.loadError = null; ctx.rerender(); });
+        return;
       }
 
-      const notice = s.id === 'gitlab-onprem' && disabledCount ? UI.notice('The server announced tools/list_changed at 11:52. ' + disabledCount + ' tool no longer matches its approved hash and is disabled in ' + s.profiles.length + ' profiles.', 'danger', UI.btn('View diff', { size: 'sm', attrs: 'data-diff="create_merge_request"' }))
-        : health(s) === 'unreachable' ? UI.notice('erp-bridge has failed health checks for 6 minutes. Bound profiles hide its tools and runs receive a typed error.', 'danger', UI.btn('Health', { size: 'sm', attrs: 'data-tab="health"' }))
-          : st.compatFailed && s.id === 'gitlab-onprem' ? UI.notice('<b>Compatibility failed.</b> The server now answers only the HTTP+SSE transport (protocol 2024-11-05). The pinned MCP SDK 1.18 requires streamable HTTP (2025-06-18). Registration changes are blocked until the server is upgraded.', 'warn', UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismisscompat' })) : '';
+      const servers = st.servers;
+      if (ctx.params.server) { const hit = servers.find((x) => x.id === ctx.params.server || x.name === ctx.params.server); if (hit) st.sel = hit.id; delete ctx.params.server; }
+      if (st.demo) {
+        const d = st.demo; st.demo = null; st.demoNote = null;
+        const pick = (f, note) => { const s = servers.find(f); if (s) { st.sel = s.id; return s; } st.demoNote = note; return null; };
+        if (d === 'unreachable') { if (pick((x) => x.health === 'unreachable', 'Every server answers its health checks. A server that stops answering shows here with its tools hidden.')) st.tab = 'health'; }
+        else if (d === 'vault') { if (pick((x) => x.auth === 'user', 'No server uses per-user tokens. Register one with per-user authorization to see the connect prompt.')) { st.tab = 'authorization'; st.vaultPrompt = true; } }
+        else if (d === 'incompatible') { if (pick((x) => x.health === 'incompatible', 'Every server speaks streamable HTTP. A server that answers with protocol 2024-11-05 is marked incompatible here.')) st.tab = 'health'; }
+      }
+      const list = servers.filter((x) => !st.query || (x.name + ' ' + x.url + ' ' + x.zone).toLowerCase().indexOf(st.query.toLowerCase()) >= 0);
+      if (!servers.find((x) => x.id === st.sel)) st.sel = (servers.find((x) => x.state === 'active') || servers[0] || {}).id;
+      const s = servers.find((x) => x.id === st.sel);
+      const d = s ? st.details[s.id] : null;
+      if (s && !d && !st.fetching) {
+        st.fetching = s.id;
+        App.get('/api/admin/mcp-servers/' + s.id).then((x) => { st.details[s.id] = x; }).catch((err) => { st.details[s.id] = { error: err }; }).finally(() => { st.fetching = null; later(); });
+      }
+      const manage = App.can('mcp:manage');
+      const active = s && s.state === 'active';
+
+      let body = '';
+      if (!s) body = UI.empty('No MCP servers yet', 'Register an internal server; its tools stay hidden until a tool admin approves them.', UI.btn('Register', { kind: 'primary', attrs: 'data-register' }));
+      else if (!d) body = UI.notice('Loading…', 'info');
+      else if (d.error) body = UI.problem('The server could not be loaded', d.error.message, d.error.problem && d.error.problem.trace_id);
+      else if (st.tab === 'tools') {
+        const changed = d.tools.filter((t) => t.state === 'changed');
+        body = UI.table(['Tool', 'Side effect', 'Schema hash', 'Approval', ''], d.tools.map((t) => ({ cells: ['<span class="mono" style="color:var(--fg)">' + esc(t.name) + '</span>' + (t.confirm === 'always' ? ' <span class="muted" style="font-size:12px">confirm: always</span>' : ''), t.sideEffect ? sidePill(t.sideEffect) : sidePill(t.suggestedSideEffect, true), '<span class="mono">' + esc(short(t.hash)) + '</span>' + (t.approvedHash && t.approvedHash !== t.hash ? ' <span class="muted" style="font-size:12px">was</span> <span class="mono">' + esc(short(t.approvedHash)) + '</span>' : ''), approvalPill(t.state), '<span class="actions">' + (!manage || !active ? '' : t.state === 'changed' ? UI.btn('View diff', { size: 'sm', attrs: 'data-diff="' + esc(t.name) + '"' }) : t.state === 'pending' || t.state === 'rejected' ? UI.btn('Review', { size: 'sm', attrs: 'data-review="' + esc(t.name) + '"' }) : t.state === 'approved' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-revoke="' + esc(t.name) + '"' }) : '') + '</span>'], attrs: 'data-tool="' + esc(t.name) + '"', selected: st.tool === t.name })), { emptyTitle: 'No tools announced', emptyText: 'The server has not answered tools/list yet. Run a compatibility test.' })
+          + changed.map((t) => UI.panel('Schema change: ' + esc(t.name), diffHtml(diffLines(pretty(t.approvedSchema || {}), announcement(t))) + '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Approved hash <span class="mono">' + esc(short(t.approvedHash)) + '</span>, announced <span class="mono">' + esc(short(t.hash)) + '</span>. The tool stays disabled until a tool admin approves the new schema.</span>' + (manage ? UI.btn('Reject change', { size: 'sm', attrs: 'data-rejectchange="' + esc(t.name) + '"' }) + UI.btn('Approve new schema', { kind: 'primary', size: 'sm', attrs: 'data-review="' + esc(t.name) + '"' }) : '') + '</div>')).join('')
+          + UI.kv([['Authorization', esc(AUTH[s.auth])], ['Protocol', esc(s.protocolVersion ? 'streamable HTTP, ' + s.protocolVersion : 'not negotiated yet')], ['Server', esc(s.serverInfo ? (s.serverInfo.name || '') + ' ' + (s.serverInfo.version || '') : 'unknown')], ['Bound by profiles', d.bindings.length ? d.bindings.map((b) => '<a href="#" data-goprofile="' + esc(b.profile) + '">' + esc(b.profile) + '</a>').join(', ') : 'none']], 4)
+          + UI.panel('Bindings and tool budgets', '<div class="fg2" style="font-size:12px">Servers bind to model profiles. A profile carries at most 32 tools; models without the tools capability cannot be bound. In chat, profiles offer the read-only tools that need no confirmation; agent runs use every bound tool and hold write and destructive calls for approval.</div>'
+            + UI.table(['Profile', 'Model', 'Tools from this server', 'Tool budget', 'Ceiling', ''], d.bindings.map((b) => ['<a href="#" data-goprofile="' + esc(b.profile) + '">' + esc(b.profile) + '</a>', '<span class="mono">' + esc(b.model || 'no model') + '</span>' + (b.toolsCapable ? '' : ' ' + UI.pill('no tools', 'danger')), esc(b.tools.join(', ')), UI.meter('', b.toolCount + ' of 32', (b.toolCount / 32) * 100, b.toolCount > 24 ? 'warn' : ''), UI.label(b.label, { sm: true }), App.can('profiles:manage') && manage ? UI.btn('Unbind', { size: 'sm', kind: 'ghost', attrs: 'data-unbind="' + esc(b.profileId) + '"' }) : '']), { clickable: false, cls: 'bare', minWidth: '0', emptyTitle: 'Not bound', emptyText: 'Bind the approved tools to a profile.' })
+            + '<div>' + UI.btn('Bind to a profile', { size: 'sm', icon: 'plus', attrs: 'data-bind', disabled: !App.can('profiles:manage') || !active, title: App.can('profiles:manage') ? '' : 'Binding changes a profile, which needs profiles:manage' }) + '</div>');
+      } else if (st.tab === 'authorization') {
+        const mine = d.myToken || { connected: false };
+        body = (s.auth === 'user' && st.vaultPrompt && !mine.connected ? UI.notice('<b>Connect your token.</b> ' + esc(s.name) + ' acts with each user\'s own token. You have not connected one, so its tools are hidden for you until you do. The token is sealed on the server and never enters model context.', 'info', UI.btn('Connect token', { kind: 'primary', size: 'sm', attrs: 'data-connect' })) : '')
+          + UI.kv([['Mode', esc(AUTH[s.auth])], ['Endpoint', '<span class="mono">' + esc(s.url) + '</span>'], ['Service credential', s.auth === 'service' ? (s.hasCredential ? 'sealed; rotated ' + esc(when(s.credentialRotatedAt)) : 'missing') : 'not used'], ['Token passthrough', UI.pill('never', 'ok') + ' <span class="muted">the server never receives the user\'s session or another server\'s token</span>'], ['Connected users', s.auth === 'user' ? esc(d.connections.length + (mine.connected ? ', including you' : '; you are not connected')) : 'not applicable'], ['Network', 'internal addresses only, checked when each connection is made']], 2)
+          + (s.auth === 'user' ? UI.panel('Per-user token vault', UI.table(['User', 'Connected', 'Scopes', 'Expires', ''], d.connections.map((c) => [esc(c.name), c.expired ? UI.pill('expired', 'danger') : UI.pill('connected', 'ok'), '<span class="mono">' + esc(c.scopes || '') + '</span>', esc(c.expiresAt ? when(c.expiresAt) : 'no expiry'), App.me && App.me.user && c.userId === App.me.user.id ? UI.btn('Disconnect', { size: 'sm', kind: 'ghost', attrs: 'data-disconnect' }) : '']), { clickable: false, cls: 'bare', minWidth: '0', emptyTitle: 'Nobody has connected a token', emptyText: 'Each user connects their own; tools stay hidden for users without one.' }) + (mine.connected ? '' : '<div>' + UI.btn('Connect your token', { size: 'sm', attrs: 'data-connect' }) + '</div>')) : '');
+      } else if (st.tab === 'health') {
+        const failing = s.health === 'unreachable' || s.health === 'incompatible';
+        const report = st.reports[s.id];
+        body = (failing ? UI.notice('<b>' + (s.health === 'incompatible' ? 'Incompatible.' : 'Unreachable.') + '</b> ' + esc(s.healthDetail || '') + ' Bound profiles hide its tools and runs receive a typed error <span class="mono">tool_unavailable</span>.', 'danger', manage ? UI.btn('Check now', { size: 'sm', attrs: 'data-compat' }) : '') : '')
+          + '<div class="stats">' + UI.stat(esc(s.health), 'Health', s.failures ? s.failures + ' failed check' + (s.failures === 1 ? '' : 's') + ' in a row' : 'last check passed') + UI.stat(s.latencyMs == null ? '–' : s.latencyMs + ' ms', 'Handshake and tools/list', 'last successful check') + UI.stat(esc(String(d.tools.filter((t) => t.state === 'approved').length)), 'Approved tools', d.tools.length + ' announced') + UI.stat(esc(when(s.lastOkAt)), 'Last success', 'checked ' + esc(when(s.lastCheckedAt))) + '</div>'
+          + (report ? UI.table(['Check', 'Result', 'Detail'], report.map((r) => [esc(r.check), UI.pill(r.result, r.result === 'passed' ? 'ok' : r.result === 'skipped' ? 'outline' : 'danger'), esc(r.detail)]), { clickable: false }) : UI.notice('Run a compatibility test to see each check: internal address, initialize handshake and tools/list with the hash comparison. The polling job repeats it on a schedule.', 'info', manage && active ? UI.btn('Run compatibility test', { size: 'sm', attrs: 'data-compat' }) : ''));
+      } else {
+        body = (d.events.length ? UI.timeline(d.events.map((e) => ({ title: esc(e.title), text: esc(e.text || ''), meta: esc(when(e.ts)), tone: e.tone }))) : UI.empty('No changes yet', '')) + '<div class="fg2" style="font-size:12px">Approvals, hash changes and health transitions are also written to the audit chain.</div>';
+      }
+
+      const disabled = d && d.tools ? d.tools.filter((t) => t.state === 'changed' || t.state === 'rejected').length : 0;
+      const notice = !s ? '' : s.state === 'deregistered' ? UI.notice('<b>Deregistered.</b> Its tools left every profile and their registry entries are deprecated.', 'danger')
+        : s.health === 'changed' && disabled ? UI.notice('The server changed ' + disabled + ' tool' + (disabled === 1 ? '' : 's') + ' since approval. ' + (disabled === 1 ? 'It no longer matches its approved hash and is' : 'They no longer match their approved hashes and are') + ' disabled in every bound profile.', 'danger', UI.btn('View diff', { size: 'sm', attrs: 'data-diff="' + esc((d.tools.find((t) => t.state === 'changed') || {}).name || '') + '"' }))
+          : s.health === 'unreachable' ? UI.notice(esc(s.name) + ' is failing its health checks: ' + esc(s.healthDetail || '') + ' Bound profiles hide its tools and runs receive a typed error.', 'danger', UI.btn('Health', { size: 'sm', attrs: 'data-tab="health"' }))
+            : s.health === 'incompatible' ? UI.notice('<b>Compatibility failed.</b> ' + esc(s.healthDetail || '') + ' Its tools stay hidden until the server speaks streamable HTTP.', 'warn', UI.btn('Health', { size: 'sm', attrs: 'data-tab="health"' })) : '';
 
       root.innerHTML = '<style>.mcp-page > *{flex-shrink:0}.mcp-list{display:flex;flex-direction:column;gap:2px}.mcp-page .tablewrap.bare .meter{min-width:110px}</style>'
-        + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Servers</div>' + UI.btn('Register', { size: 'sm', attrs: 'data-register' }) + '</div>'
+        + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Servers</div>' + (manage ? UI.btn('Register', { size: 'sm', attrs: 'data-register' }) : '') + '</div>'
         + UI.search('Filter servers', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
-        + '<div class="mcp-list">' + list.map((x) => UI.listItem(esc(x.id), esc(x.mode), { active: x.id === s.id, attrs: 'data-server="' + esc(x.id) + '"', right: healthPill(health(x)) })).join('') + (list.length ? '' : UI.empty('No servers match', 'Try another word or register a server.')) + '</div>'
-        + '<div class="muted" style="font-size:12px;margin-top:auto">Hosting modes: built-in, remote internal, managed shared, managed per-session. Vendor SaaS servers are unreachable from this network.</div></div>'
-        + '<div class="page mcp-page">' + UI.pagehead(s.id, esc(s.url) + ', zone ' + esc(s.zone) + (disabledCount ? ' ' + UI.pill(disabledCount + ' tool disabled', 'danger') : '') + ' ' + UI.pill(s.hosting, 'outline'), UI.btn('Run compatibility test', { attrs: 'data-compat' }) + UI.btn('Rotate credentials', { attrs: 'data-rotate' }) + (s.hosting !== 'Built-in' ? UI.btn('Deregister', { kind: 'ghost', attrs: 'data-deregister' }) : ''))
+        + '<div class="mcp-list">' + list.map((x) => UI.listItem(esc(x.name), esc((x.state === 'deregistered' ? 'deregistered, ' : '') + x.zone + ', ' + x.approved + ' of ' + x.tools + ' tools approved'), { active: s && x.id === s.id, attrs: 'data-server="' + esc(x.id) + '"', right: healthPill(x.state === 'deregistered' ? 'deregistered' : x.health) })).join('') + (list.length ? '' : UI.empty('No servers match', 'Try another word or register a server.')) + '</div>'
+        + '<div class="muted" style="font-size:12px;margin-top:auto">Streamable HTTP on internal hosts only. Tools are hashed; a changed schema disables the tool until it is approved again.</div></div>'
+        + '<div class="page mcp-page">' + (s ? UI.pagehead(s.name, esc(s.url) + ', zone ' + esc(s.zone) + (disabled ? ' ' + UI.pill(disabled + ' tool' + (disabled === 1 ? '' : 's') + ' disabled', 'danger') : '') + ' ' + UI.pill(s.auth === 'user' ? 'per-user tokens' : s.auth === 'service' ? 'service token' : 'no credentials', 'outline'), manage && active ? UI.btn('Run compatibility test', { attrs: 'data-compat' }) + (s.auth === 'service' ? UI.btn('Rotate credentials', { attrs: 'data-rotate' }) : '') + UI.btn('Deregister', { kind: 'ghost', attrs: 'data-deregister' }) : '') : UI.pagehead('MCP servers', 'Internal servers only; every tool is reviewed before a profile can use it', ''))
+        + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+        + (st.problem ? UI.problem(st.problem.title, st.problem.detail, st.problem.trace) : '')
         + notice
-        + UI.tabs([{ id: 'tools', label: 'Tools', count: tools.length }, { id: 'authorization', label: 'Authorization' }, { id: 'health', label: 'Health' }, { id: 'changes', label: 'Changes', count: s.changes.length }], st.tab)
+        + (s ? UI.tabs([{ id: 'tools', label: 'Tools', count: d && d.tools ? d.tools.length : s.tools }, { id: 'authorization', label: 'Authorization' }, { id: 'health', label: 'Health' }, { id: 'changes', label: 'Changes', count: d && d.events ? d.events.length : undefined }], st.tab) : '')
         + body
         + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
 
-      if (st.openRegister) { st.openRegister = false; setTimeout(() => registerModal(ctx), 30); }
-      if (bound) return; bound = true;
+      // ---- events ----
+      const tool = (name) => (d && d.tools ? d.tools.find((t) => t.name === name) : null);
+      ctx.on('click', '[data-server]', (e, t) => { st.sel = t.dataset.server; st.tool = null; st.problem = null; st.vaultPrompt = false; ctx.rerender(); });
+      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
+      ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
+      ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
+      ctx.on('click', 'tr.row[data-tool]', (e, t) => { if (e.target.closest('button')) return; st.tool = t.dataset.tool; openTool(tool(t.dataset.tool)); });
+      ctx.on('click', '[data-review]', (e, t) => reviewTool(tool(t.dataset.review)));
+      ctx.on('click', '[data-diff]', (e, t) => { const x = tool(t.dataset.diff); if (!x) return; ctx.modal({ cls: 'wide', title: 'Schema change: ' + esc(x.name) + ' ' + approvalPill(x.state), body: diffHtml(diffLines(pretty(x.approvedSchema || {}), announcement(x))) + UI.kv([['Approved hash', '<span class="mono">' + esc(short(x.approvedHash)) + '</span>'], ['Announced hash', '<span class="mono">' + esc(short(x.hash)) + '</span>'], ['Side-effect class', sidePill(x.sideEffect || x.suggestedSideEffect) + ' <span class="muted">set at review; annotations are hints</span>'], ['Disabled in', esc(d.bindings.filter((b) => b.tools.indexOf(x.name) >= 0).map((b) => b.profile).join(', ') || 'no profile')]], 2) + UI.notice('Approving records the new hash and re-enables the tool in every bound profile. Arguments are validated against the new schema from the next call.', 'info'), actions: (manage ? UI.btn('Reject change', { attrs: 'data-mreject' }) + UI.btn('Approve new schema', { kind: 'primary', attrs: 'data-mapprove' }) : UI.btn('Close', { attrs: 'data-close' })), onMount(m) { const a = m.querySelector('[data-mapprove]'); if (a) a.addEventListener('click', () => { App.closeOverlay(); reviewTool(x); }); const r = m.querySelector('[data-mreject]'); if (r) r.addEventListener('click', () => { App.closeOverlay(); rejectChange(x); }); } }); });
+      ctx.on('click', '[data-rejectchange]', (e, t) => rejectChange(tool(t.dataset.rejectchange)));
+      ctx.on('click', '[data-revoke]', async (e, t) => {
+        const x = tool(t.dataset.revoke);
+        const ok = await ctx.confirm({ title: 'Revoke approval for ' + esc(x.name), tag: 'revoke', tone: 'danger', body: '<p class="fg2" style="margin:0">The tool is hidden from every bound profile from the next turn. Runs in progress receive a typed error if they call it.</p>', kv: [['Bound profiles', esc(d.bindings.map((b) => b.profile).join(', ') || 'none')]], ok: 'Revoke' });
+        if (ok) act(() => App.post('/api/admin/mcp-servers/' + s.id + '/tools/' + encodeURIComponent(x.name) + '/revoke'), esc(x.name) + ' hidden from ' + d.bindings.length + ' profile' + (d.bindings.length === 1 ? '' : 's') + '.', 'warn');
+      });
+      ctx.on('click', '[data-compat]', async () => {
+        toast('Compatibility test running: internal address, handshake, tools/list.');
+        try {
+          const r = await App.post('/api/admin/mcp-servers/' + s.id + '/check');
+          st.reports[s.id] = r.report; st.loaded = false; load();
+          const bad = r.report.filter((x) => x.result === 'failed' || x.result === 'changed');
+          ctx.modal({ title: 'Compatibility test: ' + esc(s.name) + ' ' + healthPill(r.health), body: UI.table(['Check', 'Result', 'Detail'], r.report.map((x) => [esc(x.check), UI.pill(x.result, x.result === 'passed' ? 'ok' : x.result === 'skipped' ? 'outline' : 'danger'), esc(x.detail)]), { clickable: false, minWidth: '0' }) + (bad.length ? UI.notice(esc(r.healthDetail || 'Some checks did not pass.'), r.health === 'changed' ? 'warn' : 'danger') : ''), actions: UI.btn('Close', { attrs: 'data-close' }) });
+        } catch (err) { App.fail(err, 'Compatibility test failed'); }
+      });
+      ctx.on('click', '[data-rotate]', () => {
+        ctx.modal({ title: 'Rotate credentials for ' + esc(s.name), body: UI.field('New service token', UI.input('', { type: 'password', attrs: 'data-secret autocomplete="off"' }), 'Sealed on the server and never shown again. Issue it at the server first, then paste it here.') + UI.kv([['Currently', s.hasCredential ? 'sealed, rotated ' + esc(when(s.credentialRotatedAt)) : 'missing']], 1), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Rotate', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const secret = m.querySelector('[data-secret]').value; App.closeOverlay(); act(() => App.api('PUT', '/api/admin/mcp-servers/' + s.id + '/credential', { secret }), 'Credentials rotated for ' + esc(s.name) + '. Audit entry written.'); }); } });
+      });
+      ctx.on('click', '[data-deregister]', async () => {
+        const ok = await ctx.confirm({ title: 'Deregister ' + esc(s.name), tag: 'destructive', tone: 'danger', body: '<p class="fg2" style="margin:0">All bindings are removed and the tools disappear from ' + d.bindings.length + ' profile' + (d.bindings.length === 1 ? '' : 's') + '. Registry entries for its tools are deprecated and user tokens are deleted.</p>', kv: [['Bound profiles', esc(d.bindings.map((b) => b.profile).join(', ') || 'none')], ['Tools', String(d.tools.length)]], ok: 'Deregister' });
+        if (ok) act(() => App.del('/api/admin/mcp-servers/' + s.id), esc(s.name) + ' deregistered. ' + d.tools.length + ' tools removed from routing.', 'danger');
+      });
+      ctx.on('click', '[data-connect]', () => {
+        ctx.modal({ title: 'Connect your token for ' + esc(s.name), body: '<p class="fg2" style="margin:0">Paste a personal access token issued by the service behind <span class="mono">' + esc(s.url) + '</span>. It is sealed with your tenant\'s key, used only when a tool from ' + esc(s.name) + ' runs for you, and never enters model context.</p>' + UI.field('Token', UI.input('', { type: 'password', attrs: 'data-token autocomplete="off"' })) + UI.field('Scopes (for your reference)', UI.input('', { attrs: 'data-scopes', placeholder: 'api, read_repository' })) + UI.field('Expires', UI.input('', { type: 'date', attrs: 'data-exp' })), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Connect', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const token = m.querySelector('[data-token]').value; const scopes = m.querySelector('[data-scopes]').value.trim() || null; const exp = m.querySelector('[data-exp]').value; App.closeOverlay(); st.vaultPrompt = false; act(() => App.api('PUT', '/api/mcp/servers/' + s.id + '/token', { token, scopes, expiresAt: exp ? new Date(exp + 'T23:59:59').getTime() : null }), 'Token connected. ' + esc(s.name) + ' tools are now available to you.'); }); } });
+      });
+      ctx.on('click', '[data-disconnect]', () => act(() => App.del('/api/mcp/servers/' + s.id + '/token'), 'Your token was removed from the vault.'));
+      ctx.on('click', '[data-bind]', () => {
+        const approved = d.tools.filter((t) => t.state === 'approved');
+        const profs = (st.profiles || []).filter((p) => !p.aliasOf);
+        if (!approved.length) { toast('Approve at least one tool before binding the server.', 'warn'); return; }
+        ctx.modal({ title: 'Bind ' + esc(s.name) + ' to a profile', body: UI.field('Profile', UI.select(profs.map((p) => ({ value: p.id, label: p.name + (p.model ? ', ' + p.model.name : '') + ((p.model && p.model.capabilities.indexOf('tools') < 0) ? ' (no tools)' : '') })), profs[0] ? profs[0].id : '', 'data-prof')) + '<div class="vstack gap6">' + approved.map((t) => UI.check(t.name + ' (' + (SIDE[t.sideEffect] || t.sideEffect) + ')', true, 'data-bt="' + esc(t.name) + '"')).join('') + '</div>' + UI.notice('Binding saves a new version of the profile. Models without the tools capability are refused; a profile carries at most 32 tools.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Bind', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const profileId = m.querySelector('[data-prof]').value; const tools = Array.prototype.filter.call(m.querySelectorAll('[data-bt]'), (c) => c.checked).map((c) => c.dataset.bt); const p = profs.find((x) => x.id === profileId); App.closeOverlay(); act(() => App.post('/api/admin/mcp-servers/' + s.id + '/bind', { profileId, tools }), esc(s.name) + ' bound to ' + esc(p ? p.name : 'the profile') + '. The tool set applies from the next turn.'); }); } });
+      });
+      ctx.on('click', '[data-unbind]', async (e, t) => {
+        const b = d.bindings.find((x) => x.profileId === t.dataset.unbind);
+        const ok = await ctx.confirm({ title: 'Unbind ' + esc(s.name) + ' from ' + esc(b.profile), tone: 'warn', body: '<p class="fg2" style="margin:0">The profile stops offering ' + esc(b.tools.join(', ')) + ' from its next version.</p>', ok: 'Unbind' });
+        if (ok) act(() => App.del('/api/admin/mcp-servers/' + s.id + '/bind/' + b.profileId), esc(s.name) + ' unbound from ' + esc(b.profile) + '.');
+      });
+      ctx.on('click', '[data-register]', () => registerModal(''));
+      if (st.openRegister) { const u = typeof st.openRegister === 'string' ? st.openRegister : ''; st.openRegister = false; setTimeout(() => registerModal(u), 30); }
 
-      const on = ctx.on;
-      on('click', '[data-server]', (e, t) => { cur.st.sel = t.dataset.server; cur.st.tool = null; cur.ctx.rerender(); });
-      on('input', '[data-search]', (e, t) => { cur.st.query = t.value; const v = t.value; cur.ctx.rerender(); const i = cur.ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
-      on('click', '[data-tab]', (e, t) => { cur.st.tab = t.dataset.tab; cur.ctx.rerender(); });
-      on('click', '.state-card', (e, t) => cur.ctx.app.applyState(+t.dataset.state));
-      on('click', 'tr.row[data-tool]', (e, t) => { if (e.target.closest('button')) return; cur.st.tool = t.dataset.tool; cur.ctx.rerender(); openTool(cur.ctx, t.dataset.tool); });
-      on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); cur.ctx.navigate('profiles', { profile: t.dataset.goprofile === 'coder-32b' ? 'coder' : t.dataset.goprofile }); });
-      on('click', '[data-diff]', () => {
-        const ctx = cur.ctx;
-        ctx.modal({ title: 'Schema change: create_merge_request ' + UI.pill('disabled, re-review', 'danger'), body: diffHtml(DIFF) + UI.kv([['Approved hash', '<span class="mono">1f3d7a20</span>'], ['Announced hash', '<span class="mono">e90a44c1</span>'], ['Side-effect class', sidePill('write') + ' <span class="muted">annotation destructiveHint: false, untrusted</span>'], ['Disabled in', 'analyst, coder-32b']], 2) + UI.notice('Approving records the new hash and re-enables the tool in both profiles. Arguments are validated against the new schema from the next call.', 'info'), actions: UI.btn('Reject change', { attrs: 'data-mreject' }) + UI.btn('Approve new schema', { kind: 'primary', attrs: 'data-mapprove' }), cls: 'wide', onMount(m) { m.querySelector('[data-mapprove]').addEventListener('click', () => { App.closeOverlay(); approveChange(ctx); }); m.querySelector('[data-mreject]').addEventListener('click', () => { App.closeOverlay(); rejectChange(ctx); }); } });
-      });
-      on('click', '[data-approvechange]', () => approveChange(cur.ctx));
-      on('click', '[data-rejectchange]', () => rejectChange(cur.ctx));
-      on('click', '[data-review]', async (e, t) => {
-        const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); const tool = s.tools.find((x) => x.name === t.dataset.review);
-        ctx.modal({ title: 'Review ' + esc(tool.name) + ' ' + sidePill(tool.side), body: UI.kv([['Schema hash', '<span class="mono">' + esc(tool.hash) + '</span>'], ['Annotations', tool.side === 'destructive' ? '<span class="mono">destructiveHint: true</span> <span class="muted">untrusted hint</span>' : '<span class="mono">readOnlyHint: false</span> <span class="muted">untrusted hint</span>']], 2) + UI.field('Side-effect class (final)', UI.select(['read-only', 'write', 'destructive', 'external-comms'], tool.side, 'data-side'), 'The annotation pre-fills the class; the review sets it.') + UI.field('Confirmation', UI.select(['always', 'never'], tool.side === 'read-only' ? 'never' : 'always', 'data-confirm')) + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'confidential')) + (tool.side === 'destructive' ? UI.notice('Destructive tools require confirmation on every call and are hidden from profiles in lower-trust zones.', 'warn') : ''), actions: UI.btn('Keep hidden', { attrs: 'data-close' }) + UI.btn('Approve tool', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const side = m.querySelector('[data-side]').value; const conf = m.querySelector('[data-confirm]').value; App.closeOverlay(); cur.st.over[s.id + '/' + tool.name] = { name: tool.name, side, hash: tool.hash, approval: 'approved', confirm: conf === 'always' ? 'always' : undefined }; ctx.rerender(); ctx.toast(esc(tool.name) + ' approved as ' + esc(side) + ', hash ' + esc(tool.hash) + ' recorded.', 'ok'); }); } });
-      });
-      on('click', '[data-revoke]', async (e, t) => {
-        const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); const tool = s.tools.find((x) => x.name === t.dataset.revoke);
-        const ok = await ctx.confirm({ title: 'Revoke approval for ' + esc(tool.name), tag: 'revoke', tone: 'danger', body: '<p class="fg2" style="margin:0">The tool is hidden from every bound profile from the next turn. Runs in progress receive a typed error if they call it.</p>', kv: [['Bound profiles', s.profiles.join(', ')]], ok: 'Revoke' });
-        if (ok) { cur.st.over[s.id + '/' + tool.name] = Object.assign({}, tool, { approval: 'not approved', was: undefined }); ctx.rerender(); ctx.toast(esc(tool.name) + ' hidden from ' + s.profiles.length + ' profiles.', 'warn'); }
-      });
-      on('click', '[data-compat]', () => {
-        const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel);
-        const fail = cur.st.compatFailed && s.id === 'gitlab-onprem';
-        ctx.toast('Compatibility test running against pinned MCP SDK 1.18.');
-        setTimeout(() => ctx.modal({ title: 'Compatibility test: ' + esc(s.id) + ' ' + (fail ? UI.pill('failed', 'danger') : UI.pill('passed', 'ok')), body: UI.table(['Check', 'Result', 'Detail'], [['Transport', fail ? UI.pill('failed', 'danger') : UI.pill('passed', 'ok'), fail ? 'server offers HTTP+SSE (2024-11-05); SDK 1.18 requires streamable HTTP' : esc(s.transport)], ['Protocol version', fail ? UI.pill('failed', 'danger') : UI.pill('passed', 'ok'), fail ? '2024-11-05' : '2025-06-18'], ['tools/list', UI.pill('passed', 'ok'), s.tools.length + ' tools, schemas parse with ajv'], ['Protected-resource metadata', s.hosting === 'Built-in' ? UI.pill('not applicable', 'outline') : UI.pill('passed', 'ok'), s.hosting === 'Built-in' ? '' : 'RFC 9728'], ['Resource indicator accepted', s.hosting === 'Built-in' ? UI.pill('not applicable', 'outline') : UI.pill('passed', 'ok'), s.hosting === 'Built-in' ? '' : 'RFC 8707, audience ' + esc(s.audience)]], { clickable: false, minWidth: '0' }) + (fail ? UI.notice('Registration changes are blocked until the server is upgraded to a streamable HTTP transport.', 'warn') : ''), actions: UI.btn('Close', { attrs: 'data-close' }) }), 900);
-      });
-      on('click', '[data-rotate]', async () => {
-        const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel);
-        const ok = await ctx.confirm({ title: 'Rotate credentials for ' + esc(s.id), tag: 'write', tone: 'warn', body: '<p class="fg2" style="margin:0">' + (s.vault ? 'The OAuth client secret in OpenBao is replaced. Per-user tokens stay valid; the next refresh uses the new client.' : 'The client registration at the Exprsn IdP is re-issued. Tokens in flight expire within 10 minutes.') + '</p>', kv: [['Secret reference', s.vault ? 'ref: gitlab-oauth-client' : 'ref: idp-client-' + s.id], ['Downtime', 'none']], ok: 'Rotate' });
-        if (ok) ctx.toast('Credentials rotated for ' + esc(s.id) + '. Audit entry written.', 'ok');
-      });
-      on('click', '[data-deregister]', async () => {
-        const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel);
-        const ok = await ctx.confirm({ title: 'Deregister ' + esc(s.id), tag: 'destructive', tone: 'danger', body: '<p class="fg2" style="margin:0">All bindings are removed and the tools disappear from ' + s.profiles.length + ' profiles. Registry entries that reference them are marked deprecated.</p>', kv: [['Bound profiles', s.profiles.join(', ')], ['Tools', String(s.tools.length)]], ok: 'Deregister' });
-        if (ok) { cur.st.health[s.id] = 'deregistered'; ctx.rerender(); ctx.toast(esc(s.id) + ' deregistered. ' + s.tools.length + ' tools removed from routing.', 'danger'); }
-      });
-      on('click', '[data-connectvault]', () => { const ctx = cur.ctx; ctx.modal({ title: 'Connect GitLab', body: '<p class="fg2" style="margin:0">You are sent to <span class="mono">gitlab.northwind.internal</span> to authorise Exprsn-AI with scopes <span class="mono">api, read_repository</span>. The token is stored in your OpenBao vault entry and used only when a tool from gitlab-onprem runs for you. It never enters model context.</p>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Continue to GitLab', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { App.closeOverlay(); cur.st.vaultConnected = true; cur.st.vaultPrompt = false; ctx.rerender(); ctx.toast('GitLab connected. gitlab-onprem tools are now visible to you.', 'ok'); }); } }); });
-      on('click', '[data-disconnectvault]', () => { cur.st.vaultConnected = false; cur.ctx.rerender(); cur.ctx.toast('GitLab token removed from your vault entry.'); });
-      on('click', '[data-notify]', () => cur.ctx.toast('R. Adeyemi asked to reconnect GitLab.'));
-      on('click', '[data-checknow]', () => { const ctx = cur.ctx; ctx.toast('Health check queued.'); setTimeout(() => ctx.toast('erp-bridge still unreachable: connection timed out after 5 s.', 'danger'), 1200); });
-      on('click', '[data-dismisscompat]', () => { cur.st.compatFailed = false; cur.ctx.rerender(); });
-      on('click', '[data-bind]', () => { const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); ctx.modal({ title: 'Bind ' + esc(s.id) + ' to a profile', body: UI.field('Profile', UI.select(['fast', 'chat-default', 'coder', 'Data analyst agent'], 'chat-default', 'data-prof')) + UI.field('Tools', UI.input(s.tools.filter((t) => t.approval === 'approved').map((t) => t.name).join(', '))) + UI.notice('<b>fast</b> runs llama3.1:8b-q5_K_M with ceiling internal and a budget of 8 tools; binding is allowed only while the tool set fits. Models without the tools capability are rejected.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Bind', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const p = m.querySelector('[data-prof]').value; App.closeOverlay(); if (s.profiles.indexOf(p) < 0) s.profiles.push(p); ctx.rerender(); ctx.toast(esc(s.id) + ' bound to ' + esc(p) + '. Effective tool set recomputed on the next turn.', 'ok'); }); } }); });
-      on('click', '[data-register]', () => registerModal(cur.ctx));
-    }
-  });
-
-  async function approveChange(ctx) {
-    const ok = await ctx.confirm({ title: 'Approve new schema for create_merge_request', tag: 'write', tone: 'warn', body: '<p class="fg2" style="margin:0">Hash <span class="mono">e90a44c1</span> becomes the approved hash. The tool is re-enabled in analyst and coder-32b with confirmation still <b>always</b>.</p>', kv: [['Reviewer', 'Mara Okafor'], ['Audit', 'written']], ok: 'Approve' });
-    if (ok) { ctx.state.over['gitlab-onprem/create_merge_request'] = { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', approval: 'approved', confirm: 'always' }; ctx.state.health['gitlab-onprem'] = 'healthy'; ctx.rerender(); ctx.toast('create_merge_request approved with hash e90a44c1 and re-enabled in 2 profiles.', 'ok', 5000); }
-  }
-  async function rejectChange(ctx) {
-    const ok = await ctx.confirm({ title: 'Reject schema change', tag: 'disable', tone: 'danger', body: '<p class="fg2" style="margin:0">The tool stays disabled and the server owner is asked to restore the approved schema or submit the new one for review.</p>', ok: 'Reject and notify owner' });
-    if (ok) { ctx.state.over['gitlab-onprem/create_merge_request'] = { name: 'create_merge_request', side: 'write', hash: 'e90a44c1', was: '1f3d7a20', approval: 'disabled, rejected', confirm: 'always' }; ctx.rerender(); ctx.toast('Change rejected. create_merge_request stays disabled; owner notified.', 'warn'); }
-  }
-
-  function openTool(ctx, name) {
-    const s = find(ctx.state.sel) || ctx.state.added.find((x) => x.id === ctx.state.sel); const t = ctx.state.over[s.id + '/' + name] || s.tools.find((x) => x.name === name);
-    ctx.drawer({ title: '<span class="mono">' + esc(s.id) + '.' + esc(t.name) + '</span>', body: '<div class="hstack gap6">' + sidePill(t.side) + approvalPill(t.approval) + '</div>' + UI.kv([['Schema hash', '<span class="mono">' + esc(t.hash) + '</span>' + (t.was ? ' <span class="muted">was</span> <span class="mono">' + esc(t.was) + '</span>' : '')], ['Confirmation', t.confirm || (t.side === 'read-only' ? 'never' : 'always')], ['Visible in profiles', t.approval === 'approved' ? s.profiles.join(', ') : 'none'], ['Registry entry', '<a href="#" data-goreg>' + esc(s.id) + '.' + esc(t.name) + '</a>']], 1) + UI.code('{\n  "name": "' + t.name + '",\n  "inputSchema": { "type": "object", "properties": { ... } },\n  "annotations": { "readOnlyHint": ' + (t.side === 'read-only') + ', "destructiveHint": ' + (t.side === 'destructive') + ' }\n}', 'json') + UI.notice('Annotations are untrusted hints. The reviewed side-effect class is what policy enforces.', 'info'), actions: UI.btn('Open in Registry', { attrs: 'data-close data-goreg' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { d.querySelectorAll('[data-goreg]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); ctx.navigate('registry', { entry: s.id === 'jira-internal' && t.name === 'create_issue' ? 'jira-internal.create_issue' : 'kb.search' }); })); } });
-  }
-
-  function registerModal(ctx, prefillUrl) {
-    const url = prefillUrl || '';
-    ctx.modal({
-      title: 'Register MCP server',
-      body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'erp-bridge', attrs: 'data-name' })) + UI.field('Hosting mode', UI.select(['Remote (internal)', 'Managed shared', 'Managed per-session', 'Built-in'], 'Remote (internal)', 'data-mode'), 'Vendor SaaS servers are unreachable from this network')
-        + '<div class="span2">' + UI.field('Endpoint', UI.input(url, { placeholder: 'https://<host>.northwind.internal/mcp', attrs: 'data-url' }), 'Internal hostnames only; reached through the egress proxy') + '<div data-urlerr></div></div>'
-        + UI.field('Zone', UI.select(['app-internal', 'data', 'sandbox', 'mail-relay'], 'app-internal')) + UI.field('Authorization', UI.select(['Exprsn IdP, audience-bound token', 'Per-user token vault (internal OAuth)'], 'Exprsn IdP, audience-bound token'))
-        + '<div class="span2">' + UI.field('Container image (managed modes)', UI.input('', { placeholder: 'registry.northwind.internal/mcp/<name>@sha256:…' }), 'Images arrive only through the air-gap import path') + '</div></div>'
-        + UI.notice('Registration runs a compatibility test against the pinned MCP SDK 1.18 and hashes every announced tool. Tools stay hidden until a tool admin approves them.', 'info'),
-      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Register and test', { kind: 'primary', attrs: 'data-ok' }),
-      cls: 'wide',
-      onMount(m) {
-        const check = () => { const v = m.querySelector('[data-url]').value.trim(); const internal = !v || /\.(northwind\.internal|local|internal)(\/|:|$)/.test(v) || v.startsWith('stdio:'); m.querySelector('[data-urlerr]').innerHTML = internal ? '' : UI.notice('<b>Internal only.</b> ' + esc(v) + ' is not an internal hostname. Registration accepts hosts under northwind.internal or an stdio bridge. Hosting modes offered: built-in, remote internal, managed shared.', 'danger'); m.querySelector('[data-ok]').disabled = !internal || !v; return internal && v; };
-        m.querySelector('[data-url]').addEventListener('input', check); check();
-        m.querySelector('[data-ok]').addEventListener('click', () => {
-          if (!check()) return; const name = (m.querySelector('[data-name]').value || '').trim() || 'erp-bridge-2'; const mode = m.querySelector('[data-mode]').value; const u = m.querySelector('[data-url]').value.trim();
-          App.closeOverlay();
-          const st = ctx.state; st.added = st.added || [];
-          st.added.push({ id: name, mode: mode.toLowerCase().replace(' (internal)', ' internal') + ', streamable HTTP', hosting: mode, transport: 'Streamable HTTP', url: u, zone: 'app-internal', health: 'registering', auth: 'Exprsn IdP, audience-bound token (RFC 8707)', audience: u.replace(/\/mcp$/, ''), sdk: 'testing against pinned MCP SDK 1.18', profiles: [], latency: 'pending', scopes: 'pending', vault: false, tools: [], changes: [{ title: 'Registered', text: 'Compatibility test running.', meta: 'just now', tone: 'info' }] });
-          st.sel = name; st.tab = 'tools'; ctx.rerender(); ctx.toast('Registering ' + esc(name) + '. Compatibility test and tool hashing in progress.', 'ok');
-          setTimeout(() => { const s = st.added.find((x) => x.id === name); if (!s) return; s.health = 'healthy'; s.sdk = 'passed against pinned MCP SDK 1.18'; s.tools = [{ name: 'get_purchase_order', side: 'read-only', hash: '6b2c9d0e', approval: 'not approved' }, { name: 'list_vendors', side: 'read-only', hash: 'f81a3c55', approval: 'not approved' }]; s.changes.unshift({ title: 'Compatibility passed, 2 tools hashed', text: 'Tools wait for review before any profile can bind them.', meta: 'just now', tone: 'ok' }); if (st.sel === name) ctx.rerender(); ctx.toast(esc(name) + ' passed compatibility. 2 tools wait for review.', 'ok'); }, 2200);
+      function reviewTool(x) {
+        if (!x) return;
+        const suggested = x.sideEffect || x.suggestedSideEffect;
+        ctx.modal({ title: (x.state === 'changed' ? 'Approve new schema for ' : 'Review ') + esc(x.name) + ' ' + sidePill(suggested, !x.sideEffect), body: UI.kv([['Schema hash', '<span class="mono">' + esc(short(x.hash)) + '</span>'], ['Annotations', '<span class="mono">' + esc(JSON.stringify(x.annotations || {})) + '</span> <span class="muted">untrusted hints</span>'], ['Description', esc(x.description || 'none')]], 1) + UI.code(pretty(x.inputSchema || {}), 'json') + '<div class="formgrid">' + UI.field('Side-effect class (final)', UI.select([{ value: 'read', label: 'read-only' }, { value: 'write', label: 'write' }, { value: 'destructive', label: 'destructive' }], suggested, 'data-side'), 'The annotation pre-fills the class; the review sets it.') + UI.field('Confirmation', UI.select(['always', 'never'], x.confirm || (suggested === 'read' ? 'never' : 'always'), 'data-confirm'), 'Write and destructive tools always confirm') + UI.field('Max label', UI.select(LABELS, x.label || 'internal', 'data-label')) + '</div>' + (suggested === 'destructive' ? UI.notice('Destructive calls in agent runs need a tool admin other than the run\'s owner to approve each one.', 'warn') : ''), actions: UI.btn('Keep hidden', { attrs: 'data-close' }) + UI.btn('Approve tool', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const body = { sideEffect: m.querySelector('[data-side]').value, confirm: m.querySelector('[data-confirm]').value, label: m.querySelector('[data-label]').value }; App.closeOverlay(); act(() => App.post('/api/admin/mcp-servers/' + s.id + '/tools/' + encodeURIComponent(x.name) + '/approve', body), esc(x.name) + ' approved as ' + esc(SIDE[body.sideEffect]) + ', hash ' + esc(short(x.hash)) + ' recorded.'); }); } });
+      }
+      async function rejectChange(x) {
+        if (!x) return;
+        const ok = await ctx.confirm({ title: 'Reject schema change', tag: 'disable', tone: 'danger', body: '<p class="fg2" style="margin:0">' + esc(x.name) + ' stays disabled until the server restores the approved schema or a tool admin approves the new one.</p>', ok: 'Reject change' });
+        if (ok) act(() => App.post('/api/admin/mcp-servers/' + s.id + '/tools/' + encodeURIComponent(x.name) + '/reject-change'), 'Change rejected. ' + esc(x.name) + ' stays disabled.', 'warn');
+      }
+      function openTool(x) {
+        if (!x) return;
+        ctx.drawer({ title: '<span class="mono">' + esc(s.name) + '.' + esc(x.name) + '</span>', body: '<div class="hstack gap6">' + sidePill(x.sideEffect || x.suggestedSideEffect, !x.sideEffect) + approvalPill(x.state) + '</div>' + UI.kv([['Schema hash', '<span class="mono">' + esc(short(x.hash)) + '</span>' + (x.approvedHash && x.approvedHash !== x.hash ? ' <span class="muted">was</span> <span class="mono">' + esc(short(x.approvedHash)) + '</span>' : '')], ['Confirmation', esc(x.confirm || 'set at review')], ['Max label', x.label ? UI.label(x.label, { sm: true }) : 'set at review'], ['Visible in profiles', x.state === 'approved' ? esc(d.bindings.filter((b) => b.tools.indexOf(x.name) >= 0).map((b) => b.profile).join(', ') || 'none yet') : 'none'], ['Registry entry', x.state === 'approved' || x.approvedAt ? '<a href="#" data-goreg>' + esc(s.name + '.' + x.name) + '</a>' : 'created at approval']], 1) + UI.code(announcement(x), 'json') + UI.notice('Annotations are untrusted hints. The reviewed side-effect class is what policy enforces.', 'info'), actions: UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(el) { const g = el.querySelector('[data-goreg]'); if (g) g.addEventListener('click', (ev) => { ev.preventDefault(); App.closeOverlay(); ctx.navigate('registry', { entry: s.name + '.' + x.name }); }); } });
+      }
+      function registerModal(prefill) {
+        ctx.modal({
+          title: 'Register MCP server', cls: 'wide',
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'erp-bridge', attrs: 'data-name' }), 'Lower-case letters, digits and hyphens; tools appear as name.tool') + UI.field('Zone', UI.input('app-internal', { attrs: 'data-zone' }))
+            + '<div class="span2">' + UI.field('Endpoint', UI.input(prefill, { placeholder: 'https://<host>.internal/mcp', attrs: 'data-url' }), 'Streamable HTTP. The host must resolve to an internal address unless the platform allow-list names it') + '<div data-urlerr></div></div>'
+            + UI.field('Authorization', UI.select([{ value: 'none', label: AUTH.none }, { value: 'service', label: AUTH.service }, { value: 'user', label: AUTH.user }], 'none', 'data-auth')) + UI.field('Service token', UI.input('', { type: 'password', attrs: 'data-cred autocomplete="off"' }), 'Only for a service token; sealed, never shown again')
+            + '<div class="span2">' + UI.field('Description', UI.input('', { attrs: 'data-desc' })) + '</div></div>'
+            + UI.notice('Registration runs the handshake and tools/list, and hashes every announced tool. Tools stay hidden until a tool admin approves them.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Register and test', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(m) {
+            const err = m.querySelector('[data-urlerr]');
+            m.querySelector('[data-ok]').addEventListener('click', async () => {
+              const body = { name: m.querySelector('[data-name]').value.trim(), url: m.querySelector('[data-url]').value.trim(), zone: m.querySelector('[data-zone]').value.trim() || 'app-internal', auth: m.querySelector('[data-auth]').value, credential: m.querySelector('[data-cred]').value || null, description: m.querySelector('[data-desc]').value.trim() || null };
+              const btn = m.querySelector('[data-ok]'); btn.disabled = true; err.innerHTML = '';
+              try {
+                const r = await App.post('/api/admin/mcp-servers', body);
+                App.closeOverlay();
+                st.sel = r.id; st.tab = 'tools'; st.reports[r.id] = r.report; st.loaded = false; load();
+                toast(esc(r.name) + (r.health === 'healthy' ? ' registered. Its tools wait for review.' : ' registered, but its check did not pass: ' + esc(r.healthDetail || r.health) + '.'), r.health === 'healthy' ? 'ok' : 'warn', 6000);
+              } catch (e2) {
+                btn.disabled = false;
+                const pr = e2.problem || {};
+                err.innerHTML = UI.notice('<b>' + esc(pr.title || 'Refused') + '.</b> ' + esc(e2.message) + (pr.reason === 'public-host' ? ' Hosting modes offered: servers on internal hosts, reached over streamable HTTP.' : ''), 'danger');
+              }
+            });
+          }
         });
       }
-    });
-  }
+    }
+  });
 })();

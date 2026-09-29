@@ -47,6 +47,7 @@ describe('scripts', () => {
 
   it('checks every version, refuses blocked scripts before start, runs clean ones as jobs and seals the output', async () => {
     const w = await user('wf', ['workflow-admin']);
+    expect((await w.agent.get('/api/scripts/runtime').expect(200)).body).toMatchObject({ runner: 'fake', available: true, images: { python: 'python:3.13-slim', javascript: 'node:22-slim' } });
     const created = (await w.post('/api/scripts', { name: 'clean_feed.py', language: 'python', source: 'import csv\nimport requests\nprint(1)', label: 'confidential' }).expect(201)).body;
     expect(created).toMatchObject({ status: 'draft', version: 1, blocked: true });
     expect(created.checks.find((c: { name: string }) => c.name === 'Blocked modules')).toMatchObject({ tone: 'danger', line: 2 });
