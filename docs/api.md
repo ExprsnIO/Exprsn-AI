@@ -186,3 +186,109 @@ message; a gap means call the stream endpoint with `after`.
 Errors worth handling: `429` over quota (with `Retry-After` and the limit), `403` with `step: clearance|zone` when
 the conversation's label is above the caller or the profile, `409` for attachments not ready or images on a model
 without vision, `410` when the tenant's key was destroyed.
+
+## Sprint 5: Guardrails, classifiers and flags
+
+Every feature calls `s.guardrails.check` at its checkpoint (`user-input`, `context`, `tool-call`, `model-output`,
+`image`, `context-transfer`, `memory`, `script`, `db-query`, `media`, `export`). The published rule sets that apply
+are the platform baseline, the tenant's sets, the workspace's sets and the agent's; the most restrictive enforced
+finding wins (`allow < log < warn < flag < redact < require-approval < block`), and a tenant rule cannot relax a
+baseline rule with the same id. Shadow rules are recorded and flagged for sampling but never change the outcome.
+When a guard model or classifier cannot answer, the rule's `onError` decides (`closed` holds the turn, `allow` lets
+it through and flags the fail-open decision); confidential and tool-calling turns are held either way.
+
+A rule (the GuardrailRule schema; the same object as YAML): `{id, name, checkpoint, type, mechanism, action,
+stage: shadow|enforce, onError: closed|allow, severity: low|medium|high, enabled, description?}`. Mechanisms:
+`{kind: pattern, pattern}` (RE2), `{kind: pii, detectors, threshold}`, `{kind: secrets, detectors, threshold}`,
+`{kind: label, against: clearance|ceiling|fixed, label?}`, `{kind: budget, metric: tokens|chars|steps, max}`,
+`{kind: allow-list, field: domains, values}`, `{kind: meta, key, values}` (a fact the checkpoint passes, such as
+`sideEffect`), `{kind: classifier, classifier, label, threshold?}`, `{kind: guard-model, profile, categories}` (a
+Llama Guard style model through the gateway).
+
+### Rule sets (`guardrails:manage`)
+
+The platform baseline is changed only by platform guardrail admins (who also hold `platform:manage`) and publishes
+when a second one approves; for everyone else it is read-only and writes fail with `403 step: baseline-locked`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/guardrails/sets` | `[{id, scope: platform\|tenant\|workspace\|agent, name, description, workspaceId, workspace, agent, publishedVersion, draft: {version, status}\|null, locked, owner, rulesByCheckpoint, updatedAt}]` |
+| `POST /admin/guardrails/sets` `{name, scope: tenant\|workspace\|agent, workspaceId?, agent?, description?}` | A new, empty set |
+| `GET /admin/guardrails/sets/:id` | The summary plus `published` and `draft` versions (`{version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt…}`), `versions`, `yaml` (per rule), `stats` (per rule: `{evaluated, triggered, triggerRate, latencyMs, falsePositives: {confirmed, dismissed, rate}}` over 7 days), `baseline` (rule ids shared with the baseline) and `promotionLimit` |
+| `PUT /admin/guardrails/sets/:id/draft` `{rules}` or `{yaml}` | Replaces the draft's rules; `{version, status, rules, diff}` |
+| `PUT /admin/guardrails/sets/:id/draft/rules/:ruleId` `{rule}` or `{yaml}` | Adds or replaces one rule (new rules start in shadow); `{version, status, rule, yaml}` |
+| `DELETE /admin/guardrails/sets/:id/draft/rules/:ruleId` | Removes a rule from the draft |
+| `DELETE /admin/guardrails/sets/:id/draft` | Withdraws the draft (kept in the history) |
+| `POST /admin/guardrails/sets/:id/draft/submit` | Requests review; the other guardrail admins are notified: `{version, status: pending, notified}` |
+| `POST /admin/guardrails/sets/:id/draft/approve` | Dual control: someone other than the author and submitter approves, and it publishes (`403 step: dual-control` for your own change) |
+| `POST /admin/guardrails/sets/:id/draft/publish` | Publishes a tenant, workspace or agent set's draft (the baseline only through approval) |
+| `GET /admin/guardrails/sets/:id/diff?from&to` | `{from, to, added, removed, changed: [{id, fields}], text}` (default: published to draft) |
+| `POST /admin/guardrails/sets/:id/promote` `{ruleId}` | Moves a shadow rule to enforce in the draft; `409 Promotion refused` when reviewers' false-positive rate is above the limit (10%) |
+| `POST /admin/guardrails/sets/:id/replay` `{version?}` | `202 {jobId, version}`: a `guardrails.replay` job runs the version over the recorded (sealed) inputs of the last 7 days; its result is `{turns, rules: [{id, name, checkpoint, action, stage, wouldTrigger, publishedTriggered, errors}]}` |
+| `POST /admin/guardrails/test` `{rule}` or `{setId, ruleId}`, `{text, label?, meta?}` | Live test of one rule on sample text, nothing recorded: `{hit, score, unit, detail, ms, error?, action, stage, onError, spans: [{start, end, text}]}` |
+| `POST /admin/guardrails/validate` `{yaml}` | Validates YAML against the schema without saving: `{rules}` |
+| `POST /admin/guardrails/requests` `{setId, ruleId, change}` | A tenant admin asks the platform guardrail admins to change a baseline rule: `202 {notified}` |
+| `GET /admin/guardrails/status` | Guard-model and classifier failures in the last hour: `{degraded, since, held, failOpen, last: {at, rule, detail}}` |
+
+An invalid pattern fails with `422 Invalid pattern` carrying `{ruleId, pattern, pos, msg, fix?}` (`fix` is an
+equivalent RE2 pattern where one exists); a rule that does not match the schema fails with `422 Invalid rule` and
+`errors: [{path, message}]`.
+
+### Classifiers (`classifiers:manage`)
+
+Four engines behind one registry: `deterministic` (the platform's PII and secrets detectors), `linear` (hashed word
+features and a trained logistic head per label), `guard` (a guard model through the gateway) and `llm` (a profile
+answering JSON). Platform classifiers are visible to every tenant and changed by platform admins; evaluations are per
+tenant, on the tenant's own labelled cases.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/classifiers` | `[{id, slug, name, engine, description, status: draft\|published, version, owner, dataset, platform, labels: [{label, threshold}], family, profile, instructions, trained: {at, samples}\|null, metrics, samples: {<label>: n}, usage: [{set, setId, rule, ruleId, checkpoint}]}]` |
+| `POST /admin/classifiers` `{name, engine: linear\|guard\|llm, labels, profile?, instructions?, description?}` | A draft classifier with its own dataset |
+| `GET /admin/classifiers/:id` | The classifier plus `versions` and `usage` |
+| `PATCH /admin/classifiers/:id` `{thresholds?, profile?, instructions?, dataset?, description?}` | A new version |
+| `POST /admin/classifiers/:id/publish` | `409 Eval set too small` below 200 labelled cases per label |
+| `POST /admin/classifiers/:id/evaluate` | `202 {jobId}`: a `classifier.evaluate` job (`classify.batch` on the console) computes precision and recall per label over the dataset |
+| `POST /admin/classifiers/:id/train` | `202 {jobId}`: trains a linear classifier on four fifths of the dataset and evaluates it on the rest |
+| `POST /admin/classifiers/:id/samples` `{items: [{text, expected: <label>\|none, label?}]}` | Adds labelled cases (sealed): `201 {added, samples}` |
+| `POST /classify` `{classifier, text, label?}` (`inference:invoke` or `classifiers:manage`) | Synchronous: `{classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}`; `503` when the model is unavailable |
+| `GET /admin/label-names` / `PUT /admin/label-names` `{names, order?}` | The tenant's names for the four levels; a different order fails with `409 Reorder refused` |
+| `GET /eval-sets` (`flags:review` or `classifiers:manage`) | `[{name, cases}]` |
+
+Evaluation `metrics`: `{at, dataset, samples, heldOut, perLabel: {<label>: {precision, recall, n, tp, fp, fn}}, points,
+distribution, errors}`, where `points` keeps each case's score so the console previews precision and recall at any
+threshold.
+
+### Flags (`flags:review`)
+
+Flags come from enforced `flag` actions, sampled shadow findings, fail-open decisions and user reports. Each has a
+timer set by its severity (high 60 min, medium 4 h, low 2 days); an overdue flag notifies the guardrail admins once.
+A reviewer sees the flags of their current workspace (and tenant-wide ones) not assigned to someone else; a flag
+labelled above the reviewer's clearance shows redacted (`restricted: true`, no rule, actor, note, conversation or
+excerpt) and can only be reassigned.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /flags` | `{items: [flag], open, overdue, otherWorkspaces}` |
+| `GET /flags/decisions?hours=24` | `[{id, ref, rule, action, by, at}]` |
+| `GET /flags/:ref` | A flag with `excerpt: {before, span, after, clippedBefore, clippedAfter}`, `prior: {confirmed, dismissed}`, `ownConversation` and `history` |
+| `POST /flags/:ref/decide` `{decision: confirmed\|dismissed, reason?}` | A confirmation becomes a positive eval case of the rule (`evalCase`); a dismissal counts as a false positive against it |
+| `POST /flags/:ref/escalate` `{to: workspace\|tenant\|platform, note?}` | Moves it to the guardrail admins at that level with a fresh 60 min timer |
+| `GET /flags/:ref/reviewers` | Reviewers cleared for the flag's label: `[{id, name, roles, clearance}]` |
+| `POST /flags/:ref/reassign` `{userId}` | Assigns it to a reviewer cleared for its label, who is notified |
+| `POST /flags/:ref/eval` `{evalSet, expected: positive\|negative}` | Adds the flagged text to an eval set: `201 {evalSet, case}` |
+| `POST /flags/:ref/rule` `{setId, action?, name?}` (also `guardrails:manage`) | Drafts a shadow pattern rule matching the flagged span |
+| `POST /flags/report` `{conversationId, messageId, reason, note?, span?, severity?}` (`chat:read`) | Reports an answer from the caller's own conversation |
+
+A flag: `{id, ref: F-<n>, kind, checkpoint, severity, label, state: open|confirmed|dismissed, stage, action,
+restricted, rule, ruleId, setId, setName, setVersion, actor, note, conversationId, workspaceId, assignee, escalatedTo,
+slaMinutes, dueAt, createdAt, decidedBy, decidedAt, reason, evalSet}`. Socket event to `flags:review` holders:
+`flags.changed {id, ref, action, severity}` (fetch the queue again; it is redacted per reviewer).
+
+### Chat
+
+`user-input` runs before a message is stored: a block or hold fails with `422 Blocked by guardrail` (or `Held by
+guardrail`) carrying `{step: guardrail, action, rules}`, and a redaction is what is stored and sent to the model.
+`model-output` runs on the finished answer: a block or hold replaces the answer with a notice, a redaction replaces
+the spans. The message then carries `guard: {action, reason?, rules}`, `chat.done` carries the same `guard`, and a
+replaced answer ends with a higher sequence number so a client holding the streamed text reads it again.
