@@ -8,7 +8,7 @@
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
   const short = (d) => (d ? 'sha256:' + String(d).replace(/^sha256:/, '').slice(0, 8) + '…' : 'no digest yet');
   const RES_KIND = { loaded: 'ok', cold: 'info', unavailable: 'danger', none: '' };
-  const TOOL_NOTE = 'Only the built-in exact-calculation tool exists until MCP servers arrive in sprint 7; tool bindings, confirm policies and tool budgets come with them.';
+  const TOOL_NOTE = 'Registry and MCP tools are bound on the MCP servers screen and kept when the profile is saved.';
 
   /** The editable settings of a saved profile, as form values. */
   const formOf = (p) => ({
@@ -16,7 +16,8 @@
     numCtx: p.numCtx == null ? '' : String(p.numCtx), temperature: p.temperature == null ? '' : String(p.temperature),
     label: p.label, thinkDefault: p.thinkDefault, thinkCeiling: p.thinkCeiling, systemPrompt: p.systemPrompt || '',
     fbProfile: p.fallback ? p.fallback.profileId : '', fbWait: p.fallback ? String(p.fallback.afterQueueWaitMs / 1000) : '8',
-    calculate: (p.tools || []).indexOf('calculate') >= 0
+    calculate: (p.tools || []).indexOf('calculate') >= 0,
+    others: (p.tools || []).filter((t) => t !== 'calculate')
   });
   const num = (v, what, int) => {
     if (String(v).trim() === '') return null;
@@ -30,7 +31,7 @@
     numCtx: num(f.numCtx, 'num_ctx', true), temperature: num(f.temperature, 'temperature'), label: f.label,
     thinkDefault: f.thinkDefault, thinkCeiling: f.thinkCeiling, systemPrompt: f.systemPrompt.trim() ? f.systemPrompt : null,
     fallback: f.fbProfile ? { profileId: f.fbProfile, afterQueueWaitMs: Math.round((num(f.fbWait, 'Queue wait') || 0) * 1000) } : null,
-    tools: f.calculate ? ['calculate'] : []
+    tools: (f.calculate ? ['calculate'] : []).concat(f.others || [])
   });
 
   function cur(st) { return (st.profiles || []).find((x) => x.id === st.sel) || null; }
@@ -168,7 +169,7 @@
           + (deps.length ? UI.notice('Pointed at by ' + deps.map((d) => '<b>' + esc(d.name) + '</b>').join(', ') + ' as a fallback.', 'info') : '')
           + (target ? '<div class="formgrid" style="--cols:3">' + UI.field('Points to', UI.select(reals.map((x) => ({ value: x.id, label: x.name })), target.id, 'data-alias-target')) + UI.field('Resolved model', UI.input(target.model ? target.model.name : 'no model chosen', { readonly: true })) + UI.field('Resolved label', '<div style="height:30px;display:flex;align-items:center">' + UI.label(target.label) + '</div>') + '</div>'
             + wsPanel(target, 'Your workspaces and this alias')
-            + UI.panel('Resolved profile', UI.kv([['Profile', '<a href="#" data-profile-link="' + esc(target.id) + '">' + esc(target.name) + '</a> ' + UI.pill(target.status)], ['Pool', esc(target.pool || 'any pool the model is placed on')], ['Residency', UI.pill(target.residency, RES_KIND[target.residency])], ['Think', esc(target.thinkDefault + ', users may choose up to ' + target.thinkCeiling)], ['Tools', target.tools.length ? 'calculate' : 'none'], ['Fallback', target.fallback ? esc((byId(target.fallback.profileId) || { name: 'removed profile' }).name + ' after ' + target.fallback.afterQueueWaitMs / 1000 + ' s queue wait') : 'none']], 3))
+            + UI.panel('Resolved profile', UI.kv([['Profile', '<a href="#" data-profile-link="' + esc(target.id) + '">' + esc(target.name) + '</a> ' + UI.pill(target.status)], ['Pool', esc(target.pool || 'any pool the model is placed on')], ['Residency', UI.pill(target.residency, RES_KIND[target.residency])], ['Think', esc(target.thinkDefault + ', users may choose up to ' + target.thinkCeiling)], ['Tools', target.tools.length ? esc(target.tools.join(', ')) : 'none'], ['Fallback', target.fallback ? esc((byId(target.fallback.profileId) || { name: 'removed profile' }).name + ' after ' + target.fallback.afterQueueWaitMs / 1000 + ' s queue wait') : 'none']], 3))
             : UI.notice('The profile this alias pointed at no longer exists. Repoint it.', 'danger'))
           + versionsPanel(p);
       } else {

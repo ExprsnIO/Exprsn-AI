@@ -4,6 +4,7 @@ import * as m002 from './002_tenancy_platform.js';
 import * as m003 from './003_gateway.js';
 import * as m004 from './004_chat.js';
 import * as m005 from './005_guardrails.js';
+import * as m007 from './007_registry.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -15,8 +16,9 @@ const MIGRATIONS: Record<string, Migration> = {
   '001_core': m001,
   '002_tenancy_platform': m002,
   '003_gateway': m003,
+  '004_chat': m004,
   '005_guardrails': m005,
-  '004_chat': m004
+  '007_registry': m007
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {
