@@ -186,3 +186,111 @@ message; a gap means call the stream endpoint with `after`.
 Errors worth handling: `429` over quota (with `Retry-After` and the limit), `403` with `step: clearance|zone` when
 the conversation's label is above the caller or the profile, `409` for attachments not ready or images on a model
 without vision, `410` when the tenant's key was destroyed.
+
+## Sprint 7: Registry, MCP servers, agent runs, scripts
+
+### Registry (`tools:manage`; agent entries `agents:manage`)
+
+Lifecycle: `draft → in_review → published → deprecated → retired`. Each version is its own entry. Platform entries
+(`platform: true`, such as the built-in `calculate` tool) are published to every tenant and read-only. An entry's
+`label` is a ceiling: the highest data label it may receive. Profiles list registry tools by name in `tools`
+(`POST/PATCH /admin/profiles` now accepts any tool name); chat offers the read-class ones that need no confirmation.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/registry?kind=tool\|skill\|agent&status=` | Entries of the tenant and the platform (below) |
+| `GET /admin/registry/:id` | The entry with `versions [{id, version, status, createdAt}]`, `referencedBy` (agents and skills using a tool), `profiles` (profiles listing it), `workspaces` (publish scope names) |
+| `POST /admin/registry` | A draft, checked at once. Tool: `{kind: 'tool', name, version, description, sideEffect: read\|write\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}}` (script-backed; MCP tools come from the MCP screen). Skill: `{kind: 'skill', name, version, description, label, definition: {instructions, tools}}`. Agent: `{kind: 'agent', name, version, description, label, definition: {profile, systemPrompt, tools, skills, budgets: {steps, tokens, wallSeconds, toolCalls}}}` |
+| `PATCH /admin/registry/:id` `{description?, sideEffect?, confirm?, ratePerHour?, label?, inputSchema?, outputSchema?, definition?}` | Edits a draft (anything else takes a new version) and re-runs the checks |
+| `POST /admin/registry/:id/checks` | Re-runs the automated checks |
+| `POST /admin/registry/:id/submit` | Draft → in review, with fresh checks |
+| `POST /admin/registry/:id/review` `{decision: approve\|reject, note?, scope: tenant\|workspace, workspaces?}` | By someone other than the author (`403 step: dual-control`), cleared for the label. Approval needs every check passing (`409` naming the failing ones), records the schema hash and the publish scope (workspaces must have a ceiling at least the entry's label). Rejection returns it to draft; the owner is notified either way |
+| `POST /admin/registry/:id/publish` `{scope, workspaces?}` | Changes the scope of a published entry |
+| `POST /admin/registry/:id/lifecycle` `{to: deprecated\|retired\|published, replacement?}` | Deprecate (still callable, with a warning), retire (from deprecated or draft; returns `referencedBy`), or restore a deprecated entry |
+| `POST /admin/registry/:id/versions` `{version}` | A new draft version copied from this one |
+| `POST /admin/registry/:id/test` `{arguments, label?}` or, for agents, `{input, label?}` | Test harness. A tool runs once through the dispatcher (built-in and script tools in their sandbox; write and destructive MCP tools are not run against live systems): the dispatcher outcome below plus `{label, sandboxed, note}`. An agent starts a real run: `202 {runId}` |
+
+An entry: `{id, kind, name, version, description, impl: builtin|mcp|script|archive|agent, sideEffect, confirm,
+ratePerHour, label, inputSchema, outputSchema, definition, status, schemaHash, approvedHash, checks: [{name, ok,
+detail}], checksPassed, checkedAt, platform, owner, ownerId, submittedAt, reviewedBy, reviewedAt, reviewNote,
+publishScope: tenant|workspace|platform, publishWorkspaces, replacement, createdAt, updatedAt}`. The checks: Required
+fields, Schema valid (tools), Description quality, Side effect declared (tools; a name that suggests write or
+destructive must declare at least that), Secrets scan, Referenced tools published (agents and skills), Limits within
+workspace policy (agents: at most 100 steps, 200,000 tokens, 3,600 s).
+
+A dispatcher outcome (harness, and each doing step of a run): `{name, arguments, ok, result?, error?, decision
+(the tool-call guardrail's action), denied?, needsApproval?, valid (output schema), durationMs}`. Every call passes the
+`tool-call` guardrail checkpoint with `meta: {tool, sideEffect, toolLabel, ceiling, confirm, impl}`.
+
+### MCP servers (`mcp:manage`)
+
+Streamable HTTP only (protocol 2025-06-18 or 2025-03-26). Hosts must resolve to internal addresses (RFC 1918, unique
+local IPv6, loopback, 100.64/10) unless `MCP_ALLOWED_HOSTS` names the host or network; link-local, multicast and
+unspecified addresses are always refused. The check runs at registration and inside every connection's DNS lookup.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/mcp-servers` | Servers with tool counts (`tools, approved, disabled, pending`) and bound `profiles` |
+| `POST /admin/mcp-servers` `{name, url, zone, auth: none\|service\|user, credential?, description?}` | Registers and runs the first check: `201` server with `report`. A public host is `422 Internal only` (`reason: public-host`), and audited |
+| `GET /admin/mcp-servers/:id` | Server with `tools` (below), `events` (the changes timeline), `bindings [{profileId, profile, model, toolsCapable, label, tools, toolCount, status}]`, `connections` (per-user tokens: who and when, never the token) and `myToken` |
+| `POST /admin/mcp-servers/:id/check` | Compatibility and health check now: `report [{check, result: passed\|failed\|changed\|skipped, detail}]` (internal address, initialize handshake, tools/list with hash comparison). Per-user servers are checked with the caller's own token |
+| `POST /admin/mcp-servers/:id/tools/:tool/approve` `{sideEffect, confirm: always\|never, label}` | Records the tool's hash and reviewed class (annotations are only hints; write and destructive need `confirm: always`) and publishes it as registry tool `<server>.<tool>`. Also approves a changed schema |
+| `POST /admin/mcp-servers/:id/tools/:tool/revoke` | Hides an approved tool again |
+| `POST /admin/mcp-servers/:id/tools/:tool/reject-change` | Keeps a changed tool disabled |
+| `PUT /admin/mcp-servers/:id/credential` `{secret}` | Rotates the sealed service token |
+| `POST /admin/mcp-servers/:id/bind` `{profileId, tools?}` (also `profiles:manage`) | Adds approved tools to a profile (a new profile version); refused for models without tools |
+| `DELETE /admin/mcp-servers/:id/bind/:profileId` | Removes the server's tools from a profile |
+| `DELETE /admin/mcp-servers/:id` | Deregisters: tools leave every profile, registry entries are deprecated, user tokens deleted |
+
+A server: `{id, name, description, url, zone, auth, hasCredential, credentialRotatedAt, state: active|deregistered,
+health: registering|healthy|changed|unreachable|incompatible, healthDetail, protocolVersion, serverInfo, latencyMs,
+failures, lastCheckedAt, lastOkAt, createdAt}`. A tool: `{id, name, description, inputSchema, annotations, hash,
+approvedHash, approvedSchema, state: pending|approved|changed|rejected|removed, sideEffect, suggestedSideEffect,
+confirm, label, approvedAt, updatedAt}`. The `mcp.poll` job (every `MCP_POLL_MINUTES`, default 15) checks every
+server; an approved tool whose hash changes becomes `changed` (disabled) and tool admins are notified.
+
+The per-user vault (`tools:invoke`): `GET /mcp/servers` (servers using per-user tokens with `{connected, scopes,
+expiresAt, expired}`), `PUT /mcp/servers/:id/token` `{token, scopes?, expiresAt?}` (sealed; the answer is the
+status, never the token), `DELETE /mcp/servers/:id/token`.
+
+### Agent runs (`agents:run`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /agents` | Published agents the caller may run here: `{id, name, version, description, label, profile, tools, budgets, deprecated, replacement}` |
+| `POST /runs` `{agent, input, label?, budgets?}` | Starts a run (a job): `202` run summary. The label must be within the caller's clearance, the workspace ceiling and the agent's ceiling; quotas apply |
+| `GET /runs?all=true&state=` | The caller's runs in this workspace; `all` (agent and tool admins) the tenant's, within their clearance |
+| `GET /runs/:id` | The run with `input`, `output`, `steps` (below), `lanes {think: {steps, tokens}, do: {calls, ms, waiting, denied}, calc: {results, ms}}` and `checkpoints` (step numbers) |
+| `POST /runs/:id/cancel` | Owner or `agents:manage` |
+| `POST /runs/:id/steps/:n/decision` `{decision: approve\|reject, note?}` | On a waiting step. Write calls: the owner or a tool admin; destructive calls: a tool admin other than the owner (`step: dual-control`). The run continues from its checkpoint; a rejection reaches the model as the tool's result |
+| `POST /runs/:id/resume` `{budgets}` | After a budget stop: raises this run's limits (never beyond the maximum) and continues from the last checkpoint |
+| `POST /runs/:id/replay` `{fromStep}` | A new run (`replayOf`, `replayFrom`) reusing steps before `fromStep` and continuing from the checkpoint before it; approvals are asked again |
+
+A run summary: `{id, agentId, agent, agentVersion, profile, state: queued|running|waiting|succeeded|failed|cancelled|
+budget, label, userId, by, error, budgets: {steps, tokens, wallSeconds, toolCalls}, usage: {steps, tokens, toolCalls,
+calcCalls, wallMs, gpuMs}, replayOf, replayFrom, createdAt, startedAt, finishedAt}`. A step: `{n, lane: think|do|calc,
+title, state: ok|failed|waiting|denied|rejected, meta (think: tokens, profile, model, proposal; do/calc: tool,
+sideEffect, ceiling, durationMs, decision, valid, warning, approval), detail (sealed at rest: content and thinking, or
+arguments, result and error), createdAt, finishedAt}`. Socket events to the owner: `run.state {runId, state, error?}`
+and `run.step {runId, n, lane, title, state, meta}`; tool admins also get `run.state` for runs that start waiting.
+
+### Scripts (`scripts:run`)
+
+Scripts belong to the current workspace. Every version is checked (the `script` guardrail checkpoint, blocked network
+and process modules, a secrets scan) and a failing check refuses runs before they start. Runs execute in the
+`ScriptRunner`: `docker` or `podman` (`SCRIPT_RUNNER`, default `auto`) with no network, a read-only root, a noexec
+tmpfs, the nobody user, all capabilities dropped, and memory, CPU, process, time and output limits.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /scripts`, `GET /scripts/runtime` | The workspace's scripts; which runner is configured and whether it answers, with default and maximum limits |
+| `POST /scripts` `{name, language: python\|javascript, source, label, limits?}` | Creates version 1 (source sealed) with its checks |
+| `GET /scripts/:id` | `{id, name, language, label, status: draft\|tested\|in_review\|promoted, version, source, limits: {timeoutSeconds, memoryMb, cpus, pids, outputKb}, checks: [{name, result, tone, detail, line?}], blocked, registry, lastRunId}` |
+| `PATCH /scripts/:id` `{source?, limits?, label?, note?}` | A new version (a tested draft goes back to draft) |
+| `GET /scripts/:id/versions`, `GET /scripts/:id/versions/:v`, `POST /scripts/:id/restore` `{version}` | History; restoring makes a new version |
+| `POST /scripts/:id/checks` | Re-runs the checks on the current version |
+| `POST /scripts/:id/run` `{stdin?}` | `202 {runId, jobId}`; `409 Refused before start` naming the blocking check. A clean run makes a draft `tested` |
+| `GET /scripts/:id/runs`, `GET /script-runs/:id` | Runs; one run with `{state: queued\|running\|succeeded\|failed\|timeout\|cancelled, stdin, stdout, stderr, exitCode, durationMs, truncated, runner, error}` (sealed at rest) |
+| `POST /scripts/:id/promote` `{toolName, version, description, sideEffect, label?, inputSchema, outputSchema?}` (also `workflows:manage` or `tools:manage`) | A tested script becomes a script-backed registry tool, submitted for review; published, the script is `promoted`. The tool pins the script version, takes its arguments as JSON on stdin and returns the JSON on stdout |
+
+Socket event to the script's runner: `script.run {runId, scriptId, state, exitCode?, error?}`.

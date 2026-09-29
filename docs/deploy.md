@@ -36,6 +36,10 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `OLLAMA_MAX_LOADS_PER_10_MIN` | `6` | Anti-thrash limit per instance |
 | `ATTACHMENT_MAX_BYTES` | `10485760` | Largest chat attachment |
 | `CLAMD_HOST`, `CLAMD_PORT` | —, `3310` | ClamAV daemon for attachment scanning; without it attachments get the type check and classifier only |
+| `MCP_ALLOWED_HOSTS` | — | MCP servers must resolve to internal addresses; this comma-separated list of hostnames (`*.example.com`) and CIDR networks allows others |
+| `MCP_TIMEOUT_MS`, `MCP_POLL_MINUTES` | `15000`, `15` | MCP request timeout; how often every server's tools are re-listed and re-hashed (0 turns off) |
+| `SCRIPT_RUNNER` | `auto` | Script sandbox: `docker` or `podman` CLI (`auto` uses whichever answers), or `none` to refuse script runs. The server's user must be allowed to run containers (rootless Podman is recommended) |
+| `SCRIPT_IMAGE_PYTHON`, `SCRIPT_IMAGE_NODE` | `python:3.13-slim`, `node:22-slim` | Images for Python and JavaScript scripts; pin digests and mirror them internally, as nothing is pulled from outside at run time in an air-gapped install |
 | `SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_HOURS` | `30`, `12` | Session lifetime |
 | `LOCKOUT_MAX_ATTEMPTS`, `LOCKOUT_WINDOW_MINUTES`, `LOCKOUT_DURATION_MINUTES` | `5`, `15`, `15` | Sign-in lockout |
 | `DEFAULT_TENANT` | `default` | Tenant used when sign-in names none |
