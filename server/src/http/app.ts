@@ -17,6 +17,10 @@ import { tenantAdminRoutes } from '../routes/admin/tenants.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
+import { registryAdminRoutes } from '../routes/admin/registry.js';
+import { mcpAdminRoutes } from '../routes/admin/mcp.js';
+import { agentRoutes } from '../routes/agents.js';
+import { scriptRoutes } from '../routes/scripts.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -106,6 +110,10 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', usageAdminRoutes(s));
   api.use('/admin', gatewayAdminRoutes(s));
   api.use(chatRoutes(s));
+  api.use('/admin', registryAdminRoutes(s));
+  api.use('/admin', mcpAdminRoutes(s));
+  api.use(agentRoutes(s));
+  api.use(scriptRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

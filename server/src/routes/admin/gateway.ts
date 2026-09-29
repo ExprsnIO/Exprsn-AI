@@ -397,7 +397,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     thinkCeiling: z.enum(['off', 'low', 'medium', 'high']),
     systemPrompt: z.string().max(20_000).nullable(),
     fallback: fallbackSchema,
-    tools: z.array(z.enum(['calculate'])).max(8),
+    // calculate, or published registry and MCP tools by name (Sprint 7)
+    tools: z.array(z.string().trim().regex(/^[A-Za-z0-9][\w.:-]{0,119}$/)).max(32),
     label: z.enum(LABELS)
   });
 

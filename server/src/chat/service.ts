@@ -13,6 +13,7 @@ import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
+import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
 
 export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed';
 
@@ -66,7 +67,7 @@ export interface Chunk {
   seq: number;
   delta?: string;
   thinking?: string;
-  tool?: { name: string; expression: string; result?: { fraction: string; decimal: string; exact: boolean }; error?: string };
+  tool?: { name: string; expression: string; result?: { fraction: string; decimal: string; exact: boolean }; error?: string; output?: unknown };
 }
 
 interface Stream {
@@ -107,6 +108,7 @@ const ATTACHMENT_TEXT_LIMIT = 100_000;
 export class ChatService {
   private readonly streams = new Map<string, Stream>();
   private readonly offStop: () => void;
+  private toolDispatch: ToolDispatcher | null = null;
 
   constructor(
     private readonly db: Db,
@@ -120,6 +122,11 @@ export class ChatService {
     private readonly log: Logger
   ) {
     this.offStop = bus.on<{ messageId: string }>(TOPICS.chatStop, ({ messageId }) => this.abortLocal(messageId));
+  }
+
+  /** Registry and MCP tools on a profile's tool list are offered and called through the dispatcher (Sprint 7). */
+  useTools(d: ToolDispatcher): void {
+    this.toolDispatch = d;
   }
 
   close(): void {
@@ -567,7 +574,12 @@ export class ChatService {
       if (r.profile.system_prompt) messages.push({ role: 'system', content: r.profile.system_prompt });
       messages.push(...(await this.history(c, m.parent_id!, r.model.capabilities.includes('vision'))));
       promptChars = messages.reduce((a, x) => a + x.content.length, 0);
-      const toolsOn = r.profile.tools.includes('calculate') && r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
+      const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
+      // Beyond calculate: published registry and MCP tools, read-only in chat (write and destructive calls need an
+      // approval, which agent runs provide).
+      const extra: ResolvedTool[] = modelTools && this.toolDispatch ? (await this.toolDispatch.resolve(p, r.profile.tools.filter((t) => t !== 'calculate'), c.label)).tools.filter((t) => t.sideEffect === 'read' && t.confirm === 'never') : [];
+      const toolsOn = (r.profile.tools.includes('calculate') || extra.length > 0) && modelTools;
+      const toolDefs = [...(r.profile.tools.includes('calculate') ? [CALCULATE_TOOL] : []), ...extra.map((t) => t.def)];
       const thinkParam = think === 'off' ? false : r.model.name.startsWith('gpt-oss') ? think : true;
       const options: Record<string, unknown> = {};
       if (r.profile.num_ctx) options.num_ctx = r.profile.num_ctx;
@@ -576,7 +588,7 @@ export class ChatService {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const calls: NonNullable<ChatMessage['tool_calls']> = [];
         let roundContent = '';
-        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(r.model.capabilities.includes('thinking') ? { think: thinkParam } : {}), ...(toolsOn ? { tools: [CALCULATE_TOOL] } : {}), options }, st.ac.signal)) {
+        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(r.model.capabilities.includes('thinking') ? { think: thinkParam } : {}), ...(toolsOn ? { tools: toolDefs } : {}), options }, st.ac.signal)) {
           const msg = chunk.message;
           if (msg && (msg.content || msg.thinking) && usage.firstTokenMs == null) {
             usage.firstTokenMs = Date.now() - started;
@@ -606,7 +618,11 @@ export class ChatService {
         for (const call of calls) {
           const expression = String((call.function.arguments as { expression?: unknown }).expression ?? '');
           let tool: NonNullable<Chunk['tool']>;
-          if (call.function.name !== 'calculate') tool = { name: call.function.name, expression, error: 'Unknown tool' };
+          const ext = extra.find((t) => t.fn === call.function.name);
+          if (ext) {
+            const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
+            tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
+          } else if (call.function.name !== 'calculate' || !r.profile.tools.includes('calculate')) tool = { name: call.function.name, expression, error: 'Unknown tool' };
           else {
             usage.calcCalls++;
             try {
@@ -617,7 +633,7 @@ export class ChatService {
           }
           st.tools.push(tool);
           this.push(st, { tool });
-          messages.push({ role: 'tool', tool_name: tool.name, content: JSON.stringify(tool.result ?? { error: tool.error }) });
+          messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(tool.result ?? tool.output ?? { error: tool.error }) });
         }
       }
       st.state = 'complete';

@@ -97,6 +97,15 @@ const schema = z
     CLAMD_HOST: z.string().optional(),
     CLAMD_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
 
+    /** MCP servers: internal hosts only, unless a host or CIDR is on this comma-separated allow-list. */
+    MCP_ALLOWED_HOSTS: z.string().default(''),
+    MCP_TIMEOUT_MS: z.coerce.number().int().min(250).max(600_000).default(15_000),
+    MCP_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /** Script sandbox: docker or podman CLI (auto picks whichever is installed), or none. */
+    SCRIPT_RUNNER: z.enum(['auto', 'docker', 'podman', 'none']).default('auto'),
+    SCRIPT_IMAGE_PYTHON: z.string().default('python:3.13-slim'),
+    SCRIPT_IMAGE_NODE: z.string().default('node:22-slim'),
+
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
     SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),

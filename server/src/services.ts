@@ -29,6 +29,13 @@ import { AttachmentService } from './chat/attachments.js';
 import { CalcWorker } from './chat/calc.js';
 import { ChatService } from './chat/service.js';
 import { allowAll, type Guardrails } from './guardrails/types.js';
+import { RegistryService } from './registry/service.js';
+import { ToolDispatcher } from './registry/dispatch.js';
+import { McpService } from './mcp/service.js';
+import { ScriptService } from './scripts/service.js';
+import { createScriptRunner } from './scripts/runner.js';
+import { AgentService } from './agents/service.js';
+import { loadPrincipal } from './http/middleware.js';
 
 export interface Services {
   cfg: Config;
@@ -63,6 +70,12 @@ export interface Services {
   chat: ChatService;
   /** The guardrail checkpoints (`guardrails/types.ts`); every feature that handles tenant text calls `check`. */
   guardrails: Guardrails;
+  /** Sprint 7: the registry, MCP servers, the tool dispatcher (chat, agents, test harness), scripts and agent runs. */
+  registry: RegistryService;
+  mcp: McpService;
+  scripts: ScriptService;
+  tools: ToolDispatcher;
+  agents: AgentService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -98,6 +111,16 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log);
+  const registry = new RegistryService(db);
+  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
+  const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
+  const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
+  chat.useTools(tools);
+  const agents = new AgentService(db, keys, gateway, registry, tools, quotas, audit, bus, jobs, notifications, async (tenantId, userId, workspaceId) => {
+    const p = await loadPrincipal(s, tenantId, userId, {});
+    if (p) p.workspaceId = workspaceId;
+    return p;
+  }, log);
   const s: Services = {
     cfg,
     db,
@@ -130,6 +153,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     calc,
     chat,
     guardrails: allowAll,
+    registry,
+    mcp,
+    scripts,
+    tools,
+    agents,
     close: async () => {
       scheduler.stop();
       chat.close();
@@ -138,10 +166,14 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       siem.close();
       await jobs.stop();
       await chain.close();
+      await mcp.close();
       await bus.close();
     }
   };
   registerPlatformJobs(s);
+  scripts.registerJobs();
+  agents.registerJobs();
+  jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
 }
 
@@ -167,4 +199,5 @@ export function startSchedules(s: Services): void {
   const activeTenants = async () => (await s.tenants.list()).filter((t) => t.state === 'active').map((t) => ({ tenantId: t.id, payload: { tenantId: t.id } }));
   s.scheduler.every('directory.sync', s.cfg.DIRECTORY_SYNC_MINUTES * 60_000, activeTenants);
   s.scheduler.every('audit.checkpoint', s.cfg.AUDIT_CHECKPOINT_MINUTES * 60_000, activeTenants);
+  s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
 }

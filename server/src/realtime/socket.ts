@@ -27,7 +27,7 @@ export const rooms = {
 };
 
 /** Permissions whose holders receive live admin updates. */
-const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage'] as const;
+const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage', 'tools:manage'] as const;
 
 /**
  * Socket.io on the same HTTP server (path /socket.io), authenticated by the session cookie at handshake.
@@ -103,6 +103,11 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     }),
     s.bus.on<{ tenantId: string | null; perm: string; event: string; data: unknown }>(TOPICS.poolState, (e) => {
       io.local.to(e.tenantId ? rooms.perm(e.tenantId, e.perm) : rooms.platformPerm(e.perm)).emit(e.event as never, e.data as never);
+    }),
+    // Agent-run steps and script runs: to the owner, and waiting approvals to the tenant's tool admins.
+    s.bus.on<{ userId?: string; tenantId?: string; perm?: string; event: string; data: unknown }>(TOPICS.runEvent, (e) => {
+      if (e.userId) io.local.to(rooms.user(e.userId)).emit(e.event as never, e.data as never);
+      else if (e.tenantId && e.perm) io.local.to(rooms.perm(e.tenantId, e.perm)).emit(e.event as never, e.data as never);
     })
   ];
 
