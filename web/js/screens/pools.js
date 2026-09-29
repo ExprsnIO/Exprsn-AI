@@ -52,15 +52,25 @@
     states: [
       { title: 'No spare memory', tone: 'warn', text: 'A load does not fit next to the pinned models on an instance, even after evicting every warm model. The planner refuses it rather than evict a pinned model.',
         async apply(ctx) {
-          const st = ctx.state; const all = flat(st.pools || []);
-          const i = all.find((x) => x.available && x.available.length) || all[0];
-          if (!i) { ctx.toast('Add a pool and an instance first; this state needs one.', 'warn'); return; }
-          const cand = (i.available || []).slice().sort((a, b) => b.sizeBytes - a.sizeBytes)[0];
-          let plan = null;
-          if (cand) { try { plan = await App.get('/api/admin/instances/' + enc(i.id) + '/plan?model=' + enc(cand.name)); } catch (err) { plan = null; } }
-          const model = cand ? cand.name : 'the model';
+          const st = ctx.state; const all = flat(st.pools || []).filter((x) => x.state === 'active');
+          if (!all.length) { ctx.toast('Add a pool and an instance first; this state needs one.', 'warn'); return; }
+          // Ask the planner about every pulled, non-resident model and show the first real refusal.
+          let pick = null, fallback = null;
+          for (const i of all) {
+            for (const a of (i.available || []).filter((x) => !i.loaded.some((m) => m.name === x.name)).sort((x, y) => y.sizeBytes - x.sizeBytes)) {
+              let plan = null;
+              try { plan = await App.get('/api/admin/instances/' + enc(i.id) + '/plan?model=' + enc(a.name)); } catch (err) { continue; }
+              if (!plan.fits) { pick = { i, model: a.name, plan }; break; }
+              if (!fallback) fallback = { i, model: a.name, plan };
+            }
+            if (pick) break;
+          }
+          const hit = pick || fallback;
           st.notes = st.notes || {};
-          st.notes[i.id] = { kind: 'nospare', model, plan, at: Date.now(), detail: model + ' needs about ' + gb(plan ? plan.needBytes : null) + ' and ' + i.name + ' cannot make room without evicting a pinned model.' };
+          if (!hit) { const i = all[0]; st.notes[i.id] = { kind: 'nospare', model: '', plan: null, at: Date.now(), detail: 'Nothing is pulled on ' + i.name + ' that is not already loaded, so no load can be refused yet.' }; ctx.rerender(); return; }
+          st.notes[hit.i.id] = { kind: 'nospare', model: hit.model, plan: pick ? hit.plan : null, at: Date.now(),
+            detail: pick ? hit.model + ' needs about ' + gb(hit.plan.needBytes) + ' and ' + hit.i.name + ' cannot make room without evicting a pinned model.'
+              : 'Preview: every pulled model fits right now. The largest, ' + hit.model + ', needs about ' + gb(hit.plan.needBytes) + ' and ' + hit.i.name + ' has ' + (hit.plan.freeBytes == null ? 'no declared memory size' : gb(hit.plan.freeBytes) + ' free') + '; a load that does not fit is refused like this.' };
           ctx.rerender();
         } },
       { title: 'Anti-thrash limit', tone: 'warn', text: 'Too many loads on one instance in ten minutes. Further loads are refused until the window clears; pinned models are never evicted.',
@@ -171,13 +181,13 @@
         const n = st.notes[i.id]; if (!n) return '';
         if (n.kind === 'nospare') {
           const pl = n.plan;
-          const numbers = pl ? ' Needs ' + gb(pl.needBytes) + '; ' + (pl.freeBytes == null ? 'no memory size declared' : gb(pl.freeBytes) + ' free') + '.' + (pl.reason ? ' ' + esc(pl.reason) + '.' : '') : '';
+          const numbers = pl ? ' ' + (pl.freeBytes == null ? 'No memory size is declared.' : gb(pl.freeBytes) + ' free now.') + (pl.reason ? ' ' + esc(pl.reason) + '.' : '') : '';
           return UI.notice('<b>No spare memory on ' + esc(i.name) + '.</b> ' + esc(n.detail) + numbers + ' Unload or unpin a model, move the load to another instance, or raise the declared memory if it is wrong.', 'warn',
             '<span class="hstack gap6">' + UI.btn('Open planner', { size: 'sm', attrs: 'data-planner="' + esc(i.id) + '" data-pmodel="' + esc(n.model || '') + '"' }) + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearnote="' + esc(i.id) + '"' }) + '</span>');
         }
         if (n.kind === 'thrash') {
           const left = Math.max(0, Math.round((n.at + (n.retry || 60) * 1000 - Date.now()) / 1000));
-          return UI.notice('<b>Anti-thrash limit on ' + esc(i.name) + '.</b> ' + esc(n.detail) + (n.loads ? ' ' + n.loads + ' loads of ' + n.max + ' allowed.' : '') + ' ' + (left ? 'Retry after ' + left + ' s.' : 'Retry now.') + ' Pinned models are never evicted.', 'warn', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearnote="' + esc(i.id) + '"' }));
+          return UI.notice('<b>Anti-thrash limit on ' + esc(i.name) + '.</b> ' + esc(n.detail) + (n.loads ? ' Loads in the window: ' + n.loads + ', limit ' + n.max + '.' : '') + ' ' + (left ? 'Retry after ' + left + ' s.' : 'Retry now.') + ' Pinned models are never evicted.', 'warn', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearnote="' + esc(i.id) + '"' }));
         }
         return '';
       };
@@ -200,23 +210,26 @@
         if (!p.placements.length) return '<div class="muted" style="font-size:12px">No models placed on this pool. Place and pull them from Models.</div>';
         return UI.table(['Placed model', 'Residency', 'Resident on', { label: '', right: true }], p.placements.map((pl) => {
           const on = p.instances.filter((i) => i.loaded.some((m) => sameModel(m.name, pl.model)));
-          return { cells: ['<span class="mono">' + esc(pl.model) + '</span>', UI.select(['pinned', 'warm', 'cold'], pl.residency, 'data-residency="' + esc(pl.id) + '" aria-label="Residency of ' + esc(pl.model) + '" style="width:auto;padding:2px 6px"'),
+          return { cells: ['<span class="mono">' + esc(pl.model) + '</span>', '<span class="pl-res">' + UI.select(['pinned', 'warm', 'cold'], pl.residency, 'data-residency="' + esc(pl.id) + '" aria-label="Residency of ' + esc(pl.model) + '"') + '</span>',
             on.length ? esc(on.map((i) => i.name).join(', ')) : '<span class="muted">cold on every instance</span>',
             '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn(on.length ? 'History' : 'Why is this cold?', { kind: 'ghost', size: 'sm', attrs: 'data-cold="' + esc(p.id) + '" data-cmodel="' + esc(pl.model) + '"' }) + UI.btn('Remove', { kind: 'ghost', size: 'sm', attrs: 'data-unplace="' + esc(pl.id) + '" data-umodel="' + esc(pl.model) + '"' }) + '</span>'] };
         }), { minWidth: '0', clickable: false });
       };
       const poolPanel = (p) => {
         let notices = '';
+        const up0 = st.upgrades[p.id]; const upOn = up0 && (up0.state === 'queued' || up0.state === 'running');
+        const sentence = (t) => (t ? esc(t) + (/[.!?]$/.test(t) ? '' : '.') : '');
         p.instances.forEach((i) => {
           notices += noteHtml(i);
-          if (i.state !== 'disabled' && i.health === 'unreachable') notices += UI.notice('<b>' + esc(i.name) + ' is not answering.</b> ' + esc(i.health_detail || '') + ' Last seen ' + esc(when(i.last_seen_at)) + '. Requests route to other instances in the pool.', 'danger', UI.btn('Open instance', { size: 'sm', attrs: 'data-inst-open="' + esc(i.id) + '"' }));
-          else if (i.state !== 'disabled' && i.health === 'degraded') notices += UI.notice('<b>' + esc(i.name) + ' is degraded.</b> ' + esc(i.health_detail || ''), 'warn', UI.btn('Open instance', { size: 'sm', attrs: 'data-inst-open="' + esc(i.id) + '"' }));
-          if (i.state === 'draining') notices += UI.notice('<b>' + esc(i.name) + ' is drained.</b> The gateway routes nothing to it and refuses loads until it returns to service.', 'warn', UI.btn('Return to service', { size: 'sm', attrs: 'data-undrain="' + esc(i.id) + '"' }));
+          if (i.state !== 'disabled' && i.health === 'unreachable') notices += UI.notice('<b>' + esc(i.name) + ' is not answering.</b> ' + sentence(i.health_detail) + ' Last seen ' + esc(when(i.last_seen_at)) + '. Requests route to other instances in the pool.', 'danger', UI.btn('Open instance', { size: 'sm', attrs: 'data-inst-open="' + esc(i.id) + '"' }));
+          else if (i.state !== 'disabled' && i.health === 'degraded') notices += UI.notice('<b>' + esc(i.name) + ' is degraded.</b> ' + sentence(i.health_detail), 'warn', UI.btn('Open instance', { size: 'sm', attrs: 'data-inst-open="' + esc(i.id) + '"' }));
+          if (i.state === 'draining' && upOn) notices += UI.notice('<b>' + esc(i.name) + ' is drained for the rolling upgrade.</b> The job returns it to service once it reports the target version.', 'info');
+          else if (i.state === 'draining') notices += UI.notice('<b>' + esc(i.name) + ' is drained.</b> The gateway routes nothing to it and refuses loads until it returns to service.', 'warn', UI.btn('Return to service', { size: 'sm', attrs: 'data-undrain="' + esc(i.id) + '"' }));
         });
         notices += upgradeNotice(p) + driftNotice(p);
         if (st.showDrift && !driftList(p).length) notices += UI.notice('<b>Estimate drift.</b> No model loaded on ' + esc(p.name) + ' differs from its catalogue estimate by more than 10%.', 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-nodrift' }));
         const title = p.name + ', ' + p.accelerator + ', zone ' + p.zone + ', ceiling ' + p.label_ceiling;
-        const up = st.upgrades[p.id]; const upRunning = up && (up.state === 'queued' || up.state === 'running');
+        const upRunning = upOn;
         const actions = UI.btn('Add instance', { size: 'sm', icon: 'plus', attrs: 'data-addinst="' + esc(p.id) + '"' }) + UI.btn(upRunning ? 'Upgrade running' : 'Roll upgrade', { size: 'sm', attrs: 'data-roll="' + esc(p.id) + '"', disabled: upRunning || !p.instances.length }) + UI.iconbtn('edit', 'Edit pool', { attrs: 'data-editpool="' + esc(p.id) + '"', cls: 'sm ghost' }) + UI.iconbtn('trash', 'Delete pool', { attrs: 'data-delpool="' + esc(p.id) + '"', cls: 'sm ghost' });
         const grid = p.instances.length ? '<div class="pl-wrap">' + head + p.instances.map((i) => row(p, i)).join('') + '</div>' : UI.empty('No instances', 'Register the Ollama endpoints that serve this pool.', UI.btn('Add instance', { size: 'sm', kind: 'primary', attrs: 'data-addinst="' + esc(p.id) + '"' }));
         return UI.panel(title, (p.description ? '<div class="fg2" style="font-size:12px">' + esc(p.description) + '</div>' : '') + '<div class="hstack gap6">' + UI.label(p.label_ceiling, { sm: true }) + '<a href="#" class="muted" style="font-size:12px" data-go="zones">zone ' + esc(p.zone) + '</a></div>' + grid + notices
@@ -235,7 +248,7 @@
         + '.pl-model{display:inline-flex;gap:4px;align-items:center;font-size:11px;border:1px solid var(--line);border-radius:4px;background:var(--panel);padding:1px 6px;cursor:pointer;font-family:inherit;color:var(--fg)}.pl-model:hover{border-color:var(--muted)}.pl-model.loading{cursor:default;border-style:dashed;color:var(--info-fg)}.pl-model.drift{border-color:var(--info-fg)}'
         + '.pl-drift{font-size:10px;padding:0 4px;border-radius:3px;background:var(--info-bg);color:var(--info-fg)}'
         + '.pl-legend{display:flex;gap:14px;font-size:11px;color:var(--muted);align-items:center;flex-wrap:wrap}.pl-legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}'
-        + '.pl-ev{font-size:12px}'
+        + '.pl-ev{font-size:12px}.pl-res .select{width:auto;min-width:110px}'
         + '</style>'
         + '<div class="page">'
         + UI.pagehead('Pools and instances', 'One Ollama process per accelerator group. The gateway owns placement.',
@@ -431,7 +444,7 @@
                 let why;
                 if (m) why = 'Resident' + (last && last.event === 'load' ? ' since ' + esc(when(last.ts)) + ': ' + esc(last.reason || 'loaded') + (last.actor ? ' (' + esc(last.actor) + ')' : '') : '') + '. Residency <b>' + esc(residency) + '</b>' + (residency === 'pinned' ? '; the planner never evicts it.' : '; the planner may evict it to make room for another load.');
                 else if (!last) why = 'No load, unload or eviction of ' + esc(name) + ' is recorded' + (i ? ' on ' + esc(i.name) : ' in ' + esc(p.name)) + '. It has not been loaded here since the gateway started keeping history.';
-                else why = 'Cold since ' + esc(when(last.ts)) + (last.inst && !i ? ' on ' + esc(last.inst) : '') + ': <b>' + esc((EVENT_TEXT[last.event] || last.event).toLowerCase()) + '</b>, ' + esc(last.reason || 'no reason recorded') + (last.actor ? ', by ' + esc(last.actor) : '') + '. Residency <b>' + esc(pl ? pl.residency : 'not placed') + '</b>. Pin it to keep it resident.';
+                else why = 'Cold since ' + esc(when(last.ts)) + (last.inst && !i ? ' on ' + esc(last.inst) : '') + ': ' + esc(last.reason || 'no reason recorded') + ' (' + esc((EVENT_TEXT[last.event] || last.event).toLowerCase()) + (last.actor ? ' by ' + esc(last.actor) : '') + '). Residency <b>' + esc(pl ? pl.residency : 'not placed') + '</b>' + (pl && pl.residency === 'pinned' ? '; it loads again on first use.' : '. Pin it to keep it resident.');
                 const w = d.querySelector('[data-why]'); if (w) w.innerHTML = UI.notice(why, m ? 'info' : 'warn');
                 const box = d.querySelector('[data-hist]'); if (box) box.innerHTML = eventsTimeline(evs.slice(0, 15), !i);
               })

@@ -148,3 +148,41 @@ retireAt, notes, createdAt, updatedAt}`.
 
 A profile: `{id, name, displayName, description, aliasOf, modelId, poolId, numCtx, temperature, thinkDefault,
 thinkCeiling, systemPrompt, fallback, canary, tools, label, status, version, updatedAt}`.
+
+## Chat and compare (Sprint 4)
+
+Conversations belong to their author and to the session's current workspace. Reading needs `chat:read`; sending
+needs `chat:write` and `inference:invoke`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /chat/profiles` | Profiles the caller may pick: `{id, name, displayName, description, aliasOf, model, label, thinkDefault, thinkCeiling, tools, vision, residency: loaded\|cold, deprecated}` |
+| `GET /conversations?kind=chat\|compare&archived` | `[{id, kind, title, label, profileId, workspaceId, updatedAt, createdAt, archived}]` |
+| `POST /conversations` `{title?, label?}` | An empty conversation |
+| `POST /chat` `{content, profile, think?, attachments?, label?}` | Creates a conversation and sends its first message: `202 {conversationId, userMessageId, messageId, profile, model, think, label}` |
+| `GET /conversations/:id` | The whole tree: `{id, kind, title, label, headId, messages: [message]}` |
+| `PATCH /conversations/:id` `{title?, archived?, label?, headId?}` | Renames, archives, raises the label, or moves the head (to the newest leaf under the given message) |
+| `DELETE /conversations/:id` | Deletes it |
+| `POST /conversations/:id/messages` `{content, profile, parentId?, think?, attachments?, label?}` | Sends under `parentId` (default: the head) |
+| `POST /conversations/:id/messages/:mid/regenerate` `{profile?, think?}` | A sibling answer |
+| `POST /conversations/:id/messages/:mid/edit` `{content, profile?, think?}` | A sibling question with a new answer |
+| `POST /conversations/:id/messages/:mid/stop` | Stops generation; what was produced is kept and metered |
+| `GET /conversations/:id/messages/:mid/stream?after=<seq>` | Catch up: `{state, seq, chunks}` while streaming, or the stored `{state, seq, content, thinking, tools, usage, error}` |
+| `POST /compare` `{prompt, profiles: [2–4], think?, label?}` | `202 {conversationId, userMessageId, columns: [{slot, messageId, profile, model, think, canary}]}`; each column streams and is metered separately |
+| `PUT /attachments?name=<file>&label=<label>` (body: the file) | `202` attachment in quarantine; a job scans and classifies it (`attachment.state` socket event) |
+| `GET /attachments/:id` | `{id, name, type, size, state: quarantined\|scanning\|rejected\|ready, label, reason, findings}` |
+| `POST /calculate` `{expression}` | The exact-calculation worker: `{fraction, decimal, exact}` |
+
+A message: `{id, parentId, role, content, thinking, tools: [{name, expression, result?: {fraction, decimal, exact},
+error?}], state: queued|streaming|complete|stopped|failed, seq, profileId, profile, model, think, compareSlot, canary,
+error, label, attachments, usage: {promptTokens, outputTokens, thinkingTokens, calcCalls, gpuMs, firstTokenMs},
+createdAt, completedAt}`.
+
+Socket events to the author: `chat.status {conversationId, messageId, state: queued|loading|streaming|fallback,
+position?, instance?, profile?, model?}`, `chat.chunk {conversationId, messageId, seq, delta?, thinking?, tool?}`,
+`chat.done {conversationId, messageId, state, seq, usage, error, profile, model}`. Sequence numbers start at 1 per
+message; a gap means call the stream endpoint with `after`.
+
+Errors worth handling: `429` over quota (with `Retry-After` and the limit), `403` with `step: clearance|zone` when
+the conversation's label is above the caller or the profile, `409` for attachments not ready or images on a model
+without vision, `410` when the tenant's key was destroyed.

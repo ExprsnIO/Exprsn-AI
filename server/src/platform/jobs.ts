@@ -65,6 +65,7 @@ export interface JobProgressEvent {
   state: JobState;
   progress: number;
   message: string | null;
+  error: string | null;
 }
 
 const fromRow = (r: Record<string, unknown>): JobRow => ({
@@ -314,7 +315,7 @@ export class JobQueue {
   }
 
   private emit(job: JobRow): void {
-    const e: JobProgressEvent = { id: job.id, tenantId: job.tenant_id, createdBy: job.created_by, type: job.type, state: job.state, progress: job.progress, message: job.message };
+    const e: JobProgressEvent = { id: job.id, tenantId: job.tenant_id, createdBy: job.created_by, type: job.type, state: job.state, progress: job.progress, message: job.message, error: job.state === 'failed' ? job.error : null };
     this.bus.emitLocal(TOPICS.jobProgress, e);
   }
 }

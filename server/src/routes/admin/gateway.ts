@@ -263,9 +263,13 @@ export function gatewayAdminRoutes(s: Services): Router {
 
   r.get('/models', readModels, async (_req, res) => {
     const [list, placements, pools, profiles] = await Promise.all([g.repo.models(), g.repo.placements(), g.repo.pools(), s.db('profiles').select('id', 'name', 'model_id', 'tenant_id')]);
+    const people = [...new Set(list.flatMap((m) => [m.requested_by, m.approved_by]).filter((u): u is string => !!u))];
+    const names = new Map((await s.db('users').whereIn('id', people).select('id', 'display_name')).map((u: { id: string; display_name: string }) => [u.id, u.display_name]));
     res.json(
       list.map((m) => ({
         ...modelView(m),
+        requestedByName: m.requested_by ? (names.get(m.requested_by) ?? null) : null,
+        approvedByName: m.approved_by ? (names.get(m.approved_by) ?? null) : null,
         pools: placements.filter((x) => x.model_id === m.id).map((x) => ({ placementId: x.id, poolId: x.pool_id, pool: pools.find((p) => p.id === x.pool_id)?.name, residency: x.residency })),
         profiles: profiles.filter((x: { model_id: string | null }) => x.model_id === m.id).length
       }))
@@ -303,6 +307,10 @@ export function gatewayAdminRoutes(s: Services): Router {
     if (body.poolId) {
       const pool = await g.repo.pool(body.poolId);
       if (!pool) throw notFound('Pool');
+      if (labelRank(m.label) > labelRank(pool.label_ceiling)) {
+        await s.db('models').where({ id: m.id }).delete();
+        throw forbidden(`${m.name} is labelled ${m.label} but ${pool.name}'s ceiling is ${pool.label_ceiling}.`, { step: 'zone' });
+      }
       await g.repo.place(m.id, pool.id, 'warm', p.userId);
       jobId = (await s.jobs.enqueue({ tenantId: p.tenantId, type: 'model.pull', payload: { modelId: m.id, poolId: pool.id }, createdBy: p.userId, maxAttempts: 1 })).id;
     }
@@ -367,7 +375,9 @@ export function gatewayAdminRoutes(s: Services): Router {
       await g.repo.updateModel(m.id, { state: 'deprecated', retire_at: body.retireAt ?? null });
     } else {
       if (from !== 'deprecated' && from !== 'draft' && from !== 'evaluated') throw conflict('Deprecate the model before retiring it.');
-      await g.repo.updateModel(m.id, { state: 'retired' });
+      await g.repo.updateModel(m.id, { state: 'retired', retire_at: Date.now() });
+      // Retired models stay in the catalogue for audit but leave routing: their placements go.
+      for (const pl of (await g.repo.placements()).filter((x) => x.model_id === m.id)) await g.repo.unplace(pl.id);
     }
     await audit(req, `model.${body.to}`, { model: m.name }, { from, reason: body.reason ?? null });
     res.json(modelView((await g.repo.model(m.id))!));
@@ -573,7 +583,9 @@ export function gatewayAdminRoutes(s: Services): Router {
 
   r.get('/profiles/:id/versions', profiles, async (req, res) => {
     const x = await loadProfile(req);
-    res.json((await g.repo.versions(x.id)).map((v) => ({ version: v.version, note: v.note, createdBy: v.created_by, createdAt: v.created_at, profile: profileView(v.snapshot) })));
+    const versions = await g.repo.versions(x.id);
+    const names = new Map((await s.db('users').whereIn('id', versions.map((v) => v.created_by).filter((u): u is string => !!u)).select('id', 'display_name')).map((u: { id: string; display_name: string }) => [u.id, u.display_name]));
+    res.json(versions.map((v) => ({ version: v.version, note: v.note, createdBy: v.created_by, createdByName: v.created_by ? (names.get(v.created_by) ?? null) : null, createdAt: v.created_at, profile: profileView(v.snapshot) })));
   });
 
   r.post('/profiles/:id/rollback', profiles, async (req, res) => {

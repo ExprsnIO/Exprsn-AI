@@ -88,7 +88,7 @@ export async function up(knex: Knex): Promise<void> {
     t.string('type', 60).notNullable();
     t.string('state', 20).notNullable(); // queued | running | succeeded | failed | cancelled | preempted
     t.text('payload').notNullable();
-    t.text('result').nullable();
+    t.text('result', 'mediumtext').nullable();
     t.string('error', 1000).nullable();
     t.integer('progress').notNullable().defaultTo(0);
     t.string('message', 300).nullable();

@@ -188,7 +188,7 @@
     canOpen(route) { if (OPEN_ROUTES[route]) return true; const it = NAV_BY_ID[route]; return !it || App.can(it.perm); },
     isLive(route) { const it = NAV_BY_ID[route]; return OPEN_ROUTES[route] || !!(it && it.live) || !!(screens[route] && screens[route].live); },
     /** Shows a problem's title, detail and trace id in a toast. */
-    fail(err, what) { const p = (err && err.problem) || {}; App.toast('<b>' + esc(what || p.title || 'Request failed') + '</b> ' + esc(p.detail || (err && err.message) || '') + (p.trace_id ? '<div class="mono muted" style="font-size:11px">trace ' + esc(p.trace_id) + '</div>' : ''), 'danger', 7000); },
+    fail(err, what) { const p = (err && err.problem) || {}; App.toast('<span><b>' + esc(what || p.title || 'Request failed') + '</b> ' + esc(p.detail || (err && err.message) || '') + (p.trace_id ? '<span class="mono muted" style="display:block;font-size:11px">trace ' + esc(p.trace_id) + '</span>' : '') + '</span>', 'danger', 7000); },
     register(def) { screens[def.id] = def; },
     navigate(route, params) {
       const q = params ? '?' + Object.keys(params).map((k) => k + '=' + encodeURIComponent(params[k])).join('&') : '';
@@ -212,7 +212,11 @@
       const me = await api('GET', '/api/me');
       App.setMe(me); state.signedIn = true; App.connectSocket();
       const next = state.afterSignIn && App.canOpen(state.afterSignIn) ? state.afterSignIn : App.firstRoute();
-      state.afterSignIn = null; App.navigate(next); if (App.parse().route === next) App.render();
+      // Keep the parameters of the address the user came in on (a deep link such as #/models?model=…).
+      const hash = next === state.afterSignIn && state.afterSignInHash ? state.afterSignInHash : null;
+      state.afterSignIn = null; state.afterSignInHash = null;
+      if (hash) { if (location.hash === hash) App.render(); else location.hash = hash; return; }
+      App.navigate(next); if (App.parse().route === next) App.render();
     },
     async signOut() { try { await api('POST', '/api/auth/logout'); } catch (e) { /* already gone */ } App.sessionEnded(); },
     /** Clears local state after sign-out, revocation or expiry. */
@@ -270,11 +274,11 @@
         const s = await api('GET', '/api/auth/session');
         state.csrf = s.csrf || null;
         // A reload keeps the screen in the address bar rather than jumping to the first one.
-        if (s.authenticated) { const r = App.parse().route; if (r !== 'signin' && location.hash) state.afterSignIn = r; await App.signIn(s); state.booted = true; return; }
+        if (s.authenticated) { const r = App.parse().route; if (r !== 'signin' && location.hash) { state.afterSignIn = r; state.afterSignInHash = location.hash; } await App.signIn(s); state.booted = true; return; }
         state.pendingSession = s.stage ? s : null;
       } catch (e) { /* offline: sign-in shows the error */ }
       state.booted = true;
-      const r = App.parse().route; if (r !== 'signin') state.afterSignIn = r;
+      const r = App.parse().route; if (r !== 'signin') { state.afterSignIn = r; state.afterSignInHash = location.hash || null; }
       App.navigate('signin'); App.render();
     },
     setTheme(t) { state.theme = t; if (t) document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme'); try { t ? localStorage.setItem('exprsn.theme', t) : localStorage.removeItem('exprsn.theme'); } catch (e) {} App.renderHeader(); },

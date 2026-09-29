@@ -62,6 +62,10 @@ describe('Ollama gateway', () => {
     expect(after).toMatchObject({ importState: 'failed', state: 'draft' });
     expect(after.importError).toMatch(/Digest mismatch/);
     expect(ollama.available.has('llama3.1:8b')).toBe(false);
+    // an import straight onto a pool whose ceiling is below the model's label is refused, like a placement
+    const low = await post(a, '/api/admin/models', { name: 'qwen3:8b', label: 'confidential', poolId: pool.id }).expect(403);
+    expect(low.body.step).toBe('zone');
+    expect((await a.agent.get('/api/admin/models').expect(200)).body.some((x: { name: string }) => x.name === 'qwen3:8b')).toBe(false);
   });
 
   it('pulls, evaluates, and approves under dual control with a recorded licence', async () => {

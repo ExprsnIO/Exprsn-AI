@@ -52,6 +52,8 @@
       const st = ctx.state;
       const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
       st.form = st.form || {}; st.versions = st.versions || {};
+      // Re-rendering closes any open dialog, so data that arrives while one is open waits until it closes.
+      const later = () => { if (App.state.route !== 'profiles') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
       const load = () => {
         if (st.loading) { st.again = true; return; }
         st.loading = true;
@@ -63,7 +65,7 @@
         ])
           .then(([profiles, models, pools, users]) => { Object.assign(st, { profiles, models, pools, users, loaded: true, loadError: null }); })
           .catch((err) => { st.loadError = err; })
-          .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } if (App.state.route === 'profiles') ctx.rerender(); });
+          .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } later(); });
       };
       if (!st.loaded && !st.loadError) load();
       const refresh = () => { st.versions = {}; load(); };
@@ -82,6 +84,7 @@
       }
 
       const list = st.profiles;
+      const selBefore = st.sel;
       const byId = (id) => list.find((x) => x.id === id);
       if (ctx.params.profile) { const want = ctx.params.profile; const hit = list.find((x) => x.id === want || x.name === want); if (hit) st.sel = hit.id; delete ctx.params.profile; }
       if (!byId(st.sel)) st.sel = list[0] ? list[0].id : null;
@@ -103,20 +106,20 @@
 
       // ---- demo states: pick a matching profile from live data and stage the edit that the server would refuse ----
       if (st.demo) {
-        const d = st.demo; st.demo = null; st.demoNote = null;
+        const d = st.demo; st.demo = null; st.demoNote = null; st.conflict = null; st.showDependants = null;
         const withModel = reals.filter((p) => p.model);
         const stage = (p, patch) => { st.sel = p.id; st.form[p.id] = Object.assign(formOf(p), st.form[p.id] || {}, patch); };
         if (d === 'tools') {
           const p = withModel.find((x) => { const m = modelById(x.modelId); return m.capabilities.indexOf('tools') < 0 || (m.evaluation && m.evaluation.toolsWithheld); });
           const noTools = (models || []).find((m) => m.state === 'approved' && (m.capabilities.indexOf('tools') < 0 || (m.evaluation && m.evaluation.toolsWithheld)));
           if (p) stage(p, { calculate: true });
-          else if (noTools && reals.length) stage(reals[0], { modelId: noTools.id, calculate: true });
+          else if (noTools && reals.length) { const fit = reals.find((x) => rank(x.label) <= rank(noTools.label) && (x.thinkCeiling === 'off' || noTools.capabilities.indexOf('thinking') >= 0)) || reals[0]; stage(fit, { modelId: noTools.id, calculate: true }); }
           else st.demoNote = 'Every approved model has the tools capability, so nothing is refused here. The check below runs whenever the calculate tool is on.';
         } else if (d === 'think') {
           const p = withModel.find((x) => modelById(x.modelId).capabilities.indexOf('thinking') < 0);
           const noThink = (models || []).find((m) => m.state === 'approved' && m.capabilities.indexOf('thinking') < 0);
           if (p) stage(p, { thinkCeiling: 'medium' });
-          else if (noThink && reals.length) stage(reals[0], { modelId: noThink.id, thinkCeiling: 'medium' });
+          else if (noThink && reals.length) { const fit = reals.find((x) => rank(x.label) <= rank(noThink.label)) || reals[0]; stage(fit, { modelId: noThink.id, thinkCeiling: 'medium' }); }
           else st.demoNote = 'Every approved model supports thinking, so nothing is refused here.';
         } else if (d === 'ceiling') {
           const p = withModel.find((x) => rank(modelById(x.modelId).label) < 3 && myLabels.indexOf(LABELS[rank(modelById(x.modelId).label) + 1]) >= 0);
@@ -146,7 +149,7 @@
       };
       const versionsPanel = (x) => {
         const v = st.versions[x.id];
-        if (!v) { if (st.vLoading !== x.id) { st.vLoading = x.id; App.get('/api/admin/profiles/' + enc(x.id) + '/versions').then((r) => { st.versions[x.id] = r; }).catch((err) => { st.versions[x.id] = { error: err }; }).finally(() => { st.vLoading = null; if (App.state.route === 'profiles') ctx.rerender(); }); } return UI.panel('Version history', '<div class="muted">Loading…</div>'); }
+        if (!v) { if (st.vLoading !== x.id) { st.vLoading = x.id; App.get('/api/admin/profiles/' + enc(x.id) + '/versions').then((r) => { st.versions[x.id] = r; }).catch((err) => { st.versions[x.id] = { error: err }; }).finally(() => { st.vLoading = null; later(); }); } return UI.panel('Version history', '<div class="muted">Loading…</div>'); }
         if (v.error) return UI.panel('Version history', UI.problem('Versions could not be loaded', v.error.message, v.error.problem && v.error.problem.trace_id));
         const rows = v.slice().sort((a, b) => b.version - a.version).map((r) => ({ cells: ['<span class="num">' + r.version + '</span>' + (r.version === x.version ? ' ' + UI.pill('current', 'accent') : ''), esc(r.note || ''), esc(userName(r.createdBy)), esc(when(r.createdAt)), '<span class="hstack" style="justify-content:flex-end">' + (r.version === x.version ? '' : UI.btn('Roll back', { kind: 'ghost', size: 'xs', icon: 'undo', attrs: 'data-rollback="' + r.version + '"' })) + '</span>'] }));
         return UI.panel('Version history', UI.table(['Version', 'Note', 'By', 'When', { label: '', right: true }], rows, { clickable: false, minWidth: '0' }) + '<div class="muted" style="font-size:12px">Every change saves a new version. Rolling back copies an earlier version\'s settings into a new one; nothing is overwritten.</div>');
@@ -252,6 +255,9 @@
         + side
         + '<div class="page">' + main + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
 
+      // The header's crumb and label were drawn before this render picked the profile; redraw them when it changed.
+      if (st.sel !== selBefore && App.renderHeader) App.renderHeader();
+
       // ---- events ----
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-profile]', (e, t) => { st.sel = t.dataset.profile; st.demoNote = null; st.showDependants = null; ctx.rerender(); });
@@ -324,7 +330,7 @@
           if (Object.keys(base).some((k) => String(base[k]) !== String(now[k])) === was) return;
           const key = t.dataset.f; const pos = t.selectionStart;
           ctx.rerender();
-          const el = root.querySelector('[data-f="' + key + '"]');
+          const el = document.querySelector('#main [data-f="' + key + '"]');
           if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (err) { /* not a text field */ } }
         });
         ctx.on('change', 'select[data-key], input[type=checkbox][data-key]', (e, t) => { setF(t.dataset.key, t.type === 'checkbox' ? t.checked : t.value); ctx.rerender(); });

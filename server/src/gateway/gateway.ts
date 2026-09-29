@@ -487,11 +487,11 @@ export class Gateway {
   private async pullJob(modelId: string, poolId: string, ctx: JobContext): Promise<unknown> {
     const model = await this.repo.model(modelId);
     if (!model) throw new Error('Model not found');
-    const instances = (await this.repo.instances(poolId)).filter((i) => i.state !== 'disabled');
-    if (!instances.length) throw new Error('The pool has no instances');
     await this.repo.updateModel(model.id, { import_state: 'pulling', import_error: null });
     const results: Record<string, string> = {};
     try {
+      const instances = (await this.repo.instances(poolId)).filter((i) => i.state !== 'disabled');
+      if (!instances.length) throw new Error('The pool has no instances to pull onto');
       for (const [idx, row] of instances.entries()) {
         const r = this.runtime(row);
         let last = 0;

@@ -97,7 +97,7 @@ export async function up(knex: Knex): Promise<void> {
     t.float('temperature').nullable();
     t.string('think_default', 10).notNullable().defaultTo('off'); // off | low | medium | high
     t.string('think_ceiling', 10).notNullable().defaultTo('off');
-    t.text('system_prompt').nullable();
+    t.text('system_prompt', 'mediumtext').nullable();
     t.text('fallback').nullable(); // JSON {profileId, afterQueueWaitMs}
     t.text('canary').nullable(); // JSON {modelId, percent}
     t.text('tools').notNullable(); // JSON array of built-in tools, e.g. ["calculate"]
@@ -114,7 +114,7 @@ export async function up(knex: Knex): Promise<void> {
     t.string('id', 26).primary();
     t.string('profile_id', 26).notNullable().references('id').inTable('profiles').onDelete('CASCADE');
     t.integer('version').notNullable();
-    t.text('snapshot').notNullable();
+    t.text('snapshot', 'mediumtext').notNullable();
     t.string('note', 300).nullable();
     t.string('created_by', 26).nullable();
     t.bigInteger('created_at').notNullable();

@@ -27,9 +27,9 @@ export async function up(knex: Knex): Promise<void> {
     t.string('tenant_id', 26).notNullable();
     t.string('parent_id', 26).nullable();
     t.string('role', 20).notNullable(); // user | assistant
-    t.text('content').nullable(); // sealed
-    t.text('thinking').nullable(); // sealed
-    t.text('tools').nullable(); // sealed JSON: calculation steps
+    t.text('content', 'mediumtext').nullable(); // sealed; MySQL TEXT is only 64 KB
+    t.text('thinking', 'mediumtext').nullable(); // sealed
+    t.text('tools', 'mediumtext').nullable(); // sealed JSON: calculation steps
     t.string('state', 20).notNullable(); // queued | streaming | complete | stopped | failed
     t.string('profile_id', 26).nullable();
     t.string('profile_name', 63).nullable();

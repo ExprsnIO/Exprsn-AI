@@ -112,7 +112,7 @@
         App.get('/api/me/jobs').then((list) => {
           Object.keys(st.jobs).forEach((id) => {
             const j = list.find((x) => x.id === id);
-            if (!j) { finish(id, 'finished', ''); return; }
+            if (!j) { delete st.jobs[id]; reloadModels(); return; }
             if (TERMINAL[j.state]) finish(id, j.state, j.error);
             else { st.jobs[id].state = j.state; st.jobs[id].progress = j.progress; st.jobs[id].message = j.message; }
           });
@@ -283,7 +283,9 @@
           });
         }
       });
-      const poolOptions = (model) => (st.pools || []).map((p) => ({ value: p.id, label: p.name + ' (' + p.accelerator + ', ceiling ' + p.label_ceiling + ', ' + (p.instances || []).length + ' instance' + ((p.instances || []).length === 1 ? '' : 's') + ')', ok: !model || LABELS.indexOf(model.label) <= LABELS.indexOf(p.label_ceiling) }));
+      // Pools with instances first: a pull onto a pool without any fails.
+      const poolOptions = (model) => (st.pools || []).slice().sort((x, y) => ((y.instances || []).length ? 1 : 0) - ((x.instances || []).length ? 1 : 0))
+        .map((p) => { const n = (p.instances || []).length; return { value: p.id, label: p.name + ' (' + p.accelerator + ', ceiling ' + p.label_ceiling + ', ' + (n ? n + ' instance' + (n === 1 ? '' : 's') : 'no instances') + ')', ok: !model || LABELS.indexOf(model.label) <= LABELS.indexOf(p.label_ceiling) }; });
 
       // ----- import request -----
       const requestModal = (prefill) => {
@@ -371,7 +373,7 @@
         formModal({
           title: 'Pull ' + esc(sel.name), ok: 'Pull',
           body: UI.field('Pool', UI.select(options, options[0].value, 'data-f="pool"'), 'Pools the model is placed on')
-            + UI.notice('Every instance in the pool pulls the model. The digest' + (sel.expectedDigest ? ' is checked against the expected one and the' : ' and the') + ' format are verified; a mismatch deletes the blob and fails the import.', 'info'),
+            + UI.notice('Every instance in the pool pulls the model. ' + (sel.expectedDigest ? 'The digest is checked against the expected one and the format is verified;' : 'The digest and the format are verified;') + ' a mismatch deletes the blob and fails the import.', 'info'),
           read: (m) => ({ poolId: m.querySelector('[data-f="pool"]').value }),
           submit: (body) => App.post('/api/admin/models/' + encodeURIComponent(sel.id) + '/pull', body),
           done(r) { track(r.jobId, sel.id, 'pull'); refresh(); say('Pulling <b>' + esc(sel.name) + '</b>.'); }
