@@ -13,7 +13,7 @@ import { createLogger, Metrics } from '../../src/observability/index.js';
 import { createServices, type Services } from '../../src/services.js';
 import { bootstrap } from '../../src/bootstrap.js';
 import { createApp } from '../../src/http/app.js';
-import { LazyVectorStore } from '../../src/platform/vectors.js';
+import type { LazyVectorStore } from '../../src/platform/vectors.js';
 import { FakeOllama } from '../fake-ollama.js';
 import { loginAdmin, localUser, testConfig, type Harness } from '../helpers.js';
 import { client, drain, seedRetrieval } from '../retrieval-seed.js';

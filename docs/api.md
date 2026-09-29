@@ -186,3 +186,102 @@ message; a gap means call the stream endpoint with `after`.
 Errors worth handling: `429` over quota (with `Retry-After` and the limit), `403` with `step: clearance|zone` when
 the conversation's label is above the caller or the profile, `409` for attachments not ready or images on a model
 without vision, `410` when the tenant's key was destroyed.
+
+## Sprint 6: Knowledge, memory, connections
+
+### Knowledge (`knowledge:read`; changes need `knowledge:manage` or manage access on the base)
+
+A caller sees the bases of their tenant that are tenant-wide or in one of their workspaces (unless shared with
+curators only), plus bases shared with them or their workspaces; curators see every base. Documents and chunks
+above the caller's clearance are filtered inside every query: they are never listed, ranked or counted.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /knowledge/bases` | `[base]` the caller may read |
+| `POST /knowledge/bases` `{name, description?, label, embedModel, reranker?, sharing: members\|curators, workspaceId?, chunking?: {tokens, overlap}}` | Curators: creates a draft base with an empty serving index v1. The embedding model must be approved, have the `embedding` capability and be cleared for the label |
+| `GET /knowledge/bases/:id` | The base with `sources: [source]`, `indexes: [index]` (newest ten), `quarantined` and `vectorStore: db\|pgvector` |
+| `PATCH /knowledge/bases/:id` `{name?, description?, label?, reranker?, sharing?, status?: draft\|published, chunking?}` | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat |
+| `DELETE /knowledge/bases/:id` | Deletes the base, its documents, chunks, vectors and stored files |
+| `POST /knowledge/bases/:id/reindex` `{embedModel?}` | `202 index`: builds the next version beside the serving one by job (`knowledge.reindex`); the switch is one transaction, then the old index is dropped. `409` while one is building |
+| `POST /knowledge/bases/:id/cancel-build` | Cancels the build and discards the partial index; the serving index is untouched |
+| `GET /knowledge/bases/:id/access` | `[{id, kind: workspace\|user\|profile, principalId, name, access: read\|manage, createdBy, createdAt}]` |
+| `POST /knowledge/bases/:id/access` `{kind, id, access}` | Shares with a workspace or user (read or manage), or attaches the base to a profile (read: retrieval in chat for that profile) |
+| `DELETE /knowledge/bases/:id/access/:grant` | Removes a share |
+| `POST /knowledge/bases/:id/sources` `{kind: upload\|s3\|git\|database, location, labelFloor?, schedule?: 15m\|hourly\|daily\|manual, ref?, path?, connectionId?, idColumn?, watermarkColumn?}` | Adds a source and queues its first sync. S3: `s3://bucket/prefix/`, read with the platform's S3 credentials. Git: an `https://` URL, cloned shallow by job. Database: `pg: schema.view` through a PostgreSQL connection, allow-listed, synced by watermark (`updated_at` by default); its floor is at least the connection's label |
+| `POST /knowledge/sources/:id/sync` | `202 {jobId}` (`knowledge.sync`); unchanged documents are skipped by version (ETag, commit) or content hash |
+| `DELETE /knowledge/sources/:id` | Removes the source and its documents from every index |
+| `GET /knowledge/bases/:id/documents?q=` | `[document]` at or below the caller's clearance |
+| `PUT /knowledge/bases/:id/uploads?name=<file>&label=<label>` (body: the file) | `202 document` in sealed quarantine; `knowledge.scan` detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX) and runs ClamAV when configured, then indexing classifies and chunks it |
+| `GET /knowledge/documents/:id` | `document` with `kb: {id, name}` |
+| `PATCH /knowledge/documents/:id` `{label, reason?}` | Relabels: never below the classifier's finding or the floor (`409` naming the finding); chunks take the label at once |
+| `POST /knowledge/documents/:id/reindex` | `202 {jobId}`: extraction and embedding again (retry after a failure); embeddings come from the cache where the text is unchanged |
+| `DELETE /knowledge/documents/:id` | Removes it from every index; a synced document stays `removed` so the next sync does not bring it back |
+| `POST /knowledge/search` `{kbIds, query, k?, rerank?}` | Test search as the caller: `{hits: [hit], ceiling, vectorSkipped, vectorStore}` |
+| `GET /knowledge/models` | `{embedding: [{name, label, state}], rerankers: [...]}`: approved models for the forms |
+| `GET /knowledge/principals` | Curators: `{workspaces, users, profiles}` to share with |
+| `GET /conversations/:id/knowledge` (`context:read`) | Bases attached to one of the caller's conversations |
+| `PUT /conversations/:id/knowledge` `{kbIds}` (`context:write`) | Attaches bases the caller can read to the conversation |
+
+A base: `{id, name, description, workspaceId, label, embedModel, reranker, sharing, status, chunking, documents,
+chunks, access: read|manage, serving: index, building: index|null, lastSyncAt, createdAt, updatedAt}`. An index:
+`{id, version, embedModel, dims, state: building|serving|retired|cancelled|failed, progress, message, chunks, jobId,
+error, createdAt, builtAt}`. A source: `{id, kind, location, config, labelFloor, schedule, state: idle|syncing|failed,
+watermark, lastSyncAt, lastError, lastTrace, jobId, documents}`. A document: `{id, name, sourceId, source, type, size,
+sha256, label, autoLabel, manualLabel, labelOrigin, detections, state: quarantined|scanning|queued|indexing|indexed|
+unchanged|failed|rejected|removed, error, traceId, chunks, createdAt, updatedAt, indexedAt}`. A hit: `{chunkId, kbId,
+kb, documentId, document, source, heading, label, vector, keyword, fused, rerank, text?, withheld?}`: `vector` is the
+cosine similarity, `keyword` the BM25 score relative to the best, `fused` the reciprocal rank fusion score, `rerank`
+the reranker's 0–1 score; `withheld` names the reason when the `context` guardrail checkpoint blocked the chunk.
+
+Chat: for each answer, published bases attached to the conversation or to its profile are searched (the query is the
+user's message) up to the lowest of the user's clearance, the profile's label, the pool's ceiling and the
+workspace's ceiling; the chunks go to the model as one system message of `<context id label source section>` blocks,
+the conversation's label rises to the highest chunk used, and the answer records `citations: [{n, kind: knowledge,
+kbId, kb, documentId, document, chunkId, section, score, label}]` (sealed at rest). A `chat.status` event with
+`state: context, label, citations` reports it.
+
+### Memory (`memory:write`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /memory?tab=mine\|workspace\|agents` | `{tab, items: [memory], counts: {mine, workspace, agents}, curator, workspace, backend, policy}`. Workspace proposals are listed to curators and to their author |
+| `GET /memory/:id` | One memory with its history |
+| `POST /memory` `{text, scope: user\|workspace, type?, label, expiresAt?}` | Saves (own memories and curators' workspace entries) or proposes (a member's workspace entry). The memory checkpoint runs first: restricted memories are refused by tenant policy, credentials are never stored, then the guardrail rules (`422` with the reason) |
+| `PATCH /memory/:id` `{text?, label?, expiresAt?}` | A new version; the label never goes below the source's; the checkpoint runs again |
+| `POST /memory/:id/accept` | Accepts a proposal (the owner, or a curator for a workspace) |
+| `POST /memory/:id/reject` | Discards a proposal; the same text is not proposed again |
+| `DELETE /memory/:id` | Forgets everywhere: the record, its versions, its vector and export files that could hold it. `{id, vectors, versions, exports}`; audited |
+| `POST /memory/exports` `{tab, format: json\|csv}` | `202 {id, file, jobId}` (`memory.export`); workspace and agent exports need a curator |
+| `GET /memory/exports/:id` | `{id, file, state: queued\|ready\|failed\|purged, rows, label, format}` (the requester only) |
+| `GET /memory/exports/:id/download` | The file (sealed at rest) |
+
+A memory: `{id, scope: user|workspace|agent, ownerId, type, text, label, sourceLabel, state: proposed|active|superseded,
+origin: manual|chat|extraction, source: {conversationId, title}|null, author, acceptedBy, backend, embedded, expiresAt,
+version, history: [{version, note, actor, at}], createdAt, updatedAt}`. After an answer completes, `memory.extract`
+proposes memories from explicit phrases in the user's message ("remember that…", "I prefer…", "call me…", "I am
+working on…"); accepted memories of the user and the current workspace go into later prompts as `<memory>` blocks
+(each through the `memory` checkpoint), recalled by vector similarity when an embedding model is approved, else by
+recency. Expired memories are purged hourly from every backend.
+
+### Data connections (`connections:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/connections` | `[connection]` |
+| `POST /admin/connections` `{name, engine: postgres\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?}` | Registers; the credential is sealed with the tenant key and never returned. Other engines are refused |
+| `GET /admin/connections/:id` | One connection |
+| `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused |
+| `PUT /admin/connections/:id/credential` `{username, password}` | Replaces the credential |
+| `DELETE /admin/connections/:id` | Refused (`409`) while a knowledge source reads from it |
+| `POST /admin/connections/:id/test` | `{ok, ms, version, readOnly, detail, health}`; an account with write grants is `degraded` |
+| `POST /admin/connections/:id/schema` | Introspects: `{objects, allowed, outside, connection}` |
+| `PUT /admin/connections/:id/allow-list` `{objects, piiColumns}` | Objects the model and the browser may read (OpenSearch patterns such as `logs-*` allowed); extra PII columns as `object.column` |
+| `POST /admin/connections/:id/query` `{query, object?, confirmUnparsed?}` | Classifies, then runs on the read-only account in a read-only transaction with the statement timeout: `{columns, rows, capped, estimate, ms, masked, label, unparsed, verb}`. Refusals: `422` write, DDL, several statements, object or function outside the allow-list (`kind`, `verb`, `object`); `409 kind: unparsed` until confirmed; `403` above the caller's clearance or blocked by the `db-query` checkpoint. Every outcome is audited with the query text |
+| `POST /admin/connections/:id/export` | Same body and checks; the result as CSV (`X-Label` header), through the `export` checkpoint |
+| `POST /admin/connections/:id/sync` | `202 {jobs}`: syncs every knowledge source reading from the connection |
+
+A connection: `{id, name, engine, endpoint, database, zone, label, ops, rowLimit, timeoutS, account, hasCredential,
+tls, allowList, piiColumns, schema: [{name, kind, allowed, columns: [{name, type, pii}]}], schemaAt, health,
+healthDetail, checkedAt, version, syncs: [{kbId, kb, sourceId, object, lastSyncAt, state, docs}]}`. PII columns (by
+name, or marked) and values the classifier recognises (emails, IBANs, cards, national identifiers, phone numbers)
+are masked in every result as `••••` plus the last four characters.
