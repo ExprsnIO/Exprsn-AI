@@ -28,6 +28,7 @@ import { GatewayRepo } from './gateway/repo.js';
 import { AttachmentService } from './chat/attachments.js';
 import { CalcWorker } from './chat/calc.js';
 import { ChatService } from './chat/service.js';
+import { allowAll, type Guardrails } from './guardrails/types.js';
 
 export interface Services {
   cfg: Config;
@@ -60,6 +61,8 @@ export interface Services {
   attachments: AttachmentService;
   calc: CalcWorker;
   chat: ChatService;
+  /** The guardrail checkpoints (`guardrails/types.ts`); every feature that handles tenant text calls `check`. */
+  guardrails: Guardrails;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -126,6 +129,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     attachments,
     calc,
     chat,
+    guardrails: allowAll,
     close: async () => {
       scheduler.stop();
       chat.close();
