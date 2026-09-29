@@ -65,6 +65,7 @@ export interface ClassifierRow {
   owner: string | null;
   dataset: string | null;
   config: ClassifierConfig;
+  /** The caller's tenant's last evaluation (filled in by list and get). */
   metrics: ClassifierMetrics | null;
   created_by: string | null;
   created_at: number;
@@ -75,7 +76,7 @@ const fromRow = (r: Record<string, unknown>): ClassifierRow => ({
   ...(r as unknown as ClassifierRow),
   version: Number(r.version),
   config: json<ClassifierConfig>(r.config, { labels: [] }),
-  metrics: json<ClassifierMetrics | null>(r.metrics, null),
+  metrics: null,
   created_at: Number(r.created_at),
   updated_at: Number(r.updated_at)
 });
@@ -157,7 +158,8 @@ export class ClassifierService {
       const t = Date.now();
       for (const b of BUILTINS.filter((x) => !have.has(x.id))) {
         try {
-          await this.db('classifiers').insert({ ...b, config: JSON.stringify(b.config), metrics: null, created_by: null, created_at: t, updated_at: t });
+          const { metrics: _none, ...row } = b;
+          await this.db('classifiers').insert({ ...row, config: JSON.stringify(b.config), created_by: null, created_at: t, updated_at: t });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
         }
@@ -171,15 +173,18 @@ export class ClassifierService {
 
   async list(tenantId: string): Promise<ClassifierRow[]> {
     await this.ensureBuiltins();
-    const rows = await this.db('classifiers').where((q) => q.whereNull('tenant_id').orWhere({ tenant_id: tenantId })).orderBy([{ column: 'tenant_id', order: 'asc' }, { column: 'name' }]);
-    return rows.map(fromRow);
+    const rows = (await this.db('classifiers').where((q) => q.whereNull('tenant_id').orWhere({ tenant_id: tenantId })).orderBy([{ column: 'tenant_id', order: 'asc' }, { column: 'name' }])).map(fromRow);
+    const m = new Map(((await this.db('classifier_metrics').where({ tenant_id: tenantId })) as { classifier_id: string; metrics: string }[]).map((x) => [x.classifier_id, json<ClassifierMetrics | null>(x.metrics, null)]));
+    return rows.map((c) => ({ ...c, metrics: m.get(c.id) ?? null }));
   }
 
   /** By id or slug; a tenant's own classifier and the platform's are both visible. */
   async get(tenantId: string, ref: string): Promise<ClassifierRow | undefined> {
     await this.ensureBuiltins();
     const r = await this.db('classifiers').where((q) => q.whereNull('tenant_id').orWhere({ tenant_id: tenantId })).andWhere((q) => q.where({ id: ref }).orWhere({ slug: ref })).first();
-    return r ? fromRow(r) : undefined;
+    if (!r) return undefined;
+    const m = (await this.db('classifier_metrics').where({ classifier_id: r.id, tenant_id: tenantId }).first()) as { metrics: string } | undefined;
+    return { ...fromRow(r), metrics: m ? json<ClassifierMetrics | null>(m.metrics, null) : null };
   }
 
   async create(tenantId: string, input: z.infer<typeof newClassifierSchema>, by: { userId: string; name: string }): Promise<ClassifierRow> {
@@ -206,7 +211,8 @@ export class ClassifierService {
       created_at: t,
       updated_at: t
     };
-    await this.db('classifiers').insert({ ...row, config: JSON.stringify(row.config), metrics: null });
+    const { metrics: _none, ...insert } = row;
+    await this.db('classifiers').insert({ ...insert, config: JSON.stringify(row.config) });
     await this.snapshot(row, 'created', by.userId);
     return row;
   }
@@ -359,7 +365,8 @@ export class ClassifierService {
       points[l] = pts.slice(0, 5000).map(([s, y]) => [round(s), y]);
     }
     const metrics: ClassifierMetrics = { at: Date.now(), dataset: c.dataset ?? '', samples: cases.length, heldOut: held.length > 0, perLabel, points, distribution, errors };
-    await this.db('classifiers').where({ id: c.id }).update({ metrics: JSON.stringify(metrics) });
+    const n = await this.db('classifier_metrics').where({ classifier_id: c.id, tenant_id: tenantId }).update({ metrics: JSON.stringify(metrics), updated_at: metrics.at });
+    if (!n) await this.db('classifier_metrics').insert({ classifier_id: c.id, tenant_id: tenantId, metrics: JSON.stringify(metrics), updated_at: metrics.at });
     return { samples: cases.length, perLabel, distribution, errors };
   }
 

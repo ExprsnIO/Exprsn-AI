@@ -132,11 +132,19 @@ export async function up(knex: Knex): Promise<void> {
     t.string('owner', 100).nullable();
     t.string('dataset', 100).nullable();
     t.text('config', 'mediumtext').notNullable(); // JSON: labels and thresholds, detectors, profile, trained weights
-    t.text('metrics', 'mediumtext').nullable(); // JSON: the last evaluation
     t.string('created_by', 26).nullable();
     t.bigInteger('created_at').notNullable();
     t.bigInteger('updated_at').notNullable();
     t.index(['tenant_id', 'slug']);
+  });
+
+  // The last evaluation per tenant: a platform classifier is measured on each tenant's own labelled cases.
+  await knex.schema.createTable('classifier_metrics', (t) => {
+    t.string('classifier_id', 26).notNullable().references('id').inTable('classifiers').onDelete('CASCADE');
+    t.string('tenant_id', 26).notNullable();
+    t.text('metrics', 'mediumtext').notNullable(); // JSON
+    t.bigInteger('updated_at').notNullable();
+    t.primary(['classifier_id', 'tenant_id']);
   });
 
   await knex.schema.createTable('classifier_versions', (t) => {
@@ -167,5 +175,5 @@ export async function down(knex: Knex): Promise<void> {
   await knex.schema.alterTable('messages', (t) => {
     t.dropColumn('guard');
   });
-  for (const table of ['label_names', 'classifier_versions', 'classifiers', 'eval_cases', 'guard_flag_events', 'guard_flags', 'guard_decisions', 'guard_rule_set_versions', 'guard_rule_sets']) await knex.schema.dropTableIfExists(table);
+  for (const table of ['label_names', 'classifier_versions', 'classifier_metrics', 'classifiers', 'eval_cases', 'guard_flag_events', 'guard_flags', 'guard_decisions', 'guard_rule_set_versions', 'guard_rule_sets']) await knex.schema.dropTableIfExists(table);
 }
