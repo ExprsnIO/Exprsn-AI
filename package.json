@@ -1,0 +1,17 @@
+{
+  "name": "exprsn-ai",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.",
+  "license": "SEE LICENSE IN LICENSE",
+  "workspaces": ["server"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "npm run dev -w server",
+    "build": "npm run build -w server",
+    "start": "npm start -w server",
+    "lint": "npm run lint -w server",
+    "typecheck": "npm run typecheck -w server",
+    "test": "npm test -w server"
+  }
+}

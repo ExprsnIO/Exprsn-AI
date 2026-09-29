@@ -1,0 +1,68 @@
+# Declarative user stores and group mappings, applied at every start (IDENTITY_CONFIG=/path/to/this.yaml).
+# Stores declared here are "managed by config": the console can test, enable/disable and reorder them,
+# but their settings change only here. Stores added in the console are never touched by this file.
+#
+# Secrets are references, never values: env:NAME or file:/absolute/path.
+tenants:
+  - slug: northwind            # sign in with tenant "northwind" (or set DEFAULT_TENANT=northwind)
+    name: Northwind
+    directoryDn: dc=northwind,dc=local
+    workspaces:
+      - { name: Finance Ops, labelCeiling: confidential }
+      - { name: People Ops, labelCeiling: internal }
+
+    providers:
+      # 1. OpenLDAP. Use ldaps:// or startTLS: true; allowInsecure is for local development only
+      #    and is refused when NODE_ENV=production.
+      - name: Northwind OpenLDAP
+        kind: ldap
+        position: 10
+        config:
+          url: ldaps://ldap.northwind.local:636
+          caFile: /etc/exprsn-ai/ldap-ca.pem
+          bindDN: cn=exprsn-svc,ou=services,dc=northwind,dc=local
+          bindPassword: file:/run/secrets/ldap_bind_password
+          userBase: ou=people,dc=northwind,dc=local
+          userFilter: (&(objectClass=inetOrgPerson)(uid={{username}}))
+          groupMode: search
+          groupBase: ou=groups,dc=northwind,dc=local
+          groupFilter: (|(member={{dn}})(uniqueMember={{dn}})(memberUid={{username}}))
+
+      # 2. A PostgreSQL user table (argon2 or bcrypt hashes). Grant SELECT only.
+      - name: HR PostgreSQL
+        kind: sql
+        position: 20
+        config:
+          dialect: pg
+          connection: env:HR_PG_URL        # postgres://readonly:…@hr-db.internal:5432/hr?sslmode=verify-full
+          table: staff
+          columns: { id: staff_id, username: login, passwordHash: password_hash, displayName: full_name, email: email, disabled: is_disabled }
+          groupTable: { table: staff_groups, userColumn: staff_id, groupColumn: group_name }
+
+      # 3. A MySQL user table with groups in a comma-separated column.
+      - name: Partner portal MySQL
+        kind: sql
+        position: 30
+        enabled: false
+        config:
+          dialect: mysql
+          connection: env:PARTNER_MYSQL_URL  # mysql://readonly:…@partners.internal:3306/portal?ssl={"rejectUnauthorized":true}
+          table: users
+          columns: { id: id, username: username, passwordHash: pass_hash, displayName: name, groups: roles }
+
+      # 4. A SQLite user table (read-only file). Stores without groups can grant default roles.
+      - name: Lab SQLite
+        kind: sql
+        position: 40
+        config:
+          dialect: sqlite
+          connection: env:LAB_SQLITE_PATH
+          table: users
+          columns: { username: username, passwordHash: password_hash, displayName: display_name }
+          defaultRoles: [member]
+          defaultClearance: internal
+
+    groupMappings:
+      - { group: "cn=finance-ops,ou=groups,dc=northwind,dc=local", role: member, clearance: confidential }
+      - { group: "cn=ai-admins,ou=groups,dc=northwind,dc=local", provider: Northwind OpenLDAP, role: system-admin, clearance: restricted }
+      - { group: finance, provider: HR PostgreSQL, role: member, clearance: internal }
