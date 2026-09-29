@@ -73,7 +73,7 @@ export function meRoutes(s: Services): Router {
   r.get('/jobs', active, async (req, res) => {
     const p = principalOf(req);
     const rows = await s.jobs.list(p.tenantId, { createdBy: p.userId, limit: 50 });
-    res.json(rows.map((j) => ({ id: j.id, type: j.type, state: j.state, progress: j.progress, message: j.message, error: j.error, createdAt: j.created_at, finishedAt: j.finished_at })));
+    res.json(rows.map((j) => ({ id: j.id, type: j.type, state: j.state, progress: j.progress, message: j.message, error: j.error, payload: j.payload, result: j.state === 'succeeded' ? j.result : null, createdAt: j.created_at, finishedAt: j.finished_at })));
   });
 
   r.post('/jobs/:id/cancel', active, async (req, res) => {

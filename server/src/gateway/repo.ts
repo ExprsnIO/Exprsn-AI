@@ -304,9 +304,10 @@ export class GatewayRepo {
     await this.db('model_events').insert({ id: ulid(), instance_id: instanceId, model, event, reason, actor, ts: Date.now() });
   }
 
-  async loadsSince(instanceId: string, since: number): Promise<number> {
-    const [r] = await this.db('model_events').where({ instance_id: instanceId, event: 'load' }).andWhere('ts', '>=', since).count({ n: '*' });
-    return Number(r?.n ?? 0);
+  /** Loads on an instance since a time, and when the oldest of them happened (for the anti-thrash window). */
+  async loadsSince(instanceId: string, since: number): Promise<{ count: number; oldest: number | null }> {
+    const [r] = await this.db('model_events').where({ instance_id: instanceId, event: 'load' }).andWhere('ts', '>=', since).count({ n: '*' }).min({ oldest: 'ts' });
+    return { count: Number(r?.n ?? 0), oldest: r?.oldest == null ? null : Number(r.oldest) };
   }
 
   async events(instanceId: string, limit = 20): Promise<{ model: string; event: string; reason: string | null; actor: string | null; ts: number }[]> {

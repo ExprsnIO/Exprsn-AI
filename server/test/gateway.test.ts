@@ -140,7 +140,7 @@ describe('Ollama gateway', () => {
     await post(a, `/api/admin/instances/${inst.id}/load`, { model: 'llama3.1:8b' }).expect(200);
     const thrash = await post(a, `/api/admin/instances/${inst.id}/load`, { model: 'qwen3:8b' }).expect(429);
     expect(thrash.body.limit).toBe('anti_thrash');
-    expect(thrash.headers['retry-after']).toBeDefined();
+    expect(Number(thrash.headers['retry-after'])).toBeGreaterThan(500); // until the oldest load leaves the ten-minute window
   });
 
   it('records models that disappear without being unloaded as evicted', async () => {
@@ -231,7 +231,7 @@ describe('Ollama gateway', () => {
     setTimeout(() => (ollama.version = '0.13.0'), 50);
     await h.s.jobs.runDue();
     const done = await h.s.jobs.get(h.tenantId, job.body.jobId);
-    expect(done).toMatchObject({ state: 'succeeded', result: { done: ['gpu-large-1 upgraded to 0.13.0'] } });
+    expect(done).toMatchObject({ state: 'succeeded', result: { done: ['gpu-large-1 upgraded to 0.13.0'], reloadFailures: [] } });
     expect((await h.s.gateway.repo.instance(inst.id))?.state).toBe('active');
     expect(ollama.loaded.has('llama3.1:8b')).toBe(true);
   });

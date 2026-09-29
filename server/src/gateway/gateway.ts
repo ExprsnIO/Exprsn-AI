@@ -286,10 +286,12 @@ export class Gateway {
 
   /** Anti-thrash: at most N loads per instance in any ten minutes. */
   private async checkThrash(row: InstanceRow): Promise<void> {
-    const since = Date.now() - 10 * 60_000;
-    const n = await this.repo.loadsSince(row.id, since);
+    const window = 10 * 60_000;
+    const { count: n, oldest } = await this.repo.loadsSince(row.id, Date.now() - window);
     if (n >= this.o.maxLoadsPer10Min) {
-      const p = tooManyRequests(`${row.name} has loaded ${n} models in the last ten minutes, its anti-thrash limit. Further loads wait until the window clears.`, 60);
+      // The window clears one load at a time: the next load is allowed when the oldest one ages out.
+      const retry = oldest ? (oldest + window - Date.now()) / 1000 : 60;
+      const p = tooManyRequests(`${row.name} has loaded ${n} models in the last ten minutes, its anti-thrash limit. Further loads wait until the window clears.`, retry);
       Object.assign(p.extensions, { limit: 'anti_thrash', loads: n, max: this.o.maxLoadsPer10Min });
       throw p;
     }
@@ -601,6 +603,7 @@ export class Gateway {
   private async upgradeJob(poolId: string, target: string, waitMs: number, ctx: JobContext): Promise<unknown> {
     const rows = (await this.repo.instances(poolId)).filter((i) => i.state !== 'disabled');
     const done: string[] = [];
+    const reloadFailures: { instance: string; model: string; error: string }[] = [];
     const placements = (await this.repo.placements()).filter((p) => p.pool_id === poolId && p.residency === 'pinned');
     const models = await this.repo.models();
     for (const [i, row] of rows.entries()) {
@@ -624,12 +627,16 @@ export class Gateway {
       await this.undrain(row.id);
       for (const p of placements) {
         const m = models.find((x) => x.id === p.model_id);
-        if (m) await this.load(row.id, m.name, { pinned: true, actor: 'upgrade', reason: `Reloaded after upgrade to ${target}` }).catch((err: Error) => this.log.warn({ err: err.message, model: m.name }, 'reload after upgrade failed'));
+        if (m)
+          await this.load(row.id, m.name, { pinned: true, actor: 'upgrade', reason: `Reloaded after upgrade to ${target}` }).catch((err: Error) => {
+            this.log.warn({ err: err.message, model: m.name }, 'reload after upgrade failed');
+            reloadFailures.push({ instance: row.name, model: m.name, error: err.message });
+          });
       }
       done.push(`${row.name} upgraded to ${target}`);
       await ctx.progress(((i + 1) / rows.length) * 100, `${row.name} back in service`);
     }
-    return { done };
+    return { done, reloadFailures };
   }
 }
 
