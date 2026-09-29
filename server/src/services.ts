@@ -28,7 +28,8 @@ import { GatewayRepo } from './gateway/repo.js';
 import { AttachmentService } from './chat/attachments.js';
 import { CalcWorker } from './chat/calc.js';
 import { ChatService } from './chat/service.js';
-import { allowAll, type Guardrails } from './guardrails/types.js';
+import type { Guardrails } from './guardrails/types.js';
+import { createGuardrails, type GuardrailModule } from './guardrails/index.js';
 
 export interface Services {
   cfg: Config;
@@ -63,6 +64,8 @@ export interface Services {
   chat: ChatService;
   /** The guardrail checkpoints (`guardrails/types.ts`); every feature that handles tenant text calls `check`. */
   guardrails: Guardrails;
+  /** Rule sets, flags and classifiers behind the checkpoints (Sprint 5). */
+  guard: GuardrailModule;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -97,7 +100,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const gateway = new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS }, jobs);
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
-  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log);
+  const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
+  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine);
   const s: Services = {
     cfg,
     db,
@@ -129,7 +133,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     attachments,
     calc,
     chat,
-    guardrails: allowAll,
+    guardrails: guard.engine,
+    guard,
     close: async () => {
       scheduler.stop();
       chat.close();
@@ -167,4 +172,5 @@ export function startSchedules(s: Services): void {
   const activeTenants = async () => (await s.tenants.list()).filter((t) => t.state === 'active').map((t) => ({ tenantId: t.id, payload: { tenantId: t.id } }));
   s.scheduler.every('directory.sync', s.cfg.DIRECTORY_SYNC_MINUTES * 60_000, activeTenants);
   s.scheduler.every('audit.checkpoint', s.cfg.AUDIT_CHECKPOINT_MINUTES * 60_000, activeTenants);
+  s.scheduler.every('guardrails.sweep', 2 * 60_000, activeTenants);
 }

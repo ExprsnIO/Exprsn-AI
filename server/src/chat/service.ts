@@ -13,6 +13,7 @@ import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
+import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
 
 export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed';
 
@@ -60,6 +61,8 @@ interface MessageRow {
   canary: boolean;
   created_at: number;
   completed_at: number | null;
+  /** JSON: the guardrail outcome of an answer (Sprint 5). */
+  guard?: string | null;
 }
 
 export interface Chunk {
@@ -117,7 +120,8 @@ export class ChatService {
     private readonly bus: Bus,
     private readonly attachments: AttachmentService,
     private readonly calc: CalcWorker,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly guardrails: Guardrails = allowAll
   ) {
     this.offStop = bus.on<{ messageId: string }>(TOPICS.chatStop, ({ messageId }) => this.abortLocal(messageId));
   }
@@ -245,7 +249,8 @@ export class ChatService {
       attachments: json<string[]>(m.attachments, []),
       usage: m.role === 'assistant' && m.completed_at ? { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0), thinkingTokens: Number(m.thinking_tokens ?? 0), calcCalls: Number(m.calc_calls ?? 0), gpuMs: Number(m.gpu_ms ?? 0), firstTokenMs: m.first_token_ms == null ? null : Number(m.first_token_ms) } : null,
       createdAt: Number(m.created_at),
-      completedAt: m.completed_at == null ? null : Number(m.completed_at)
+      completedAt: m.completed_at == null ? null : Number(m.completed_at),
+      guard: json<Record<string, unknown> | null>(m.guard ?? null, null)
     };
   }
 
@@ -340,11 +345,12 @@ export class ChatService {
       const parent = await this.message(c, parentId);
       if (parent.role !== 'assistant') throw conflict('A new message follows an answer.');
     }
+    const content = await this.guardInput(p, c.workspace_id, input.content, label, c.id);
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: parentId ?? null, role: 'user', content: input.content, label, attachments: atts.map((a) => a.id), created_at: t });
+    const user = await this.insertMessage(c, { parent_id: parentId ?? null, role: 'user', content, label, attachments: atts.map((a) => a.id), created_at: t });
     const think = this.thinkLevel(r.profile, input.think);
     const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label, profile: r, think, created_at: t + 1 });
-    const title = c.title ? undefined : await this.seal(c.tenant_id, c.id, 'title', input.content.replace(/\s+/g, ' ').trim().slice(0, 80));
+    const title = c.title ? undefined : await this.seal(c.tenant_id, c.id, 'title', content.replace(/\s+/g, ' ').trim().slice(0, 80));
     await this.db('conversations').where({ id: c.id }).update({ head_id: assistant.id, label, profile_id: r.profile.id, updated_at: Date.now(), ...(title ? { title } : {}) });
     this.start(p, { ...c, label }, assistant, r, think, 'chat');
     return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label };
@@ -373,8 +379,9 @@ export class ChatService {
     const prevAnswer = (await this.db('messages').where({ conversation_id: c.id, parent_id: old.id }).orderBy('created_at', 'desc').first()) as MessageRow | undefined;
     const r = await this.resolveFor(p, input.profile ?? prevAnswer?.profile_id ?? c.profile_id ?? '', c.label);
     await this.admit(p, c.workspace_id);
+    const content = await this.guardInput(p, c.workspace_id, input.content, c.label, c.id);
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: old.parent_id, role: 'user', content: input.content, label: c.label, attachments: json<string[]>(old.attachments, []), created_at: t });
+    const user = await this.insertMessage(c, { parent_id: old.parent_id, role: 'user', content, label: c.label, attachments: json<string[]>(old.attachments, []), created_at: t });
     const think = this.thinkLevel(r.profile, input.think);
     const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label: c.label, profile: r, think, created_at: t + 1 });
     await this.db('conversations').where({ id: c.id }).update({ head_id: assistant.id, updated_at: Date.now() });
@@ -388,9 +395,10 @@ export class ChatService {
     const resolved: ResolvedProfile[] = [];
     for (const name of input.profiles) resolved.push(await this.resolveFor(p, name, label));
     await this.admit(p, p.workspaceId ?? null);
-    const c = await this.createConversation(p, { title: input.prompt.replace(/\s+/g, ' ').trim().slice(0, 80), label, kind: 'compare' });
+    const prompt = await this.guardInput(p, p.workspaceId ?? null, input.prompt, label, null);
+    const c = await this.createConversation(p, { title: prompt.replace(/\s+/g, ' ').trim().slice(0, 80), label, kind: 'compare' });
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: input.prompt, label, created_at: t });
+    const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: prompt, label, created_at: t });
     const columns = [];
     for (const [i, r] of resolved.entries()) {
       const think = this.thinkLevel(r.profile, input.think);
@@ -633,6 +641,7 @@ export class ChatService {
     } finally {
       lease?.release(usage.firstTokenMs);
     }
+    const guard = (st.state === 'complete' || st.state === 'stopped') && st.content ? await this.guardOutput(p, c, m, r, st) : null;
 
     // Metering happens once, on the final chunk; a stopped stream is estimated from what was produced.
     if (!evalCounted && (st.content || st.thinking)) {
@@ -648,15 +657,64 @@ export class ChatService {
       thinking_tokens: usage.thinkingTokens,
       calc_calls: usage.calcCalls,
       gpu_ms: Math.round(usage.gpuMs),
-      first_token_ms: usage.firstTokenMs
+      first_token_ms: usage.firstTokenMs,
+      ...(guard ? { guard: JSON.stringify(guard.summary) } : {})
     });
+    // A replaced answer is read back from the store, not from the streamed chunks.
+    if (guard?.replaced && this.streams.get(m.id) === st) this.streams.delete(m.id);
     if (metered) {
       await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind, profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, conversationId: c.id, messageId: m.id, promptTokens: usage.promptTokens, outputTokens: usage.outputTokens, thinkingTokens: usage.thinkingTokens, calcCalls: usage.calcCalls, gpuMs: usage.gpuMs });
     }
     const error = st.state === 'failed' ? ((await this.db('messages').where({ id: m.id }).first('error')) as { error: string | null } | undefined)?.error : null;
-    this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name });
+    this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name, ...(guard ? { guard: guard.summary } : {}) });
     if (st.state === 'failed') {
       await this.audit.append({ tenantId: c.tenant_id, action: 'chat.failed', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, profile: r.profile.name, model: r.model.name }, label: c.label, detail: { state: st.state, error: error ?? null } });
     }
+  }
+
+  // ---------- guardrails ----------
+
+  /** The user-input checkpoint. A block or hold refuses the send with the reason; a redaction is what is stored and sent. */
+  private async guardInput(p: Principal, workspaceId: string | null, text: string, label: Label, conversationId: string | null): Promise<string> {
+    const d = await this.guardrails.check({ tenantId: p.tenantId, workspaceId, checkpoint: 'user-input', text, label, principal: p, ...(conversationId ? { source: { kind: 'conversation', id: conversationId } } : {}), meta: { tokens: Math.ceil(text.length / 4), via: 'chat', ...(conversationId ? { conversationId } : {}) } });
+    if (d.action === 'block' || d.action === 'require-approval') {
+      const rules = [...new Set(d.findings.filter((f) => f.stage === 'enforce' && f.action === d.action).map((f) => f.ruleName))];
+      throw new HttpProblem(422, d.action === 'block' ? 'Blocked by guardrail' : 'Held by guardrail', d.reason ?? 'A guardrail refused this message.', { extensions: { step: 'guardrail', action: d.action, rules } });
+    }
+    return d.text;
+  }
+
+  /**
+   * The model-output checkpoint, on the finished (or stopped) answer. A block or hold replaces the answer with a
+   * notice; a redaction replaces the flagged spans. Either way the stored answer is what the user sees from then on.
+   */
+  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream): Promise<{ summary: Record<string, unknown>; replaced: boolean } | null> {
+    let d: GuardDecision;
+    try {
+      const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
+      const prompt = q?.content ? await this.open(c.tenant_id, m.parent_id!, 'content', q.content) : null;
+      const tools = r.profile.tools.includes('calculate') && r.model.capabilities.includes('tools');
+      d = await this.guardrails.check({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', text: st.content, label: c.label, principal: p, source: { kind: 'message', id: m.id }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, tools, via: 'chat', ...(prompt ? { prompt } : {}) } });
+    } catch (err) {
+      this.log.error({ err, message: m.id }, 'model-output guardrail failed');
+      d = { action: 'block', text: st.content, findings: [], reason: 'The guardrail check could not run, so the answer is withheld.' };
+    }
+    const enforced = d.findings.filter((f) => f.stage === 'enforce');
+    if (!enforced.length && d.action === 'allow') return null;
+    const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))] };
+    let replaced = false;
+    if (d.action === 'block' || d.action === 'require-approval') {
+      st.content = `This answer was withheld. ${d.reason ?? ''}`.trim();
+      replaced = true;
+    } else if (d.action === 'redact' && d.text !== st.content) {
+      st.content = d.text;
+      replaced = true;
+    }
+    if (replaced) {
+      // Clients holding the streamed text see a higher sequence number on chat.done and read the answer again.
+      st.seq++;
+      st.chunks = [];
+    }
+    return { summary, replaced };
   }
 }

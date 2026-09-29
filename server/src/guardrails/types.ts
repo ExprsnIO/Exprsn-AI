@@ -34,6 +34,10 @@ export interface GuardFinding {
   /** Character offsets in the inspected text, when the rule matched a span. */
   span?: [number, number];
   score?: number;
+  /** The rule set the rule belongs to. */
+  setId?: string;
+  /** What matched or failed, safe to show a reviewer (a detector kind, hazard categories, "guard model unavailable"). */
+  detail?: string;
 }
 
 export interface GuardDecision {

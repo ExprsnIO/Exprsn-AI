@@ -55,7 +55,7 @@ export function sniff(buf: Buffer, name: string): { type: string } | { rejected:
   return { type: ext === 'md' || ext === 'markdown' ? 'text/markdown' : ext === 'csv' ? 'text/csv' : 'text/plain' };
 }
 
-const luhn = (digits: string): boolean => {
+export const luhn = (digits: string): boolean => {
   let sum = 0;
   for (let i = 0; i < digits.length; i++) {
     let d = Number(digits[digits.length - 1 - i]);
@@ -68,7 +68,7 @@ const luhn = (digits: string): boolean => {
   return sum % 10 === 0;
 };
 
-const ibanValid = (iban: string): boolean => {
+export const ibanValid = (iban: string): boolean => {
   const s = iban.replace(/\s/g, '').toUpperCase();
   const r = s.slice(4) + s.slice(0, 4);
   let rem = 0;
