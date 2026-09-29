@@ -25,6 +25,7 @@ export interface GroupMapping {
   group_name: string;
   role: string;
   clearance: Label;
+  workspace_id: string | null;
   created_at: number;
 }
 
@@ -127,11 +128,11 @@ export class UserRepo {
 
   async mappings(tenantId: string): Promise<GroupMapping[]> {
     const rows = await this.db('group_mappings').where({ tenant_id: tenantId }).orderBy(['group_name', 'role']);
-    return rows.map((r: Record<string, unknown>) => ({ ...(r as unknown as GroupMapping), created_at: Number(r.created_at) }));
+    return rows.map((r: Record<string, unknown>) => ({ ...(r as unknown as GroupMapping), workspace_id: (r.workspace_id as string | null) ?? null, created_at: Number(r.created_at) }));
   }
 
-  async addMapping(tenantId: string, input: { providerId: string | null; group: string; role: string; clearance: Label }): Promise<GroupMapping> {
-    const row: GroupMapping = { id: ulid(), tenant_id: tenantId, provider_id: input.providerId, group_name: normaliseGroup(input.group), role: input.role, clearance: input.clearance, created_at: Date.now() };
+  async addMapping(tenantId: string, input: { providerId: string | null; group: string; role: string; clearance: Label; workspaceId?: string | null }): Promise<GroupMapping> {
+    const row: GroupMapping = { id: ulid(), tenant_id: tenantId, provider_id: input.providerId, group_name: normaliseGroup(input.group), role: input.role, clearance: input.clearance, workspace_id: input.workspaceId ?? null, created_at: Date.now() };
     await this.db('group_mappings').insert(row);
     return row;
   }
@@ -139,18 +140,43 @@ export class UserRepo {
   async removeMapping(tenantId: string, id: string): Promise<boolean> {
     return (await this.db('group_mappings').where({ tenant_id: tenantId, id }).delete()) > 0;
   }
+
+  async updateMapping(tenantId: string, id: string, patch: { role?: string; clearance?: Label; workspaceId?: string | null; group?: string }): Promise<void> {
+    const upd: Record<string, unknown> = {};
+    if (patch.role !== undefined) upd.role = patch.role;
+    if (patch.clearance !== undefined) upd.clearance = patch.clearance;
+    if (patch.workspaceId !== undefined) upd.workspace_id = patch.workspaceId;
+    if (patch.group !== undefined) upd.group_name = normaliseGroup(patch.group);
+    if (Object.keys(upd).length) await this.db('group_mappings').where({ tenant_id: tenantId, id }).update(upd);
+  }
+
+  // ---- workspace membership ----
+
+  async setWorkspaceMemberships(userId: string, source: 'mapping' | 'direct', workspaceIds: string[]): Promise<void> {
+    await this.db.transaction(async (trx) => {
+      await trx('workspace_members').where({ user_id: userId, source }).delete();
+      const t = Date.now();
+      const unique = [...new Set(workspaceIds)];
+      if (unique.length) await trx('workspace_members').insert(unique.map((workspace_id) => ({ workspace_id, user_id: userId, source, created_at: t })));
+    });
+  }
+
+  async workspaceIds(userId: string): Promise<string[]> {
+    return [...new Set((await this.db('workspace_members').where({ user_id: userId }).select('workspace_id')).map((r: { workspace_id: string }) => r.workspace_id))];
+  }
 }
 
 /**
  * Resolves groups to roles and clearance: the union of roles over every matching mapping, and the highest clearance.
  * A mapping with a provider id only matches groups from that provider.
  */
-export function resolveMappings(mappings: GroupMapping[], providerId: string, groups: string[]): { roles: string[]; clearance: Label | null } {
+export function resolveMappings(mappings: GroupMapping[], providerId: string, groups: string[]): { roles: string[]; clearance: Label | null; workspaces: string[] } {
   const have = new Set(groups.map(normaliseGroup));
   const hits = mappings.filter((m) => (m.provider_id == null || m.provider_id === providerId) && have.has(m.group_name));
-  if (!hits.length) return { roles: [], clearance: null };
+  if (!hits.length) return { roles: [], clearance: null, workspaces: [] };
   return {
     roles: [...new Set(hits.map((m) => m.role))].sort(),
-    clearance: highest(...hits.map((m) => (isLabel(m.clearance) ? m.clearance : 'public')))
+    clearance: highest(...hits.map((m) => (isLabel(m.clearance) ? m.clearance : 'public'))),
+    workspaces: [...new Set(hits.map((m) => m.workspace_id).filter((w): w is string => !!w))].sort()
   };
 }

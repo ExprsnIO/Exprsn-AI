@@ -1,7 +1,11 @@
 # Ollama inference nodes on bare metal
 
-Sprint 3 registers Ollama endpoints as *pool instances* (one Ollama process per accelerator group), polls
-`/api/ps` and `/api/tags`, and routes requests by profile and label. This page prepares a node now so it is ready.
+Exprsn-AI registers Ollama endpoints as *pool instances* (one Ollama process per accelerator group), polls
+`/api/version`, `/api/ps` and `/api/tags` every few seconds, and routes requests by profile and label. Prepare the
+node as below, then add it under **Admin > Pools > Add instance** with its URL, memory size and the settings you gave
+Ollama (parallel requests, maximum loaded models, context length, KV cache type, keep-alive), so the memory planner
+and slot accounting match the node. For mutual TLS, give the instance the CA, client certificate and key paths on
+the Exprsn-AI server and put an mTLS-terminating proxy in front of Ollama.
 
 ## Rules
 

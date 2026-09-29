@@ -22,7 +22,8 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8080 \
     WEB_ROOT=/app/web \
-    SQLITE_FILENAME=/var/lib/exprsn-ai/exprsn-ai.sqlite
+    SQLITE_FILENAME=/var/lib/exprsn-ai/exprsn-ai.sqlite \
+    BLOB_DIR=/var/lib/exprsn-ai/blobs
 WORKDIR /app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates \

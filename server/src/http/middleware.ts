@@ -3,7 +3,8 @@ import { parseCookie } from 'cookie';
 import type { z } from 'zod';
 import { safeEqual } from '../crypto/index.js';
 import { isLabel } from '../authz/labels.js';
-import { authorize, type Principal, type Resource } from '../authz/policy.js';
+import { authorize, effectivePermissions, type Principal, type Resource } from '../authz/policy.js';
+import type { Workspace } from '../repos/tenants.js';
 import { rolesRequireMfa, type Permission } from '../authz/permissions.js';
 import { actorFrom } from '../audit/chain.js';
 import type { SessionRow, SessionStage } from '../identity/sessions.js';
@@ -65,6 +66,18 @@ export async function loadPrincipal(
   };
 }
 
+/** Workspaces the principal may act in: all of them for tenant admins, else tenant-wide ones and memberships. */
+export async function workspacesFor(s: Services, p: Principal): Promise<Workspace[]> {
+  if (effectivePermissions(p).has('tenant:manage')) return s.tenants.workspaces(p.tenantId);
+  return s.tenants.workspacesForUser(p.tenantId, p.userId);
+}
+
+/** Picks the requested workspace when the principal may use it, otherwise their first one (or none). */
+export async function resolveWorkspace(s: Services, p: Principal, requested: string | null | undefined): Promise<Workspace | null> {
+  const list = await workspacesFor(s, p);
+  return list.find((w) => w.id === requested) ?? list[0] ?? null;
+}
+
 /** Resolves the caller from a bearer API key or the session cookie. Never rejects: see requireAuth. */
 export function authenticate(s: Services): RequestHandler {
   return async (req, _res, next) => {
@@ -78,6 +91,7 @@ export function authenticate(s: Services): RequestHandler {
       if (!p) throw unauthorized('The key owner is disabled.');
       req.apiKey = key;
       req.principal = p;
+      p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
       return next();
     }
     const token = sessionTokenFrom(req.headers.cookie, s.cfg.COOKIE_SECURE);
@@ -88,6 +102,7 @@ export function authenticate(s: Services): RequestHandler {
         if (p) {
           req.authSession = session;
           req.principal = p;
+          p.workspaceId = session.stage === 'active' ? ((await resolveWorkspace(s, p, session.workspace_id))?.id ?? null) : null;
           await s.sessions.touch(session);
         }
       }

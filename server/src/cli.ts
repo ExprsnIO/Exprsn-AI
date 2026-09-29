@@ -23,7 +23,8 @@ Commands:
       --clearance <label>      defaults to restricted
     The password is read from EXPRSN_ADMIN_PASSWORD or prompted for. Admin roles must enrol a second factor
     at first sign-in.
-  audit:verify [--tenant slug] Recompute the audit hash chain
+  audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
+  kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
 `;
 
 async function readPassword(prompt: string): Promise<string> {
@@ -93,13 +94,14 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = createLogger(cfg.LOG_LEVEL === 'info' ? 'warn' : cfg.LOG_LEVEL, false);
   const db = createDb(cfg);
+  let s: Services | undefined;
   try {
     const applied = await migrate(db);
     if (cmd === 'migrate') {
       process.stdout.write(applied.length ? `Applied: ${applied.join(', ')}\n` : 'Already up to date\n');
       return;
     }
-    const s = createServices(cfg, db, log);
+    s = createServices(cfg, db, log);
     await bootstrap(s);
     switch (cmd) {
       case 'admin:create':
@@ -109,9 +111,18 @@ async function main(): Promise<void> {
         const { values } = parseArgs({ args: rest, options: { tenant: { type: 'string' } } });
         const tenant = await s.tenants.bySlug(values.tenant ?? cfg.DEFAULT_TENANT);
         if (!tenant) throw new Error('Unknown tenant');
-        const r = await s.audit.verify(tenant.id);
+        const r = await s.checkpoints.verify(tenant.id);
         process.stdout.write(JSON.stringify(r, null, 2) + '\n');
         if (r.status !== 'verified') process.exitCode = 2;
+        break;
+      }
+      case 'kms:rotate': {
+        const { values } = parseArgs({ args: rest, options: { tenant: { type: 'string' } } });
+        const tenant = await s.tenants.bySlug(values.tenant ?? cfg.DEFAULT_TENANT);
+        if (!tenant) throw new Error('Unknown tenant');
+        const r = await s.keys.rotate(tenant.id);
+        await s.audit.append({ tenantId: tenant.id, action: 'kms.key.rotated', kind: 'system', actor: { service: 'cli' }, target: { key: s.keys.kekName(tenant.id) }, detail: r });
+        process.stdout.write(`Data key for ${tenant.slug} rotated to version ${r.version}\n`);
         break;
       }
       default:
@@ -119,6 +130,7 @@ async function main(): Promise<void> {
         process.exitCode = 64;
     }
   } finally {
+    await s?.close();
     await db.destroy();
   }
 }

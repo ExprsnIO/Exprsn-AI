@@ -4,7 +4,8 @@ import { actorFrom } from '../audit/chain.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { getRole, PERMISSIONS, type Permission } from '../authz/permissions.js';
 import { apiKeyState } from '../identity/apikeys.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, setSessionCookie } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAuth, setSessionCookie, workspacesFor } from '../http/middleware.js';
+import { toClient as notificationView } from '../platform/notifications.js';
 import { badRequest, forbidden, notFound, unauthorized } from '../http/problem.js';
 import type { Services } from '../services.js';
 
@@ -26,7 +27,7 @@ export function meRoutes(s: Services): Router {
     const p = principalOf(req);
     const [tenant, workspaces, methods, recovery] = await Promise.all([
       s.tenants.byId(p.tenantId),
-      s.tenants.workspaces(p.tenantId),
+      workspacesFor(s, p),
       s.mfa.methods(p.userId),
       s.mfa.remainingRecoveryCodes(p.userId)
     ]);
@@ -36,9 +37,52 @@ export function meRoutes(s: Services): Router {
       permissions: [...effectivePermissions(p)].sort(),
       tenant: tenant ? { id: tenant.id, slug: tenant.slug, name: tenant.name } : null,
       workspaces: workspaces.map((w) => ({ id: w.id, name: w.name, label: w.label_ceiling })),
+      workspace: p.workspaceId ?? null,
       credential: p.kind,
       mfa: { verified: p.mfa, methods, recoveryCodesRemaining: recovery }
     });
+  });
+
+  // ---------- workspace ----------
+
+  /** Switches the session's current workspace; conversations, knowledge and quotas scope to it. */
+  r.put('/workspace', browser, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ workspaceId: z.string().length(26) }), req.body);
+    const w = (await workspacesFor(s, p)).find((x) => x.id === body.workspaceId);
+    if (!w) throw notFound('Workspace');
+    await s.sessions.setWorkspace(p.sessionId as string, w.id);
+    res.json({ workspace: w.id });
+  });
+
+  // ---------- notifications ----------
+
+  r.get('/notifications', active, async (req, res) => {
+    const p = principalOf(req);
+    res.json({ items: (await s.notifications.list(p.userId)).map(notificationView), email: s.notifications.emailEnabled });
+  });
+
+  r.post('/notifications/read', active, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ ids: z.array(z.string().length(26)).max(500).optional() }), req.body);
+    res.json({ read: await s.notifications.markRead(p.userId, body.ids) });
+  });
+
+  // ---------- jobs I started ----------
+
+  r.get('/jobs', active, async (req, res) => {
+    const p = principalOf(req);
+    const rows = await s.jobs.list(p.tenantId, { createdBy: p.userId, limit: 50 });
+    res.json(rows.map((j) => ({ id: j.id, type: j.type, state: j.state, progress: j.progress, message: j.message, error: j.error, payload: j.payload, result: j.state === 'succeeded' ? j.result : null, createdAt: j.created_at, finishedAt: j.finished_at })));
+  });
+
+  r.post('/jobs/:id/cancel', active, async (req, res) => {
+    const p = principalOf(req);
+    const j = await s.jobs.get(p.tenantId, String(req.params.id));
+    if (!j || j.created_by !== p.userId) throw notFound('Job');
+    const after = await s.jobs.cancel(p.tenantId, j.id);
+    await audit(req, 'job.cancelled', { job: j.id, type: j.type });
+    res.json({ id: j.id, state: after?.state });
   });
 
   // ---------- sessions ----------

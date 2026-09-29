@@ -1,0 +1,208 @@
+import { readFileSync } from 'node:fs';
+import { Agent, fetch, type Dispatcher } from 'undici';
+
+export interface InstanceTls {
+  caFile?: string;
+  certFile?: string;
+  keyFile?: string;
+}
+
+export interface PsModel {
+  name: string;
+  model: string;
+  size: number;
+  size_vram: number;
+  digest: string;
+  expires_at?: string;
+  details?: { family?: string; parameter_size?: string; quantization_level?: string; format?: string };
+}
+
+export interface TagModel {
+  name: string;
+  model: string;
+  size: number;
+  digest: string;
+  modified_at?: string;
+  details?: { family?: string; parameter_size?: string; quantization_level?: string; format?: string };
+}
+
+export interface ShowResult {
+  details?: { family?: string; parameter_size?: string; quantization_level?: string; format?: string };
+  model_info?: Record<string, unknown>;
+  capabilities?: string[];
+  license?: string;
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  thinking?: string;
+  images?: string[];
+  tool_calls?: { function: { name: string; arguments: Record<string, unknown> } }[];
+  tool_name?: string;
+}
+
+export interface ChatRequest {
+  model: string;
+  messages: ChatMessage[];
+  think?: boolean | 'low' | 'medium' | 'high';
+  tools?: unknown[];
+  options?: Record<string, unknown>;
+  keep_alive?: string | number;
+}
+
+export interface ChatChunk {
+  message?: { role: string; content?: string; thinking?: string; tool_calls?: ChatMessage['tool_calls'] };
+  done: boolean;
+  done_reason?: string;
+  total_duration?: number;
+  load_duration?: number;
+  prompt_eval_count?: number;
+  prompt_eval_duration?: number;
+  eval_count?: number;
+  eval_duration?: number;
+  error?: string;
+}
+
+export class OllamaError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null
+  ) {
+    super(message);
+  }
+}
+
+/** Reads a streamed newline-delimited JSON body. */
+export async function* ndjson<T>(body: AsyncIterable<Uint8Array>): AsyncGenerator<T> {
+  const decoder = new TextDecoder();
+  let buf = '';
+  for await (const chunk of body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) yield JSON.parse(line) as T;
+    }
+  }
+  const rest = (buf + decoder.decode()).trim();
+  if (rest) yield JSON.parse(rest) as T;
+}
+
+/**
+ * A client for one Ollama endpoint. Only the gateway talks to Ollama, over the internal network, optionally with
+ * mutual TLS (the instance's CA, client certificate and key are file paths on this server).
+ */
+export class OllamaClient {
+  private readonly dispatcher: Dispatcher | undefined;
+  private readonly base: string;
+
+  constructor(
+    url: string,
+    tls: InstanceTls | null,
+    private readonly timeoutMs: number
+  ) {
+    this.base = url.replace(/\/+$/, '');
+    if (tls && (tls.caFile || tls.certFile)) {
+      this.dispatcher = new Agent({
+        connect: {
+          ...(tls.caFile ? { ca: readFileSync(tls.caFile) } : {}),
+          ...(tls.certFile ? { cert: readFileSync(tls.certFile) } : {}),
+          ...(tls.keyFile ? { key: readFileSync(tls.keyFile) } : {}),
+          rejectUnauthorized: true
+        }
+      });
+    }
+  }
+
+  private async req(method: string, path: string, body?: unknown, opts: { timeoutMs?: number | null; signal?: AbortSignal } = {}) {
+    const signals: AbortSignal[] = [];
+    if (opts.timeoutMs !== null) signals.push(AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs));
+    if (opts.signal) signals.push(opts.signal);
+    let res;
+    try {
+      res = await fetch(this.base + path, {
+        method,
+        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: signals.length ? AbortSignal.any(signals) : undefined,
+        ...(this.dispatcher ? { dispatcher: this.dispatcher } : {})
+      });
+    } catch (err) {
+      if ((err as Error).name === 'AbortError' && opts.signal?.aborted) throw err;
+      throw new OllamaError(`${(err as Error).name === 'TimeoutError' ? 'timed out' : (err as Error).message}`, null);
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let message = text;
+      try {
+        message = (JSON.parse(text) as { error?: string }).error ?? text;
+      } catch {
+        // not JSON
+      }
+      throw new OllamaError(message || `HTTP ${res.status}`, res.status);
+    }
+    return res;
+  }
+
+  async version(): Promise<string> {
+    return ((await (await this.req('GET', '/api/version')).json()) as { version: string }).version;
+  }
+
+  async ps(): Promise<PsModel[]> {
+    return ((await (await this.req('GET', '/api/ps')).json()) as { models?: PsModel[] }).models ?? [];
+  }
+
+  async tags(): Promise<TagModel[]> {
+    return ((await (await this.req('GET', '/api/tags')).json()) as { models?: TagModel[] }).models ?? [];
+  }
+
+  async show(model: string): Promise<ShowResult> {
+    return (await (await this.req('POST', '/api/show', { model })).json()) as ShowResult;
+  }
+
+  /** Loads a model into memory (an empty generate request) and sets how long it stays. */
+  async load(model: string, keepAlive: string | number, timeoutMs = 10 * 60_000): Promise<void> {
+    await (await this.req('POST', '/api/generate', { model, keep_alive: keepAlive, stream: false }, { timeoutMs })).text();
+  }
+
+  async unload(model: string): Promise<void> {
+    await (await this.req('POST', '/api/generate', { model, keep_alive: 0, stream: false })).text();
+  }
+
+  async delete(model: string): Promise<void> {
+    await (await this.req('DELETE', '/api/delete', { model })).text();
+  }
+
+  async *pull(model: string, signal?: AbortSignal): AsyncGenerator<{ status: string; digest?: string; total?: number; completed?: number; error?: string }> {
+    const res = await this.req('POST', '/api/pull', { model, stream: true }, { timeoutMs: null, ...(signal ? { signal } : {}) });
+    if (!res.body) return;
+    yield* ndjson(res.body);
+  }
+
+  /**
+   * Streams a chat completion. The caller's signal stops generation (Ollama stops when the connection closes).
+   * Response headers must arrive within `headerTimeoutMs` (a cold load can take minutes); the stream itself has no
+   * time limit.
+   */
+  async *chat(request: ChatRequest, signal: AbortSignal, headerTimeoutMs = 5 * 60_000): AsyncGenerator<ChatChunk> {
+    const headers = new AbortController();
+    const timer = setTimeout(() => headers.abort(new Error('timed out waiting for the instance')), headerTimeoutMs);
+    let res;
+    try {
+      res = await this.req('POST', '/api/chat', { ...request, stream: true }, { timeoutMs: null, signal: AbortSignal.any([signal, headers.signal]) });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.body) return;
+    for await (const chunk of ndjson<ChatChunk>(res.body)) {
+      if (chunk.error) throw new OllamaError(chunk.error, 500);
+      yield chunk;
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.dispatcher?.close();
+  }
+}

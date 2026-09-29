@@ -10,7 +10,8 @@ import {
 } from '@simplewebauthn/server';
 import { ulid } from 'ulid';
 import { json, type Db } from '../db/knex.js';
-import { hmac, safeEqual, type SecretBox } from '../crypto/index.js';
+import { hmac, safeEqual } from '../crypto/index.js';
+import type { Sealer } from '../platform/datakeys.js';
 
 authenticator.options = { step: 30, window: 1, digits: 6 };
 
@@ -46,7 +47,7 @@ const factor = (r: Record<string, unknown>): FactorRow => ({
 export class MfaService {
   constructor(
     private readonly db: Db,
-    private readonly box: SecretBox,
+    private readonly box: Sealer,
     private readonly cfg: MfaSettings
   ) {}
 
@@ -72,14 +73,14 @@ export class MfaService {
     await this.db('mfa_factors').where({ user_id: userId, kind: 'totp' }).whereNull('confirmed_at').delete();
     const id = ulid();
     const secret = authenticator.generateSecret(20);
-    await this.db('mfa_factors').insert({ id, user_id: userId, kind: 'totp', label, secret: this.box.seal(secret, 'totp:' + id), created_at: Date.now() });
+    await this.db('mfa_factors').insert({ id, user_id: userId, kind: 'totp', label, secret: await this.box.seal(secret, 'totp:' + id), created_at: Date.now() });
     return { id, secret, uri: authenticator.keyuri(username, this.cfg.issuer, secret) };
   }
 
   async confirmTotp(userId: string, factorId: string, code: string): Promise<boolean> {
     const row = await this.db('mfa_factors').where({ id: factorId, user_id: userId, kind: 'totp' }).whereNull('confirmed_at').first();
     if (!row) return false;
-    const step = this.checkCode(row, code);
+    const step = await this.checkCode(row, code);
     if (step == null) return false;
     await this.db('mfa_factors').where({ id: factorId }).update({ confirmed_at: Date.now(), last_step: step, last_used_at: Date.now() });
     return true;
@@ -90,7 +91,7 @@ export class MfaService {
     if (!/^\d{6}$/.test(code)) return false;
     const rows = await this.db('mfa_factors').where({ user_id: userId, kind: 'totp' }).whereNotNull('confirmed_at');
     for (const row of rows) {
-      const step = this.checkCode(row, code);
+      const step = await this.checkCode(row, code);
       if (step == null) continue;
       const n = await this.db('mfa_factors')
         .where({ id: row.id })
@@ -101,9 +102,9 @@ export class MfaService {
     return false;
   }
 
-  private checkCode(row: Record<string, unknown>, code: string): number | null {
+  private async checkCode(row: Record<string, unknown>, code: string): Promise<number | null> {
     if (!/^\d{6}$/.test(code)) return null;
-    const secret = this.box.open(String(row.secret), 'totp:' + String(row.id));
+    const secret = await this.box.open(String(row.secret), 'totp:' + String(row.id));
     const delta = authenticator.checkDelta(code, secret);
     if (delta == null) return null;
     return Math.floor(Date.now() / 30_000) + delta;

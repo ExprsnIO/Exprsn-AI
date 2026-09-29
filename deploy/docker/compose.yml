@@ -1,11 +1,13 @@
-# Production-shaped stack: the application server, PostgreSQL, and Ollama (profile "inference").
+# Production-shaped stack: the application server, PostgreSQL, Redis (job queue and multi-instance fan-out),
+# and Ollama (profile "inference").
 # TLS terminates in front of this stack (your reverse proxy or load balancer); the app listens on 127.0.0.1:8080.
 #
 #   ./gen-secrets.sh                                   # once: writes secrets/*.txt (mode 600)
 #   cp ../config/identity.example.yaml identity.yaml   # then edit: your OpenLDAP / SQL user stores
 #   PUBLIC_URL=https://ai.example.internal docker compose up -d
 #   docker compose exec app node server/dist/cli.js admin:create --username root --display-name "Platform admin"
-#   docker compose --profile inference up -d           # add Ollama (compose.gpu.yml for NVIDIA GPUs)
+#   docker compose --profile inference up -d           # add Ollama (compose.gpu.yml for NVIDIA GPUs), then register
+#                                                      # http://ollama:11434 as an instance under Admin > Pools
 name: exprsn-ai
 
 services:
@@ -25,6 +27,13 @@ services:
       DATABASE_URL_FILE: /run/secrets/database_url
       SESSION_SECRET_FILE: /run/secrets/session_secret
       DATA_KEY_FILE: /run/secrets/data_key
+      # KMS: local wraps each tenant's data key with DATA_KEY. For OpenBao transit set KMS_PROVIDER=openbao,
+      # OPENBAO_ADDR and OPENBAO_TOKEN_FILE (see docs/deploy.md).
+      KMS_PROVIDER: ${KMS_PROVIDER:-local}
+      REDIS_URL: redis://redis:6379
+      BLOB_DIR: /var/lib/exprsn-ai/blobs
+      SMTP_URL: ${SMTP_URL:-}
+      SIEM_URL: ${SIEM_URL:-}
       IDENTITY_CONFIG: /etc/exprsn-ai/identity.yaml
       DEFAULT_TENANT: ${DEFAULT_TENANT:-default}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -32,9 +41,11 @@ services:
     secrets: [database_url, session_secret, data_key, ldap_bind_password]
     volumes:
       - ./identity.yaml:/etc/exprsn-ai/identity.yaml:ro
+      - appdata:/var/lib/exprsn-ai
     ports: ["127.0.0.1:${APP_PORT:-8080}:8080"]
     depends_on:
       postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
     networks: [app, data, inference]
 
   postgres:
@@ -53,8 +64,21 @@ services:
       retries: 20
     networks: [data]
 
-  # Model serving. Bare-metal Ollama nodes are registered as pools in Sprint 3; this container is the
-  # Docker placement. It only joins the internal inference network: no published port, no egress.
+  redis:
+    image: redis:7-bookworm
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", ""]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [data]
+
+  # Model serving. This container is the Docker placement; bare-metal Ollama nodes are registered the same way,
+  # as instances of a pool (see deploy/baremetal/ollama-node.md). It only joins the internal inference network:
+  # no published port, no egress.
   ollama:
     profiles: [inference]
     image: ollama/ollama:${OLLAMA_VERSION:-latest}
@@ -73,7 +97,9 @@ networks:
   inference: { internal: true }
 
 volumes:
+  appdata: {}
   pgdata: {}
+  redisdata: {}
   ollama: {}
 
 secrets:

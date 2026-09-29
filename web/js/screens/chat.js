@@ -1,200 +1,734 @@
 (function () {
   const { UI, esc } = App;
 
-  const CONVOS = [
-    { id: 'c1', title: 'Q3 travel overrun', meta: 'analyst, 2 min ago', label: 'confidential', profile: 'analyst' },
-    { id: 'c2', title: 'Vendor contract summary', meta: 'chat-default, 1 h ago', label: 'internal', profile: 'chat-default' },
-    { id: 'c3', title: 'Rewrite onboarding email', meta: 'fast, yesterday', label: 'public', profile: 'fast' },
-    { id: 'c4', title: 'Reconcile card feed', meta: 'Data analyst agent, Mon', label: 'confidential', profile: 'Data analyst agent' },
-    { id: 'c5', title: 'Policy wording check', meta: 'chat-default, Mon', label: 'internal', profile: 'chat-default' }
-  ];
-  const PROFILES = [
-    { id: 'analyst', model: 'qwen2.5:32b-q4_K_M', ceiling: 'confidential', thinking: 'high' },
-    { id: 'chat-default', model: 'llama3.1:8b-q5_K_M', ceiling: 'confidential', thinking: 'medium' },
-    { id: 'fast', model: 'llama3.1:8b-q5_K_M', ceiling: 'internal', thinking: 'off' },
-    { id: 'coder', model: 'qwen2.5-coder:32b-q4_K_M', ceiling: 'internal', thinking: 'medium' },
-    { id: 'Data analyst agent', model: 'qwen2.5:32b-q4_K_M', ceiling: 'confidential', thinking: 'high', agent: true }
-  ];
-  const THREADS = {
-    c1: [
-      { role: 'user', text: 'How far over budget was travel in Q3, and what explains it? Use the Finance KB and the ledger.' },
-      { role: 'assistant', thinking: { secs: 6, level: 'medium', tokens: 412, text: 'The user wants a variance and a cause. Query the ledger for Q3 travel actuals by cost centre, then look for an approved exception in the Finance KB before attributing the overrun.' },
-        raised: 'Finance KB', ctx: { title: 'ledger.query, 14 rows', level: 'confidential', body: 'cost_centre, q3_actual, q3_budget\nFIELD-SALES, 188420.00, 150000.00\nLIS-ONBOARD, 96310.00, 60000.00' },
-        paras: ['Travel spend for Q3 came to 412,880 EUR against a budget of 361,500 EUR, an overrun of <button type="button" class="btn xs" data-calc="(412880-361500)/361500 = 0.1421">14.2%</button><a href="#" class="cite" data-cite="1">1</a>. Two cost centres account for most of it: Field Sales and the Lisbon onboarding programme<a href="#" class="cite" data-cite="2">2</a>.', 'The approved exception for Lisbon covers 38,000 EUR of the difference, so the unexplained overrun is closer to 13,380 EUR<a href="#" class="cite" data-cite="1">1</a>.'],
-        meta: 'analyst, qwen2.5:32b, 1,204 tokens, 9.1 s', branch: [2, 2],
-        confirm: { title: 'Confirm action: create Jira issue', tool: 'jira-internal.create_issue', args: 'project=FIN  summary="Q3 travel overrun review"', note: 'Acts as you through Data analyst agent. Tool ceiling: confidential.' },
-        memory: 'Reports travel figures in EUR, net of VAT' }
-    ],
-    c2: [
-      { role: 'user', text: 'Summarise the Fabrikam maintenance contract, especially termination terms.' },
-      { role: 'assistant', thinking: { secs: 2, level: 'low', tokens: 96, text: 'Find the termination clause and notice period.' }, ctx: { title: 'Contracts KB, Fabrikam MSA 2025.pdf, page 11', level: 'internal', body: 'Either party may terminate for convenience on ninety (90) days written notice.' },
-        paras: ['The contract runs to 31 March 2027 with automatic annual renewal. Either side can terminate for convenience on 90 days written notice<a href="#" class="cite" data-cite="2">2</a>, and Northwind can terminate for cause within 30 days of an unremedied breach.', 'Service credits cap at 15% of the monthly fee; there is no uncapped liability clause.'], meta: 'chat-default, llama3.1:8b, 640 tokens, 3.2 s', branch: [1, 1] }
-    ],
-    c3: [
-      { role: 'user', text: 'Make this onboarding email friendlier and shorter.' },
-      { role: 'assistant', paras: ['Welcome to Northwind. Your laptop and badge are ready at the front desk from 9:00 on Monday, and your buddy, Sam, will meet you there. Bring photo ID. See you then.'], meta: 'fast, llama3.1:8b, 118 tokens, 0.9 s', branch: [1, 1] }
-    ],
-    c4: [
-      { role: 'user', text: 'Reconcile last week\'s card feed against the ledger and list unmatched lines.' },
-      { role: 'assistant', thinking: { secs: 14, level: 'high', tokens: 1880, text: 'Plan: pull card transactions, join on amount and date within two days, report residue.' }, ctx: { title: 'cards.query, 212 rows joined to ledger.query, 209 rows', level: 'confidential', body: 'unmatched: 3 lines, total 1,842.10 EUR' },
-        paras: ['Three card lines have no ledger match: two Lisbon hotel charges of 412.00 EUR each on 12 and 13 September, and one 1,018.10 EUR airfare on 9 September. All three sit under LIS-ONBOARD<a href="#" class="cite" data-cite="1">1</a>.'], meta: 'Data analyst agent, qwen2.5:32b, 2,904 tokens, 21.4 s', branch: [1, 1] }
-    ],
-    c5: [
-      { role: 'user', text: 'Does the expense policy allow taxis after 22:00 without pre-approval?' },
-      { role: 'assistant', ctx: { title: 'Policy KB, Travel policy v7.md, section 4.3', level: 'internal', body: 'Taxis after 22:00 need no pre-approval where public transport has stopped running.' },
-        paras: ['Yes, when public transport has stopped for the night. Section 4.3 of Travel policy v7 waives pre-approval for taxis after 22:00 in that case<a href="#" class="cite" data-cite="2">2</a>; a receipt is still required.'], meta: 'chat-default, llama3.1:8b, 402 tokens, 2.1 s', branch: [1, 1] }
-    ]
+  // Chat, backed by /api/chat, /api/conversations and /api/attachments. Answers stream over the socket
+  // (chat.status, chat.chunk, chat.done); a gap in the sequence numbers is filled from the stream endpoint.
+  const LEVELS = ['off', 'low', 'medium', 'high'];
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const enc = encodeURIComponent;
+  const cUrl = (id) => '/api/conversations/' + enc(id);
+  const mUrl = (cid, mid) => cUrl(cid) + '/messages/' + enc(mid);
+  const S = () => App.stateFor('chat');
+  const visible = () => App.state.route === 'chat' && App.state.signedIn;
+  const num = (n) => Number(n || 0).toLocaleString('en-US');
+  const rank = (l) => LABELS.indexOf(l);
+  const active = (m) => m && m.role === 'assistant' && (m.state === 'queued' || m.state === 'streaming');
+  const ago = (ms) => {
+    if (!ms) return '';
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
   };
-  const SOURCES = {
-    c1: [{ n: 1, title: 'ledger.query result', sub: 'Tool result, 14 rows, this turn' }, { n: 2, title: 'Q3 cost centre review.pdf', sub: 'Finance KB, page 4, score 0.83' }],
-    c2: [{ n: 1, title: 'Fabrikam MSA 2025.pdf', sub: 'Contracts KB, page 3, score 0.91' }, { n: 2, title: 'Fabrikam MSA 2025.pdf', sub: 'Contracts KB, page 11, score 0.88' }],
-    c3: [], c4: [{ n: 1, title: 'cards.query ⋈ ledger.query', sub: 'Tool result, 3 rows, this turn' }], c5: [{ n: 2, title: 'Travel policy v7.md', sub: 'Policy KB, section 4.3, score 0.94' }]
-  };
+  const size = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? Math.round(b / 1024) + ' KB' : b + ' B');
+  const ms = (v) => (v == null ? '' : v >= 1000 ? (v / 1000).toFixed(1) + ' s' : Math.round(v) + ' ms');
+
+  // Attachment names for message chips, fetched once per id.
+  const attCache = {};
+
+  // ---------- state helpers ----------
+  const byId = (st, id) => (st.conv && st.byId ? st.byId[id] : null);
+  const profileOf = (st, name) => (st.profiles || []).find((p) => p.name === name || p.id === name) || null;
+  const selProfile = (st) => profileOf(st, st.profile);
+  const levelsFor = (p) => (p ? LEVELS.slice(0, LEVELS.indexOf(p.thinkCeiling) + 1) : ['off']);
+  const clampThink = (p, want) => { const ok = levelsFor(p); return ok.indexOf(want) >= 0 ? want : ok[ok.length - 1]; };
+
+  function pickProfile(st, preferred) {
+    const list = st.profiles || [];
+    const keep = profileOf(st, preferred) || profileOf(st, st.profile) || list.find((p) => !p.deprecated) || list[0] || null;
+    if (!keep) { st.profile = null; st.think = 'off'; return; }
+    if (keep.name !== st.profile) { st.profile = keep.name; st.think = keep.thinkDefault; }
+    st.think = clampThink(keep, st.think || keep.thinkDefault);
+  }
+
+  function setConv(st, conv) {
+    st.conv = conv || null;
+    st.byId = {};
+    if (!conv) return;
+    conv.messages.forEach((m) => { m.tools = m.tools || []; st.byId[m.id] = m; });
+    // chat.done events that arrived before this view did.
+    Object.keys(st.doneBuf || {}).forEach((mid) => { const m = st.byId[mid]; if (m) { applyDone(st, m, st.doneBuf[mid]); delete st.doneBuf[mid]; } });
+  }
+
+  /** The head's path from the root, oldest first. */
+  function pathOf(conv) {
+    if (!conv || !conv.messages.length) return [];
+    const by = {}; conv.messages.forEach((m) => { by[m.id] = m; });
+    let cur = by[conv.headId] || conv.messages[conv.messages.length - 1];
+    const out = []; const seen = {};
+    while (cur && !seen[cur.id]) { seen[cur.id] = true; out.unshift(cur); cur = cur.parentId ? by[cur.parentId] : null; }
+    return out;
+  }
+  const siblingsOf = (conv, m) => conv.messages.filter((x) => x.parentId === m.parentId && x.role === m.role).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+  const headAnswer = (st) => { const p = pathOf(st.conv); const last = p[p.length - 1]; return last && last.role === 'assistant' ? last : null; };
+
+  // ---------- socket ----------
+  const live = { sock: null, handlers: null, timer: null, poll: null, ctx: null };
+  function detach() {
+    if (live.sock && live.handlers) Object.keys(live.handlers).forEach((ev) => live.sock.off(ev, live.handlers[ev]));
+    live.sock = null; live.handlers = null;
+    if (live.timer) { clearTimeout(live.timer); live.timer = null; }
+  }
+  function attach() {
+    if (!App.socket || live.sock === App.socket) return;
+    detach();
+    live.sock = App.socket;
+    const guard = (fn) => (d) => { if (!visible()) { detach(); return; } fn(S(), d || {}); };
+    live.handlers = {
+      'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone),
+      'attachment.state': guard(onAttachment), connect: guard(onReconnect)
+    };
+    Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
+  }
+  window.addEventListener('hashchange', () => { if (App.parse().route !== 'chat') detach(); });
+
+  function onStatus(st, d) {
+    st.status = st.status || {};
+    st.status[d.messageId] = Object.assign({}, st.status[d.messageId] || {}, d);
+    if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model }; }
+    const m = byId(st, d.messageId);
+    if (m && d.state !== 'queued' && m.state === 'queued') m.state = 'streaming';
+    if (m && d.profile) m.profile = d.profile;
+    if (m && d.model) m.model = d.model;
+    schedule();
+  }
+  function applyChunk(m, c) {
+    if (c.seq <= m.seq) return true;
+    if (c.seq !== m.seq + 1) return false;
+    if (c.delta) m.content = (m.content || '') + c.delta;
+    if (c.thinking) m.thinking = (m.thinking || '') + c.thinking;
+    if (c.tool) m.tools.push(c.tool);
+    m.seq = c.seq;
+    if (m.state === 'queued') m.state = 'streaming';
+    return true;
+  }
+  function onChunk(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) return;
+    const m = byId(st, d.messageId);
+    if (!m) return; // the conversation view that is loading includes it, and the next gap check catches up
+    if (!applyChunk(m, d)) catchUp(m.id, false);
+    schedule();
+  }
+  function applyDone(st, m, d) {
+    m.state = d.state; m.usage = d.usage || m.usage; m.error = d.error || null;
+    if (d.profile) m.profile = d.profile;
+    if (d.model) m.model = d.model;
+    if (!m.completedAt) m.completedAt = Date.now();
+    if (st.status) delete st.status[m.id];
+    if (d.seq > m.seq) catchUp(m.id, false);
+  }
+  function onDone(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) { if (d.conversationId === st.convId) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; } return; }
+    const m = byId(st, d.messageId);
+    if (!m) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; return; }
+    applyDone(st, m, d);
+    if (d.state === 'failed') App.toast('<b>The answer failed</b> ' + esc(d.error || ''), 'danger', 6000);
+    refreshProfiles();
+    schedule();
+  }
+  function onAttachment(st, d) {
+    const a = (st.pending || []).find((x) => x.id === d.id);
+    if (!a) return;
+    a.state = d.state;
+    refreshAttachment(a);
+    schedule();
+  }
+  function onReconnect(st) {
+    if (!st.conv) return;
+    st.conv.messages.filter(active).forEach((m) => catchUp(m.id, true));
+  }
+
+  /** Fills a message from the stream endpoint: chunks after its last seq, or the stored answer once it is done. */
+  async function catchUp(mid, marker) {
+    const st = S();
+    st.catching = st.catching || {};
+    if (st.catching[mid]) { st.catching[mid] = 'again'; return; }
+    const m = byId(st, mid); if (!m || !st.conv) return;
+    st.catching[mid] = true;
+    const from = m.seq;
+    try {
+      const r = await App.get(mUrl(st.conv.id, mid) + '/stream?after=' + m.seq);
+      if (r.chunks) {
+        r.chunks.slice().sort((a, b) => a.seq - b.seq).forEach((c) => applyChunk(m, c));
+        m.state = r.state;
+      } else {
+        m.content = r.content || ''; m.thinking = r.thinking || null; m.tools = r.tools || [];
+        m.usage = r.usage || null; m.error = r.error || null; m.seq = r.seq; m.state = r.state;
+        if (st.status) delete st.status[mid];
+      }
+      if (marker) { st.resumed = st.resumed || {}; st.resumed[mid] = { at: from, to: r.seq }; }
+    } catch (err) {
+      if (err.status !== 404) App.fail(err, 'Could not catch up on the answer');
+    } finally {
+      const again = st.catching[mid] === 'again';
+      delete st.catching[mid];
+      schedule();
+      if (again) catchUp(mid, false);
+    }
+  }
+
+  // ---------- painting ----------
+  // Streaming updates repaint only the thread, attachment chips, send bar and inspector, at most every 50 ms,
+  // so the composer keeps its text, focus and caret and open dialogs stay open.
+  function schedule() {
+    if (live.timer) return;
+    live.timer = setTimeout(() => { live.timer = null; paint(); }, 50);
+  }
+  function paint() {
+    if (!visible()) return;
+    const st = S(); const main = document.getElementById('main'); if (!main) return;
+    const scroller = main.querySelector('.ch-scroll');
+    const near = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90 : false;
+    const set = (region, html) => { const el = main.querySelector('[data-region="' + region + '"]'); if (el && el.innerHTML !== html) el.innerHTML = html; };
+    set('thread', threadHtml(st));
+    set('atts', attsHtml(st));
+    set('actions', actionsHtml(st));
+    set('side', sideHtml(st));
+    set('cold', coldHtml(st));
+    if (scroller && near) scroller.scrollTop = scroller.scrollHeight;
+  }
+  function rerender(focusComposer) {
+    if (!visible() || !live.ctx) return;
+    const st = S(); const a = document.activeElement;
+    st.focus = !!focusComposer || !!(a && a.id === 'ch-composer');
+    st.caret = a && a.id === 'ch-composer' ? [a.selectionStart, a.selectionEnd] : null;
+    live.ctx.rerender();
+  }
+
+  // ---------- rendering ----------
+  function richText(s) {
+    return String(s || '').split('```').map((part, i) => {
+      if (i % 2) return '<pre class="ch-code">' + esc(part.replace(/^[\w+.-]*\n/, '')) + '</pre>';
+      return part.split(/\n{2,}/).filter((p) => p.trim()).map((p) => '<p>' + esc(p.replace(/^\n+|\n+$/g, '')).replace(/\n/g, '<br>') + '</p>').join('');
+    }).join('');
+  }
+  function branchSwitch(conv, m) {
+    const sibs = siblingsOf(conv, m); if (sibs.length < 2) return '';
+    const i = sibs.indexOf(m);
+    return '<span class="ch-branch">' + UI.iconbtn('chev', 'Previous branch', { cls: 'sm ghost', attrs: 'data-branch="' + (i > 0 ? esc(sibs[i - 1].id) : '') + '" style="transform:rotate(180deg)"' + (i > 0 ? '' : ' disabled') })
+      + '<span class="num">' + (i + 1) + ' / ' + sibs.length + '</span>'
+      + UI.iconbtn('chev', 'Next branch', { cls: 'sm ghost', attrs: 'data-branch="' + (i < sibs.length - 1 ? esc(sibs[i + 1].id) : '') + '"' + (i < sibs.length - 1 ? '' : ' disabled') }) + '</span>';
+  }
+  function msgAttachments(ids) {
+    if (!ids || !ids.length) return '';
+    return '<div class="ch-matts">' + ids.map((id) => {
+      const a = attCache[id];
+      if (!a) { attCache[id] = { loading: true }; App.get('/api/attachments/' + enc(id)).then((r) => { attCache[id] = r; schedule(); }).catch(() => { attCache[id] = { name: 'attachment', gone: true }; schedule(); }); }
+      const name = a && a.name ? a.name : 'attachment';
+      return '<span class="ch-mchip">' + UI.icon('attach', 12) + esc(name) + (a && a.label ? ' ' + UI.label(a.label, { sm: true }) : '') + '</span>';
+    }).join('') + '</div>';
+  }
+  function statusLine(st, m) {
+    const s = (st.status || {})[m.id] || {};
+    if (m.state === 'queued') {
+      if (s.state === 'loading') return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
+      return '<div class="ch-status">' + UI.icon('clock', 13) + ' Queued' + (s.position ? ', position ' + num(s.position) : '') + ' for ' + esc(s.profile || m.profile || '') + '</div>';
+    }
+    if (m.state !== 'streaming') return '';
+    if (s.state === 'loading' && !m.content && !m.thinking) return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
+    if (m.thinking && !m.content) return '';
+    return '<div class="ch-status">' + (m.content ? 'Answering' : 'Starting') + ' with ' + esc(m.profile || '') + '…</div>';
+  }
+  function usageLine(m) {
+    const u = m.usage; const parts = [esc(m.profile || ''), '<span class="mono">' + esc(m.model || '') + '</span>'];
+    if (m.think && m.think !== 'off') parts.push('thinking ' + esc(m.think));
+    if (u) {
+      parts.push(num(u.promptTokens) + ' in, ' + num(u.outputTokens) + ' out tokens');
+      if (u.thinkingTokens) parts.push(num(u.thinkingTokens) + ' thinking');
+      if (u.calcCalls) parts.push(u.calcCalls + (u.calcCalls === 1 ? ' calculation' : ' calculations'));
+      if (u.firstTokenMs != null) parts.push('first token ' + ms(u.firstTokenMs));
+      parts.push((u.gpuMs / 1000).toFixed(2) + ' GPU-s');
+    }
+    return parts.filter(Boolean).join(', ');
+  }
+  function toolsHtml(m) {
+    if (!m.tools || !m.tools.length) return '';
+    return '<div class="ch-calc"><div class="eyebrow">' + UI.icon('calc', 12) + ' Calculated exactly</div>' + m.tools.map((t) => '<div class="ch-calcrow"><span class="mono">' + esc(t.expression) + '</span>'
+      + (t.error ? ' <span class="ch-err">' + esc(t.error) + '</span>'
+        : t.result ? (t.result.exact ? ' = <b class="mono">' + esc(t.result.decimal) + '</b>' + (t.result.fraction && t.result.fraction !== t.result.decimal ? ' <span class="muted mono">(' + esc(t.result.fraction) + ')</span>' : '')
+          : ' ≈ <b class="mono">' + esc(t.result.decimal) + '</b> <span class="muted">exactly <span class="mono">' + esc(t.result.fraction) + '</span></span>') : '')
+      + (t.name !== 'calculate' ? ' <span class="muted">' + esc(t.name) + '</span>' : '') + '</div>').join('') + '<div class="muted" style="font-size:11px">Computed by the calculation worker, not by the model.</div></div>';
+  }
+  function aiHtml(st, conv, m) {
+    const streaming = active(m);
+    const openDefault = streaming && !m.content;
+    const open = st.openThink && st.openThink[m.id] !== undefined ? st.openThink[m.id] : openDefault;
+    const fb = (st.fallback || {})[m.id];
+    let h = '<div class="ch-msg ch-ai" data-mid="' + esc(m.id) + '">';
+    if (fb) h += UI.notice(esc(fb.from) + ' waited too long in the queue, so ' + esc(fb.profile) + ' (<span class="mono">' + esc(fb.model) + '</span>) is answering instead.', 'warn');
+    h += statusLine(st, m);
+    if (m.thinking) {
+      const u = m.usage;
+      h += '<button type="button" class="ch-thinkbar" data-think="' + esc(m.id) + '" aria-expanded="' + (open ? 'true' : 'false') + '"><span>' + UI.icon('brain', 13) + ' ' + (streaming && !m.content ? 'Thinking at level ' + esc(m.think || '') + '…' : 'Thinking' + (m.think ? ' at level ' + esc(m.think) : '') + (u && u.thinkingTokens ? ', ' + num(u.thinkingTokens) + ' tokens' : '')) + '</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>'
+        + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
+    }
+    h += toolsHtml(m);
+    if (m.content || streaming) h += '<div class="ch-answer serif">' + richText(m.content) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
+    const rs = (st.resumed || {})[m.id];
+    if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
+    if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
+    if (m.state === 'failed') h += UI.notice('<b>The answer failed.</b> ' + esc(m.error || 'No detail was recorded.'), 'danger');
+    if (m.state === 'complete' && !m.content && !(m.tools || []).length) h += '<div class="ch-final muted">The model returned an empty answer.</div>';
+    h += '<div class="ch-mactions">';
+    if (streaming) h += UI.btn('Stop', { kind: 'ghost', size: 'xs', icon: 'stop', attrs: 'data-stop="' + esc(m.id) + '"' });
+    else h += UI.iconbtn('copy', 'Copy answer', { cls: 'sm', attrs: 'data-cp="' + esc(m.id) + '"' }) + (App.can('chat:write') && App.can('inference:invoke') ? UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + esc(m.id) + '"' }) : '');
+    h += branchSwitch(conv, m) + '<span class="right muted">' + usageLine(m) + '</span></div>';
+    return h + '</div>';
+  }
+  function userHtml(st, conv, m) {
+    return '<div class="ch-msg ch-user" data-mid="' + esc(m.id) + '"><div class="ch-bubble">' + esc(m.content).replace(/\n/g, '<br>') + msgAttachments(m.attachments) + '</div>'
+      + '<div class="ch-uact">' + branchSwitch(conv, m) + (App.can('chat:write') && App.can('inference:invoke') ? UI.iconbtn('edit', 'Edit as a new branch', { cls: 'sm ghost', attrs: 'data-edit="' + esc(m.id) + '"' }) : '') + UI.iconbtn('copy', 'Copy', { cls: 'sm ghost', attrs: 'data-cp="' + esc(m.id) + '"' }) + '</div></div>';
+  }
+  function threadHtml(st) {
+    if (st.loadError) return UI.problem('Chat could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id);
+    if (!st.loaded || st.convLoading) return UI.notice('Loading…', 'info');
+    if (st.convError) return UI.problem('This conversation could not be opened', st.convError.message, st.convError.problem && st.convError.problem.trace_id);
+    const conv = st.conv;
+    if (!conv || !conv.messages.length) {
+      return UI.empty('Start with a question', (st.profiles || []).length ? 'Pick a profile, attach a text file if it helps, and ask. Calculations are done exactly by the calculation worker when the profile allows it.' : 'No profile is published for your clearance yet. A profile admin publishes them under Profiles.');
+    }
+    return pathOf(conv).map((m) => (m.role === 'user' ? userHtml(st, conv, m) : aiHtml(st, conv, m))).join('');
+  }
+  function attsHtml(st) {
+    const list = st.pending || [];
+    if (!list.length) return '';
+    return '<div class="ch-atts">' + list.map((a) => {
+      const tone = a.state === 'ready' ? 'ok' : a.state === 'rejected' || a.state === 'failed' ? 'danger' : a.state === 'scanning' ? 'info' : 'warn';
+      return '<div class="ch-att ' + (tone === 'danger' ? 'bad' : '') + '"><span class="hstack gap6">' + UI.icon('attach', 12) + '<span class="mono">' + esc(a.name) + '</span>' + (a.size ? '<span class="muted">' + size(a.size) + '</span>' : '')
+        + UI.pill(a.state === 'failed' ? 'upload failed' : a.state, tone) + (a.state === 'ready' && a.label ? UI.label(a.label, { sm: true }) : '')
+        + UI.iconbtn('x', 'Remove ' + a.name, { cls: 'sm ghost', attrs: 'data-rmatt="' + esc(a.key) + '"' }) + '</span>'
+        + (a.reason ? '<span class="ch-attwhy">' + esc(a.reason) + (a.findings && a.findings.detections ? ' Found: ' + esc(Object.keys(a.findings.detections).map((k) => k.replace(/_/g, ' ') + ' ' + a.findings.detections[k]).join(', ')) + '.' : '') + '</span>' : '') + '</div>';
+    }).join('') + '</div>';
+  }
+  function blocker(st) {
+    const list = st.pending || [];
+    const bad = list.find((a) => a.state === 'rejected' || a.state === 'failed');
+    if (bad) return 'Remove ' + bad.name + ' before sending; it was not accepted.';
+    const wait = list.find((a) => a.state !== 'ready');
+    if (wait) return 'Waiting for ' + wait.name + ' to be scanned and classified.';
+    const head = headAnswer(st);
+    if (active(head)) return 'The answer is still ' + head.state + '. Stop it or wait for it to finish.';
+    return '';
+  }
+  function actionsHtml(st) {
+    const canSend = App.can('chat:write') && App.can('inference:invoke');
+    const block = blocker(st);
+    const disabled = !canSend || !selProfile(st) || !!block || st.sending;
+    return '<div class="hstack gap6">' + UI.iconbtn('attach', 'Attach a file', { attrs: 'data-attachbtn' + (canSend ? '' : ' disabled') }) + '</div>'
+      + '<span class="muted ch-hint grow">' + esc(block || (canSend ? 'Enter sends, Shift+Enter adds a line.' : 'Your roles let you read conversations but not send messages.')) + '</span>'
+      + UI.btn(st.sending ? 'Sending…' : 'Send', { kind: 'primary', icon: 'send', attrs: 'data-send', disabled });
+  }
+  function noticeHtml(st) {
+    const n = st.notice; if (!n) return '';
+    const p = n.problem || {};
+    const close = UI.iconbtn('x', 'Dismiss', { cls: 'sm ghost', attrs: 'data-dismiss' });
+    if (n.kind === 'quota') {
+      const what = p.limit === 'gpu_seconds_per_month' ? 'GPU-seconds per month' : p.limit === 'tokens_per_day' ? 'tokens per day' : (p.limit || 'a usage limit');
+      const reset = p.resets_at ? new Date(p.resets_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      return UI.notice('<b>Over quota: ' + esc(what) + (p.scope ? ' for this ' + esc(p.scope) : '') + '.</b> ' + (p.detail ? esc(p.detail) : (p.max != null ? 'Used ' + num(p.used) + ' of ' + num(p.max) + '.' : '') + (p.raised_by ? ' ' + esc(p.raised_by.charAt(0).toUpperCase() + p.raised_by.slice(1)) + ' can raise it.' : '')) + (reset ? ' Resets ' + esc(reset) + '.' : '') + (n.example ? ' <span class="muted">(example)</span>' : ''), 'warn', close);
+    }
+    if (n.kind === 'forbidden') return UI.notice('<b>' + (p.step === 'zone' ? 'Label above this profile' : 'Above your clearance') + '.</b> ' + esc(p.detail || '') + (p.step === 'zone' ? ' Pick a profile cleared for this label.' : ''), 'danger', close);
+    return '';
+  }
+  function coldHtml(st) {
+    const p = selProfile(st);
+    if (!p || (p.residency !== 'cold' && !st.forceCold)) return '';
+    return '<div class="ch-cold">' + UI.icon('clock', 14) + '<span class="grow"><b>' + esc(p.name) + '</b> uses <span class="mono">' + esc(p.model) + '</span>, which is not loaded on any instance' + (p.residency === 'cold' ? '' : ' in this example; right now it is loaded') + '. Model cold start: the first answer may take a moment while it loads. You can send now; the message queues.</span></div>';
+  }
+  function sideHtml(st) {
+    const conv = st.conv; const p = selProfile(st);
+    let h = '';
+    if (conv) {
+      const clearance = App.me && App.me.user ? App.me.user.clearance : 'public';
+      const up = LABELS.filter((l) => rank(l) > rank(conv.label) && rank(l) <= rank(clearance));
+      h += '<div class="eyebrow">This conversation</div>' + UI.kv([['Label', UI.label(conv.label, { sm: true })], ['Messages', num(conv.messages.length)], ['Branches', num(conv.messages.filter((m) => !conv.messages.some((x) => x.parentId === m.id)).length)], ['Started', esc(ago(Number(conv.createdAt)))]], 2)
+        + (up.length && App.can('chat:write') ? '<div class="hstack gap6">' + UI.select(up.map((l) => ({ value: l, label: l })), up[0], 'data-raiseto aria-label="New label"') + UI.btn('Raise label', { size: 'sm', attrs: 'data-raise' }) + '</div><div class="muted" style="font-size:12px">A label only goes up. Profiles below it can no longer answer here.</div>' : '');
+      const last = headAnswer(st);
+      if (last) {
+        const u = last.usage;
+        h += '<div class="eyebrow">Last answer</div>' + UI.kv([['Profile', App.can('profiles:manage') ? '<a href="#" data-goprofile="' + esc(last.profile || '') + '">' + esc(last.profile || '') + '</a>' : esc(last.profile || '')], ['Model', '<span class="mono">' + esc(last.model || '') + '</span>'], ['State', UI.pill(last.state, last.state === 'complete' ? 'ok' : last.state === 'failed' ? 'danger' : last.state === 'stopped' ? 'warn' : 'info')], ['Thinking', esc(last.think || 'off')]]
+          .concat(u ? [['Tokens in', num(u.promptTokens)], ['Tokens out', num(u.outputTokens)], ['Thinking tokens', num(u.thinkingTokens)], ['Calculations', num(u.calcCalls)], ['First token', u.firstTokenMs == null ? '' : ms(u.firstTokenMs)], ['GPU-seconds', (u.gpuMs / 1000).toFixed(2)]] : []), 2);
+      }
+    }
+    if (p) {
+      h += '<div class="eyebrow">Selected profile</div>' + UI.kv([['Profile', esc(p.displayName || p.name) + (p.aliasOf ? ' <span class="muted">alias of ' + esc(p.aliasOf) + '</span>' : '')], ['Model', '<span class="mono">' + esc(p.model) + '</span>'], ['Residency', UI.pill(p.residency, p.residency === 'loaded' ? 'ok' : 'outline')], ['Handles up to', UI.label(p.label, { sm: true })], ['Thinking ceiling', esc(p.thinkCeiling)], ['Tools', p.tools && p.tools.length ? esc(p.tools.join(', ')) : 'none']], 2)
+        + (p.description ? '<div class="fg2" style="font-size:12px">' + esc(p.description) + '</div>' : '') + (p.deprecated ? UI.notice('This profile\'s model is deprecated.', 'warn') : '');
+    }
+    return h || '<div class="muted" style="font-size:12px">Nothing selected.</div>';
+  }
+  function listHtml(st) {
+    const q = (st.query || '').toLowerCase();
+    const list = (st.convos || []).filter((c) => !q || (c.title || '').toLowerCase().indexOf(q) >= 0);
+    if (!st.loaded) return st.loadError ? '' : '<div class="muted" style="font-size:12px;padding:6px">Loading…</div>';
+    return list.map((c) => UI.listItem(esc(c.title || 'Untitled conversation'), esc(ago(c.updatedAt)), { active: c.id === st.convId, attrs: 'data-convo="' + esc(c.id) + '"', right: UI.label(c.label, { sm: true }) })).join('')
+      + (list.length ? '' : UI.empty(q ? 'No conversations match' : st.archived ? 'No archived conversations' : 'No conversations yet', q ? 'Try another word or start a new conversation.' : st.archived ? 'Archived conversations show here.' : 'Ask something to start one in this workspace.'));
+  }
+
+  /** Keeps the open conversation in the address bar (so a reload reopens it) without a hashchange re-render. */
+  function syncUrl(id) {
+    const h = '#/chat' + (id ? '?id=' + enc(id) : '');
+    if (!visible() || location.hash === h) return;
+    try { history.replaceState(null, '', h); } catch (e) { return; }
+    App.state.lastHash = location.hash; App.state.params = id ? { id } : {};
+    S().paramId = id || null;
+  }
+
+  // ---------- data ----------
+  const listReq = (st) => App.get('/api/conversations?kind=chat' + (st.archived ? '&archived=true' : ''));
+  function load() {
+    const st = S(); if (st.loading) return;
+    st.loading = true;
+    const wanted = st.convId;
+    Promise.all([App.get('/api/chat/profiles'), listReq(st), wanted ? App.get(cUrl(wanted)).catch((err) => { if (err.status === 404) { st.convId = null; return null; } throw err; }) : null])
+      .then(([profiles, convos, conv]) => {
+        st.profiles = profiles; st.convos = convos; setConv(st, conv); st.convError = null;
+        pickProfile(st, conv ? conv.profileId : null);
+        st.loaded = true; st.loadError = null;
+      })
+      .catch((err) => { st.loadError = err; })
+      .finally(() => {
+        st.loading = false;
+        if (!st.convId && App.state.params.id) { syncUrl(null); App.toast('That conversation is not in this workspace or no longer exists.', 'warn'); }
+        rerender();
+        if (st.conv) st.conv.messages.filter(active).forEach((m) => catchUp(m.id, true));
+      });
+  }
+  /** Residency changes once a model has loaded; picked up after each answer. */
+  function refreshProfiles() {
+    const st = S();
+    App.get('/api/chat/profiles').then((list) => { if (S() !== st) return; st.profiles = list; pickProfile(st, st.profile); schedule(); }).catch(() => { /* keeps the last list */ });
+  }
+  async function loadList() {
+    const st = S();
+    try { st.convos = await listReq(st); } catch (err) { App.fail(err, 'Could not list conversations'); }
+  }
+  /** Reloads the open conversation; `marker` shows "Stream resumed" for answers that were already running. */
+  async function loadConv(marker) {
+    const st = S(); const id = st.convId; if (!id) { setConv(st, null); return; }
+    try {
+      const conv = await App.get(cUrl(id));
+      if (S() !== st || st.convId !== id) return;
+      setConv(st, conv); st.convError = null;
+    } catch (err) {
+      if (err.status === 404) { st.convId = null; setConv(st, null); App.toast('That conversation no longer exists.', 'warn'); } else st.convError = err;
+    }
+    st.convLoading = false;
+    if (st.conv) st.conv.messages.filter(active).forEach((m) => catchUp(m.id, marker));
+  }
+  async function openConv(id) {
+    const st = S();
+    if (st.convId === id && st.conv) return;
+    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false;
+    syncUrl(id);
+    rerender();
+    await loadConv(true);
+    if (st.conv) pickProfile(st, st.conv.profileId);
+    rerender();
+  }
+  function handleError(err, what) {
+    const st = S(); const p = (err && err.problem) || {};
+    if (err && err.status === 429) { st.notice = { kind: 'quota', problem: p }; rerender(); return; }
+    if (err && err.status === 403 && (p.step === 'clearance' || p.step === 'zone')) { st.notice = { kind: 'forbidden', problem: p }; rerender(); return; }
+    if (err && err.status === 409) { App.toast('<b>' + esc(what || 'Not possible right now') + '</b> ' + esc(p.detail || err.message), 'warn', 6000); return; }
+    App.fail(err, what);
+  }
+
+  async function send() {
+    const st = S(); const ta = document.getElementById('ch-composer');
+    const text = ((ta && ta.value) || '').trim();
+    if (!text) { App.toast('Type a message first.'); return; }
+    const p = selProfile(st); if (!p) { App.toast('No profile is available to answer.', 'warn'); return; }
+    const block = blocker(st); if (block) { App.toast(esc(block), 'warn'); return; }
+    if (st.sending) return;
+    st.sending = true; paint();
+    const body = { content: text, profile: p.name, think: st.think, attachments: (st.pending || []).map((a) => a.id) };
+    try {
+      if (!st.convId) {
+        const r = await App.post('/api/chat', body);
+        st.convId = r.conversationId; syncUrl(st.convId);
+      } else {
+        await App.post(cUrl(st.convId) + '/messages', body);
+      }
+      st.draft = ''; if (ta) ta.value = '';
+      st.pending = []; st.notice = null;
+      await Promise.all([loadConv(false), loadList()]);
+      st.sending = false;
+      rerender(true);
+    } catch (err) {
+      st.sending = false; paint();
+      handleError(err, 'Could not send');
+    }
+  }
+
+  async function refreshAttachment(a) {
+    try { Object.assign(a, await App.get('/api/attachments/' + enc(a.id))); attCache[a.id] = a; } catch (err) { /* the next event or poll retries */ }
+    schedule();
+  }
+  function pollAttachments() {
+    if (live.poll) return;
+    live.poll = setInterval(() => {
+      const st = S();
+      const waiting = (st.pending || []).filter((a) => a.id && (a.state === 'quarantined' || a.state === 'scanning'));
+      if (!waiting.length || !visible()) { clearInterval(live.poll); live.poll = null; return; }
+      waiting.forEach(refreshAttachment);
+    }, 1500);
+  }
+  async function upload(files) {
+    const st = S(); st.pending = st.pending || [];
+    const label = st.conv && rank(st.conv.label) > rank('internal') ? st.conv.label : 'internal';
+    for (const file of files) {
+      const a = { key: 'k' + Math.random().toString(36).slice(2), name: file.name, size: file.size, state: 'uploading' };
+      st.pending.push(a); paint();
+      try {
+        const res = await fetch('/api/attachments?name=' + enc(file.name) + '&label=' + label, { method: 'PUT', body: file, credentials: 'same-origin', headers: { 'X-CSRF-Token': App.state.csrf || '', 'Content-Type': file.type || 'application/octet-stream', Accept: 'application/json' } });
+        const data = /json/.test(res.headers.get('content-type') || '') ? await res.json() : null;
+        if (!res.ok) { a.state = 'failed'; a.reason = (data && (data.detail || data.title)) || res.statusText; if (res.status === 401) App.sessionEnded('Your session ended. Sign in again.'); }
+        else { Object.assign(a, data); attCache[a.id] = a; }
+      } catch (e) { a.state = 'failed'; a.reason = 'The server could not be reached.'; }
+      paint();
+    }
+    pollAttachments();
+  }
+
+  // ---------- modals ----------
+  function profileOptions(st) { return (st.profiles || []).map((p) => ({ value: p.name, label: p.name + ' · ' + p.model + (p.residency === 'cold' ? ' (cold)' : '') + (p.deprecated ? ' (deprecated)' : '') })); }
+  function regenerate(ctx, mid) {
+    const st = S(); const m = byId(st, mid); if (!m) return;
+    const start = profileOf(st, m.profile) || selProfile(st);
+    if (!start) { App.toast('No profile is available to answer.', 'warn'); return; }
+    const levelSel = (p, v) => UI.select(levelsFor(p), clampThink(p, v), 'data-rlevel');
+    ctx.modal({
+      title: 'Regenerate this answer',
+      body: '<div class="fg2">A new answer to the same question, kept beside this one as a branch.</div>'
+        + UI.field('Profile', UI.select(profileOptions(st), start.name, 'data-rprof'))
+        + '<div data-rlevelhost>' + UI.field('Thinking', levelSel(start, m.think || start.thinkDefault)) + '</div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Regenerate', { kind: 'primary', icon: 'refresh', attrs: 'data-rgo' }),
+      onMount(el) {
+        const prof = el.querySelector('[data-rprof]');
+        prof.addEventListener('change', () => { const p = profileOf(st, prof.value); el.querySelector('[data-rlevelhost]').innerHTML = UI.field('Thinking', levelSel(p, p.thinkDefault)); });
+        el.querySelector('[data-rgo]').addEventListener('click', async (e) => {
+          e.target.disabled = true;
+          const think = el.querySelector('[data-rlevel]').value;
+          try {
+            await App.post(mUrl(st.conv.id, mid) + '/regenerate', { profile: prof.value, think });
+            App.closeOverlay(); App.toast('Regenerating with ' + esc(prof.value) + '. The earlier answer stays as a branch.', 'ok');
+            await loadConv(false); rerender();
+          } catch (err) { e.target.disabled = false; App.closeOverlay(); handleError(err, 'Could not regenerate'); }
+        });
+      }
+    });
+  }
+  function editMessage(ctx, mid) {
+    const st = S(); const m = byId(st, mid); if (!m) return;
+    ctx.modal({
+      title: 'Edit and branch',
+      body: UI.field('Message', UI.textarea(m.content, { rows: 6, attrs: 'data-etext' })) + UI.notice('Sending makes a new branch from this point with a fresh answer. The original question and its answers stay in the tree.', 'info'),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send as a new branch', { kind: 'primary', icon: 'send', attrs: 'data-ego' }),
+      onMount(el) {
+        const ta = el.querySelector('[data-etext]'); ta.focus();
+        el.querySelector('[data-ego]').addEventListener('click', async (e) => {
+          const content = ta.value.trim(); if (!content) { App.toast('The message is empty.'); return; }
+          e.target.disabled = true;
+          try {
+            await App.post(mUrl(st.conv.id, mid) + '/edit', { content });
+            App.closeOverlay(); App.toast('Sent as a new branch.', 'ok');
+            await loadConv(false); rerender();
+          } catch (err) { e.target.disabled = false; App.closeOverlay(); handleError(err, 'Could not send the edit'); }
+        });
+      }
+    });
+  }
+  function rename(ctx) {
+    const st = S(); const conv = st.conv; if (!conv) return;
+    ctx.modal({
+      title: 'Rename conversation',
+      body: UI.field('Title', UI.input(conv.title || '', { attrs: 'data-rtitle maxlength="200"' })),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Rename', { kind: 'primary', attrs: 'data-rok' }),
+      onMount(el) {
+        const inp = el.querySelector('[data-rtitle]'); inp.focus(); inp.select();
+        const go = async () => {
+          const title = inp.value.trim(); if (!title) { App.toast('A title cannot be empty.'); return; }
+          try { await App.patch(cUrl(conv.id), { title }); App.closeOverlay(); App.toast('Renamed to ' + esc(title) + '.', 'ok'); await Promise.all([loadConv(false), loadList()]); rerender(); } catch (err) { App.fail(err, 'Could not rename'); }
+        };
+        el.querySelector('[data-rok]').addEventListener('click', go);
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+      }
+    });
+  }
 
   App.register({
-    id: 'chat', title: 'Chat', summary: 'Conversation list, thinking trace, citations, tool confirmations, memory proposals',
-    crumb: (st) => ['Chat', (CONVOS.find((c) => c.id === (st.convo || 'c1')) || CONVOS[0]).title],
-    label: (st) => (CONVOS.find((c) => c.id === (st.convo || 'c1')) || CONVOS[0]).label,
+    id: 'chat', title: 'Chat', live: true,
+    summary: 'Conversations with branches, streamed answers, thinking, exact calculation and attachments',
+    crumb: (st) => ['Chat', st.conv ? (st.conv.title || 'Untitled conversation') : st.convId ? 'Conversation' : 'New conversation'],
+    label: (st) => (st.conv ? st.conv.label : st.convId ? null : 'internal'),
     commands: [
-      { label: 'New conversation', sub: 'Chat', run(app) { app.stateFor('chat').convo = 'new'; app.render(); } },
-      { label: 'Run a workflow from this conversation', sub: 'Chat', run(app) { app.stateFor('chat').runWorkflow = true; app.render(); } }
+      { label: 'New conversation', sub: 'Chat', run(app) { const st = app.stateFor('chat'); st.convId = null; st.conv = null; st.byId = {}; st.notice = null; st.pending = []; app.render(); setTimeout(() => { const c = document.getElementById('ch-composer'); if (c) c.focus(); }, 30); } }
     ],
     states: [
-      { title: 'Model cold start', tone: 'neutral', text: 'analyst is loading on gpu-large-2, about 20 s. The composer stays usable and the message queues.', apply(ctx) { ctx.state.cold = true; ctx.rerender(); setTimeout(() => { ctx.state.cold = false; ctx.rerender(); ctx.toast('analyst is warm on gpu-large-2. Queued message sent.', 'ok'); }, 6000); } },
-      { title: 'Guardrail stop', tone: 'danger', text: 'Streaming stops at the sentence boundary. The partial answer is replaced with the rule name and a report link.', apply(ctx) { ctx.state.guardStop = true; ctx.rerender(); } },
-      { title: 'Stream resumed', tone: 'info', text: 'Connection dropped at event 212 and resumed with no duplicate text. A quiet marker shows the gap.', apply(ctx) { ctx.state.resumed = true; ctx.rerender(); } },
-      { title: 'Ungrounded figure', tone: 'warn', text: 'A number with no calc result or cited source gets a dotted underline and a flag entry.', apply(ctx) { ctx.state.ungrounded = true; ctx.rerender(); } }
+      { title: 'Chat', tone: 'neutral', text: 'The conversation as it is: the head branch, streamed answers and their usage.', apply(ctx) { Object.assign(ctx.state, { notice: null, forceCold: false, resumed: {} }); ctx.rerender(); } },
+      { title: 'Model cold start', tone: 'neutral', text: 'The picked profile\'s model is not loaded. The composer stays usable and the message queues while it loads.', apply(ctx) {
+        const st = ctx.state; const cold = (st.profiles || []).find((p) => p.residency === 'cold');
+        if (cold) { st.profile = cold.name; st.think = cold.thinkDefault; st.forceCold = false; ctx.toast(esc(cold.name) + ' is cold: its model loads on the first message.'); } else st.forceCold = true;
+        ctx.rerender();
+      } },
+      { title: 'Over quota', tone: 'warn', text: 'Sending is refused with 429. The notice names the limit, when it resets and who can raise it.', apply(ctx) {
+        const st = ctx.state;
+        if (!st.notice || st.notice.kind !== 'quota') {
+          const t = new Date(); t.setUTCHours(24, 0, 0, 0);
+          st.notice = { kind: 'quota', example: true, problem: { limit: 'tokens_per_day', scope: 'workspace', used: 500000, max: 500000, resets_at: t.toISOString(), raised_by: 'a tenant admin' } };
+        }
+        ctx.rerender();
+      } },
+      { title: 'Stream resumed', tone: 'info', text: 'The answer is caught up from the stream endpoint after a dropped connection, with no duplicate text. A quiet marker shows the gap.', apply(ctx) {
+        const last = headAnswer(ctx.state);
+        if (!last) { ctx.toast('Open a conversation with an answer first.'); return; }
+        catchUp(last.id, true);
+      } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.convo) { st.convo = ctx.params.convo; }
-      st.convo = st.convo || 'c1'; st.sent = st.sent || {}; st.decided = st.decided || {}; st.memories = st.memories || {}; st.query = st.query || '';
-      st.thinking = st.thinking || {}; st.level = st.level || 'medium';
-      const isNew = st.convo === 'new';
-      const convo = isNew ? { id: 'new', title: 'New conversation', label: 'internal', profile: st.profile || 'chat-default' } : CONVOS.find((c) => c.id === st.convo) || CONVOS[0];
-      if (st.profile) convo.profile = st.profile;
-      const prof = PROFILES.find((p) => p.id === convo.profile) || PROFILES[1];
-      const thread = (isNew ? [] : THREADS[convo.id] || []).concat(st.sent[convo.id] || []);
-      const sources = SOURCES[convo.id] || [];
-      const list = CONVOS.filter((c) => !st.query || c.title.toLowerCase().includes(st.query.toLowerCase()));
-
-      const renderMsg = (m, i) => {
-        if (m.role === 'user') return '<div class="msg user"><div class="bubble">' + esc(m.text) + '</div><div class="uactions">' + UI.iconbtn('edit', 'Edit and branch', { cls: 'sm ghost', attrs: 'data-edit="' + i + '"' }) + '</div></div>';
-        if (m.streaming) return '<div class="msg ai"><div class="thinkbar"><span>' + (m.phase === 'thinking' ? 'Thinking at level ' + esc(st.level) + '…' : 'Answering…') + '</span><span class="muted">' + UI.btn('Stop', { kind: 'ghost', size: 'xs', attrs: 'data-stop' }) + '</span></div><div class="answer serif">' + m.partial + '<span class="blink">▍</span></div></div>';
-        const open = st.thinking[i];
-        let h = '<div class="msg ai">';
-        if (m.thinking) h += '<button type="button" class="thinkbar" data-think="' + i + '"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s at level ' + esc(m.thinking.level) + ', ' + m.thinking.tokens + ' tokens</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>' + (open ? '<div class="thinktrace">' + esc(m.thinking.text) + '</div>' : '');
-        if (m.raised) h += '<div class="raised"><span class="rule"></span>Label raised to ' + UI.label('confidential', { sm: true }) + ' by ' + esc(m.raised) + '<span class="rule"></span></div>';
-        if (m.ctx) h += UI.ctx(m.ctx.title, m.ctx.body, m.ctx.level);
-        if (st.guardStop && i === thread.length - 1) {
-          h += '<div class="answer serif"><p>' + m.paras[0].replace(/<a[^>]*>\d<\/a>/g, '') + '</p></div>' + UI.notice('<b>Stopped by guardrail</b> Finance baseline v12, rule <span class="mono">no-personal-data-in-summaries</span>. The rest of this answer was withheld at the sentence boundary.', 'danger', '<a href="#" data-report="' + i + '">Report</a>');
-        } else {
-          h += '<div class="answer serif">' + m.paras.map((p, pi) => '<p>' + (st.ungrounded && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span class="ungrounded" title="No calculation result or cited source backs this figure. Logged to flags.">13,380 EUR</span>') : p) + (st.resumed && pi === 0 ? '<span class="gap" title="Connection dropped at event 212 and resumed"> ⋯ </span>' : '') + '</p>').join('') + '</div>';
-        }
-        h += '<div class="mactions">' + UI.iconbtn('copy', 'Copy', { cls: 'sm', attrs: 'data-copy="answer"' }) + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + i + '"' }) + UI.iconbtn('branch', 'Branch from here', { cls: 'sm', attrs: 'data-branchmsg="' + i + '"' }) + UI.iconbtn('flag', 'Report this answer', { cls: 'sm', attrs: 'data-report="' + i + '"' }) + (m.branch ? '<span class="hstack gap4">' + UI.iconbtn('chev', 'Previous branch', { cls: 'sm ghost', attrs: 'data-branch="prev" style="transform:rotate(180deg)"' }) + '<span>Branch ' + m.branch[0] + ' of ' + m.branch[1] + '</span>' + UI.iconbtn('chev', 'Next branch', { cls: 'sm ghost', attrs: 'data-branch="next"' }) + '</span>' : '') + '<span class="right muted">' + esc(m.meta || '') + '</span></div>';
-        if (m.confirm && !st.decided[convo.id + i]) h += '<div class="confirmcard"><div class="hstack"><b>' + esc(m.confirm.title) + '</b>' + UI.pill('write', 'warn') + '</div><div class="mono fg2">' + esc(m.confirm.tool) + '  ' + esc(m.confirm.args) + '</div><div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">' + esc(m.confirm.note) + '</span><span class="hstack gap6">' + UI.btn('Deny', { size: 'sm', attrs: 'data-deny="' + i + '"' }) + UI.btn('Allow once', { kind: 'primary', size: 'sm', attrs: 'data-allow="' + i + '"' }) + '</span></div></div>';
-        if (m.confirm && st.decided[convo.id + i]) h += '<div class="decided ' + (st.decided[convo.id + i] === 'allow' ? 'ok' : '') + '">' + UI.icon(st.decided[convo.id + i] === 'allow' ? 'check' : 'x', 13) + (st.decided[convo.id + i] === 'allow' ? ' Created <a href="#" data-jira>FIN-1187</a> in jira-internal as Mara Okafor. Logged to audit.' : ' Denied. The agent was told the action was refused and continued without it.') + '</div>';
-        if (m.memory && !st.memories[convo.id + i]) h += '<div class="memprop"><span class="grow">Remember: "' + esc(m.memory) + '"</span>' + UI.btn('Save', { size: 'sm', attrs: 'data-memsave="' + i + '"' }) + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-memdismiss="' + i + '"' }) + '</div>';
-        return h + '</div>';
-      };
+      live.ctx = ctx;
+      attach();
+      const wantId = ctx.params.id || ctx.params.convo; // other screens link with ?convo=
+      if (wantId && wantId !== st.paramId) { st.paramId = wantId; st.convId = wantId; setConv(st, null); st.loaded = false; }
+      if (st.pending === undefined) st.pending = [];
+      if (!st.loaded && !st.loadError) load();
+      const p = selProfile(st);
+      const canSend = App.can('chat:write') && App.can('inference:invoke');
+      const conv = st.conv;
 
       root.innerHTML = '<style>'
-        + '.chat-list{display:flex;flex-direction:column;gap:2px}'
-        + '.chat-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto}'
-        + '.msg.user{display:flex;justify-content:flex-end;align-items:flex-end;gap:6px}.msg.user .bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px}.msg.user .uactions{opacity:0}.msg.user:hover .uactions{opacity:1}'
-        + '.msg.ai{display:flex;flex-direction:column;gap:10px;max-width:640px}'
-        + '.thinkbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--fg2);cursor:pointer;font-family:inherit;text-align:left}.thinkbar span{display:inline-flex;align-items:center;gap:6px}'
-        + '.thinktrace{padding:10px 12px;border-left:2px solid var(--line);font-size:13px;color:var(--fg2);font-style:italic}'
-        + '.raised{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}.raised .rule{flex-grow:1;height:1px;background:var(--line)}'
-        + '.answer{font-size:16px;line-height:1.55}.answer p{margin:0 0 10px}.answer p:last-child{margin:0}.answer .cite{display:inline-block;margin-left:2px;font-size:11px;font-weight:700;vertical-align:super;text-decoration:none;font-family:var(--sans)}.answer .btn.xs{vertical-align:baseline;font-family:var(--sans);margin:0 2px}'
-        + '.answer .ungrounded{border-bottom:2px dotted var(--warn-fg);cursor:help}.answer .gap{color:var(--muted);font-size:12px}'
-        + '.mactions{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);flex-wrap:wrap}'
-        + '.confirmcard{display:flex;flex-direction:column;gap:8px;padding:12px;background:var(--accent-tint);border:1px solid var(--accent);border-radius:6px}'
-        + '.decided{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--fg2)}.decided.ok{color:var(--ok-fg)}'
-        + '.memprop{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px dashed var(--line);border-radius:6px;font-size:13px}'
-        + '.composer{border-top:1px solid var(--line);background:var(--bg);padding:12px 24px 16px}.composer .inner{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:8px}'
-        + '.composer textarea{width:100%;min-height:64px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:14px;resize:vertical;line-height:1.4}'
-        + '.src{display:flex;gap:8px;align-items:flex-start;padding:8px;border-radius:5px;cursor:pointer}.src:hover,.src.hi{background:var(--accent-tint)}.src .n{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}'
-        + '.coldbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--info-bg);color:var(--info-fg);font-size:12px;border-radius:6px}'
+        + '.ch-list{display:flex;flex-direction:column;gap:2px}'
+        + '.ch-page{display:flex;flex-direction:column;min-height:0}.ch-page>.ch-scroll{flex:1 1 auto;min-height:0;overflow:auto}'
+        + '.ch-head{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line);min-height:44px}.ch-head .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+        + '.ch-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto;box-sizing:border-box}'
+        + '.ch-user{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.ch-bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px;overflow-wrap:anywhere}'
+        + '.ch-uact{display:flex;align-items:center;gap:4px;opacity:.55}.ch-user:hover .ch-uact,.ch-uact:focus-within{opacity:1}'
+        + '.ch-ai{display:flex;flex-direction:column;gap:10px;max-width:680px}'
+        + '.ch-thinkbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--fg2);cursor:pointer;font-family:inherit;text-align:left}.ch-thinkbar span{display:inline-flex;align-items:center;gap:6px}'
+        + '.ch-trace{padding:10px 12px;border-left:2px solid var(--line);font-size:13px;color:var(--fg2);font-style:italic;overflow-wrap:anywhere;max-height:260px;overflow:auto}'
+        + '.ch-answer{font-size:16px;line-height:1.55;overflow-wrap:anywhere}.ch-answer p{margin:0 0 10px}.ch-answer p:last-of-type{margin-bottom:0}'
+        + '.ch-code{font-family:var(--mono,monospace);font-size:13px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow:auto;white-space:pre;margin:0 0 10px}'
+        + '.ch-calc{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}.ch-calc .eyebrow{display:inline-flex;align-items:center;gap:6px}.ch-calcrow{font-size:13px;overflow-wrap:anywhere}.ch-err{color:var(--danger-fg)}'
+        + '.ch-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}'
+        + '.ch-gap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);border-top:1px dashed var(--line);padding-top:6px}'
+        + '.ch-final{display:flex;align-items:center;gap:6px;font-size:12px}'
+        + '.ch-mactions{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);flex-wrap:wrap}.ch-mactions .right{margin-left:auto;text-align:right}'
+        + '.ch-branch{display:inline-flex;align-items:center;gap:2px;font-size:12px;color:var(--fg2)}'
+        + '.ch-matts{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.ch-mchip{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:2px 6px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}'
+        + '.ch-composer{border-top:1px solid var(--line);background:var(--bg);padding:12px 24px 16px}.ch-inner{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:8px}'
+        + '.ch-composer textarea{width:100%;box-sizing:border-box;min-height:64px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--fg);font:inherit;font-size:14px;resize:vertical;line-height:1.4}'
+        + '.ch-cold{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--info-bg);color:var(--info-fg);font-size:12px;border-radius:6px}'
+        + '.ch-atts{display:flex;flex-direction:column;gap:6px}.ch-att{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px}.ch-att.bad{border-color:var(--danger-fg)}.ch-attwhy{color:var(--danger-fg)}'
+        + '.ch-actions{display:flex;align-items:center;gap:12px}.ch-hint{font-size:12px}'
+        + '.ch-dd{max-height:320px;overflow:auto;min-width:260px}.ch-dd button{height:auto;min-height:28px;padding:4px 10px}.ch-dd .sub{display:block;font-size:11px;color:var(--muted);font-weight:400}'
+        + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
         + '</style>'
-        + '<div class="leftpane">' + UI.btn('New conversation', { icon: 'plus', cls: 'block', attrs: 'data-new' }) + UI.search('Search conversations', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
-        + '<div class="chat-list">' + list.map((c) => UI.listItem(esc(c.title), esc(c.meta), { active: c.id === convo.id, attrs: 'data-convo="' + c.id + '"', right: UI.label(c.label, { sm: true }) })).join('') + (list.length ? '' : UI.empty('No conversations match', 'Try another word or start a new conversation.')) + '</div></div>'
-        + '<div class="page tight" style="display:flex;flex-direction:column">'
-        + '<div class="grow" style="overflow:auto"><div class="chat-thread" id="thread">'
-        + (st.cold ? '<div class="coldbar">' + UI.icon('clock', 14) + '<span class="grow"><b>' + esc(prof.id) + '</b> is loading on gpu-large-2, about 20 s. Your message will send when it is warm.</span><span class="skeleton" style="width:80px"></span></div>' : '')
-        + (thread.length ? thread.map(renderMsg).join('') : UI.empty('Start with a question', 'Pick a profile, attach files or a knowledge base, and ask. Answers cite their sources and show their label.', UI.btn('Ask about Q3 travel', { size: 'sm', attrs: 'data-suggest' })))
-        + (st.runWorkflow ? '<div class="panel" style="gap:8px"><div class="phead"><div class="eyebrow">Run workflow: video-to-notes v3</div>' + UI.pill('running', 'info') + '</div>' + UI.timeline([{ title: 'Extract frames', text: 'media worker, 48 frames', tone: 'ok' }, { title: 'Transcribe audio', text: 'whisper, 12 min of audio', tone: 'ok' }, { title: 'Summarise', text: 'analyst, thinking medium', tone: 'accent' }, { title: 'Guardrail check', text: 'waiting', tone: '' }]) + '<div>' + UI.btn('Open in Runs', { size: 'sm', attrs: 'data-goruns' }) + '</div></div>' : '')
-        + '</div></div>'
-        + '<div class="composer"><div class="inner"><div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + esc(prof.id) + (prof.agent ? '' : ' · ' + esc(prof.model.split(':')[0])), true, 'data-pick="profile"') + '</span><span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' Finance KB', true, 'data-pick="kb"') + '</span>' + UI.chip('Travel policy', true, 'data-toggle') + UI.chip(UI.icon('attach', 12) + ' q3-ledger.csv, scanned ' + UI.label('confidential', { sm: true }), true, 'data-attach') + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.level), false, 'data-pick="level"') + '</span></div>'
-        + '<label class="sr" for="composer">Message</label><textarea id="composer" placeholder="Ask about the Finance KB, attach a file, or type / for a workflow"></textarea>'
-        + '<div class="hstack"><div class="hstack gap6">' + UI.iconbtn('attach', 'Attach a file', { attrs: 'data-attachbtn' }) + UI.iconbtn('workflows', 'Run a workflow', { attrs: 'data-wf' }) + UI.iconbtn('images', 'Generate an image', { attrs: 'data-img' }) + '</div><div class="hstack right gap12"><span class="muted num" style="font-size:12px">18,400 of 32,768 context tokens</span>' + UI.btn('Send', { kind: 'primary', icon: 'send', attrs: 'data-send' }) + '</div></div></div></div></div>'
-        + '<aside class="inspector w300"><div class="eyebrow">Sources</div><div class="vstack gap4" id="sources">' + (sources.length ? sources.map((s) => '<div class="src" data-src="' + s.n + '"><span class="n">' + s.n + '</span><span><span style="font-weight:600;display:block">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.sub) + '</span></span></div>').join('') : '<div class="muted" style="font-size:12px">No sources cited in this conversation.</div>') + '</div>'
-        + '<div class="eyebrow">This turn</div>' + UI.kv([['Profile', '<a href="#" data-goprofile>' + esc(prof.id) + '</a>'], ['Model', '<span class="mono">' + esc(prof.model) + '</span>'], ['Guardrails', 'Finance baseline v12, ' + (st.guardStop ? '<span style="color:var(--danger-fg)">1 stop</span>' : '0 triggers')], ['Calculations', st.ungrounded ? '2 exact, <span style="color:var(--warn-fg)">1 ungrounded figure</span>' : '2 exact, 0 ungrounded figures'], ['Trace', '<span class="mono">4bf92f3577b34da6</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="4bf92f3577b34da6"' })]], 1)
-        + '<div class="eyebrow">Quota today</div>' + UI.meter('Tokens', '310k of 500k', 62) + UI.meter('GPU-seconds this month', '16,380 of 18,000', 91, 'warn') + '</aside>';
+        + '<div class="leftpane ch-left' + (st.showList ? ' ch-open' : '') + '">' + UI.btn('New conversation', { icon: 'plus', cls: 'block', attrs: 'data-new' + (canSend ? '' : ' disabled') })
+        + UI.search('Search conversations', 'data-search', st.query || '').replace('class="search"', 'class="search" style="width:100%"')
+        + '<div class="hstack gap6">' + UI.chip(st.archived ? 'Showing archived' : 'Show archived', !!st.archived, 'data-archived') + '<span class="muted" style="font-size:12px">' + esc(App.DATA.tenant.workspace || '') + '</span></div>'
+        + '<div class="ch-list" data-region="list">' + listHtml(st) + '</div></div>'
+        + '<div class="page tight ch-page">'
+        + '<div class="ch-head">' + UI.iconbtn('menu', 'Conversations', { cls: 'sm ghost ch-listbtn', attrs: 'data-showlist' })
+          + (conv ? '<span class="t grow">' + esc(conv.title || 'Untitled conversation') + '</span>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
+            + (App.can('chat:write') ? UI.iconbtn('edit', 'Rename', { cls: 'sm ghost', attrs: 'data-rename' }) + UI.btn(conv.archived ? 'Unarchive' : 'Archive', { kind: 'ghost', size: 'sm', attrs: 'data-archive' }) + UI.iconbtn('trash', 'Delete conversation', { cls: 'sm ghost', attrs: 'data-delete' }) : '')
+            : '<span class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</span>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
+        + '<div class="ch-scroll"><div class="ch-thread" data-region="thread">' + threadHtml(st) + '</div></div>'
+        + '<div class="ch-composer"><div class="ch-inner">'
+        + '<div data-region="notice">' + noticeHtml(st) + '</div>'
+        + '<div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + (p ? esc(p.name) + ' · ' + esc(p.model) : 'No profile'), true, 'data-pick="profile" aria-haspopup="true"' + ((st.profiles || []).length ? '' : ' disabled')) + '</span>'
+        + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.think || 'off'), false, 'data-pick="level" aria-haspopup="true"' + (p && p.thinkCeiling !== 'off' ? '' : ' disabled title="This profile does not think"')) + '</span>'
+        + (p && p.tools && p.tools.indexOf('calculate') >= 0 ? '<span class="muted hstack gap4" style="font-size:12px">' + UI.icon('calc', 12) + ' Exact calculation on</span>' : '') + '</div>'
+        + '<div data-region="cold">' + coldHtml(st) + '</div>'
+        + '<div data-region="atts">' + attsHtml(st) + '</div>'
+        + '<label class="sr" for="ch-composer">Message</label><textarea id="ch-composer" placeholder="' + (canSend ? 'Ask something. Attach a text file with the paper clip.' : 'Read only') + '"' + (canSend ? '' : ' disabled') + '></textarea>'
+        + '<input type="file" multiple hidden data-file>'
+        + '<div class="ch-actions" data-region="actions">' + actionsHtml(st) + '</div>'
+        + '</div></div></div>'
+        + '<aside class="inspector w300 ch-side" data-region="side">' + sideHtml(st) + '</aside>';
+
+      // Restore the draft, focus and caret across whole-screen renders.
+      const ta = ctx.$('#ch-composer');
+      if (ta) {
+        ta.value = st.draft || '';
+        if (st.focus) { ta.focus(); const c = st.caret || [ta.value.length, ta.value.length]; try { ta.setSelectionRange(c[0], c[1]); } catch (e) { /* not focusable */ } }
+      }
+      const sc = ctx.$('.ch-scroll'); if (sc) sc.scrollTop = sc.scrollHeight;
 
       // ---- events ----
-      ctx.on('click', '[data-convo]', (e, t) => { st.convo = t.dataset.convo; st.guardStop = st.resumed = st.ungrounded = false; ctx.rerender(); });
-      ctx.on('click', '[data-new]', () => { st.convo = 'new'; ctx.rerender(); setTimeout(() => { const c = ctx.$('#composer'); if (c) c.focus(); }, 30); });
-      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
-      ctx.on('click', '[data-think]', (e, t) => { st.thinking[t.dataset.think] = !st.thinking[t.dataset.think]; ctx.rerender(); });
-      ctx.on('click', '.cite', (e, t) => { e.preventDefault(); const s = ctx.$('.src[data-src="' + t.dataset.cite + '"]'); ctx.$$('.src').forEach((x) => x.classList.remove('hi')); if (s) { s.classList.add('hi'); s.scrollIntoView({ block: 'nearest' }); } });
-      ctx.on('click', '.src', (e, t) => {
-        const s = sources.find((x) => String(x.n) === t.dataset.src);
-        ctx.drawer({ title: esc(s.title), body: '<div class="fg2">' + esc(s.sub) + '</div>' + UI.kv([['Label', UI.label(convo.label)], ['Retrieved', 'hybrid search, rerank 0.83']], 2) + UI.ctx('Passage used', s.title.includes('query') ? 'cost_centre, q3_actual, q3_budget\nFIELD-SALES, 188420.00, 150000.00\nLIS-ONBOARD, 96310.00, 60000.00' : 'Field Sales exceeded its travel allocation in each month of the quarter. The Lisbon onboarding programme carried an approved exception of 38,000 EUR.', convo.label), actions: UI.btn('Open in Knowledge', { attrs: 'data-close data-gokb' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { d.querySelector('[data-gokb]').addEventListener('click', () => ctx.navigate('knowledge', { kb: 'finance' })); } });
+      ctx.on('input', '#ch-composer', (e, t) => { st.draft = t.value; });
+      ctx.on('keydown', '#ch-composer', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+      ctx.on('click', '[data-send]', () => send());
+      ctx.on('click', '[data-new]', () => { st.showList = false; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; rerender(true); });
+      ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; openConv(t.dataset.convo); });
+      ctx.on('click', '[data-showlist]', () => { st.showList = !st.showList; const l = ctx.$('.ch-left'); if (l) l.classList.toggle('ch-open', st.showList); });
+      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
+      ctx.on('click', '[data-archived]', async () => { st.archived = !st.archived; await loadList(); rerender(); });
+      ctx.on('click', '[data-dismiss]', () => { st.notice = null; rerender(); });
+      ctx.on('click', '[data-think]', (e, t) => { const id = t.dataset.think; const m = byId(st, id); const cur = st.openThink && st.openThink[id] !== undefined ? st.openThink[id] : active(m) && !m.content; st.openThink = st.openThink || {}; st.openThink[id] = !cur; paint(); });
+      ctx.on('click', '[data-cp]', (e, t) => {
+        const m = byId(st, t.dataset.cp); if (!m) return;
+        const done = () => ctx.toast(m.role === 'user' ? 'Message copied.' : 'Answer copied.');
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(m.content || '').then(done, () => ctx.toast('The browser refused clipboard access.', 'warn'));
+        else ctx.toast('The browser refused clipboard access.', 'warn');
       });
-      ctx.on('click', '[data-calc]', (e, t) => { ctx.modal({ title: 'Exact calculation', body: UI.code(t.dataset.calc, 'calc') + '<div class="fg2">Computed by the calculating worker, not by the model. Inputs come from the ledger.query result on this turn.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) }); });
-      ctx.on('click', '[data-allow]', (e, t) => { st.decided[convo.id + t.dataset.allow] = 'allow'; ctx.rerender(); ctx.toast('jira-internal.create_issue ran as Mara Okafor. Audit entry written.', 'ok'); });
-      ctx.on('click', '[data-deny]', (e, t) => { st.decided[convo.id + t.dataset.deny] = 'deny'; ctx.rerender(); ctx.toast('Action denied. Nothing was written.'); });
-      ctx.on('click', '[data-memsave]', (e, t) => { st.memories[convo.id + t.dataset.memsave] = 'saved'; ctx.rerender(); ctx.toast('Saved to your memories as <b>internal</b>. Manage it under Memory.', 'ok'); });
-      ctx.on('click', '[data-memdismiss]', (e, t) => { st.memories[convo.id + t.dataset.memdismiss] = 'dismissed'; ctx.rerender(); });
-      ctx.on('click', '[data-report]', (e, t) => { e.preventDefault(); ctx.modal({ title: 'Report this answer', body: UI.field('Reason', UI.select(['Wrong or unsupported figure', 'Leaked something it should not', 'Guardrail stopped a legitimate answer', 'Offensive or unsafe', 'Other'], 'Wrong or unsupported figure')) + UI.field('Details', UI.textarea('', { placeholder: 'What should the reviewer look at?', rows: 3 })) + UI.notice('The flagged span, this turn\'s trace and label go to the flag queue. Reviewers see the conversation only up to this turn.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send to flag queue', { kind: 'primary', attrs: 'data-sendflag' }), onMount(m) { m.querySelector('[data-sendflag]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Flag F-2297 created, severity medium. <a href="#/flags?id=F-2297" style="color:inherit">Open</a>', 'ok', 6000); }); } }); });
-      ctx.on('click', '[data-regen]', (e, t) => { stream(ctx, st, convo, thread, thread[+t.dataset.regen - 1].text, true); });
-      ctx.on('click', '[data-branchmsg]', (e, t) => { ctx.toast('Branch 3 of 3 created from this turn. Earlier branches stay in the tree.'); const m = thread[+t.dataset.branchmsg]; if (m.branch) m.branch = [m.branch[1] + 1, m.branch[1] + 1]; ctx.rerender(); });
-      ctx.on('click', '[data-branch]', (e, t) => { const m = thread.find((x) => x.branch); if (!m) return; m.branch[0] = t.dataset.branch === 'next' ? Math.min(m.branch[1], m.branch[0] + 1) : Math.max(1, m.branch[0] - 1); ctx.rerender(); });
-      ctx.on('click', '[data-edit]', (e, t) => { const m = thread[+t.dataset.edit]; ctx.$('#composer').value = m.text; ctx.$('#composer').focus(); ctx.toast('Editing creates a new branch from this turn when you send.'); });
-      ctx.on('click', '[data-suggest]', () => { ctx.$('#composer').value = 'How far over budget was travel in Q3, and what explains it?'; ctx.$('#composer').focus(); });
-      ctx.on('click', '[data-send]', () => send(ctx, st, convo, thread));
-      ctx.on('keydown', '#composer', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(ctx, st, convo, thread); } });
-      ctx.on('click', '[data-stop]', () => { const m = thread[thread.length - 1]; if (m && m.streaming) { clearTimeout(st.timer); thread.pop(); st.sent[convo.id].pop(); ctx.rerender(); ctx.toast('Cancelled. The GPU slot is released through the gateway.'); } });
+      ctx.on('click', '[data-stop]', async (e, t) => {
+        t.disabled = true;
+        try { const r = await App.post(mUrl(st.conv.id, t.dataset.stop) + '/stop'); ctx.toast(r && r.state === 'stopped' ? 'Stopped. What was produced is kept and metered.' : 'The answer had already finished.'); } catch (err) { t.disabled = false; handleError(err, 'Could not stop'); }
+      });
+      ctx.on('click', '[data-regen]', (e, t) => regenerate(ctx, t.dataset.regen));
+      ctx.on('click', '[data-edit]', (e, t) => editMessage(ctx, t.dataset.edit));
+      ctx.on('click', '[data-branch]', async (e, t) => {
+        if (!t.dataset.branch || !st.conv) return;
+        try { await App.patch(cUrl(st.conv.id), { headId: t.dataset.branch }); await loadConv(false); rerender(); } catch (err) { handleError(err, 'Could not switch branch'); }
+      });
+      ctx.on('click', '[data-rename]', () => rename(ctx));
+      ctx.on('click', '[data-archive]', async () => {
+        const c = st.conv; if (!c) return;
+        const to = !c.archived;
+        const ok = await ctx.confirm({ title: to ? 'Archive this conversation?' : 'Unarchive this conversation?', body: to ? 'It leaves the list but stays readable under Show archived. Nothing is deleted.' : 'It returns to the conversation list.', ok: to ? 'Archive' : 'Unarchive' });
+        if (!ok) return;
+        try { await App.patch(cUrl(c.id), { archived: to }); ctx.toast(to ? 'Archived. It is listed under Show archived.' : 'Unarchived.', 'ok'); await Promise.all([loadConv(false), loadList()]); rerender(); } catch (err) { handleError(err, 'Could not change the conversation'); }
+      });
+      ctx.on('click', '[data-delete]', async () => {
+        const c = st.conv; if (!c) return;
+        const ok = await ctx.confirm({ title: 'Delete this conversation?', tone: 'danger', body: 'Every branch, answer and its thinking is deleted. Usage already metered stays in the usage records. This cannot be undone.', kv: [['Title', esc(c.title || 'Untitled conversation')], ['Messages', num(c.messages.length)]], ok: 'Delete' });
+        if (!ok) return;
+        try { await App.del(cUrl(c.id)); syncUrl(null); st.convId = null; setConv(st, null); ctx.toast('Conversation deleted.', 'ok'); await loadList(); rerender(); } catch (err) { handleError(err, 'Could not delete'); }
+      });
+      ctx.on('click', '[data-raise]', async () => {
+        const c = st.conv; const sel = ctx.$('[data-raiseto]'); if (!c || !sel) return;
+        const to = sel.value;
+        const ok = await ctx.confirm({ title: 'Raise the label to ' + to + '?', body: 'A conversation\'s label never goes down again. Only profiles that handle ' + to + ' data can answer here afterwards.', kv: [['From', UI.label(c.label, { sm: true })], ['To', UI.label(to, { sm: true })]], ok: 'Raise label' });
+        if (!ok) return;
+        try { await App.patch(cUrl(c.id), { label: to }); ctx.toast('Label raised to ' + esc(to) + '.', 'ok'); await Promise.all([loadConv(false), loadList()]); rerender(); } catch (err) { handleError(err, 'Could not raise the label'); }
+      });
+      ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
+      ctx.on('click', '[data-attachbtn]', () => { const f = ctx.$('[data-file]'); if (f) f.click(); });
+      ctx.on('change', '[data-file]', (e, t) => { const files = Array.prototype.slice.call(t.files || []); t.value = ''; if (files.length) upload(files); });
+      ctx.on('click', '[data-rmatt]', (e, t) => { st.pending = (st.pending || []).filter((a) => a.key !== t.dataset.rmatt); paint(); });
       ctx.on('click', '[data-pick]', (e, t) => {
-        const host = t.closest('.relative'); const ex = host.querySelector('.dropdown'); ctx.$$('.dropdown').forEach((d) => d.remove()); if (ex) return;
-        const d = document.createElement('div'); d.className = 'dropdown'; d.style.top = 'auto'; d.style.bottom = 'calc(100% + 4px)';
-        if (t.dataset.pick === 'profile') d.innerHTML = '<div class="dh">Profiles allowed by policy</div>' + PROFILES.map((p) => '<button type="button" data-prof="' + esc(p.id) + '" class="' + (p.id === prof.id ? 'on' : '') + '"><span class="grow">' + esc(p.id) + (p.agent ? ' <span class="pill outline">agent</span>' : '') + '</span>' + UI.label(p.ceiling, { sm: true }) + '</button>').join('') + '<div class="dh">Hidden: 2 profiles above your clearance</div>';
-        else if (t.dataset.pick === 'kb') d.innerHTML = '<div class="dh">Knowledge bases</div>' + ['Finance KB', 'Policy KB', 'Contracts KB', 'Engineering wiki'].map((k, i) => '<button type="button" data-kb="' + k + '" class="' + (i === 0 ? 'on' : '') + '">' + k + '</button>').join('');
-        else d.innerHTML = '<div class="dh">Thinking level, ceiling high</div>' + ['off', 'low', 'medium', 'high'].map((l) => '<button type="button" data-level="' + l + '" class="' + (l === st.level ? 'on' : '') + '">' + l + '</button>').join('');
+        const host = t.closest('.relative'); const ex = host.querySelector('.dropdown');
+        ctx.$$('.dropdown').forEach((d) => d.remove()); if (ex) return;
+        const d = document.createElement('div'); d.className = 'dropdown ch-dd'; d.style.top = 'auto'; d.style.bottom = 'calc(100% + 4px)';
+        const cur = selProfile(st);
+        if (t.dataset.pick === 'profile') {
+          d.innerHTML = '<div class="dh">Profiles cleared for you</div>' + (st.profiles || []).map((x) => '<button type="button" data-prof="' + esc(x.name) + '" class="' + (cur && x.name === cur.name ? 'on' : '') + '"><span class="grow">' + esc(x.name) + '<span class="sub mono">' + esc(x.model) + '</span></span>' + UI.pill(x.residency, x.residency === 'loaded' ? 'ok' : 'outline') + (x.deprecated ? UI.pill('deprecated', 'warn') : '') + UI.label(x.label, { sm: true }) + '</button>').join('');
+        } else {
+          d.innerHTML = '<div class="dh">Thinking level, ceiling ' + esc(cur ? cur.thinkCeiling : 'off') + '</div>' + levelsFor(cur).map((l) => '<button type="button" data-level="' + l + '" class="' + (l === st.think ? 'on' : '') + '">' + l + (cur && l === cur.thinkDefault ? ' <span class="muted">default</span>' : '') + '</button>').join('');
+        }
         host.appendChild(d);
-        d.addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (!b) return; if (b.dataset.prof) { st.profile = b.dataset.prof; ctx.toast('Profile set to ' + esc(b.dataset.prof) + ' for this conversation.'); } if (b.dataset.level) { st.level = b.dataset.level; } if (b.dataset.kb) { ctx.toast(b.dataset.kb + ' attached to this conversation.'); } d.remove(); ctx.rerender(); });
+        const outside = (ev) => { if (!d.contains(ev.target) && !host.contains(ev.target)) { d.remove(); document.removeEventListener('click', outside, true); } };
+        setTimeout(() => document.addEventListener('click', outside, true), 0);
+        d.addEventListener('click', (ev) => {
+          const b = ev.target.closest('button'); if (!b) return;
+          if (b.dataset.prof) { const np = profileOf(st, b.dataset.prof); st.profile = np.name; st.think = np.thinkDefault; st.forceCold = false; }
+          if (b.dataset.level) st.think = b.dataset.level;
+          document.removeEventListener('click', outside, true);
+          d.remove(); rerender();
+        });
       });
-      ctx.on('click', '[data-attach], [data-attachbtn]', () => ctx.modal({ title: 'Attachments', body: UI.table(['File', 'Scan', 'Label', 'Size'], [['<span class="mono">q3-ledger.csv</span>', UI.pill('clean', 'ok'), UI.label('confidential', { sm: true }), '84 KB']], { clickable: false, minWidth: '0' }) + UI.notice('Uploads go to quarantine first. They join the context only after the scan and classification jobs pass.', 'info'), actions: UI.btn('Upload another', { icon: 'upload', attrs: 'data-close data-up' }) + UI.btn('Done', { kind: 'primary', attrs: 'data-close' }), onMount(m) { m.querySelector('[data-up]').addEventListener('click', () => ctx.toast('travel-exceptions.xlsx queued: scanning, then classifying.', '', 4000)); } }));
-      ctx.on('click', '[data-wf]', () => ctx.modal({ title: 'Run a workflow', body: '<div class="vstack gap6">' + ['video-to-notes v3', 'quarterly-variance v1', 'contract-redline v2'].map((w, i) => UI.listItem(esc(w), i === 0 ? 'Media, transcribe, summarise, guardrail check' : i === 1 ? 'Ledger query, calculate, draft, approval' : 'Contracts KB, diff, draft', { attrs: 'data-runwf' })).join('') + '</div>', actions: UI.btn('Cancel', { attrs: 'data-close' }), onMount(m) { m.querySelectorAll('[data-runwf]').forEach((b) => b.addEventListener('click', () => { App.closeOverlay(); st.runWorkflow = true; ctx.rerender(); ctx.toast('Workflow started. Steps report live below the thread.'); })); } }));
-      ctx.on('click', '[data-goruns]', () => ctx.navigate('runs'));
-      ctx.on('click', '[data-img]', () => ctx.navigate('images'));
-      ctx.on('click', '[data-goprofile]', (e) => { e.preventDefault(); ctx.navigate('profiles', { profile: prof.id }); });
-      ctx.on('click', '[data-jira]', (e) => { e.preventDefault(); ctx.toast('External links open after a confirmation because jira-internal is an allow-listed internal domain.'); });
-      const th = ctx.$('#thread'); if (th) th.scrollTop = th.scrollHeight;
-      if (ctx.params.convo) { delete ctx.params.convo; }
     }
   });
-
-  function send(ctx, st, convo, thread) {
-    const ta = ctx.$('#composer'); const text = (ta.value || '').trim(); if (!text) { ctx.toast('Type a message first.'); return; }
-    ta.value = '';
-    stream(ctx, st, convo, thread, text, false);
-  }
-  function stream(ctx, st, convo, thread, text, regen) {
-    const key = convo.id; st.sent[key] = st.sent[key] || [];
-    if (!regen) st.sent[key].push({ role: 'user', text });
-    if (st.cold) { ctx.toast('Queued until analyst is warm.'); return; }
-    const answer = 'Based on the ledger and the Finance KB, the figure you are asking about is grounded in the same Q3 rows as before. Field Sales remains the largest contributor, and the Lisbon exception still explains most of the rest. I can break this down by month if that helps.';
-    const msg = { role: 'assistant', streaming: true, phase: 'thinking', partial: '' }; st.sent[key].push(msg);
-    ctx.rerender();
-    const words = answer.split(' '); let i = 0;
-    const tick = () => {
-      if (msg.phase === 'thinking') { msg.phase = 'answer'; st.timer = setTimeout(tick, 400); ctx.rerender(); return; }
-      msg.partial += (i ? ' ' : '') + esc(words[i]); i++;
-      const el = ctx.$('.msg.ai:last-of-type .answer'); if (el) el.innerHTML = msg.partial + '<span class="blink">▍</span>';
-      if (i < words.length) st.timer = setTimeout(tick, 45); else { delete msg.streaming; msg.thinking = { secs: 3, level: st.level, tokens: 210, text: 'Reuse the Q3 rows already in context; no new tool call is needed.' }; msg.paras = [answer + '<a href="#" class="cite" data-cite="1">1</a>']; msg.meta = (st.profile || convo.profile) + ', ' + (words.length * 2 + 60) + ' tokens, ' + (2 + Math.round(words.length / 20)) + '.4 s'; msg.branch = regen ? [2, 2] : [1, 1]; ctx.rerender(); }
-    };
-    st.timer = setTimeout(tick, st.level === 'off' ? 50 : 1200);
-  }
 })();

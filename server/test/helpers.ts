@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { authenticator } from 'otplib';
 import request from 'supertest';
 import type { Express } from 'express';
@@ -23,6 +26,8 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
     DATA_KEY: randomBytes(32).toString('base64'),
     PUBLIC_URL: 'http://localhost:8080',
     WEB_ROOT: '/nonexistent',
+    BLOB_DIR: mkdtempSync(path.join(tmpdir(), 'exprsn-blobs-')),
+    JOB_QUEUE: 'db',
     ...overrides
   } as NodeJS.ProcessEnv);
 }
@@ -46,7 +51,7 @@ export async function harness(overrides: Record<string, string> = {}): Promise<H
     app: createApp(s),
     tenantId: tenant!.id,
     close: async () => {
-      await s.chain.close();
+      await s.close();
       await db.destroy();
     }
   };
@@ -82,14 +87,12 @@ export async function login(h: Harness, username: string, password = PASSWORD) {
 }
 
 /** Signs in an admin: password, then TOTP enrolment on first sign-in. Returns an active, MFA-verified client. */
-export async function loginAdmin(h: Harness, username: string): Promise<Client & { totpSecret: string }> {
+export async function loginAdmin(h: Harness, username: string): Promise<Client & { totpSecret: string; enrolCode: string }> {
   const { agent, res } = await login(h, username);
   if (res.body.stage !== 'enroll') throw new Error(`expected enroll stage, got ${JSON.stringify(res.body)}`);
   const begin = await agent.post('/api/me/mfa/totp').set('x-csrf-token', res.body.csrf).send({});
-  const confirm = await agent
-    .post(`/api/me/mfa/totp/${begin.body.id}/confirm`)
-    .set('x-csrf-token', res.body.csrf)
-    .send({ code: authenticator.generate(begin.body.secret) });
+  const enrolCode = authenticator.generate(begin.body.secret);
+  const confirm = await agent.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', res.body.csrf).send({ code: enrolCode });
   if (confirm.status !== 201) throw new Error(`enrol failed: ${JSON.stringify(confirm.body)}`);
-  return { agent, csrf: confirm.body.csrf, cookie: cookieOf(confirm), totpSecret: begin.body.secret };
+  return { agent, csrf: confirm.body.csrf, cookie: cookieOf(confirm), totpSecret: begin.body.secret, enrolCode };
 }

@@ -167,7 +167,7 @@ export function userAdminRoutes(s: Services): Router {
 
   r.get('/sessions', manage, async (req, res) => {
     const rows = await s.sessions.listForTenant(principalOf(req).tenantId);
-    res.json(rows.map((x) => ({ id: x.id, user: { id: x.user_id, username: x.username, displayName: x.display_name }, method: x.method, stage: x.stage, ip: x.ip, userAgent: x.user_agent, createdAt: x.created_at, lastSeenAt: x.last_seen_at })));
+    res.json(rows.map((x) => ({ id: x.id, user: { id: x.user_id, username: x.username, displayName: x.display_name }, method: x.method, stage: x.stage, workspaceId: x.workspace_id ?? null, ip: x.ip, userAgent: x.user_agent, createdAt: x.created_at, lastSeenAt: x.last_seen_at })));
   });
 
   r.delete('/sessions/:id', manage, async (req, res) => {

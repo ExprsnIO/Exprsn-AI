@@ -135,17 +135,17 @@
   // `live` marks screens backed by the server; the rest still show prototype data (see docs/PLAN.md for their sprint).
   const NAV = [
     { group: null, items: [
-      { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', sprint: 4 }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', sprint: 4 }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', sprint: 7 },
+      { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', sprint: 7 },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', sprint: 6 }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', sprint: 6 }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', sprint: 8 },
       { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'tools:invoke', sprint: 7 }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', sprint: 8 }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', sprint: 8 }
     ] },
     { group: 'Admin', items: [
-      { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', sprint: 3 }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', sprint: 3 }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', sprint: 3 },
+      { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },
       { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', sprint: 7 }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', sprint: 7 }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', sprint: 5 },
       { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', sprint: 5 }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', sprint: 5 }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', sprint: 6 },
-      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', sprint: 9 }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', sprint: 2 },
+      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', sprint: 9 }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', sprint: 9 },
-      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', sprint: 9 }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', sprint: 2 }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', sprint: 9 }
+      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', sprint: 9 }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', sprint: 9 }
     ] }
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));
@@ -188,7 +188,7 @@
     canOpen(route) { if (OPEN_ROUTES[route]) return true; const it = NAV_BY_ID[route]; return !it || App.can(it.perm); },
     isLive(route) { const it = NAV_BY_ID[route]; return OPEN_ROUTES[route] || !!(it && it.live) || !!(screens[route] && screens[route].live); },
     /** Shows a problem's title, detail and trace id in a toast. */
-    fail(err, what) { const p = (err && err.problem) || {}; App.toast('<b>' + esc(what || p.title || 'Request failed') + '</b> ' + esc(p.detail || (err && err.message) || '') + (p.trace_id ? '<div class="mono muted" style="font-size:11px">trace ' + esc(p.trace_id) + '</div>' : ''), 'danger', 7000); },
+    fail(err, what) { const p = (err && err.problem) || {}; App.toast('<span><b>' + esc(what || p.title || 'Request failed') + '</b> ' + esc(p.detail || (err && err.message) || '') + (p.trace_id ? '<span class="mono muted" style="display:block;font-size:11px">trace ' + esc(p.trace_id) + '</span>' : '') + '</span>', 'danger', 7000); },
     register(def) { screens[def.id] = def; },
     navigate(route, params) {
       const q = params ? '?' + Object.keys(params).map((k) => k + '=' + encodeURIComponent(params[k])).join('&') : '';
@@ -212,7 +212,11 @@
       const me = await api('GET', '/api/me');
       App.setMe(me); state.signedIn = true; App.connectSocket();
       const next = state.afterSignIn && App.canOpen(state.afterSignIn) ? state.afterSignIn : App.firstRoute();
-      state.afterSignIn = null; App.navigate(next); if (App.parse().route === next) App.render();
+      // Keep the parameters of the address the user came in on (a deep link such as #/models?model=…).
+      const hash = next === state.afterSignIn && state.afterSignInHash ? state.afterSignInHash : null;
+      state.afterSignIn = null; state.afterSignInHash = null;
+      if (hash) { if (location.hash === hash) App.render(); else location.hash = hash; return; }
+      App.navigate(next); if (App.parse().route === next) App.render();
     },
     async signOut() { try { await api('POST', '/api/auth/logout'); } catch (e) { /* already gone */ } App.sessionEnded(); },
     /** Clears local state after sign-out, revocation or expiry. */
@@ -226,9 +230,30 @@
       App.me = me;
       const name = me.user.displayName || me.user.username;
       DATA.user = { name, initials: name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase(), username: me.user.username, roles: me.roles.map((r) => r.name), clearance: me.user.clearance };
-      DATA.tenant = { name: me.tenant ? me.tenant.name : '', workspace: me.workspaces.length ? me.workspaces[0].name : (me.tenant ? me.tenant.name : '') };
-      DATA.workspaces = me.workspaces.map((w) => ({ name: w.name, tenant: (me.tenant ? me.tenant.name : '') + ' tenant', label: w.label }));
-      DATA.notifications = []; // delivered over the socket from Sprint 2
+      const cur = me.workspaces.find((w) => w.id === me.workspace) || me.workspaces[0];
+      DATA.tenant = { name: me.tenant ? me.tenant.name : '', workspace: cur ? cur.name : (me.tenant ? me.tenant.name : ''), workspaceId: cur ? cur.id : null, label: cur ? cur.label : null };
+      DATA.workspaces = me.workspaces.map((w) => ({ id: w.id, name: w.name, tenant: (me.tenant ? me.tenant.name : '') + ' tenant', label: w.label }));
+      DATA.notifications = [];
+      App.loadNotifications();
+    },
+    /** Unread notifications for the bell; new ones arrive over the socket. */
+    async loadNotifications() {
+      try {
+        const r = await api('GET', '/api/me/notifications');
+        DATA.notifications = r.items.filter((n) => !n.read).map((n) => ({ id: n.id, title: n.title, sub: n.body || '', route: n.route || '' }));
+        DATA.notificationEmail = r.email;
+        if (state.route !== 'signin') App.renderHeader();
+      } catch (e) { /* the bell stays empty */ }
+    },
+    /** Switches the session's workspace on the server, then re-renders everything that scopes to it. */
+    async switchWorkspace(id) {
+      try {
+        await api('PUT', '/api/me/workspace', { workspaceId: id });
+        const w = DATA.workspaces.find((x) => x.id === id);
+        App.me.workspace = id; DATA.tenant.workspace = w.name; DATA.tenant.workspaceId = w.id; DATA.tenant.label = w.label;
+        state.screenState = {};
+        App.renderSidebar(); App.toast('Switched to ' + esc(w.name) + '. Conversations, knowledge and quotas now scope to it.'); App.render();
+      } catch (err) { App.fail(err, 'Could not switch workspace'); }
     },
     firstRoute() { for (const g of NAV) for (const it of g.items) if (App.can(it.perm)) return it.id; return 'settings'; },
     connectSocket() {
@@ -236,6 +261,11 @@
       const sock = window.io({ path: '/socket.io', transports: ['websocket', 'polling'], withCredentials: true });
       sock.on('session.revoked', () => App.sessionEnded('This session was signed out.'));
       sock.on('connect_error', (e) => { if (e && e.message === 'unauthorized') { sock.close(); } });
+      sock.on('notification', (n) => {
+        if (!n || n.read) return;
+        DATA.notifications.unshift({ id: n.id, title: n.title, sub: n.body || '', route: n.route || '' });
+        App.renderHeader(); App.toast('<b>' + esc(n.title) + '</b>' + (n.body ? ' ' + esc(n.body) : ''), 'warn', 6000);
+      });
       App.socket = sock;
     },
     /** Asks the server whether this browser already has a session, then renders. */
@@ -243,11 +273,12 @@
       try {
         const s = await api('GET', '/api/auth/session');
         state.csrf = s.csrf || null;
-        if (s.authenticated) { await App.signIn(s); state.booted = true; return; }
+        // A reload keeps the screen in the address bar rather than jumping to the first one.
+        if (s.authenticated) { const r = App.parse().route; if (r !== 'signin' && location.hash) { state.afterSignIn = r; state.afterSignInHash = location.hash; } await App.signIn(s); state.booted = true; return; }
         state.pendingSession = s.stage ? s : null;
       } catch (e) { /* offline: sign-in shows the error */ }
       state.booted = true;
-      const r = App.parse().route; if (r !== 'signin') state.afterSignIn = r;
+      const r = App.parse().route; if (r !== 'signin') { state.afterSignIn = r; state.afterSignInHash = location.hash || null; }
       App.navigate('signin'); App.render();
     },
     setTheme(t) { state.theme = t; if (t) document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme'); try { t ? localStorage.setItem('exprsn.theme', t) : localStorage.removeItem('exprsn.theme'); } catch (e) {} App.renderHeader(); },
@@ -362,9 +393,9 @@
         e.stopPropagation();
         const existing = $('.popover', side); if (existing) { existing.remove(); return; }
         const pop = document.createElement('div'); pop.className = 'popover'; pop.style.cssText = 'position:fixed;left:8px;top:52px;right:auto;width:260px';
-        pop.innerHTML = '<div class="ph">Switch workspace</div>' + DATA.workspaces.map((w) => '<button type="button" class="pi" data-ws="' + esc(w.name) + '"><span class="hstack"><span class="t grow">' + esc(w.name) + '</span>' + UI.label(w.label, { sm: true }) + '</span><span class="s">' + esc(w.tenant) + '</span></button>').join('') + (DATA.workspaces.length ? '' : '<div class="pi"><span class="s">No workspaces yet. A tenant admin creates them.</span></div>') + (App.can('tenant:manage') ? '<div class="divider"></div><button type="button" class="pi" data-go="tenants"><span class="t">Manage tenants and workspaces</span></button>' : '');
+        pop.innerHTML = '<div class="ph">Switch workspace</div>' + DATA.workspaces.map((w) => '<button type="button" class="pi" data-ws="' + esc(w.id) + '"><span class="hstack"><span class="t grow">' + esc(w.name) + '</span>' + UI.label(w.label, { sm: true }) + '</span><span class="s">' + esc(w.tenant) + '</span></button>').join('') + (DATA.workspaces.length ? '' : '<div class="pi"><span class="s">No workspaces yet. A tenant admin creates them.</span></div>') + (App.can('tenant:manage') ? '<div class="divider"></div><button type="button" class="pi" data-go="tenants"><span class="t">Manage tenants and workspaces</span></button>' : '');
         side.appendChild(pop);
-        on(pop, 'click', '[data-ws]', (ev, t) => { const w = DATA.workspaces.find((x) => x.name === t.dataset.ws); DATA.tenant.workspace = w.name; DATA.tenant.name = w.tenant.replace(' tenant', ''); pop.remove(); App.renderSidebar(); App.toast('Switched to ' + esc(w.name) + '. Conversations, knowledge and quotas now scope to it.'); App.render(); });
+        on(pop, 'click', '[data-ws]', (ev, t) => { pop.remove(); if (t.dataset.ws !== DATA.tenant.workspaceId) App.switchWorkspace(t.dataset.ws); });
         on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); App.navigate(t.dataset.go); });
       });
     },
@@ -380,10 +411,11 @@
       $('#bell-btn').addEventListener('click', (e) => {
         e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { ex.remove(); return; }
         const pop = document.createElement('div'); pop.className = 'popover';
-        pop.innerHTML = '<div class="ph">Notifications</div>' + (DATA.notifications.length ? '' : '<div class="pi"><span class="s">Nothing new.</span></div>') + DATA.notifications.map((n) => '<button type="button" class="pi" data-go="' + n.route + '"><span class="t">' + esc(n.title) + '</span><span class="s">' + esc(n.sub) + '</span></button>').join('') + '<div class="divider"></div><div class="hstack"><span class="muted grow" style="font-size:12px">Delivered over /ws; also by email where enabled.</span>' + UI.btn('Mark all read', { kind: 'ghost', size: 'sm', attrs: 'data-read' }) + '</div>';
+        pop.innerHTML = '<div class="ph">Notifications</div>' + (DATA.notifications.length ? '' : '<div class="pi"><span class="s">Nothing new.</span></div>') + DATA.notifications.map((n) => '<button type="button" class="pi" data-go="' + esc(n.route) + '" data-nid="' + esc(n.id) + '"><span class="t">' + esc(n.title) + '</span><span class="s">' + esc(n.sub) + '</span></button>').join('') + '<div class="divider"></div><div class="hstack"><span class="muted grow" style="font-size:12px">Delivered live to the console' + (DATA.notificationEmail ? ' and by email.' : '.') + '</span>' + UI.btn('Mark all read', { kind: 'ghost', size: 'sm', attrs: 'data-read' + (DATA.notifications.length ? '' : ' disabled') }) + '</div>';
         host.appendChild(pop);
-        on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); App.navigate(t.dataset.go); });
-        on(pop, 'click', '[data-read]', () => { pop.remove(); DATA.notifications = []; const d = $('#bell-btn .dot'); if (d) d.remove(); });
+        const markRead = (ids) => api('POST', '/api/me/notifications/read', ids ? { ids } : {}).catch((err) => App.fail(err, 'Could not mark read'));
+        on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); DATA.notifications = DATA.notifications.filter((n) => n.id !== t.dataset.nid); markRead([t.dataset.nid]); App.renderHeader(); if (t.dataset.go && App.canOpen(t.dataset.go)) App.navigate(t.dataset.go); });
+        on(pop, 'click', '[data-read]', () => { pop.remove(); DATA.notifications = []; markRead(); App.renderHeader(); });
       });
       const sb = $('#states-btn'); if (sb) sb.addEventListener('click', (e) => {
         e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { ex.remove(); return; }

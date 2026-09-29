@@ -163,6 +163,16 @@ export function identityAdminRoutes(s: Services): Router {
 
   // ---------- group mappings ----------
 
+  /** Runs directory sync for one store now (it also runs on a schedule). */
+  r.post('/identity-providers/:id/sync', async (req, res) => {
+    const p = principalOf(req);
+    const row = await load(req);
+    if (row.kind === 'local') throw conflict('Local accounts have no directory to sync with.');
+    const job = await s.jobs.enqueue({ tenantId: p.tenantId, type: 'directory.sync', payload: { tenantId: p.tenantId, providerId: row.id }, createdBy: p.userId, maxAttempts: 1 });
+    await audit(req, 'identity.sync.requested', { provider: row.id, name: row.name }, { job: job.id });
+    res.status(202).json({ jobId: job.id });
+  });
+
   r.get('/group-mappings', async (req, res) => {
     res.json(await s.users.mappings(principalOf(req).tenantId));
   });
@@ -174,16 +184,39 @@ export function identityAdminRoutes(s: Services): Router {
         providerId: z.string().length(26).nullable().default(null),
         group: z.string().trim().min(1).max(512),
         role: z.string().refine(isRole, 'Unknown role'),
-        clearance: z.enum(LABELS)
+        clearance: z.enum(LABELS),
+        workspaceId: z.string().length(26).nullable().default(null)
       }),
       req.body
     );
     if (!canGrant(p.roles, body.role)) throw forbidden(`Your roles cannot grant ${body.role}.`, { step: 'role' });
     if (!clears(p.clearance, body.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
     if (body.providerId && !(await s.providers.get(p.tenantId, body.providerId))) throw notFound('User store');
+    if (body.workspaceId && !(await s.tenants.workspace(p.tenantId, body.workspaceId))) throw notFound('Workspace');
     const row = await s.users.addMapping(p.tenantId, body);
-    await audit(req, 'identity.mapping.created', { mapping: row.id, group: row.group_name, role: row.role, clearance: row.clearance });
+    await audit(req, 'identity.mapping.created', { mapping: row.id, group: row.group_name, role: row.role, clearance: row.clearance, workspace: row.workspace_id });
     res.status(201).json(row);
+  });
+
+  r.patch('/group-mappings/:id', async (req, res) => {
+    const p = principalOf(req);
+    const existing = (await s.users.mappings(p.tenantId)).find((m) => m.id === req.params.id);
+    if (!existing) throw notFound('Group mapping');
+    const body = parseBody(
+      z.object({
+        group: z.string().trim().min(1).max(512).optional(),
+        role: z.string().refine(isRole, 'Unknown role').optional(),
+        clearance: z.enum(LABELS).optional(),
+        workspaceId: z.string().length(26).nullable().optional()
+      }),
+      req.body
+    );
+    if (!canGrant(p.roles, existing.role) || (body.role && !canGrant(p.roles, body.role))) throw forbidden('Your roles cannot grant this role.', { step: 'role' });
+    if (body.clearance && !clears(p.clearance, body.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
+    if (body.workspaceId && !(await s.tenants.workspace(p.tenantId, body.workspaceId))) throw notFound('Workspace');
+    await s.users.updateMapping(p.tenantId, existing.id, body);
+    await audit(req, 'identity.mapping.updated', { mapping: existing.id, group: existing.group_name }, { before: { role: existing.role, clearance: existing.clearance, workspace: existing.workspace_id, group: existing.group_name }, after: body });
+    res.json((await s.users.mappings(p.tenantId)).find((m) => m.id === existing.id));
   });
 
   r.delete('/group-mappings/:id', async (req, res) => {
