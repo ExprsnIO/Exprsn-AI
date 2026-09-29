@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import * as m001 from './001_core.js';
 import * as m002 from './002_tenancy_platform.js';
 import * as m003 from './003_gateway.js';
+import * as m004 from './004_chat.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -12,7 +13,8 @@ interface Migration {
 const MIGRATIONS: Record<string, Migration> = {
   '001_core': m001,
   '002_tenancy_platform': m002,
-  '003_gateway': m003
+  '003_gateway': m003,
+  '004_chat': m004
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

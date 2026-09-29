@@ -25,6 +25,9 @@ import { QuotaService } from './tenancy/quotas.js';
 import { Offboarding } from './tenancy/offboarding.js';
 import { Gateway } from './gateway/gateway.js';
 import { GatewayRepo } from './gateway/repo.js';
+import { AttachmentService } from './chat/attachments.js';
+import { CalcWorker } from './chat/calc.js';
+import { ChatService } from './chat/service.js';
 
 export interface Services {
   cfg: Config;
@@ -54,6 +57,9 @@ export interface Services {
   quotas: QuotaService;
   offboarding: Offboarding;
   gateway: Gateway;
+  attachments: AttachmentService;
+  calc: CalcWorker;
+  chat: ChatService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -84,6 +90,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   );
   const apiKeys = new ApiKeyService(db, cfg.SESSION_SECRET);
   const siem = new SiemForwarder(audit, log, { url: cfg.SIEM_URL, token: cfg.SIEM_TOKEN });
+  const quotas = new QuotaService(db);
+  const gateway = new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS }, jobs);
+  const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
+  const calc = new CalcWorker();
+  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log);
   const s: Services = {
     cfg,
     db,
@@ -109,12 +120,17 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     mfa: new MfaService(db, keys.sealer(PLATFORM_SCOPE), { issuer: 'Exprsn-AI', rpId: cfg.WEBAUTHN_RP_ID, rpName: cfg.WEBAUTHN_RP_NAME, origin: cfg.ORIGIN, secret: cfg.SESSION_SECRET }),
     throttle: new LoginThrottle(db, { maxAttempts: cfg.LOCKOUT_MAX_ATTEMPTS, windowMinutes: cfg.LOCKOUT_WINDOW_MINUTES, durationMinutes: cfg.LOCKOUT_DURATION_MINUTES }),
     sync: new DirectorySync(db, providers, users, chain, sessions, apiKeys, audit, notifications, log),
-    quotas: new QuotaService(db),
+    quotas,
     offboarding: new Offboarding(db, keys, blobs, jobs),
-    gateway: new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS }, jobs),
+    gateway,
+    attachments,
+    calc,
+    chat,
     close: async () => {
       scheduler.stop();
-      await s.gateway.stop();
+      chat.close();
+      await gateway.stop();
+      await calc.close();
       siem.close();
       await jobs.stop();
       await chain.close();

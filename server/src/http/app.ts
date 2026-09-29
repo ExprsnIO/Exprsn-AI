@@ -16,6 +16,7 @@ import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
+import { chatRoutes } from '../routes/chat.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -77,7 +78,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
-  api.use(express.json({ limit: '256kb', strict: true }));
+  const json = express.json({ limit: '256kb', strict: true });
+  // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
+  api.use((req, res, next) => (req.method === 'PUT' && req.path === '/attachments' ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -102,6 +105,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', tenantAdminRoutes(s));
   api.use('/admin', usageAdminRoutes(s));
   api.use('/admin', gatewayAdminRoutes(s));
+  api.use(chatRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

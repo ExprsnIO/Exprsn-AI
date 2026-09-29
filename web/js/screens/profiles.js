@@ -1,195 +1,442 @@
 (function () {
   const { UI, esc } = App;
 
-  const PROFILES = [
-    { id: 'analyst', model: 'qwen2.5:32b-q4_K_M', short: 'qwen2.5:32b', sub: 'qwen2.5:32b, alias of none', status: 'published', maxLabel: 'confidential', pool: 'gpu-large', residency: 'warm', num_ctx: '16384', temperature: '0.2', prompt: 'prompts/analyst, v4', promptKey: 'prompts/analyst@v4', think: 'medium, users may choose up to high', thinkKey: '{ default: medium, ceiling: high }', fallback: 'general-8b after 8 s queue wait', fallbackKey: '{ profile: general-8b, afterQueueWait: 8s }', stable: 'sha256:41ab..', canary: 'sha256:c07e..', canaryPct: 10, maxTools: 24, maxSchema: 6000, schemaUsed: 3480,
-      bindings: [
-        { server: 'kb-search', builtin: true, tools: 'all 3 tools', n: 3, confirm: 'never', ceiling: 'confidential' },
-        { server: 'jira-internal', tools: 'search_issues, get_issue, create_issue', n: 3, confirm: 'on write', ceiling: 'confidential' },
-        { server: 'gitlab-onprem', tools: 'create_merge_request', n: 1, confirm: 'always', ceiling: 'internal', disabled: 'disabled, schema changed' }
-      ] },
-    { id: 'chat-default', alias: 'general-8b', sub: 'alias, points to general-8b', status: 'alias' },
-    { id: 'general-8b', model: 'llama3.1:8b-q5_K_M', short: 'llama3.1:8b', sub: 'llama3.1:8b', status: 'published', maxLabel: 'confidential', pool: 'gpu-large', residency: 'pinned', num_ctx: '8192', temperature: '0.7', prompt: 'prompts/general, v2', promptKey: 'prompts/general@v2', think: 'low, users may choose up to medium', thinkKey: '{ default: low, ceiling: medium }', fallback: 'fast after 5 s queue wait', fallbackKey: '{ profile: fast, afterQueueWait: 5s }', stable: 'sha256:7d21..', canary: null, canaryPct: 0, maxTools: 12, maxSchema: 3000, schemaUsed: 940,
-      bindings: [{ server: 'kb-search', builtin: true, tools: 'all 3 tools', n: 3, confirm: 'never', ceiling: 'confidential' }] },
-    { id: 'code', alias: 'coder-32b', sub: 'alias, points to coder-32b', status: 'alias' },
-    { id: 'coder-32b', model: 'qwen2.5-coder:32b-q4_K_M', short: 'qwen2.5-coder:32b', sub: 'qwen2.5-coder:32b', status: 'in review', maxLabel: 'internal', pool: 'gpu-large', residency: 'warm', num_ctx: '32768', temperature: '0.1', prompt: 'prompts/coder, v1', promptKey: 'prompts/coder@v1', think: 'medium, users may choose up to high', thinkKey: '{ default: medium, ceiling: high }', fallback: 'general-8b after 10 s queue wait', fallbackKey: '{ profile: general-8b, afterQueueWait: 10s }', stable: 'sha256:9f2c..', canary: null, canaryPct: 0, maxTools: 16, maxSchema: 4000, schemaUsed: 1210,
-      bindings: [{ server: 'gitlab-onprem', tools: 'get_file, search_code, list_merge_requests', n: 3, confirm: 'never', ceiling: 'internal' }], note: 'The model is evaluated but not approved; the tools capability is withheld until conformance passes. Publishing waits on Models.' },
-    { id: 'fast', model: 'llama3.2:3b-q8_0', short: 'llama3.2:3b', sub: 'llama3.2:3b', status: 'published', maxLabel: 'internal', pool: 'cpu-helpers', residency: 'pinned', num_ctx: '4096', temperature: '0.7', prompt: 'prompts/general, v2', promptKey: 'prompts/general@v2', think: 'off', thinkKey: '{ default: off, ceiling: off }', fallback: 'none', fallbackKey: 'none', stable: 'sha256:3c8a..', canary: null, canaryPct: 0, maxTools: 4, maxSchema: 1200, schemaUsed: 0, bindings: [] },
-    { id: 'vision', model: 'llama3.2-vision:11b-q4_K_M', short: 'llama3.2-vision:11b', sub: 'llama3.2-vision:11b', status: 'published', maxLabel: 'internal', pool: 'gpu-large', residency: 'warm', num_ctx: '8192', temperature: '0.3', prompt: 'prompts/vision, v1', promptKey: 'prompts/vision@v1', think: 'off', thinkKey: '{ default: off, ceiling: off }', fallback: 'none', fallbackKey: 'none', stable: 'sha256:d04e..', canary: null, canaryPct: 0, maxTools: 8, maxSchema: 2000, schemaUsed: 940,
-      bindings: [{ server: 'kb-search', builtin: true, tools: 'all 3 tools', n: 3, confirm: 'never', ceiling: 'confidential' }] }
-  ];
-  const EMBED = { id: 'embed', model: 'nomic-embed-text:v1.5', short: 'nomic-embed-text', sub: 'nomic-embed-text:v1.5', status: 'published', maxLabel: 'restricted', pool: 'cpu-helpers', residency: 'pinned', num_ctx: '8192', temperature: '0', prompt: 'none', promptKey: 'none', think: 'off', thinkKey: '{ default: off, ceiling: off }', fallback: 'none', fallbackKey: 'none', stable: 'sha256:0c6e..', canary: null, canaryPct: 0, maxTools: 0, maxSchema: 0, schemaUsed: 0, bindings: [], noTools: true };
-  const SERVERS = [
-    { id: 'kb-search', mode: 'built-in', ceiling: 'confidential', tools: ['search', 'get_passage', 'list_bases'] },
-    { id: 'jira-internal', mode: 'remote, internal', ceiling: 'confidential', tools: ['search_issues', 'get_issue', 'create_issue', 'add_comment'] },
-    { id: 'gitlab-onprem', mode: 'remote, internal', ceiling: 'internal', tools: ['get_file', 'search_code', 'list_merge_requests', 'create_merge_request'] },
-    { id: 'erp-sap', mode: 'remote, internal', ceiling: 'confidential', tools: ['get_vendor', 'list_invoices', 'post_journal'] },
-    { id: 'hr-records', mode: 'remote, internal', ceiling: 'restricted', tools: ['get_employee', 'list_absences'] },
-    { id: 'browser-sandbox', mode: 'managed per-session', ceiling: 'internal', tools: ['open', 'read_page', 'click'] }
-  ];
-  const LEVELS = { public: 1, internal: 2, confidential: 3, restricted: 4 };
-  const WORKSPACES = [
-    { name: 'Finance Ops', label: 'confidential', conv: '1,240 conversations, 7 days' },
-    { name: 'People Ops', label: 'internal', conv: '318 conversations, 7 days' },
-    { name: 'Field Sales', label: 'internal', conv: '702 conversations, 7 days' }
-  ];
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const THINK = ['off', 'low', 'medium', 'high'];
+  const rank = (l) => LABELS.indexOf(l);
+  const enc = encodeURIComponent;
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+  const short = (d) => (d ? 'sha256:' + String(d).replace(/^sha256:/, '').slice(0, 8) + '…' : 'no digest yet');
+  const RES_KIND = { loaded: 'ok', cold: 'info', unavailable: 'danger', none: '' };
+  const TOOL_NOTE = 'Only the built-in exact-calculation tool exists until MCP servers arrive in sprint 7; tool bindings, confirm policies and tool budgets come with them.';
 
-  function profileList(st) { return st.showEmbed ? PROFILES.concat([EMBED]) : PROFILES; }
-  function resolve(st, p) { if (!p.alias) return p; const target = (st.aliasTarget || {})[p.id] || p.alias; return PROFILES.find((x) => x.id === target) || p; }
+  /** The editable settings of a saved profile, as form values. */
+  const formOf = (p) => ({
+    displayName: p.displayName, description: p.description || '', modelId: p.modelId || '', poolId: p.poolId || '',
+    numCtx: p.numCtx == null ? '' : String(p.numCtx), temperature: p.temperature == null ? '' : String(p.temperature),
+    label: p.label, thinkDefault: p.thinkDefault, thinkCeiling: p.thinkCeiling, systemPrompt: p.systemPrompt || '',
+    fbProfile: p.fallback ? p.fallback.profileId : '', fbWait: p.fallback ? String(p.fallback.afterQueueWaitMs / 1000) : '8',
+    calculate: (p.tools || []).indexOf('calculate') >= 0
+  });
+  const num = (v, what, int) => {
+    if (String(v).trim() === '') return null;
+    const n = Number(v);
+    if (!isFinite(n) || (int && Math.round(n) !== n)) throw new Error(what + ' must be ' + (int ? 'a whole number' : 'a number') + '.');
+    return n;
+  };
+  /** Form values as the API body. Throws on numbers that do not parse. */
+  const bodyOf = (f) => ({
+    displayName: f.displayName.trim(), description: f.description.trim() || null, modelId: f.modelId || null, poolId: f.poolId || null,
+    numCtx: num(f.numCtx, 'num_ctx', true), temperature: num(f.temperature, 'temperature'), label: f.label,
+    thinkDefault: f.thinkDefault, thinkCeiling: f.thinkCeiling, systemPrompt: f.systemPrompt.trim() ? f.systemPrompt : null,
+    fallback: f.fbProfile ? { profileId: f.fbProfile, afterQueueWaitMs: Math.round((num(f.fbWait, 'Queue wait') || 0) * 1000) } : null,
+    tools: f.calculate ? ['calculate'] : []
+  });
+
+  function cur(st) { return (st.profiles || []).find((x) => x.id === st.sel) || null; }
 
   App.register({
-    id: 'profiles', title: 'Profiles', summary: 'Pinned model version, options, prompt, pool, residency, ceiling, MCP bindings and tool budgets', section: 'admin',
-    crumb: (st, params) => ['Admin', 'Profiles', params.profile || st.selected || 'analyst'],
-    label: (st, params) => { const id = params.profile || st.selected || 'analyst'; const p = profileList(st).find((x) => x.id === id); return p ? resolve(st, p).maxLabel : null; },
-    commands: [{ label: 'New model profile', sub: 'Profiles', run(app) { app.stateFor('profiles').openNew = true; app.render(); } }],
+    id: 'profiles', title: 'Profiles', section: 'admin', live: true,
+    summary: 'Pinned model, options, prompt, pool, residency, label, fallback, canary and version history',
+    crumb: (st) => { const p = cur(st); return ['Admin', 'Profiles'].concat(p ? [p.name] : []); },
+    label: (st) => { const p = cur(st); const t = p && p.aliasOf ? (st.profiles || []).find((x) => x.id === p.aliasOf) : p; return t ? t.label : null; },
+    commands: [{ label: 'New model profile', sub: 'Profiles', run(app) { app.stateFor('profiles').openNew = 'profile'; app.render(); } }],
     states: [
-      { title: 'Binding refused', tone: 'danger', text: 'nomic-embed-text lacks the tools capability, so the registry rejects any MCP binding on its profile.', apply(ctx) { ctx.state.showEmbed = true; ctx.state.selected = 'embed'; ctx.state.bindRefused = true; ctx.rerender(); } },
-      { title: 'Over tool budget', tone: 'warn', text: '31 tools are bound against a budget of 24. The profile exposes find_tools and loads matches per step.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.overBudget = true; ctx.rerender(); } },
-      { title: 'Alias repoint', tone: 'info', text: 'Moving chat-default from general-8b to analyst shows which workspaces are affected before it applies.', apply(ctx) { ctx.state.selected = 'chat-default'; ctx.state.openRepoint = 'analyst'; ctx.rerender(); } },
-      { title: 'Ceiling conflict', tone: 'danger', text: 'A server reaching restricted data cannot bind to a profile capped at confidential.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.openBind = 'hr-records'; ctx.rerender(); } }
+      { title: 'Tools refused', tone: 'danger', text: 'A model without the tools capability, or with tools withheld after its conformance test, cannot publish a profile that offers the calculate tool.', apply(ctx) { ctx.state.demo = 'tools'; ctx.rerender(); } },
+      { title: 'Thinking unsupported', tone: 'warn', text: 'A thinking ceiling above off needs a model with the thinking capability; the server refuses to publish until it is off.', apply(ctx) { ctx.state.demo = 'think'; ctx.rerender(); } },
+      { title: 'Alias repoint', tone: 'info', text: 'Moving an alias to another profile shows the model, label and pool change and which of your workspaces are affected before it applies.', apply(ctx) { ctx.state.demo = 'repoint'; ctx.rerender(); } },
+      { title: 'Ceiling conflict', tone: 'danger', text: 'A profile labelled above the data its model is approved for cannot publish, and a canary model must be approved for the profile\'s label.', apply(ctx) { ctx.state.demo = 'ceiling'; ctx.rerender(); } },
+      { title: 'Delete refused', tone: 'danger', text: 'A profile that an alias or a fallback points at cannot be deleted until they are moved.', apply(ctx) { ctx.state.demo = 'dependants'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.profile) { st.selected = ctx.params.profile; delete ctx.params.profile; }
-      st.selected = st.selected || 'analyst'; st.form = st.form || {}; st.pointer = st.pointer || {}; st.aliasTarget = st.aliasTarget || {}; st.extraBindings = st.extraBindings || {}; st.unbound = st.unbound || {}; st.created = st.created || [];
-      const list = profileList(st).concat(st.created);
-      const p = list.find((x) => x.id === st.selected) || list[0];
-      const isAlias = !!p.alias;
-      const target = isAlias ? resolve(st, p) : p;
-      const f = Object.assign({ model: target.model, pool: target.pool, residency: target.residency, num_ctx: target.num_ctx, temperature: target.temperature, maxLabel: target.maxLabel, prompt: target.prompt, think: target.think, fallback: target.fallback }, st.form[target.id] || {});
-      const ptr = st.pointer[target.id] || { stable: target.stable, canary: target.canary, pct: target.canaryPct };
-      const bindings = (target.bindings || []).concat(st.extraBindings[target.id] || []).filter((b) => !(st.unbound[target.id] || {})[b.server]);
-      const overBudget = st.overBudget && target.id === 'analyst';
-      const toolCount = overBudget ? 31 : bindings.reduce((n, b) => n + b.n, 0);
-      const schemaUsed = overBudget ? 7860 : target.schemaUsed + bindings.filter((b) => b.added).reduce((n, b) => n + b.n * 260, 0);
+      const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
+      st.form = st.form || {}; st.versions = st.versions || {};
+      const load = () => {
+        if (st.loading) { st.again = true; return; }
+        st.loading = true;
+        Promise.all([
+          App.get('/api/admin/profiles'),
+          App.can('models:read') ? App.get('/api/admin/models') : Promise.resolve(null),
+          App.can('pools:manage') ? App.get('/api/admin/pools') : Promise.resolve(null),
+          App.can('users:manage') ? App.get('/api/admin/users?limit=500').catch(() => null) : Promise.resolve(null)
+        ])
+          .then(([profiles, models, pools, users]) => { Object.assign(st, { profiles, models, pools, users, loaded: true, loadError: null }); })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } if (App.state.route === 'profiles') ctx.rerender(); });
+      };
+      if (!st.loaded && !st.loadError) load();
+      const refresh = () => { st.versions = {}; load(); };
+      const reload = () => { st.loaded = false; st.loadError = null; st.versions = {}; ctx.rerender(); };
+      /** Runs one server call; a refusal stays on the page as a notice as well as a toast. */
+      const act = async (fn, okMsg, pid) => {
+        try { const r = await fn(); st.conflict = null; if (okMsg) toast(okMsg, 'ok', 5000); refresh(); return r || true; }
+        catch (err) { const pr = err.problem || {}; if (err.status >= 400 && err.status < 500) st.conflict = { id: pid, title: pr.title || 'Refused', detail: err.message, trace: pr.trace_id }; App.fail(err); ctx.rerender(); return null; }
+      };
 
-      const yaml = 'profile: ' + target.id + '\nmodel: ' + f.model + '\npool: ' + f.pool + '\nresidency: ' + f.residency + '\noptions: { num_ctx: ' + f.num_ctx + ', temperature: ' + f.temperature + ' }\nsystemPrompt: ' + (f.prompt === target.prompt ? target.promptKey : f.prompt.replace(', v', '@v')) + '\nmaxLabel: ' + f.maxLabel + '\nthink: ' + (f.think === target.think ? target.thinkKey : '{ default: ' + f.think.split(',')[0] + ' }') + '\ntools:\n  maxTools: ' + target.maxTools + '\n  maxSchemaTokens: ' + target.maxSchema + (bindings.length ? '\n  mcpServers:' + bindings.map((b) => '\n    - server: ' + b.server + (b.builtin ? '' : '\n      tools: [' + b.tools.replace(/, /g, ', ') + ']') + (b.confirm !== 'never' ? '\n      confirm: ' + (b.confirm === 'on write' ? 'on-write' : b.confirm) : '')).join('') : '');
+      if (st.loadError || !st.loaded) {
+        root.innerHTML = '<div class="page">' + UI.pagehead('Profiles', 'What users pick in chat: a pinned model plus options, prompt, pool, label and fallback', '')
+          + (st.loadError ? UI.problem('Profiles could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        ctx.on('click', '[data-reload]', reload);
+        return;
+      }
 
-      const sideList = '<div class="leftpane" style="width:300px"><div class="hstack"><div class="eyebrow grow">Profiles</div>' + UI.btn('New', { size: 'sm', attrs: 'data-new' }) + '</div><div class="vstack gap4">'
-        + list.map((x) => UI.listItem(esc(x.id), esc(x.alias ? 'alias, points to ' + resolve(st, x).id : x.sub), { active: x.id === p.id, attrs: 'data-profile="' + esc(x.id) + '"', right: UI.pill(x.status, x.status === 'alias' ? '' : undefined) })).join('') + '</div></div>';
+      const list = st.profiles;
+      const byId = (id) => list.find((x) => x.id === id);
+      if (ctx.params.profile) { const want = ctx.params.profile; const hit = list.find((x) => x.id === want || x.name === want); if (hit) st.sel = hit.id; delete ctx.params.profile; }
+      if (!byId(st.sel)) st.sel = list[0] ? list[0].id : null;
+      const reals = list.filter((x) => !x.aliasOf);
+      const models = st.models;
+      const modelById = (id) => (models ? models.find((m) => m.id === id) : null) || (list.map((x) => x.model).find((m) => m && m.id === id)) || null;
+      const pickable = (keep) => (models || []).filter((m) => m.state === 'approved' || m.id === keep);
+      const poolChoices = () => {
+        if (st.pools) return st.pools.map((pl) => ({ id: pl.id, name: pl.name, ceiling: pl.label_ceiling }));
+        const seen = {}; const out = [];
+        (models || []).forEach((m) => (m.pools || []).forEach((x) => { if (!seen[x.poolId]) { seen[x.poolId] = true; out.push({ id: x.poolId, name: x.pool || x.poolId, ceiling: null }); } }));
+        list.forEach((p) => { if (p.poolId && !seen[p.poolId]) { seen[p.poolId] = true; out.push({ id: p.poolId, name: p.pool || p.poolId, ceiling: null }); } });
+        return out;
+      };
+      const poolName = (id) => { const x = poolChoices().find((pl) => pl.id === id); return x ? x.name : (id ? 'unknown pool' : 'any pool the model is placed on'); };
+      const userName = (id) => { if (App.me && App.me.user && id === App.me.user.id) return 'you'; const u = (st.users || []).find((x) => x.id === id); return u ? u.displayName : (id ? id.slice(-6) : ''); };
+      const dependants = (p) => list.filter((y) => y.aliasOf === p.id || (y.fallback && y.fallback.profileId === p.id));
+      const myLabels = LABELS.filter((l) => !App.me || !App.me.user || rank(l) <= rank(App.me.user.clearance));
 
-      let main;
-      if (isAlias) {
-        const targets = PROFILES.filter((x) => !x.alias);
-        main = UI.pagehead(p.id, UI.pill('alias') + ' Clients ask for <span class="mono">' + esc(p.id) + '</span>; the gateway resolves it to a profile you can repoint without client changes', UI.btn('Repoint alias', { kind: 'primary', attrs: 'data-repoint' }))
-          + '<div class="formgrid" style="--cols:3">' + UI.field('Points to', UI.select(targets.map((x) => x.id), target.id, 'data-alias-target')) + UI.field('Resolved model', UI.input(target.model, { readonly: true })) + UI.field('Resolved ceiling', '<div style="height:30px;display:flex;align-items:center">' + UI.label(target.maxLabel) + '</div>') + '</div>'
-          + UI.panel('Workspaces using this alias', UI.table(['Workspace', 'Label', 'Usage', 'Effect of ' + target.id], WORKSPACES.map((w) => [esc(w.name), UI.label(w.label, { sm: true }), esc(w.conv), LEVELS[w.label] <= LEVELS[target.maxLabel] ? UI.pill('within ceiling', 'ok') : UI.pill('above ceiling', 'danger')]), { clickable: false, minWidth: '0' }))
-          + UI.panel('Resolved profile', UI.kv([['Profile', '<a href="#" data-profile-link="' + esc(target.id) + '">' + esc(target.id) + '</a>'], ['Pool', '<a href="#" data-go="pools">' + esc(target.pool) + '</a>'], ['Residency', esc(target.residency)], ['Think', esc(target.think)], ['MCP bindings', bindings.length + ' servers, ' + toolCount + ' tools'], ['Fallback', esc(target.fallback)]], 3));
+      // ---- demo states: pick a matching profile from live data and stage the edit that the server would refuse ----
+      if (st.demo) {
+        const d = st.demo; st.demo = null; st.demoNote = null;
+        const withModel = reals.filter((p) => p.model);
+        const stage = (p, patch) => { st.sel = p.id; st.form[p.id] = Object.assign(formOf(p), st.form[p.id] || {}, patch); };
+        if (d === 'tools') {
+          const p = withModel.find((x) => { const m = modelById(x.modelId); return m.capabilities.indexOf('tools') < 0 || (m.evaluation && m.evaluation.toolsWithheld); });
+          const noTools = (models || []).find((m) => m.state === 'approved' && (m.capabilities.indexOf('tools') < 0 || (m.evaluation && m.evaluation.toolsWithheld)));
+          if (p) stage(p, { calculate: true });
+          else if (noTools && reals.length) stage(reals[0], { modelId: noTools.id, calculate: true });
+          else st.demoNote = 'Every approved model has the tools capability, so nothing is refused here. The check below runs whenever the calculate tool is on.';
+        } else if (d === 'think') {
+          const p = withModel.find((x) => modelById(x.modelId).capabilities.indexOf('thinking') < 0);
+          const noThink = (models || []).find((m) => m.state === 'approved' && m.capabilities.indexOf('thinking') < 0);
+          if (p) stage(p, { thinkCeiling: 'medium' });
+          else if (noThink && reals.length) stage(reals[0], { modelId: noThink.id, thinkCeiling: 'medium' });
+          else st.demoNote = 'Every approved model supports thinking, so nothing is refused here.';
+        } else if (d === 'ceiling') {
+          const p = withModel.find((x) => rank(modelById(x.modelId).label) < 3 && myLabels.indexOf(LABELS[rank(modelById(x.modelId).label) + 1]) >= 0);
+          if (p) stage(p, { label: LABELS[rank(modelById(p.modelId).label) + 1] }); else st.demoNote = 'No profile has a model approved below your clearance, so the conflict cannot be staged here.';
+        } else if (d === 'dependants') {
+          const p = reals.find((x) => dependants(x).length);
+          if (p) { st.sel = p.id; st.showDependants = p.id; } else st.demoNote = 'No alias or fallback points at a profile yet; every profile here can be deleted.';
+        } else if (d === 'repoint') {
+          const a = list.find((x) => x.aliasOf);
+          if (a) { st.sel = a.id; const to = reals.find((x) => x.id !== a.aliasOf); if (to) st.openRepoint = to.id; else st.demoNote = 'There is only one profile to point at. Create another to repoint ' + a.name + '.'; }
+          else if (reals.length) st.openNew = 'alias'; else st.demoNote = 'Create a profile first; an alias points at one.';
+        }
+      }
+
+      const p = byId(st.sel);
+      const isAlias = !!(p && p.aliasOf);
+      const target = p ? (isAlias ? byId(p.aliasOf) : p) : null;
+
+      const side = '<div class="leftpane" style="width:300px"><div class="hstack"><div class="eyebrow grow">Profiles</div>' + UI.btn('New', { size: 'sm', icon: 'plus', attrs: 'data-new' }) + '</div><div class="vstack gap4">'
+        + (list.length ? list.map((x) => { const t = x.aliasOf ? byId(x.aliasOf) : null; return UI.listItem(esc(x.name), esc(x.aliasOf ? 'alias, points to ' + (t ? t.name : 'a removed profile') : (x.model ? x.model.name : 'no model chosen')), { active: p && x.id === p.id, attrs: 'data-profile="' + esc(x.id) + '"', right: UI.pill(x.aliasOf ? 'alias' : x.status, x.aliasOf ? 'outline' : undefined) }); }).join('') : '<div class="muted" style="font-size:12px">No profiles yet.</div>')
+        + '</div></div>';
+
+      const wsPanel = (t, title) => {
+        const ws = (App.me && App.me.workspaces) || [];
+        return UI.panel(title, UI.table(['Workspace', 'Ceiling', 'With ' + t.name], ws.map((w) => [esc(w.name), UI.label(w.label, { sm: true }), rank(w.label) <= rank(t.label) ? UI.pill('every conversation label fits', 'ok') : UI.pill('only conversations up to ' + t.label, 'warn')]), { clickable: false, minWidth: '0', emptyTitle: 'No workspaces', emptyText: 'You are not a member of any workspace.' })
+          + '<div class="muted" style="font-size:12px">A conversation can use this profile when its label is at or below <b>' + esc(t.label) + '</b> and the user is cleared for ' + esc(t.label) + '. Only workspaces you belong to are listed.</div>');
+      };
+      const versionsPanel = (x) => {
+        const v = st.versions[x.id];
+        if (!v) { if (st.vLoading !== x.id) { st.vLoading = x.id; App.get('/api/admin/profiles/' + enc(x.id) + '/versions').then((r) => { st.versions[x.id] = r; }).catch((err) => { st.versions[x.id] = { error: err }; }).finally(() => { st.vLoading = null; if (App.state.route === 'profiles') ctx.rerender(); }); } return UI.panel('Version history', '<div class="muted">Loading…</div>'); }
+        if (v.error) return UI.panel('Version history', UI.problem('Versions could not be loaded', v.error.message, v.error.problem && v.error.problem.trace_id));
+        const rows = v.slice().sort((a, b) => b.version - a.version).map((r) => ({ cells: ['<span class="num">' + r.version + '</span>' + (r.version === x.version ? ' ' + UI.pill('current', 'accent') : ''), esc(r.note || ''), esc(userName(r.createdBy)), esc(when(r.createdAt)), '<span class="hstack" style="justify-content:flex-end">' + (r.version === x.version ? '' : UI.btn('Roll back', { kind: 'ghost', size: 'xs', icon: 'undo', attrs: 'data-rollback="' + r.version + '"' })) + '</span>'] }));
+        return UI.panel('Version history', UI.table(['Version', 'Note', 'By', 'When', { label: '', right: true }], rows, { clickable: false, minWidth: '0' }) + '<div class="muted" style="font-size:12px">Every change saves a new version. Rolling back copies an earlier version\'s settings into a new one; nothing is overwritten.</div>');
+      };
+      const conflictNotice = (x) => (st.conflict && st.conflict.id === x.id ? UI.notice('<b>' + esc(st.conflict.title) + '.</b> ' + esc(st.conflict.detail) + (st.conflict.trace ? ' <span class="mono muted" style="font-size:11px">trace ' + esc(st.conflict.trace) + '</span>' : ''), 'danger', UI.btn('Dismiss', { kind: 'ghost', size: 'xs', attrs: 'data-dismiss' })) : '');
+
+      let main = '';
+      let f = null; let dirty = false; let checks = [];
+      if (!p) {
+        main = UI.pagehead('Profiles', 'What users pick in chat: a pinned model plus options, prompt, pool, label and fallback', UI.btn('Refresh', { kind: 'ghost', size: 'sm', icon: 'refresh', attrs: 'data-refresh' }))
+          + UI.empty('No profiles yet', 'A profile pins an approved model with its options, prompt, pool and label. Create one, then publish it for users.', UI.btn('New model profile', { kind: 'primary', attrs: 'data-new' }));
+      } else if (isAlias) {
+        const deps = dependants(p);
+        main = UI.pagehead(p.displayName, UI.pill('alias', 'outline') + ' Clients ask for <span class="mono">' + esc(p.name) + '</span>; the gateway resolves it to the profile it points at, which you can repoint without client changes', UI.btn('Refresh', { kind: 'ghost', size: 'sm', icon: 'refresh', attrs: 'data-refresh' }) + UI.btn('Delete', { kind: 'ghost', size: 'sm', icon: 'trash', attrs: 'data-delete' }) + UI.btn('Repoint alias', { kind: 'primary', attrs: 'data-repoint' }))
+          + conflictNotice(p) + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+          + (deps.length ? UI.notice('Pointed at by ' + deps.map((d) => '<b>' + esc(d.name) + '</b>').join(', ') + ' as a fallback.', 'info') : '')
+          + (target ? '<div class="formgrid" style="--cols:3">' + UI.field('Points to', UI.select(reals.map((x) => ({ value: x.id, label: x.name })), target.id, 'data-alias-target')) + UI.field('Resolved model', UI.input(target.model ? target.model.name : 'no model chosen', { readonly: true })) + UI.field('Resolved label', '<div style="height:30px;display:flex;align-items:center">' + UI.label(target.label) + '</div>') + '</div>'
+            + wsPanel(target, 'Your workspaces and this alias')
+            + UI.panel('Resolved profile', UI.kv([['Profile', '<a href="#" data-profile-link="' + esc(target.id) + '">' + esc(target.name) + '</a> ' + UI.pill(target.status)], ['Pool', esc(target.pool || 'any pool the model is placed on')], ['Residency', UI.pill(target.residency, RES_KIND[target.residency])], ['Think', esc(target.thinkDefault + ', users may choose up to ' + target.thinkCeiling)], ['Tools', target.tools.length ? 'calculate' : 'none'], ['Fallback', target.fallback ? esc((byId(target.fallback.profileId) || { name: 'removed profile' }).name + ' after ' + target.fallback.afterQueueWaitMs / 1000 + ' s queue wait') : 'none']], 3))
+            : UI.notice('The profile this alias pointed at no longer exists. Repoint it.', 'danger'))
+          + versionsPanel(p);
       } else {
-        const pointerBar = '<div class="profiles-ptr"><div class="stable" style="width:' + (100 - ptr.pct) + '%"></div>' + (ptr.pct ? '<div class="canary" style="width:' + ptr.pct + '%"></div>' : '') + '</div>';
-        const ptrText = ptr.pct ? (100 - ptr.pct) + '% on ' + esc(ptr.stable) + ', ' + ptr.pct + '% canary on ' + esc(ptr.canary) : '100% on ' + esc(ptr.stable) + (ptr.previous ? ', ' + esc(ptr.previous) + ' stays warm for 24 h' : '');
-        const bindRows = bindings.map((b) => ({ cells: [esc(b.server) + (b.builtin ? ' ' + UI.pill('built-in') : ''), (b.builtin ? esc(b.tools) : '<span class="mono fg2">' + esc(b.tools) + '</span>') + (b.disabled ? ' ' + UI.pill(b.disabled, 'danger') : ''), esc(b.confirm), UI.label(b.ceiling, { sm: true })], attrs: 'data-binding="' + esc(b.server) + '"' }));
-        if (overBudget) bindRows.push({ cells: ['erp-sap', 'all 3 tools', 'on write', UI.label('confidential', { sm: true })], attrs: 'data-binding="erp-sap"' }, { cells: ['browser-sandbox ' + UI.pill('per-session'), 'all 3 tools', 'always', UI.label('internal', { sm: true })], attrs: 'data-binding="browser-sandbox"' }, { cells: ['jira-internal ' + UI.pill('extended'), 'all 18 project tools', 'on write', UI.label('confidential', { sm: true })], attrs: 'data-binding="jira-internal"' });
-        main = UI.pagehead(p.id, UI.pill(p.status) + ' What users pick in chat: a pinned model version plus options, prompt, pool, residency, ceiling and tools', UI.btn('Preview effective tools for a user', { attrs: 'data-preview' }) + UI.btn('Save draft', { kind: 'primary', attrs: 'data-save' }))
-          + (p.note ? UI.notice(esc(p.note) + ' <a href="#" data-go="models">Open Models</a>', 'info') : '')
-          + (p.noTools ? UI.notice('<b>Binding refused.</b> nomic-embed-text lacks the tools capability, so the registry rejects any MCP binding on this profile. <a href="#" data-go="models">See the model</a>', 'danger') : '')
+        f = Object.assign(formOf(p), st.form[p.id] || {});
+        const base = formOf(p);
+        dirty = Object.keys(base).some((k) => String(base[k]) !== String(f[k]));
+        const m = modelById(f.modelId);
+        const pools = poolChoices();
+        // The same checks the server runs when a profile is published (and on every save of a published one).
+        if (!m) checks.push({ ok: false, text: 'Choose a model before publishing.' });
+        else {
+          checks.push({ ok: m.state === 'approved' || (m.state === 'deprecated' && p.status === 'published'), text: m.name + ' is ' + m.state + (m.state === 'approved' ? '.' : '; profiles publish only with an approved model.') });
+          checks.push({ ok: rank(f.label) <= rank(m.label), text: m.name + ' is approved for ' + m.label + ' data; the profile\'s label is ' + f.label + '.' });
+          if (m.pools) {
+            const on = m.pools.filter((x) => !f.poolId || x.poolId === f.poolId);
+            checks.push({ ok: on.length > 0, text: on.length ? m.name + ' is placed on ' + on.map((x) => x.pool).join(', ') + '.' : m.name + ' is not placed on ' + (f.poolId ? 'the chosen pool' : 'any pool') + '.' });
+            if (st.pools && on.length) { const ok = on.some((x) => { const pl = st.pools.find((y) => y.id === x.poolId); return pl && rank(pl.label_ceiling) >= rank(f.label); }); checks.push({ ok, text: ok ? 'A pool running ' + m.name + ' is cleared for ' + f.label + ' data.' : 'No pool running ' + m.name + ' is cleared for ' + f.label + ' data.' }); }
+          }
+          checks.push({ ok: f.thinkCeiling === 'off' || m.capabilities.indexOf('thinking') >= 0, text: f.thinkCeiling === 'off' ? 'Thinking is off.' : m.capabilities.indexOf('thinking') >= 0 ? m.name + ' supports thinking.' : m.name + ' does not support thinking; set the ceiling to off.' });
+          const withheld = m.evaluation && m.evaluation.toolsWithheld;
+          checks.push({ ok: !f.calculate || (m.capabilities.indexOf('tools') >= 0 && !withheld), text: !f.calculate ? 'No tools offered.' : m.capabilities.indexOf('tools') < 0 ? m.name + ' has no tools capability.' : withheld ? m.name + ' has tools withheld until its tool-calling test passes.' : m.name + ' can call tools.' });
+        }
+        checks.push({ ok: THINK.indexOf(f.thinkDefault) <= THINK.indexOf(f.thinkCeiling), text: THINK.indexOf(f.thinkDefault) <= THINK.indexOf(f.thinkCeiling) ? 'Default thinking is within the ceiling.' : 'The default thinking level cannot be above the ceiling.' });
+        const failing = checks.filter((c) => !c.ok).length;
+
+        const modelOpts = [{ value: '', label: 'Choose an approved model' }].concat((models ? pickable(p.modelId) : (m ? [m] : [])).map((x) => ({ value: x.id, label: x.name + (x.state === 'approved' ? '' : ', ' + x.state) + ', ' + x.label })));
+        const poolOpts = [{ value: '', label: 'Any pool the model is placed on' }].concat(pools.map((x) => ({ value: x.id, label: x.name + (x.ceiling ? ', ceiling ' + x.ceiling : '') })));
+        const fbOpts = [{ value: '', label: 'No fallback' }].concat(list.filter((x) => x.id !== p.id).map((x) => ({ value: x.id, label: x.name + (x.aliasOf ? ' (alias)' : '') + ', ' + (x.aliasOf ? 'published' : x.status) })));
+        const labelOpts = myLabels.indexOf(f.label) >= 0 ? myLabels : myLabels.concat([f.label]);
+        const ptr = p.canary ? p.canary.percent : 0;
+        const canaryM = p.canary ? modelById(p.canary.modelId) : null;
+        const deps = dependants(p);
+        const yaml = 'profile: ' + p.name + '\nversion: ' + p.version + '\nstatus: ' + p.status + '\nmodel: ' + (p.model ? p.model.name + '  # ' + short(p.model.digest) : 'none') + '\npool: ' + (p.pool || 'any') + '\nlabel: ' + p.label
+          + '\noptions: { num_ctx: ' + (p.numCtx == null ? 'model default' : p.numCtx) + ', temperature: ' + (p.temperature == null ? 'model default' : p.temperature) + ' }'
+          + '\nthink: { default: ' + p.thinkDefault + ', ceiling: ' + p.thinkCeiling + ' }'
+          + '\nfallback: ' + (p.fallback ? '{ profile: ' + (byId(p.fallback.profileId) || { name: '?' }).name + ', afterQueueWait: ' + p.fallback.afterQueueWaitMs / 1000 + 's }' : 'none')
+          + '\ncanary: ' + (p.canary ? '{ model: ' + (p.canaryModel || '?') + ', percent: ' + p.canary.percent + ' }' : 'none')
+          + '\ntools: [' + p.tools.join(', ') + ']'
+          + '\nsystemPrompt: ' + (p.systemPrompt ? '|\n  ' + p.systemPrompt.split('\n').join('\n  ') : 'none');
+
+        const statusBtns = (p.status !== 'published' ? UI.btn('Publish', { attrs: 'data-status="published"', disabled: dirty, title: dirty ? 'Save or reset your changes first' : '' }) : '')
+          + (p.status === 'published' ? UI.btn('Disable', { attrs: 'data-status="disabled"' }) : '')
+          + (p.status !== 'draft' ? UI.btn('Back to draft', { kind: 'ghost', attrs: 'data-status="draft"' }) : '');
+        main = UI.pagehead(p.displayName, UI.pill(p.status) + ' <span class="mono">' + esc(p.name) + '</span>, version ' + p.version + (p.description ? '. ' + esc(p.description) : '. What users pick in chat: a pinned model plus options, prompt, pool, label and fallback'),
+          UI.btn('Refresh', { kind: 'ghost', size: 'sm', icon: 'refresh', attrs: 'data-refresh' }) + UI.btn('Delete', { kind: 'ghost', size: 'sm', icon: 'trash', attrs: 'data-delete' }) + statusBtns + (dirty ? UI.btn('Reset', { kind: 'ghost', attrs: 'data-reset' }) : '') + UI.btn('Save version', { kind: 'primary', attrs: 'data-save', disabled: !dirty }))
+          + conflictNotice(p) + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+          + (st.showDependants === p.id && deps.length ? UI.notice('<b>Delete refused.</b> ' + deps.map((d) => esc(d.name)).join(', ') + ' point' + (deps.length === 1 ? 's' : '') + ' at this profile. Repoint the alias or change the fallback first.', 'danger') : deps.length ? UI.notice('Pointed at by ' + deps.map((d) => '<b>' + esc(d.name) + '</b>' + (d.aliasOf === p.id ? ' (alias)' : ' (fallback)')).join(', ') + '.', 'info') : '')
+          + (p.model && p.model.state === 'deprecated' ? UI.notice(esc(p.model.name) + ' is deprecated. This profile keeps serving it, but once you switch away it cannot be picked again. <a href="#" data-go="models">Open Models</a>', 'warn') : '')
+          + (p.model && p.model.state === 'retired' ? UI.notice(esc(p.model.name) + ' is retired; choose another model.', 'danger') : '')
+          + (p.status === 'published' && p.residency === 'unavailable' ? UI.notice('No instance in ' + esc(p.pool || 'any pool') + ' has ' + esc(p.model ? p.model.name : 'the model') + ' pulled. Requests will fail until it is placed and pulled. <a href="#" data-go="models">Open Models</a>', 'danger') : '')
+          + (dirty ? UI.notice('Unsaved changes. ' + (p.status === 'published' ? 'This profile is published, so saving runs the publishing checks and users get the new version on their next turn.' : 'Saving creates a new draft version.'), 'accent') : '')
           + '<div class="formgrid" style="--cols:3">'
-          + UI.field('Model version', UI.select([target.model + ', ' + target.stable.replace('..', '..')].concat(ptr.canary ? [target.model + ', ' + ptr.canary + ' (canary)'] : []), target.model + ', ' + target.stable, 'data-f="model"'), '<a href="#" data-go="models">Open in Models</a>')
-          + UI.field('Pool', UI.select(['gpu-large', 'cpu-helpers', 'gpu-amd', 'mac-overflow'], f.pool, 'data-f="pool"'), '<a href="#" data-go="pools">Instances and health</a>')
-          + UI.field('Residency', UI.select(['pinned', 'warm', 'on-demand', 'batch-only'], f.residency, 'data-f="residency"'))
-          + UI.field('num_ctx (fixed at load)', UI.input(f.num_ctx, { attrs: 'data-f="num_ctx" class="input mono"' }).replace('class="input" ', ''), 'Changing it reloads the model on every instance')
-          + UI.field('temperature', UI.input(f.temperature, { attrs: 'data-f="temperature" class="input mono"' }).replace('class="input" ', ''))
-          + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], f.maxLabel, 'data-f="maxLabel"'))
-          + UI.field('System prompt', UI.select(['prompts/analyst, v4', 'prompts/analyst, v3', 'prompts/general, v2', 'prompts/coder, v1', 'prompts/vision, v1', 'none'], f.prompt, 'data-f="prompt"'))
-          + UI.field('Think', UI.select(['off', 'low, users may choose up to medium', 'medium, users may choose up to high', 'high, users may choose up to high'], f.think, 'data-f="think"'))
-          + UI.field('Fallback chain', UI.select(['none', 'general-8b after 8 s queue wait', 'general-8b after 10 s queue wait', 'fast after 5 s queue wait', 'analyst after 8 s queue wait'], f.fallback, 'data-f="fallback"'))
+          + UI.field('Display name', UI.input(f.displayName, { attrs: 'data-f="displayName" maxlength="200"' }))
+          + UI.field('Model', UI.select(modelOpts, f.modelId, 'data-f="model" data-key="modelId"'), m ? esc(short(m.digest)) + ', ' + esc(m.capabilities.join(', ')) + (models ? ' · <a href="#" data-go="models">Open in Models</a>' : '') : 'Only approved models are offered')
+          + UI.field('Pool', UI.select(poolOpts, f.poolId, 'data-f="pool" data-key="poolId"'), App.can('pools:manage') ? '<a href="#" data-go="pools">Instances and health</a>' : '')
+          + UI.field('num_ctx (fixed at load)', UI.input(f.numCtx, { placeholder: 'model default', attrs: 'data-f="numCtx" class="input mono" inputmode="numeric"' }).replace('class="input" ', ''), 'Changing it reloads the model on every instance')
+          + UI.field('temperature', UI.input(f.temperature, { placeholder: 'model default', attrs: 'data-f="temperature" class="input mono" inputmode="decimal"' }).replace('class="input" ', ''), '0 to 2')
+          + UI.field('Max label', UI.select(labelOpts, f.label, 'data-f="label" data-key="label"'), 'Up to your clearance')
+          + UI.field('Thinking default', UI.select(THINK, f.thinkDefault, 'data-f="thinkDefault" data-key="thinkDefault"'))
+          + UI.field('Thinking ceiling', UI.select(THINK, f.thinkCeiling, 'data-f="thinkCeiling" data-key="thinkCeiling"'), 'Users may choose up to this level')
+          + UI.field('Fallback after queue wait', '<div class="hstack gap6">' + UI.select(fbOpts, f.fbProfile, 'data-f="fbProfile" data-key="fbProfile" style="flex:1;min-width:0"') + UI.input(f.fbWait, { attrs: 'data-f="fbWait" class="input mono" style="width:64px" inputmode="decimal" aria-label="Seconds of queue wait"' + (f.fbProfile ? '' : ' disabled') }).replace('class="input" ', '') + '<span class="muted">s</span></div>')
           + '</div>'
-          + UI.panel('Version pointer', '<div class="hstack wrap gap12"><div style="flex:1 1 200px">' + pointerBar + '</div><span class="fg2" style="font-size:12px">' + ptrText + '</span>' + UI.btn('Promote', { size: 'sm', attrs: 'data-promote', disabled: !ptr.pct }) + UI.btn('Roll back', { size: 'sm', attrs: 'data-rollback', disabled: !ptr.pct && !ptr.previous }) + '</div>')
+          + UI.field('System prompt', UI.textarea(f.systemPrompt, { placeholder: 'None: the model\'s own template applies', attrs: 'data-f="systemPrompt" maxlength="20000" spellcheck="false"', rows: 4 }))
+          + '<div class="formgrid" style="--cols:2">' + UI.field('Description', UI.input(f.description, { placeholder: 'What this profile is for', attrs: 'data-f="description" maxlength="500"' }))
+          + UI.field('Built-in tools', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('calculate, exact arithmetic', f.calculate, 'data-f="calculate" data-key="calculate"') + '</div>', esc(TOOL_NOTE)) + '</div>'
           + '<div class="cols"><div class="grow vstack gap12" style="min-width:0">'
-          + UI.panel('MCP bindings', (st.bindRefused && p.noTools ? '' : '')
-            + UI.table(['MCP server', 'Tools exposed', 'Confirm', 'Ceiling'], bindRows, { minWidth: '0', emptyTitle: p.noTools ? 'No bindings possible' : 'No servers bound', emptyText: p.noTools ? 'The model has no tools capability.' : 'Bind a server to expose tools through this profile.' })
-            + (overBudget ? UI.notice('31 tools are bound against a budget of 24. The profile exposes <span class="mono">find_tools</span> instead and loads matches per step from the tool description index.', 'warn', UI.btn('Raise budget', { size: 'sm', attrs: 'data-raise' })) : '')
-            + '<div class="grid2">' + UI.meter('Tools', toolCount + ' of ' + target.maxTools, target.maxTools ? (toolCount / target.maxTools) * 100 : 0, toolCount > target.maxTools ? 'danger' : '') + UI.meter('Schema tokens', schemaUsed.toLocaleString('en-GB') + ' of ' + target.maxSchema.toLocaleString('en-GB'), target.maxSchema ? (schemaUsed / target.maxSchema) * 100 : 0, schemaUsed > target.maxSchema ? 'danger' : '') + '</div>', { actions: UI.btn('Bind server', { size: 'sm', attrs: 'data-bind', disabled: !!p.noTools, title: p.noTools ? 'Model has no tools capability' : '' }) })
-          + '</div><div style="width:330px;flex-shrink:0">' + UI.panel('YAML', '<pre class="profiles-yaml">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="profile yaml"' }) }) + '</div></div>';
+          + UI.panel('Publishing checks', '<div class="vstack gap4">' + checks.map((c) => '<div class="pf-check">' + UI.pill(c.ok ? 'passes' : 'fails', c.ok ? 'ok' : 'danger') + '<span>' + esc(c.text) + '</span></div>').join('') + '</div>'
+            + '<div class="muted" style="font-size:12px">' + (failing ? failing + ' check' + (failing === 1 ? '' : 's') + ' would stop publishing. ' : 'Publishing would pass these checks. ') + 'The server runs them again and has the final word; ' + (dirty ? 'these include your unsaved changes.' : 'they reflect the saved version.') + '</div>')
+          + UI.panel('Model rollout', '<div class="hstack wrap gap12"><div style="flex:1 1 200px"><div class="pf-ptr"><div class="stable" style="width:' + (100 - ptr) + '%"></div>' + (ptr ? '<div class="canary" style="width:' + ptr + '%"></div>' : '') + '</div></div>'
+            + '<span class="fg2" style="font-size:12px">' + (p.model ? (ptr ? (100 - ptr) + '% on <b>' + esc(p.model.name) + '</b>, ' + ptr + '% canary on <b>' + esc(p.canaryModel || 'unknown') + '</b>' : '100% on <b>' + esc(p.model.name) + '</b>') : 'No model chosen') + '</span></div>'
+            + UI.kv([['Stable', p.model ? esc(p.model.name) + ' <span class="mono muted">' + esc(short(p.model.digest)) + '</span>' : 'none'], ['Canary', p.canary ? esc(p.canaryModel || '') + ' <span class="mono muted">' + esc(short(canaryM && canaryM.digest)) + '</span>, ' + ptr + '%' : 'none'], ['Residency', UI.pill(p.residency, RES_KIND[p.residency])], ['Pool', esc(p.pool || 'any pool the model is placed on')]], 2)
+            + '<div class="hstack wrap gap6">' + UI.btn(p.canary ? 'Change canary' : 'Start canary', { size: 'sm', icon: 'branch', attrs: 'data-canary', disabled: !p.model || dirty, title: dirty ? 'Save or reset your changes first' : '' }) + UI.btn('Promote', { size: 'sm', attrs: 'data-promote', disabled: !p.canary || dirty }) + UI.btn('Stop canary', { size: 'sm', kind: 'ghost', attrs: 'data-stopcanary', disabled: !p.canary || dirty }) + '</div>')
+          + wsPanel(p, 'Your workspaces and this profile')
+          + versionsPanel(p)
+          + '</div><div class="pf-side">' + UI.panel('Saved version', '<pre class="pf-yaml">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy' }) }) + '</div></div>';
       }
 
       root.innerHTML = '<style>'
-        + '.profiles-ptr{display:flex;height:12px;background:var(--sel);border-radius:3px;overflow:hidden}.profiles-ptr .stable{background:var(--meter)}.profiles-ptr .canary{background:var(--accent)}'
-        + '.profiles-yaml{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre;overflow:auto;min-height:210px}'
+        + '.pf-ptr{display:flex;height:12px;background:var(--sel);border-radius:3px;overflow:hidden}.pf-ptr .stable{background:var(--meter)}.pf-ptr .canary{background:var(--accent)}'
+        + '.pf-yaml{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre;overflow:auto;min-height:210px}'
+        + '.pf-check{display:flex;gap:8px;align-items:baseline;font-size:13px}.pf-check .pill{flex-shrink:0}'
+        + '.pf-side{width:330px;flex-shrink:0;min-width:0}@media (max-width:1100px){.pf-side{width:100%}}'
         + '</style>'
-        + sideList
+        + side
         + '<div class="page">' + main + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
 
       // ---- events ----
-      ctx.on('click', '[data-profile]', (e, t) => { st.selected = t.dataset.profile; ctx.rerender(); });
-      ctx.on('click', '[data-profile-link]', (e, t) => { e.preventDefault(); st.selected = t.dataset.profileLink; ctx.rerender(); });
-      ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go, t.dataset.go === 'models' ? { model: target.model } : undefined); });
-      ctx.on('change', '[data-f]', (e, t) => { st.form[target.id] = st.form[target.id] || {}; st.form[target.id][t.dataset.f] = t.value; st.dirty = true; ctx.rerender(); });
-      ctx.on('click', '[data-save]', () => { st.dirty = false; ctx.toast('Draft saved for <b>' + esc(p.id) + '</b>. The published version keeps serving until a model admin publishes the draft.', 'ok', 5000); });
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
-      ctx.on('click', '[data-raise]', () => ctx.modal({ title: 'Raise tool budget for analyst', body: UI.field('maxTools', UI.input('32', { attrs: 'class="input mono"' }).replace('class="input" ', '')) + UI.field('maxSchemaTokens', UI.input('9000', { attrs: 'class="input mono"' }).replace('class="input" ', '')) + UI.notice('A 32B model keeps tool-calling accuracy up to about 30 tools in the conformance suite. Above that, find_tools stays the safer choice.', 'warn'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save to draft', { kind: 'primary', attrs: 'data-close data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { st.overBudget = false; target.maxTools = 32; target.maxSchema = 9000; ctx.rerender(); ctx.toast('Budget raised to 32 tools, 9,000 schema tokens in the draft.', 'ok'); }); } }));
+      ctx.on('click', '[data-profile]', (e, t) => { st.sel = t.dataset.profile; st.demoNote = null; st.showDependants = null; ctx.rerender(); });
+      ctx.on('click', '[data-profile-link]', (e, t) => { e.preventDefault(); st.sel = t.dataset.profileLink; ctx.rerender(); });
+      ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go, t.dataset.go === 'models' && target && target.model ? { model: target.model.name } : undefined); });
+      ctx.on('click', '[data-refresh]', () => { refresh(); toast('Refreshing profiles.', '', 1500); });
+      ctx.on('click', '[data-dismiss]', () => { st.conflict = null; ctx.rerender(); });
+      ctx.on('click', '[data-new]', () => newModal('profile'));
 
-      ctx.on('click', '[data-promote]', async () => {
-        const ok = await ctx.confirm({ title: 'Promote canary on ' + p.id, tag: 'blue/green', tone: 'info', body: '<p style="margin:0" class="fg2">The pointer flips to ' + esc(ptr.canary) + ' for 100% of traffic. In-flight streams finish on ' + esc(ptr.stable) + ', which stays warm for 24 hours so a rollback is instant.</p>', kv: [['Canary traffic so far', ptr.pct + '%, 1,842 turns'], ['Guardrail triggers', 'canary 0.4%, stable 0.4%'], ['First token p50', 'canary 1.3 s, stable 1.1 s'], ['Flags', '0 on canary']], ok: 'Promote' });
+      const delProfile = async () => {
+        const deps = dependants(p);
+        const ok = await ctx.confirm({ title: 'Delete ' + p.name + '?', tag: 'cannot be undone', tone: 'danger', body: '<div class="fg2">' + (p.aliasOf ? 'Clients asking for ' + esc(p.name) + ' get an unknown-profile error.' : 'Users can no longer pick it, and its version history goes with it.') + (deps.length ? ' The server will refuse while ' + deps.map((d) => esc(d.name)).join(', ') + ' point' + (deps.length === 1 ? 's' : '') + ' at it.' : '') + '</div>', ok: 'Delete profile' });
         if (!ok) return;
-        st.pointer[target.id] = { stable: ptr.canary, canary: null, pct: 0, previous: ptr.stable }; ctx.rerender(); ctx.toast('<b>' + esc(p.id) + '</b> now serves 100% on ' + esc(ptr.canary) + '. Previous version stays warm for 24 h.', 'ok', 5000);
-      });
-      ctx.on('click', '[data-rollback]', async () => {
-        const back = ptr.previous || ptr.stable;
-        const ok = await ctx.confirm({ title: 'Roll back ' + p.id, tag: 'rollback', tone: 'warn', body: '<p style="margin:0" class="fg2">The pointer moves back to ' + esc(back) + ' for all traffic and the canary unloads with keep_alive 0 once its streams finish.</p>', ok: 'Roll back' });
+        const r = await act(() => App.del('/api/admin/profiles/' + enc(p.id)), 'Profile ' + esc(p.name) + ' deleted. Audit entry written.', p.id);
+        if (r) { st.sel = null; delete st.form[p.id]; }
+      };
+      if (p) ctx.on('click', '[data-delete]', delProfile);
+
+      const rollback = async (ver) => {
+        const v = (st.versions[p.id] || []).find((x) => x.version === ver);
+        if (!v) return;
+        const s = v.profile; const vm = modelById(s.modelId);
+        const kv = s.aliasOf ? [['Points to', esc((byId(s.aliasOf) || { name: 'a removed profile' }).name)]] : [['Model', esc(vm ? vm.name : 'none')], ['Label', UI.label(s.label, { sm: true })], ['Status', UI.pill(s.status)], ['Pool', esc(poolName(s.poolId))], ['Think', esc(s.thinkDefault + ' up to ' + s.thinkCeiling)], ['Canary', s.canary ? esc((modelById(s.canary.modelId) || { name: '?' }).name + ' at ' + s.canary.percent + '%') : 'none']];
+        const ok = await ctx.confirm({ title: 'Roll ' + p.name + ' back to version ' + ver + '?', tag: 'rollback', tone: 'warn', body: '<p style="margin:0" class="fg2">Version ' + ver + ' (' + esc(v.note || '') + ') is copied into a new version ' + (p.version + 1) + '. ' + (s.status === 'published' ? 'It is published, so the publishing checks run again.' : '') + '</p>', kv, ok: 'Roll back' });
         if (!ok) return;
-        st.pointer[target.id] = { stable: back, canary: null, pct: 0 }; ctx.rerender(); ctx.toast('Rolled back. 100% on ' + esc(back) + '.', 'warn');
-      });
+        const r = await act(() => App.post('/api/admin/profiles/' + enc(p.id) + '/rollback', { version: ver }), null, p.id);
+        if (r) { delete st.form[p.id]; toast('<b>' + esc(p.name) + '</b> rolled back to version ' + ver + ', saved as version ' + r.version + '.', 'warn', 5000); }
+      };
+      ctx.on('click', '[data-rollback]', (e, t) => rollback(+t.dataset.rollback));
 
-      ctx.on('click', 'tr.row[data-binding]', (e, t) => {
-        const b = bindings.find((x) => x.server === t.dataset.binding) || { server: t.dataset.binding, tools: 'all tools', confirm: 'on write', ceiling: 'confidential', n: 3 };
-        const srv = SERVERS.find((s) => s.id === b.server) || SERVERS[0];
-        ctx.drawer({ title: esc(b.server) + ' on ' + esc(p.id), body: (b.disabled ? UI.notice('<b>Disabled.</b> The server announced tools/list_changed and the schema hash for <span class="mono">create_merge_request</span> no longer matches the approved hash. The tool stays off until a tool admin re-reviews it.', 'danger') : '') + UI.kv([['Hosting', esc(srv.mode)], ['Server ceiling', UI.label(srv.ceiling, { sm: true })], ['Profile ceiling', UI.label(target.maxLabel, { sm: true })], ['Schema hash', '<span class="mono">' + (b.disabled ? 'e91a… changed' : '4f0c… approved') + '</span>']], 2) + '<div class="eyebrow">Tools exposed</div><div class="vstack gap4">' + srv.tools.map((tl) => UI.check(tl, b.builtin || b.tools.includes(tl) || /^all/.test(b.tools))).join('') + '</div>' + UI.field('Confirm', UI.select(['never', 'on write', 'always'], b.confirm)) + UI.notice('Acts as the user through this profile. Side-effect classes come from the tool admin review, not from the server\'s annotations.', 'info'), actions: (b.disabled ? UI.btn('Re-review in MCP servers', { kind: 'primary', attrs: 'data-close data-mcp' }) : UI.btn('Save to draft', { kind: 'primary', attrs: 'data-close data-savebind' })) + UI.btn('Unbind', { kind: 'danger', attrs: 'data-close data-unbind' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { const m = d.querySelector('[data-mcp]'); if (m) m.addEventListener('click', () => ctx.navigate('mcp-servers', { server: b.server })); const s = d.querySelector('[data-savebind]'); if (s) s.addEventListener('click', () => ctx.toast('Binding saved to the draft.', 'ok')); d.querySelector('[data-unbind]').addEventListener('click', () => { st.unbound[target.id] = st.unbound[target.id] || {}; st.unbound[target.id][b.server] = true; ctx.rerender(); ctx.toast(esc(b.server) + ' unbound from ' + esc(p.id) + ' in the draft.'); }); } });
-      });
-
-      const bindModal = (preset) => {
-        const draw = (sid) => {
-          const srv = SERVERS.find((s) => s.id === sid);
-          const conflict = LEVELS[srv.ceiling] > LEVELS[target.maxLabel];
-          return UI.field('MCP server', UI.select(SERVERS.map((s) => ({ value: s.id, label: s.id + ', ' + s.mode + ', ceiling ' + s.ceiling })), sid, 'data-srv'))
-            + (conflict ? UI.notice('<b>Ceiling conflict.</b> ' + esc(srv.id) + ' reaches ' + esc(srv.ceiling) + ' data; this profile is capped at ' + esc(target.maxLabel) + '. Raise the profile ceiling or pick a server within it.', 'danger') : '')
-            + '<div class="eyebrow">Tools to expose</div><div class="vstack gap4">' + srv.tools.map((tl) => UI.check(tl, true)).join('') + '</div>'
-            + UI.field('Confirm', UI.select(['never', 'on write', 'always'], 'on write'))
-            + UI.notice('Budget after binding: ' + (toolCount + srv.tools.length) + ' of ' + target.maxTools + ' tools. Schemas are hashed at approval; a later change disables the tool until re-review.', (toolCount + srv.tools.length) > target.maxTools ? 'warn' : 'info')
-            + '<div class="mfoot">' + UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Bind', { kind: 'primary', attrs: 'data-dobind', disabled: conflict }) + '</div>';
+      if (p && isAlias) {
+        const repointModal = (to) => {
+          const ws = (App.me && App.me.workspaces) || [];
+          const draw = (tid) => {
+            const tp = byId(tid) || reals[0];
+            return UI.field('Point ' + esc(p.name) + ' to', UI.select(reals.filter((x) => x.id !== (target && target.id)).map((x) => ({ value: x.id, label: x.name + ', ' + x.status })), tp.id, 'data-to'))
+              + UI.kv([['From', target ? esc(target.name) + ', ' + esc(target.model ? target.model.name : 'no model') : 'a removed profile'], ['To', esc(tp.name) + ', ' + esc(tp.model ? tp.model.name : 'no model')], ['Label', (target ? esc(target.label) : '?') + ' → ' + esc(tp.label)], ['Pool', esc(target ? (target.pool || 'any') : '?') + ' → ' + esc(tp.pool || 'any')]], 2)
+              + (tp.status !== 'published' ? UI.notice(esc(tp.name) + ' is ' + esc(tp.status) + '. Users cannot chat through the alias until it is published.', 'warn') : '')
+              + '<div class="eyebrow">Your workspaces</div>' + UI.table(['Workspace', 'Ceiling', 'Effect'], ws.map((w) => [esc(w.name), UI.label(w.label, { sm: true }), rank(w.label) <= rank(tp.label) ? 'every conversation label fits' : '<span style="color:var(--warn-fg)">conversations above ' + esc(tp.label) + ' cannot use the alias</span>']), { clickable: false, minWidth: '0', emptyTitle: 'No workspaces', emptyText: '' })
+              + UI.field('Note for the version history', UI.input('', { attrs: 'data-note maxlength="300"', placeholder: 'why the alias moves' }))
+              + UI.notice('Applies on the next turn. Clients keep asking for ' + esc(p.name) + '; in-flight streams finish where they started.', 'info')
+              + '<div class="mfoot">' + UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Apply repoint', { kind: 'primary', attrs: 'data-apply' }) + '</div>';
+          };
+          ctx.modal({ title: 'Repoint alias ' + esc(p.name), cls: 'wide', body: '<div class="vstack gap12" data-rpbody>' + draw(to) + '</div>', onClose() { ctx.rerender(); }, onMount(mEl) {
+            const host = mEl.querySelector('[data-rpbody]');
+            const wire = () => {
+              host.querySelector('[data-to]').addEventListener('change', (e) => { host.innerHTML = draw(e.target.value); wire(); });
+              host.querySelector('[data-apply]').addEventListener('click', async () => {
+                const tid = host.querySelector('[data-to]').value; const note = host.querySelector('[data-note]').value.trim();
+                App.closeOverlay();
+                const r = await act(() => App.patch('/api/admin/profiles/' + enc(p.id), Object.assign({ aliasOf: tid }, note ? { note } : {})), null, p.id);
+                if (r) toast('<b>' + esc(p.name) + '</b> now points to <b>' + esc((byId(tid) || {}).name || '') + '</b>. Saved as version ' + r.version + '.', 'ok', 5000);
+              });
+            };
+            wire();
+          } });
         };
-        ctx.modal({ title: 'Bind server to ' + esc(p.id), body: '<div class="vstack gap12" id="bindbody">' + draw(preset) + '</div>', onMount(m) {
-          const host = m.querySelector('#bindbody');
+        const other = () => { const o = reals.find((x) => x.id !== p.aliasOf); return o ? o.id : null; };
+        ctx.on('click', '[data-repoint]', () => { if (other()) repointModal(other()); else toast('There is no other profile to point at.', 'warn'); });
+        ctx.on('change', '[data-alias-target]', (e, t) => { if (t.value !== p.aliasOf) repointModal(t.value); });
+        if (st.openRepoint) { const to = st.openRepoint; st.openRepoint = null; setTimeout(() => repointModal(to), 30); }
+      }
+
+      if (p && !isAlias) {
+        const setF = (k, v) => { st.form[p.id] = Object.assign(formOf(p), st.form[p.id] || {}); st.form[p.id][k] = v; };
+        // Text fields update state without re-rendering (focus stays put); selects and the checkbox re-render the checks.
+        ctx.on('input', 'input[data-f]:not([type=checkbox]), textarea[data-f]', (e, t) => {
+          setF(t.dataset.f, t.value);
+          const was = dirty; const base = formOf(p); const now = Object.assign({}, base, st.form[p.id]);
+          if (Object.keys(base).some((k) => String(base[k]) !== String(now[k])) === was) return;
+          const key = t.dataset.f; const pos = t.selectionStart;
+          ctx.rerender();
+          const el = root.querySelector('[data-f="' + key + '"]');
+          if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (err) { /* not a text field */ } }
+        });
+        ctx.on('change', 'select[data-key], input[type=checkbox][data-key]', (e, t) => { setF(t.dataset.key, t.type === 'checkbox' ? t.checked : t.value); ctx.rerender(); });
+        ctx.on('click', '[data-reset]', () => { delete st.form[p.id]; ctx.rerender(); toast('Changes discarded.'); });
+        ctx.on('click', '[data-copy]', () => { const text = root.querySelector('.pf-yaml').textContent; (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(() => toast('Copied the saved version.', 'ok'), () => toast('The browser did not allow copying.', 'warn')); });
+
+        ctx.on('click', '[data-save]', () => {
+          let body; let before;
+          try { body = bodyOf(f); before = bodyOf(formOf(p)); } catch (err) { toast(esc(err.message), 'danger'); return; }
+          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools' };
+          const show = (k, v) => { if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
+          const patch = {}; const kv = [];
+          Object.keys(body).forEach((k) => { if (JSON.stringify(body[k]) !== JSON.stringify(before[k])) { patch[k] = body[k]; kv.push([LBL[k], esc(show(k, before[k])) + ' → <b>' + esc(show(k, body[k])) + '</b>']); } });
+          if (!kv.length) { delete st.form[p.id]; ctx.rerender(); return; }
+          ctx.modal({ title: 'Save ' + esc(p.name) + ' as version ' + (p.version + 1), body: UI.kv(kv, 1) + UI.field('Note for the version history', UI.input('', { attrs: 'data-note maxlength="300"', placeholder: 'what changed and why' }))
+            + (p.status === 'published' ? UI.notice('This profile is published. The server runs the publishing checks on save and refuses a version that would fail them.', 'info') : '')
+            + (patch.numCtx !== undefined ? UI.notice('A new num_ctx reloads the model on every instance that serves this profile.', 'warn') : ''),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save version', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(mEl) {
+            mEl.querySelector('[data-ok]').addEventListener('click', async () => {
+              const note = mEl.querySelector('[data-note]').value.trim();
+              App.closeOverlay();
+              const r = await act(() => App.patch('/api/admin/profiles/' + enc(p.id), Object.assign(patch, note ? { note } : {})), null, p.id);
+              if (r) { delete st.form[p.id]; toast('<b>' + esc(p.name) + '</b> saved as version ' + r.version + '.', 'ok', 5000); }
+            });
+          } });
+        });
+
+        ctx.on('click', '[data-status]', async (e, t) => {
+          const to = t.dataset.status;
+          const copy = {
+            published: { title: 'Publish ' + p.name + '?', tag: 'users can pick it', tone: 'info', text: 'Users with clearance for ' + p.label + ' can pick it in chat. The server checks the model, its placement and the label first.', ok: 'Publish', done: 'published. Users can pick it in chat.' },
+            disabled: { title: 'Disable ' + p.name + '?', tag: 'stops new turns', tone: 'danger', text: 'Users can no longer pick it, and aliases pointing at it stop resolving. It can be published again later.', ok: 'Disable', done: 'disabled.' },
+            draft: { title: 'Move ' + p.name + ' back to draft?', tag: 'hidden from users', tone: 'warn', text: 'Users can no longer pick it until it is published again.', ok: 'Back to draft', done: 'moved back to draft.' }
+          }[to];
+          const kv = to === 'published' ? checks.map((c) => [c.ok ? 'passes' : 'fails', esc(c.text)]) : undefined;
+          const ok = await ctx.confirm({ title: copy.title, tag: copy.tag, tone: copy.tone, body: '<p style="margin:0" class="fg2">' + esc(copy.text) + '</p>', kv, ok: copy.ok });
+          if (!ok) return;
+          await act(() => App.post('/api/admin/profiles/' + enc(p.id) + '/publish', { status: to }), '<b>' + esc(p.name) + '</b> ' + copy.done, p.id);
+        });
+
+        const canaryModal = () => {
+          const opts = (models || []).filter((x) => x.state === 'approved' && x.id !== p.modelId);
+          if (!models) { toast('Starting a canary needs the model catalogue (models:read).', 'warn'); return; }
+          const where = (x) => (x.pools || []).filter((y) => !p.poolId || y.poolId === p.poolId).map((y) => y.pool).join(', ');
+          ctx.modal({ title: (p.canary ? 'Change canary on ' : 'Start canary on ') + esc(p.name),
+            body: (opts.length ? UI.field('Canary model', UI.select(opts.map((x) => ({ value: x.id, label: x.name + ', ' + x.label + (where(x) ? ', on ' + where(x) : ', not placed where this profile routes') })), p.canary ? p.canary.modelId : opts[0].id, 'data-cm'), 'Approved models only. It must be approved for ' + esc(p.label) + ' data and placed where this profile routes.')
+              + UI.field('Share of requests', '<div class="hstack gap6">' + UI.input(String(p.canary ? p.canary.percent : 10), { type: 'number', attrs: 'data-cp min="1" max="50" class="input mono" style="width:90px"' }).replace('class="input" ', '') + '<span class="muted">% (1 to 50)</span></div>')
+              + UI.notice('The rest stays on ' + esc(p.model ? p.model.name : '') + '. Promote to move all traffic, or stop to send everything back.', 'info') : UI.notice('No other approved model exists. Approve one in Models first.', 'warn')),
+            actions: UI.btn('Cancel', { attrs: 'data-close' }) + (opts.length ? UI.btn(p.canary ? 'Change canary' : 'Start canary', { kind: 'primary', attrs: 'data-ok' }) : ''),
+            onMount(mEl) {
+              const b = mEl.querySelector('[data-ok]'); if (!b) return;
+              b.addEventListener('click', async () => {
+                const modelId = mEl.querySelector('[data-cm]').value; const percent = Number(mEl.querySelector('[data-cp]').value);
+                if (!(percent >= 1 && percent <= 50 && Math.round(percent) === percent)) { toast('The share must be a whole number from 1 to 50.', 'danger'); return; }
+                App.closeOverlay();
+                await act(() => App.api('PUT', '/api/admin/profiles/' + enc(p.id) + '/canary', { modelId, percent }), 'Canary on <b>' + esc(p.name) + '</b>: ' + percent + '% of requests go to ' + esc((modelById(modelId) || {}).name || '') + '.', p.id);
+              });
+            } });
+        };
+        ctx.on('click', '[data-canary]', canaryModal);
+        ctx.on('click', '[data-promote]', async () => {
+          const ok = await ctx.confirm({ title: 'Promote canary on ' + p.name + '?', tag: 'all traffic', tone: 'info', body: '<p style="margin:0" class="fg2">' + esc(p.canaryModel || '') + ' becomes the profile\'s model for 100% of requests. The previous version stays in the history, so a rollback is one step.</p>', kv: [['Stable now', esc(p.model ? p.model.name : '')], ['Canary', esc((p.canaryModel || '') + ' at ' + p.canary.percent + '%')]], ok: 'Promote' });
+          if (!ok) return;
+          await act(() => App.post('/api/admin/profiles/' + enc(p.id) + '/canary/promote'), '<b>' + esc(p.name) + '</b> now serves 100% on ' + esc(p.canaryModel || '') + '.', p.id);
+        });
+        ctx.on('click', '[data-stopcanary]', async () => {
+          const ok = await ctx.confirm({ title: 'Stop canary on ' + p.name + '?', tag: 'rollback', tone: 'warn', body: '<p style="margin:0" class="fg2">All requests go back to ' + esc(p.model ? p.model.name : '') + ' on the next turn.</p>', ok: 'Stop canary' });
+          if (!ok) return;
+          await act(() => App.del('/api/admin/profiles/' + enc(p.id) + '/canary'), 'Canary stopped. 100% on ' + esc(p.model ? p.model.name : '') + '.', p.id);
+        });
+      }
+
+      // ---- new profile or alias ----
+      function newModal(kind) {
+        const approved = (models || []).filter((x) => x.state === 'approved');
+        const pools = poolChoices();
+        const draw = (k) => '<div class="formgrid" style="--cols:2">'
+          + UI.field('Kind', UI.select([{ value: 'profile', label: 'Profile, pins a model' }, { value: 'alias', label: 'Alias, points at a profile' }], k, 'data-nk'))
+          + UI.field('Name', UI.input('', { placeholder: k === 'alias' ? 'chat-default' : 'summariser-8b', attrs: 'data-nn maxlength="63" autocomplete="off"' }), 'Lower case, digits and hyphens; clients ask for it by this name')
+          + UI.field('Display name', UI.input('', { placeholder: k === 'alias' ? 'Default chat' : 'Summariser', attrs: 'data-nd maxlength="200"' }))
+          + (k === 'alias'
+            ? UI.field('Points to', UI.select(reals.map((x) => ({ value: x.id, label: x.name + ', ' + x.status })), reals[0] ? reals[0].id : '', 'data-na'))
+            : UI.field('Model', UI.select([{ value: '', label: approved.length ? 'Choose later' : 'No approved models yet' }].concat(approved.map((x) => ({ value: x.id, label: x.name + ', ' + x.label }))), approved[0] ? approved[0].id : '', 'data-nm'))
+              + UI.field('Pool', UI.select([{ value: '', label: 'Any pool the model is placed on' }].concat(pools.map((x) => ({ value: x.id, label: x.name + (x.ceiling ? ', ceiling ' + x.ceiling : '') }))), '', 'data-np'))
+              + UI.field('Max label', UI.select(myLabels, myLabels.indexOf('internal') >= 0 ? 'internal' : myLabels[myLabels.length - 1], 'data-nl'))
+              + UI.field('Description', UI.input('', { placeholder: 'What this profile is for', attrs: 'data-nds maxlength="500"' })))
+          + '</div>'
+          + (k === 'alias' ? UI.notice('An alias is published as soon as it is created and resolves to whatever it points at. Repoint it later without client changes.', 'info') + (reals.length ? '' : UI.notice('Create a profile first; an alias points at one.', 'warn'))
+            : UI.notice('Only approved models are offered. The profile starts as a draft: set its options, then publish it for users.', 'info'))
+          + '<div data-nerr></div><div class="mfoot">' + UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(k === 'alias' ? 'Create alias' : 'Create draft', { kind: 'primary', attrs: 'data-create', disabled: k === 'alias' && !reals.length }) + '</div>';
+        ctx.modal({ title: 'New model profile', body: '<div class="vstack gap12" data-nbody>' + draw(kind) + '</div>', onMount(mEl) {
+          const host = mEl.querySelector('[data-nbody]');
           const wire = () => {
-            host.querySelector('[data-srv]').addEventListener('change', (e) => { host.innerHTML = draw(e.target.value); wire(); });
-            host.querySelector('[data-dobind]').addEventListener('click', () => { const sid = host.querySelector('[data-srv]').value; const srv = SERVERS.find((s) => s.id === sid); App.closeOverlay(); st.extraBindings[target.id] = st.extraBindings[target.id] || []; st.extraBindings[target.id].push({ server: sid, tools: srv.tools.join(', '), n: srv.tools.length, confirm: 'on write', ceiling: srv.ceiling, added: true }); ctx.rerender(); ctx.toast(esc(sid) + ' bound to ' + esc(p.id) + ' in the draft. Tokens are audience-bound to that server.', 'ok', 5000); });
+            host.querySelector('[data-nk]').addEventListener('change', (e) => { host.innerHTML = draw(e.target.value); wire(); });
+            host.querySelector('[data-create]').addEventListener('click', async () => {
+              const k = host.querySelector('[data-nk]').value; const val = (sel) => { const el = host.querySelector(sel); return el ? el.value.trim() : ''; };
+              const name = val('[data-nn]'); const body = { name, displayName: val('[data-nd]') || name };
+              if (k === 'alias') body.aliasOf = val('[data-na]');
+              else { if (val('[data-nm]')) body.modelId = val('[data-nm]'); if (val('[data-np]')) body.poolId = val('[data-np]'); body.label = val('[data-nl]'); if (val('[data-nds]')) body.description = val('[data-nds]'); }
+              try {
+                const created = await App.post('/api/admin/profiles', body);
+                App.closeOverlay(); st.sel = created.id; st.conflict = null;
+                toast(k === 'alias' ? 'Alias <b>' + esc(created.name) + '</b> created and published.' : 'Draft profile <b>' + esc(created.name) + '</b> created. Set its options, then publish it.', 'ok', 5000);
+                refresh();
+              } catch (err) { const pr = err.problem || {}; host.querySelector('[data-nerr]').innerHTML = UI.notice('<b>' + esc(pr.title || 'Refused') + '.</b> ' + esc(err.message), 'danger'); }
+            });
           };
           wire();
         } });
-      };
-      ctx.on('click', '[data-bind]', () => bindModal('erp-sap'));
-      if (st.openBind) { const s = st.openBind; st.openBind = null; setTimeout(() => bindModal(s), 30); }
-
-      const repointModal = (to) => {
-        const draw = (tid) => {
-          const tp = PROFILES.find((x) => x.id === tid);
-          return UI.field('Point ' + esc(p.id) + ' to', UI.select(PROFILES.filter((x) => !x.alias).map((x) => x.id), tid, 'data-to'))
-            + UI.kv([['From', esc(target.id) + ', ' + esc(target.model)], ['To', esc(tp.id) + ', ' + esc(tp.model)], ['Ceiling', esc(target.maxLabel) + ' → ' + esc(tp.maxLabel)], ['Pool', esc(target.pool) + ' → ' + esc(tp.pool)]], 2)
-            + '<div class="eyebrow">Affected workspaces</div>' + UI.table(['Workspace', 'Label', 'Usage', 'Effect'], WORKSPACES.map((w) => [esc(w.name), UI.label(w.label, { sm: true }), esc(w.conv), tp.id === 'analyst' && w.label !== 'confidential' ? '<span style="color:var(--warn-fg)">users below confidential clearance lose this alias</span>' : 'history re-rendered with the new template']), { clickable: false, minWidth: '0' })
-            + UI.notice('Applies atomically. In-flight streams finish on ' + esc(target.id) + '. Clients keep asking for ' + esc(p.id) + ' and see the change on their next turn.', 'info')
-            + '<div class="mfoot">' + UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Apply repoint', { kind: 'primary', attrs: 'data-apply' }) + '</div>';
-        };
-        ctx.modal({ title: 'Repoint alias ' + esc(p.id), cls: 'wide', body: '<div class="vstack gap12" id="rpbody">' + draw(to) + '</div>', onMount(m) {
-          const host = m.querySelector('#rpbody');
-          const wire = () => {
-            host.querySelector('[data-to]').addEventListener('change', (e) => { host.innerHTML = draw(e.target.value); wire(); });
-            host.querySelector('[data-apply]').addEventListener('click', () => { const tid = host.querySelector('[data-to]').value; App.closeOverlay(); st.aliasTarget[p.id] = tid; ctx.rerender(); ctx.toast('<b>' + esc(p.id) + '</b> now points to <b>' + esc(tid) + '</b>. 3 workspaces notified.', 'ok', 5000); });
-          };
-          wire();
-        } });
-      };
-      ctx.on('click', '[data-repoint]', () => repointModal(target.id === 'general-8b' ? 'analyst' : 'general-8b'));
-      ctx.on('change', '[data-alias-target]', (e, t) => repointModal(t.value));
-      if (st.openRepoint) { const to = st.openRepoint; st.openRepoint = null; setTimeout(() => repointModal(to), 30); }
-
-      ctx.on('click', '[data-preview]', () => {
-        const rows = [['kb-search.search', 'kb-search', UI.pill('included', 'ok'), 'built-in, workspace enabled'], ['kb-search.get_passage', 'kb-search', UI.pill('included', 'ok'), 'built-in'], ['jira-internal.search_issues', 'jira-internal', UI.pill('included', 'ok'), 'scope jira:read'], ['jira-internal.get_issue', 'jira-internal', UI.pill('included', 'ok'), 'scope jira:read'], ['jira-internal.create_issue', 'jira-internal', UI.pill('included, confirm', 'warn'), 'scope jira:write, confirm on write'], ['gitlab-onprem.create_merge_request', 'gitlab-onprem', UI.pill('excluded', 'danger'), 'disabled, schema changed']];
-        ctx.modal({ title: 'Effective tools for a user on ' + esc(p.id), cls: 'wide', body: '<div class="formgrid" style="--cols:2">' + UI.field('User', UI.select(['Mara Okafor, mokafor', 'Sam Reyes, sreyes'], 'Mara Okafor, mokafor')) + UI.field('Workspace', UI.select(['Finance Ops, confidential', 'People Ops, internal', 'Field Sales, internal'], 'Finance Ops, confidential')) + '</div>' + UI.table(['Tool', 'Server', 'Result', 'Reason'], rows, { clickable: false, minWidth: '0' }) + '<div class="muted" style="font-size:12px">Effective set = profile bindings ∩ workspace enablement ∩ agent allow-list ∩ user scopes, then filtered by label ceilings and tool egress. Computed per turn, cached by policy version 214.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) });
-      });
-
-      const newModal = () => ctx.modal({ title: 'New model profile', body: '<div class="formgrid" style="--cols:2">' + UI.field('Name', UI.input('', { placeholder: 'summariser-8b', attrs: 'data-n' })) + UI.field('Model version', UI.select(['qwen2.5:32b-q4_K_M, sha256:41ab..', 'llama3.1:8b-q5_K_M, sha256:7d21..', 'llama3.2:3b-q8_0, sha256:3c8a..'], 'llama3.1:8b-q5_K_M, sha256:7d21..', 'data-m')) + UI.field('Pool', UI.select(['gpu-large', 'cpu-helpers'], 'gpu-large')) + UI.field('Residency', UI.select(['pinned', 'warm', 'on-demand', 'batch-only'], 'on-demand')) + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal', 'data-l')) + UI.field('Hardware classes', UI.input('cuda, rocm')) + '</div>' + UI.notice('Only approved model versions are offered. The profile starts as a draft and goes through review before users can pick it.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }), onMount(m) { m.querySelector('[data-create]').addEventListener('click', () => { const name = (m.querySelector('[data-n]').value || 'summariser-8b').trim(); const model = m.querySelector('[data-m]').value.split(', ')[0]; const lbl = m.querySelector('[data-l]').value; App.closeOverlay(); st.created.push({ id: name, model, short: model.split(':')[0], sub: model.split('-q')[0], status: 'draft', maxLabel: lbl, pool: 'gpu-large', residency: 'on-demand', num_ctx: '8192', temperature: '0.5', prompt: 'none', promptKey: 'none', think: 'off', thinkKey: '{ default: off, ceiling: off }', fallback: 'none', fallbackKey: 'none', stable: 'sha256:7d21..', canary: null, canaryPct: 0, maxTools: 12, maxSchema: 3000, schemaUsed: 0, bindings: [] }); st.selected = name; ctx.rerender(); ctx.toast('Draft profile <b>' + esc(name) + '</b> created.', 'ok'); }); } });
-      ctx.on('click', '[data-new]', newModal);
-      if (st.openNew) { st.openNew = false; setTimeout(newModal, 30); }
+      }
+      if (st.openNew) { const k = st.openNew; st.openNew = null; setTimeout(() => newModal(k === 'alias' ? 'alias' : 'profile'), 30); }
     }
   });
 })();
