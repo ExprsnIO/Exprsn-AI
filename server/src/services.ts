@@ -29,6 +29,13 @@ import { AttachmentService } from './chat/attachments.js';
 import { CalcWorker } from './chat/calc.js';
 import { ChatService } from './chat/service.js';
 import { allowAll, type Guardrails } from './guardrails/types.js';
+import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
+import { ConnectionService } from './connections/service.js';
+import { defaultDrivers, type DriverFactory } from './connections/drivers.js';
+import { KnowledgeService } from './knowledge/service.js';
+import { CliGit, type GitFetcher } from './knowledge/sources.js';
+import { MemoryService } from './memory/service.js';
+import { effectivePermissions } from './authz/policy.js';
 
 export interface Services {
   cfg: Config;
@@ -63,6 +70,11 @@ export interface Services {
   chat: ChatService;
   /** The guardrail checkpoints (`guardrails/types.ts`); every feature that handles tenant text calls `check`. */
   guardrails: Guardrails;
+  /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
+  vectors: VectorStore;
+  connections: ConnectionService;
+  knowledge: KnowledgeService;
+  memory: MemoryService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -70,6 +82,10 @@ export interface Services {
 export interface ServiceOverrides {
   kms?: Kms;
   blobs?: BlobStore;
+  vectors?: VectorStore;
+  /** Data connection drivers by engine (tests use in-process fakes). */
+  drivers?: Partial<Record<'postgres' | 'opensearch', DriverFactory>>;
+  git?: GitFetcher;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -98,6 +114,22 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log);
+  // Checkpoints go through whatever `s.guardrails` is when they run.
+  const guard: Guardrails = { check: (input) => s.guardrails.check(input) };
+  const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
+  const connections = new ConnectionService(db, keys, audit, guard, { ...defaultDrivers, ...overrides.drivers });
+  const knowledge = new KnowledgeService(
+    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id) },
+    {
+      maxBytes: cfg.ATTACHMENT_MAX_BYTES,
+      ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
+      ...(cfg.S3_ENDPOINT && cfg.S3_ACCESS_KEY_ID && cfg.S3_SECRET_ACCESS_KEY ? { s3: { endpoint: cfg.S3_ENDPOINT, region: cfg.S3_REGION, accessKeyId: cfg.S3_ACCESS_KEY_ID, secretAccessKey: cfg.S3_SECRET_ACCESS_KEY, pathStyle: cfg.S3_FORCE_PATH_STYLE } } : {}),
+      git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 })
+    }
+  );
+  const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
+  chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
+  chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
     db,
@@ -130,6 +162,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     calc,
     chat,
     guardrails: allowAll,
+    vectors,
+    connections,
+    knowledge,
+    memory,
     close: async () => {
       scheduler.stop();
       chat.close();
@@ -167,4 +203,6 @@ export function startSchedules(s: Services): void {
   const activeTenants = async () => (await s.tenants.list()).filter((t) => t.state === 'active').map((t) => ({ tenantId: t.id, payload: { tenantId: t.id } }));
   s.scheduler.every('directory.sync', s.cfg.DIRECTORY_SYNC_MINUTES * 60_000, activeTenants);
   s.scheduler.every('audit.checkpoint', s.cfg.AUDIT_CHECKPOINT_MINUTES * 60_000, activeTenants);
+  s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
+  s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
 }

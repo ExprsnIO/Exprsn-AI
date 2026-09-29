@@ -26,6 +26,22 @@ export interface Reply {
 const digestOf = (name: string) => createHash('sha256').update(name).digest('hex');
 
 /**
+ * A deterministic bag-of-words embedding: each word (lower case, plural folded) adds one to a hashed dimension, with
+ * a hashed sign, then the vector is normalised. Texts sharing words are close; unrelated texts are nearly orthogonal.
+ */
+export function embedding(text: string, dims: number): number[] {
+  const v = new Array<number>(dims).fill(0);
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (raw.length < 2) continue;
+    const w = raw.length > 3 && raw.endsWith('s') && !raw.endsWith('ss') ? raw.slice(0, -1) : raw;
+    const h = createHash('sha256').update(w).digest();
+    v[h[0]! % dims]! += h[1]! & 1 ? 1 : -1;
+  }
+  const n = Math.sqrt(v.reduce((a, x) => a + x * x, 0)) || 1;
+  return v.map((x) => x / n);
+}
+
+/**
  * An Ollama stand-in speaking enough of its HTTP API for the gateway and chat: version, tags, ps, show, pull,
  * delete, generate (load and unload) and streamed chat. Replies come from `reply`, streamed word by word.
  */
@@ -38,6 +54,8 @@ export class FakeOllama {
   requests: { path: string; body: Record<string, unknown> }[] = [];
   chatDelayMs = 5;
   reply: (messages: Msg[], opts: { think: unknown; tools: unknown[]; model: string }) => Reply = (messages) => ({ content: `You said: ${messages[messages.length - 1]?.content ?? ''}` });
+  /** Embedding size per model: models with "bge" in the name give 48 dimensions, others 64. */
+  embedDims: (model: string) => number = (model) => (model.includes('bge') ? 48 : 64);
   /** When set, requests hang until released (to test queueing and stop). */
   hold: Promise<void> | null = null;
   down = false;
@@ -124,6 +142,13 @@ export class FakeOllama {
       }
       case 'POST /api/chat':
         return this.chat(body, res, req);
+      case 'POST /api/embed': {
+        const m = this.available.get(name);
+        if (!m) return json(404, { error: `model '${name}' not found` });
+        const input = (Array.isArray(body.input) ? body.input : [body.input]).map(String);
+        this.loaded.set(name, { size: m.size, expires: Date.now() + 30 * 60_000 });
+        return json(200, { model: name, embeddings: input.map((t) => embedding(t, this.embedDims(name))), total_duration: 2_000_000 * input.length, load_duration: 0, prompt_eval_count: input.reduce((a, t) => a + Math.ceil(t.length / 4), 0) });
+      }
       default:
         return json(404, { error: 'not found' });
     }
