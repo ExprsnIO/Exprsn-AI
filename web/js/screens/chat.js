@@ -590,7 +590,8 @@
       const st = ctx.state;
       live.ctx = ctx;
       attach();
-      if (ctx.params.id && ctx.params.id !== st.paramId) { st.paramId = ctx.params.id; st.convId = ctx.params.id; setConv(st, null); st.loaded = false; }
+      const wantId = ctx.params.id || ctx.params.convo; // other screens link with ?convo=
+      if (wantId && wantId !== st.paramId) { st.paramId = wantId; st.convId = wantId; setConv(st, null); st.loaded = false; }
       if (st.pending === undefined) st.pending = [];
       if (!st.loaded && !st.loadError) load();
       const p = selProfile(st);

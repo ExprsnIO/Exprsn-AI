@@ -7,6 +7,8 @@ export default defineConfig({
     include: ['test/integration/**/*.test.ts'],
     environment: 'node',
     pool: 'forks',
+    // The files share one database per engine and each runs the migrations: one file at a time.
+    fileParallelism: false,
     testTimeout: 30000
   }
 });

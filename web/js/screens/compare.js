@@ -541,7 +541,7 @@
         try {
           const r = await App.post('/api/chat', { content: run.prompt, profile: col.profile, think: col.think, label: run.label });
           ctx.toast('Started a new chat with ' + esc(col.profile) + ' from the same prompt. The comparison is kept in Compare.', 'ok');
-          ctx.navigate('chat', { id: r.conversationId, convo: r.conversationId });
+          ctx.navigate('chat', { id: r.conversationId });
         } catch (err) {
           if (err && err.status === 429) { st.problem = { kind: 'quota', err }; if (App.state.route === 'compare') ctx.rerender(); } else App.fail(err, 'Could not start the chat');
         }

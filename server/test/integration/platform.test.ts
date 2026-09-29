@@ -128,9 +128,9 @@ for (const d of dialects) {
       ollama = await new FakeOllama().start();
     });
     afterAll(async () => {
-      await s.close();
-      await s.db.destroy();
-      await ollama.stop();
+      await s?.close();
+      await s?.db.destroy();
+      await ollama?.stop();
     });
 
     it('streams, meters, enforces the quota and exports usage', async () => {
