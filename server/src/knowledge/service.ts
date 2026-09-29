@@ -877,12 +877,15 @@ export class KnowledgeService {
       const idAt = cfg.idColumn ? r.columns.indexOf(cfg.idColumn) : -1;
       const wmAt = cfg.watermarkColumn ? r.columns.indexOf(cfg.watermarkColumn) : -1;
       let watermark = s.watermark;
+      let best: unknown = null;
+      const later = (a: unknown, b: unknown) => (a instanceof Date && b instanceof Date ? a.getTime() > b.getTime() : typeof a === 'number' && typeof b === 'number' ? a > b : String(a) > String(b));
       const items: SourceItem[] = r.rows.map((row, i) => {
         const id = idAt >= 0 ? String(row[idAt]) : String(i + 1);
-        const body = `# ${cfg.object} ${id}\n\n` + r.columns.map((col, j) => `${col}: ${row[j] == null ? '' : String(row[j])}`).join('\n');
-        if (wmAt >= 0 && row[wmAt] != null) {
-          const v = row[wmAt] instanceof Date ? (row[wmAt] as Date).toISOString() : String(row[wmAt]);
-          if (!watermark || v > watermark) watermark = v;
+        const body = `# ${cfg.object} ${id}\n\n` + r.columns.map((col, j) => `${col}: ${row[j] == null ? '' : row[j] instanceof Date ? (row[j] as Date).toISOString() : String(row[j])}`).join('\n');
+        // Rows arrive ordered by the watermark column; the last is the newest, compared in its own type.
+        if (wmAt >= 0 && row[wmAt] != null && (best == null || later(row[wmAt], best))) {
+          best = row[wmAt];
+          watermark = best instanceof Date ? best.toISOString() : String(best);
         }
         const data = Buffer.from(body, 'utf8');
         return { key: `${cfg.object}#${id}`, name: `${cfg.object} #${id}`, version: sha(data), size: data.length, read: async () => data };

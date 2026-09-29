@@ -144,7 +144,7 @@ export class PostgresDriver implements DataDriver {
     return this.client(opts.timeoutMs, (c) =>
       this.readOnly(c, opts.timeoutMs, async () => {
         const wm = opts.watermarkColumn ? quoteIdent(opts.watermarkColumn) : null;
-        const text = `SELECT * FROM ${quoteIdent(object)}${wm && opts.after != null ? ` WHERE ${wm}::text > $1` : ''}${wm ? ` ORDER BY ${wm}` : ''} LIMIT ${opts.limit + 1}`;
+        const text = `SELECT * FROM ${quoteIdent(object)}${wm && opts.after != null ? ` WHERE ${wm} > $1` : ''}${wm ? ` ORDER BY ${wm}` : ''} LIMIT ${opts.limit + 1}`;
         const r = await c.query({ text, values: wm && opts.after != null ? [opts.after] : [], rowMode: 'array' });
         return { columns: r.fields.map((f) => f.name), rows: (r.rows as unknown[][]).slice(0, opts.limit), capped: r.rows.length > opts.limit, estimate: null };
       })
