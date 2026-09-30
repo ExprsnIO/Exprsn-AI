@@ -18,6 +18,49 @@
   // Accessibility modes (App.setA11y in app.js; the tokens are in css/app.css under [data-a11y="aaa"]).
   const A11Y = [{ value: 'system', label: 'Follow system' }, { value: 'aa', label: 'Standard (AA)' }, { value: 'aaa', label: 'Enhanced (AAA)' }];
 
+  /**
+   * Step-up (B-106): sensitive changes answer 401 "Step-up required" when the last password or factor check is older
+   * than the server's window. This asks for the password, an authenticator code or a passkey, and resolves true when
+   * the server accepted it.
+   */
+  const stepUp = (ctx) => new Promise((resolve) => {
+    const methods = (App.me && App.me.stepUp && App.me.stepUp.methods) || ['password'];
+    const pw = methods.indexOf('password') >= 0; const totp = methods.indexOf('totp') >= 0;
+    const passkey = methods.indexOf('webauthn') >= 0 && App.webauthn && App.webauthn.supported();
+    let ok = false;
+    ctx.modal({ title: 'Confirm it is you',
+      body: '<div class="fg2">This change needs a fresh check of who you are. ' + (pw && totp ? 'Enter your password or a code from your authenticator.' : pw ? 'Enter your password.' : totp ? 'Enter a code from your authenticator.' : 'Use your passkey.') + '</div>'
+        + (pw ? UI.field('Password', UI.input('', { type: 'password', attrs: 'data-supw autocomplete="current-password"' })) : '')
+        + (totp ? UI.field('Authenticator code', UI.input('', { attrs: 'data-sucode inputmode="numeric" maxlength="6" autocomplete="one-time-code"' })) : '')
+        + '<div data-suerr role="alert"></div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + (passkey ? UI.btn('Use a passkey', { icon: 'key', attrs: 'data-supk' }) : '') + (pw || totp ? UI.btn('Confirm', { kind: 'primary', attrs: 'data-sugo' }) : ''),
+      onMount(m) {
+        const err = m.querySelector('[data-suerr]'); const first = m.querySelector('input'); if (first) first.focus();
+        const send = async (body) => {
+          try { await App.post('/api/me/step-up', body); ok = true; App.closeOverlay(); }
+          catch (e) { const p = e.problem || {}; err.innerHTML = UI.notice(esc(p.detail || e.message), 'danger'); }
+        };
+        const go = () => {
+          const pwv = m.querySelector('[data-supw]') ? m.querySelector('[data-supw]').value : '';
+          const code = m.querySelector('[data-sucode]') ? m.querySelector('[data-sucode]').value.trim() : '';
+          if (pwv) send({ password: pwv }); else if (code) send({ code }); else err.innerHTML = UI.notice('Enter your password or a code.', 'warn');
+        };
+        const b = m.querySelector('[data-sugo]'); if (b) b.addEventListener('click', go);
+        m.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } }));
+        const pk = m.querySelector('[data-supk]');
+        if (pk) pk.addEventListener('click', async () => { try { const opts = await App.post('/api/me/step-up/webauthn/options'); const response = await App.webauthn.authenticate(opts); await send({ response }); } catch (e) { err.innerHTML = UI.notice(esc((e.problem && e.problem.detail) || e.message), 'danger'); } });
+      },
+      onClose() { resolve(ok); } });
+  });
+  /** Runs `fn`; when the server asks for step-up, confirms the user and runs it once more. */
+  const withStepUp = async (ctx, fn) => {
+    try { return await fn(); } catch (err) {
+      if (!(err && err.problem && err.problem.step_up)) throw err;
+      if (!(await stepUp(ctx))) { const e = new Error('Not confirmed.'); e.cancelled = true; throw e; }
+      return fn();
+    }
+  };
+
   App.register({
     id: 'settings', title: 'Settings', summary: 'Profile, appearance, second factors, API keys, sessions', crumb: ['Settings'], live: true,
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
@@ -39,10 +82,18 @@
 
       const a11y = App.state.a11y || 'system';
       const eff = App.a11yMode();
+      const pwHome = me.password || { managedHere: false, stores: [] };
+      const passwordPanel = UI.panel('Password', pwHome.managedHere
+        ? '<div class="formgrid" style="--cols:1">' + UI.field('Current password', UI.input('', { type: 'password', attrs: 'data-pwcur autocomplete="current-password"' }))
+          + UI.field('New password', UI.input('', { type: 'password', attrs: 'data-pwnew autocomplete="new-password"' }), 'At least 12 characters. Not your username, not a common or breached password.')
+          + UI.field('New password again', UI.input('', { type: 'password', attrs: 'data-pwagain autocomplete="new-password"' })) + '</div>'
+          + '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Changing it signs out your other sessions and applications.</span>' + UI.btn('Change password', { kind: 'primary', size: 'sm', attrs: 'data-pwchange' }) + '</div>'
+        : '<div class="fg2" style="font-size:13px">Your password is kept by ' + esc((pwHome.stores || []).join(', ') || 'your directory') + '. Change it there; this server never stores it.</div>');
+
       const appearance = UI.panel('Appearance', '<div class="formgrid" style="--cols:2">' + UI.field('Theme', UI.select(['Follow system', 'Light', 'Dark'], theme, 'data-theme'))
         + UI.field('Accessibility', UI.select(A11Y, a11y, 'data-a11y-mode'), a11y === 'system' ? 'In use: ' + (eff === 'aaa' ? 'Enhanced, because your system asks for more contrast.' : 'Standard.') : '') + '</div>'
         + UI.toggle('Single-key shortcuts (? opens the screen map)', App.state.singleKeys, 'data-singlekeys data-manual="1"')
-        + '<span class="muted" style="font-size:12px">Saved in this browser. Standard meets WCAG 2.2 AA. Enhanced raises text contrast to 7:1, enlarges click targets, shows a focus ring on every focused control, underlines links, stops animation and keeps messages on screen longer. Reduced motion from your system is always honoured.</span>');
+        + '<span class="muted" style="font-size:12px">The accessibility mode is saved with your account and follows you to other browsers; the theme and shortcuts are saved in this browser. Standard meets WCAG 2.2 AA. Enhanced raises text contrast to 7:1, enlarges click targets, shows a focus ring on every focused control, underlines links, stops animation and keeps messages on screen longer. Reduced motion from your system is always honoured.</span>');
 
       const factors = st.mfa ? st.mfa.factors : [];
       const mfaPanel = UI.panel('Second factors', (st.codes ? UI.notice('<b>New recovery codes. Store them now; they are shown once.</b><div class="mono" style="margin-top:4px;columns:2">' + st.codes.map((c) => '<div>' + esc(c) + '</div>').join('') + '</div>', 'warn', UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-codesdone' })) : '')
@@ -67,23 +118,33 @@
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(me.user.displayName))
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + keysPanel + '</div></div>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       const reload = () => { st.loaded = false; ctx.rerender(); };
-      const act = async (fn, okMsg) => { try { await fn(); if (okMsg) ctx.toast(okMsg, 'ok'); reload(); } catch (err) { App.fail(err); } };
+      const act = async (fn, okMsg) => { try { await fn(); if (okMsg) ctx.toast(okMsg, 'ok'); reload(); } catch (err) { if (!err.cancelled) App.fail(err); } };
+      const guarded = (fn) => withStepUp(ctx, fn);
 
       ctx.on('change', '[data-theme]', (e, t) => { App.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '.'); });
-      ctx.on('change', '[data-a11y-mode]', (e, t) => { App.setA11y(t.value === 'system' ? null : t.value); ctx.rerender(); ctx.toast('Accessibility: ' + esc(A11Y.find((o) => o.value === t.value).label) + '.'); });
+      ctx.on('change', '[data-a11y-mode]', (e, t) => {
+        const v = t.value; App.setA11y(v === 'system' ? null : v); ctx.rerender();
+        App.patch('/api/me/preferences', { a11y: v }).then((prefs) => { if (App.me) App.me.preferences = prefs; ctx.toast('Accessibility: ' + esc(A11Y.find((o) => o.value === v).label) + '. Saved with your account.'); }, (err) => App.fail(err, 'Not saved to your account'));
+      });
+      ctx.on('click', '[data-pwchange]', () => {
+        const cur = ctx.$('[data-pwcur]').value, next = ctx.$('[data-pwnew]').value, again = ctx.$('[data-pwagain]').value;
+        if (!cur || !next) { ctx.toast('Enter your current and new password.', 'warn'); return; }
+        if (next !== again) { ctx.toast('The new passwords do not match.', 'warn'); return; }
+        act(async () => { const r = await App.post('/api/me/password', { currentPassword: cur, newPassword: next }); ctx.toast('Password changed.' + (r.sessionsRevoked ? ' ' + r.sessionsRevoked + ' other session' + (r.sessionsRevoked === 1 ? '' : 's') + ' signed out.' : ''), 'ok'); });
+      });
       ctx.on('click', '[data-singlekeys]', (e, t) => { App.setSingleKeys(!App.state.singleKeys); t.classList.toggle('on', App.state.singleKeys); t.setAttribute('aria-checked', App.state.singleKeys ? 'true' : 'false'); ctx.toast(App.state.singleKeys ? 'Single-key shortcuts on.' : 'Single-key shortcuts off. Ctrl K still opens the command palette.'); });
 
       ctx.on('click', '[data-addtotp]', () => act(async () => { st.totp = await App.post('/api/me/mfa/totp', { label: 'Authenticator app' }); }));
       ctx.on('click', '[data-totpcancel]', () => { st.totp = null; ctx.rerender(); });
       ctx.on('click', '[data-totpconfirm]', () => { const code = ctx.$('[data-totpcode]').value.trim(); act(async () => { const r = await App.post('/api/me/mfa/totp/' + encodeURIComponent(st.totp.id) + '/confirm', { code }); st.totp = null; if (r.recoveryCodes) st.codes = r.recoveryCodes; }, 'Authenticator added.'); });
       ctx.on('click', '[data-addpasskey]', () => act(async () => { const opts = await App.post('/api/me/mfa/webauthn/options'); const response = await App.webauthn.register(opts); const r = await App.post('/api/me/mfa/webauthn', { label: 'Passkey', response }); if (r.recoveryCodes) st.codes = r.recoveryCodes; }, 'Passkey added.'));
-      ctx.on('click', '[data-newcodes]', async () => { const ok = await ctx.confirm({ title: 'Replace recovery codes?', tag: 'old codes stop working', tone: 'danger', body: '<div class="fg2">Ten new codes are generated and every earlier code stops working.</div>', ok: 'Generate new codes' }); if (ok) act(async () => { st.codes = (await App.post('/api/me/mfa/recovery-codes')).recoveryCodes; }); });
+      ctx.on('click', '[data-newcodes]', async () => { const ok = await ctx.confirm({ title: 'Replace recovery codes?', tag: 'old codes stop working', tone: 'danger', body: '<div class="fg2">Ten new codes are generated and every earlier code stops working.</div>', ok: 'Generate new codes' }); if (ok) act(async () => { st.codes = (await guarded(() => App.post('/api/me/mfa/recovery-codes'))).recoveryCodes; }); });
       ctx.on('click', '[data-codesdone]', () => { st.codes = null; ctx.rerender(); });
-      ctx.on('click', '[data-rmfactor]', async (e, t) => { const f = factors.find((x) => x.id === t.dataset.rmfactor); const ok = await ctx.confirm({ title: 'Remove ' + f.label + '?', tag: 'second factor', tone: 'danger', body: '<div class="fg2">You will no longer be able to sign in with it.</div>', ok: 'Remove' }); if (ok) act(() => App.del('/api/me/mfa/' + encodeURIComponent(f.id)), 'Factor removed. Audit entry written.'); });
+      ctx.on('click', '[data-rmfactor]', async (e, t) => { const f = factors.find((x) => x.id === t.dataset.rmfactor); const ok = await ctx.confirm({ title: 'Remove ' + f.label + '?', tag: 'second factor', tone: 'danger', body: '<div class="fg2">You will no longer be able to sign in with it.</div>', ok: 'Remove' }); if (ok) act(() => guarded(() => App.del('/api/me/mfa/' + encodeURIComponent(f.id))), 'Factor removed. Audit entry written.'); });
 
       ctx.on('click', '[data-revoke]', async (e, t) => {
         const k = keys.find((x) => x.id === t.dataset.revoke);
@@ -103,10 +164,14 @@
               const name = nameEl.value.trim(); const chosen = Array.prototype.slice.call(m.querySelectorAll('[data-scope]:checked')).map((c) => c.dataset.scope);
               if (!name) { ctx.toast('Give the key a name.', 'warn'); return; }
               if (!chosen.length) { ctx.toast('Pick at least one scope.', 'warn'); return; }
-              try {
-                const r = await App.post('/api/me/api-keys', { name, scopes: chosen, ttlDays: Number(m.querySelector('[data-exp]').value) });
-                st.revealed = { name, key: r.key }; App.closeOverlay(); reload(); ctx.toast('Key created. Copy it now; it will not be shown again.', 'warn', 5000);
-              } catch (err) { App.fail(err, 'Key not created'); }
+              const body = { name, scopes: chosen, ttlDays: Number(m.querySelector('[data-exp]').value) };
+              const created = (r) => { st.revealed = { name, key: r.key }; App.closeOverlay(); reload(); ctx.toast('Key created. Copy it now; it will not be shown again.', 'warn', 5000); };
+              try { created(await App.post('/api/me/api-keys', body)); } catch (err) {
+                if (!(err.problem && err.problem.step_up)) { App.fail(err, 'Key not created'); return; }
+                // The step-up dialog replaces this one; the key is created once the check succeeds.
+                App.closeOverlay();
+                if (await stepUp(ctx)) { try { created(await App.post('/api/me/api-keys', body)); } catch (err2) { App.fail(err2, 'Key not created'); } }
+              }
             });
           } });
       };
