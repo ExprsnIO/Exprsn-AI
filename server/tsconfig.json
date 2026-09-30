@@ -19,5 +19,5 @@
     "rootDir": ".",
     "sourceMap": true
   },
-  "include": ["src", "test", "vitest.config.ts", "vitest.integration.config.ts"]
+  "include": ["src", "test", "loadtest", "vitest.config.ts", "vitest.integration.config.ts"]
 }

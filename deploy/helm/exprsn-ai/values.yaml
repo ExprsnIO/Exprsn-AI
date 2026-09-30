@@ -1,0 +1,331 @@
+# Exprsn-AI Helm chart values. See README.md next to this file for a walk-through.
+#
+# The chart runs the application server only. PostgreSQL or MySQL, Redis, the S3 store, OpenBao, the directory
+# (LDAP, Kerberos KDC) and the Ollama nodes are external: point the values below at them, and allow them in the
+# NetworkPolicies at the end of this file. Ollama instances are registered in the console (Admin > Pools), not here.
+
+image:
+  # Build with: docker build -f deploy/docker/Dockerfile -t <registry>/exprsn-ai:<tag> .
+  repository: registry.example.internal/exprsn-ai
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # Pinning a digest (sha256:...) is recommended; when set it wins over the tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# More than one replica needs a Redis URL (secrets.REDIS_URL): the Socket.io adapter, the BullMQ job queue and the
+# cross-instance bus all use it. The chart refuses to render otherwise.
+replicaCount: 2
+
+# ---------------------------------------------------------------------------------------------------------------
+# Application settings (non-secret). Rendered into a ConfigMap; see docs/deploy.md for every variable.
+# ---------------------------------------------------------------------------------------------------------------
+config:
+  # The https:// address users open. Required. Its origin is the only one allowed for state changes and sockets.
+  publicUrl: ""
+  nodeEnv: production
+  # The ingress controller's pods sit on private addresses; uniquelocal trusts 10/8, 172.16/12, 192.168/16, fc00::/7.
+  trustProxy: uniquelocal
+  logLevel: info
+  defaultTenant: default
+
+  database:
+    # pg or mysql. SQLite is for single-node Compose and systemd installs and is not supported by this chart.
+    client: pg
+    poolMax: 10
+    # The URL itself is a secret: secrets.DATABASE_URL.
+
+  kms:
+    # local wraps each tenant's data key with DATA_KEY (secrets.DATA_KEY); openbao uses the transit engine.
+    provider: local
+    openbao:
+      addr: ""                  # https://openbao.vault.svc:8200
+      transitMount: transit
+      keyPrefix: exprsn-
+      # Key of a Secret holding the CA bundle, mounted at /run/secrets/openbao_ca.pem when set.
+      caSecret: { name: "", key: ca.pem }
+
+  blobStore:
+    # s3 (MinIO, Ceph, SeaweedFS, AWS) or pvc (a filesystem volume; ReadWriteMany when replicaCount > 1).
+    type: s3
+    s3:
+      endpoint: ""              # https://minio.data.svc:9000
+      region: us-east-1
+      bucket: exprsn-ai
+      accessKeyId: ""
+      forcePathStyle: true
+      # The secret access key: secrets.S3_SECRET_ACCESS_KEY.
+    pvc:
+      existingClaim: ""
+      storageClassName: ""
+      accessModes: [ReadWriteMany]
+      size: 50Gi
+
+  # Job workers on these pods. Set false (and run a second release with workers only) to split web and workers.
+  workersEnabled: true
+  jobConcurrency: 4
+
+  smtpFrom: "Exprsn-AI <no-reply@localhost>"
+  siemUrl: ""
+
+  # The script sandbox needs a docker or podman CLI, which a locked-down pod does not have. Scripts are refused with
+  # "none"; run script runners in the sandbox zone and see docs/deploy.md before changing this.
+  scriptRunner: none
+
+  # Any other variable from docs/deploy.md, as NAME: "value" (strings). Secrets never go here.
+  extra: {}
+    # OLLAMA_MAX_INFLIGHT: "4"
+    # MCP_ALLOWED_HOSTS: "*.tools.internal"
+    # CLAMD_HOST: clamav.sandbox.svc
+
+# Identity YAML (docs/identity.md), mounted at /etc/exprsn-ai/identity.yaml and applied at every start.
+identity:
+  # Inline YAML; secrets inside are references (file:/run/secrets/<path> or env:NAME), never values.
+  config: ""
+  # Or an existing ConfigMap with the key identity.yaml.
+  existingConfigMap: ""
+
+# ---------------------------------------------------------------------------------------------------------------
+# Secrets. Each entry names a key of an existing Kubernetes Secret. The key is mounted as a file under /run/secrets
+# and the server reads it through <NAME>_FILE, so no secret appears in the pod's environment. Leave name empty to
+# leave a variable unset. The chart never creates Secrets.
+# ---------------------------------------------------------------------------------------------------------------
+secrets:
+  SESSION_SECRET: { name: exprsn-ai, key: session_secret }          # required: openssl rand -hex 32
+  DATA_KEY: { name: exprsn-ai, key: data_key }                      # required with kms.provider=local: openssl rand -base64 32
+  DATABASE_URL: { name: exprsn-ai, key: database_url }              # required: postgres://... or mysql://...
+  REDIS_URL: { name: exprsn-ai, key: redis_url }                    # required when more than one replica
+  METRICS_TOKEN: { name: "", key: metrics_token }                   # required by serviceMonitor
+  OPENBAO_TOKEN: { name: "", key: openbao_token }                   # required with kms.provider=openbao
+  S3_SECRET_ACCESS_KEY: { name: exprsn-ai, key: s3_secret_access_key }  # required with blobStore.type=s3
+  SMTP_URL: { name: "", key: smtp_url }
+  SIEM_TOKEN: { name: "", key: siem_token }
+
+# Further files for the identity YAML and friends, mounted at /run/secrets/<path>.
+extraSecretFiles: []
+  # - { name: exprsn-ai-ldap, key: bind_password, path: ldap_bind_password }
+  # - { name: exprsn-ai-ldap, key: ca.pem, path: ldap-ca.pem }
+
+# Plain extra environment (for env: references in the identity YAML, for example) and extra volumes.
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+# ---------------------------------------------------------------------------------------------------------------
+# Migrations
+# ---------------------------------------------------------------------------------------------------------------
+migrations:
+  # initContainer: every pod runs `node server/dist/cli.js migrate` before starting (Knex's migration lock keeps
+  #   concurrent pods safe; a pod that loses the race restarts its init container and finds nothing to do).
+  # job: a pre-install/pre-upgrade hook Job runs it once before the Deployment changes.
+  # none: the server migrates on start (DB_MIGRATE_ON_START=true).
+  mode: initContainer
+  job:
+    backoffLimit: 3
+    activeDeadlineSeconds: 900
+    ttlSecondsAfterFinished: 3600
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { memory: 512Mi }
+
+# ---------------------------------------------------------------------------------------------------------------
+# Pod
+# ---------------------------------------------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The server never talks to the Kubernetes API.
+  automountServiceAccountToken: false
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000               # the image's "node" user
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile: { type: RuntimeDefault }
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  privileged: false
+  capabilities: { drop: [ALL] }
+  seccompProfile: { type: RuntimeDefault }
+
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { memory: 1536Mi }
+
+# /tmp is an emptyDir (attachments are quarantined and media jobs work there).
+tmpDir:
+  sizeLimit: 2Gi
+  medium: ""
+
+# The server drains on SIGTERM and exits within 25 s; the preStop pause lets endpoints drop the pod first.
+terminationGracePeriodSeconds: 40
+preStopSleepSeconds: 5
+
+probes:
+  startup: { path: /healthz, periodSeconds: 5, failureThreshold: 36, timeoutSeconds: 3 }
+  liveness: { path: /healthz, periodSeconds: 15, failureThreshold: 3, timeoutSeconds: 3 }
+  readiness: { path: /readyz, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 5 }
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: ScheduleAnyway
+  #   labelSelector: { matchLabels: { app.kubernetes.io/name: exprsn-ai } }
+priorityClassName: ""
+
+# ---------------------------------------------------------------------------------------------------------------
+# Service, Ingress, availability
+# ---------------------------------------------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: true
+  className: nginx
+  # Streams and sockets are long-lived: raise the proxy read and send timeouts, and keep WebSocket upgrades on
+  # /socket.io. ingress-nginx forwards upgrades by default; the annotations below cover the timeouts and body size.
+  # For other controllers, the equivalent settings are named in README.md.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+    # The console connects over WebSocket first and falls back to HTTP long polling, whose requests must all reach
+    # the same pod. Cookie affinity keeps them there when there is more than one replica.
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/session-cookie-name: exprsn-route
+    nginx.ingress.kubernetes.io/session-cookie-secure: "true"
+  hosts:
+    - host: ai.example.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: exprsn-ai-tls
+      hosts: [ai.example.internal]
+
+podDisruptionBudget:
+  enabled: true
+  # Used when replicaCount (or autoscaling.minReplicas) is above 1.
+  minAvailable: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 0
+
+# Prometheus Operator ServiceMonitor. Needs secrets.METRICS_TOKEN (the scrape sends it as a bearer token).
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# ---------------------------------------------------------------------------------------------------------------
+# NetworkPolicies, mirroring the zones of the design (edge, app, data, directory, inference, sandbox, training,
+# external). The release's pods are the app zone. With enabled: true everything in and out of them is denied except
+# the peers below. Each egress group takes Kubernetes NetworkPolicy peers (`to`: namespaceSelector, podSelector,
+# ipBlock) and ports; a group with no peers is not rendered. The external zone has no egress in an air-gapped site,
+# so nothing here allows the internet.
+# ---------------------------------------------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # Label put on the pods so zone-wide policies elsewhere can select them.
+  zoneLabel: app
+
+  ingress:
+    # edge zone: the ingress controller.
+    controller:
+      namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+      podSelector: { matchLabels: { app.kubernetes.io/name: ingress-nginx } }
+    # Prometheus, for /metrics (rendered when serviceMonitor.enabled).
+    monitoring:
+      namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+      podSelector: {}
+    # Further ingress rules, as NetworkPolicy ingress rules.
+    extra: []
+
+  egress:
+    dns:
+      to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    # data zone
+    database:
+      to: []
+        # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }
+        #   podSelector: { matchLabels: { app.kubernetes.io/name: postgresql } }
+        # - ipBlock: { cidr: 10.30.0.0/24 }
+      ports:
+        - { port: 5432, protocol: TCP }
+        - { port: 3306, protocol: TCP }
+    redis:
+      to: []
+      ports:
+        - { port: 6379, protocol: TCP }
+    objectStorage:
+      to: []
+      ports:
+        - { port: 9000, protocol: TCP }
+        - { port: 443, protocol: TCP }
+    kms:
+      to: []
+      ports:
+        - { port: 8200, protocol: TCP }
+    # directory zone: OpenLDAP and the Kerberos KDC.
+    directory:
+      to: []
+        # - ipBlock: { cidr: 10.31.0.0/24 }
+      ports:
+        - { port: 389, protocol: TCP }
+        - { port: 636, protocol: TCP }
+        - { port: 88, protocol: TCP }
+        - { port: 88, protocol: UDP }
+    # inference zone: Ollama pools and image workers (the gateway is the only client).
+    inference:
+      to: []
+        # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: inference } }
+        # - ipBlock: { cidr: 10.40.0.0/16 }
+      ports:
+        - { port: 11434, protocol: TCP }
+        - { port: 8188, protocol: TCP }
+    # sandbox zone: MCP servers, tool runners, ClamAV, media workers, the egress proxy.
+    sandbox:
+      to: []
+        # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: sandbox } }
+      ports: []
+    # Mail relay and SIEM collector.
+    notifications:
+      to: []
+      ports:
+        - { port: 587, protocol: TCP }
+        - { port: 465, protocol: TCP }
+        - { port: 25, protocol: TCP }
+    siem:
+      to: []
+      ports: []
+    # Further egress rules, as NetworkPolicy egress rules.
+    extra: []

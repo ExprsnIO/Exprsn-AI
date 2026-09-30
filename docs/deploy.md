@@ -96,6 +96,46 @@ credentials, and installs a hardened unit (`ProtectSystem=strict`, no capabiliti
 Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forward WebSocket upgrades for
 `/socket.io/`. Preparing Ollama GPU nodes: [deploy/baremetal/ollama-node.md](../deploy/baremetal/ollama-node.md).
 
+## Kubernetes (Helm)
+
+The chart in [deploy/helm/exprsn-ai](../deploy/helm/exprsn-ai/README.md) runs the application server as a Deployment
+with a Service, an Ingress, a PodDisruptionBudget, an optional HorizontalPodAutoscaler and ServiceMonitor, and
+NetworkPolicies that mirror the network zones. PostgreSQL or MySQL, Redis, the S3 store, OpenBao, the directory and the
+Ollama nodes are external; Ollama instances are registered in the console as usual.
+
+```sh
+kubectl create namespace exprsn-ai
+kubectl -n exprsn-ai create secret generic exprsn-ai \
+  --from-literal=session_secret="$(openssl rand -hex 32)" --from-literal=data_key="$(openssl rand -base64 32)" \
+  --from-literal=database_url='postgres://...' --from-literal=redis_url='redis://...' \
+  --from-literal=s3_secret_access_key='...'
+helm install exprsn-ai deploy/helm/exprsn-ai -n exprsn-ai -f my-values.yaml
+kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:create --username root --display-name "Platform admin"
+```
+
+- Secrets are never values in the chart: each `secrets.<NAME>` entry names a key of an existing Secret, mounted as a
+  file under `/run/secrets/` and read through `<NAME>_FILE`.
+- Pods run as UID 1000 with a read-only root filesystem, no capabilities, no privilege escalation, the `RuntimeDefault`
+  seccomp profile and no service-account token. Probes use `/healthz` (startup, liveness) and `/readyz` (readiness).
+- Migrations run in an init container (`node server/dist/cli.js migrate`) or a pre-upgrade hook Job, and the chart sets
+  `DB_MIGRATE_ON_START=false`.
+- The chart refuses to render several replicas without `REDIS_URL`, SQLite, or a plain `http://` `PUBLIC_URL` in
+  production.
+- NetworkPolicies deny everything in and out of the pods except the ingress controller, DNS and the egress groups you
+  fill in (data, directory, inference, sandbox, KMS, mail, SIEM). Nothing allows the internet.
+- `SCRIPT_RUNNER` is `none` in the chart, since the pod has no container runtime; run script runners in the sandbox
+  zone.
+
+## Runbooks and load testing
+
+- [Backup and restore](runbooks/backup-restore.md): database dumps per dialect, blob store, keys, restore order,
+  verification with `exprsn-ai audit:verify`, restore drills.
+- [Incident response](runbooks/incident-response.md): severity, first 15 minutes, revoking sessions and API keys,
+  rotating `SESSION_SECRET` and data keys, disabling a tenant, audit forensics, guardrail emergency blocks, draining
+  Ollama instances.
+- [Upgrade and rollback](runbooks/upgrade.md): rolling upgrades, migrations, rollback, Ollama node upgrades.
+- [Load test of the streaming path](loadtest.md): `server/loadtest/stream.ts` and the 1.0 targets.
+
 ## Operations
 
 - **Health:** `/healthz` (process up), `/readyz` (database reachable and migrated, KMS and blob store answering; 503 while draining).
