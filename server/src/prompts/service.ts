@@ -2,7 +2,7 @@ import { ulid } from 'ulid';
 import { json } from '../db/knex.js';
 import { clears, labelRank, type Label } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
-import { badRequest, conflict, forbidden, notFound } from '../http/problem.js';
+import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { workspacesFor } from '../http/middleware.js';
 import type { Services } from '../services.js';
 
@@ -168,11 +168,26 @@ export class PromptService {
     return used.map((name) => defs.find((d) => d.name === name) ?? { name });
   }
 
+  /**
+   * The `user-input` checkpoint on a template body (B-708): a template becomes part of a prompt, so it passes the same
+   * rules when it is saved and again when a version is published (the rules may have changed in between). A block, a
+   * hold or a redaction refuses the save or the publication with the rules named; nothing is stored changed.
+   */
+  private async guard(p: Principal, body: string, label: Label, workspaceId: string | null, templateId: string, op: 'save' | 'publish'): Promise<void> {
+    const d = await this.s().guardrails.check({ tenantId: p.tenantId, workspaceId, checkpoint: 'user-input', text: body, label, principal: p, source: { kind: 'prompt', id: templateId }, meta: { tokens: Math.ceil(body.length / 4), via: 'prompt-library', op } });
+    if (d.action !== 'block' && d.action !== 'require-approval' && d.action !== 'redact') return;
+    const rules = [...new Set(d.findings.filter((f) => f.stage === 'enforce' && f.action === d.action).map((f) => f.ruleName))];
+    const verb = op === 'publish' ? 'published' : 'saved';
+    const what = d.action === 'redact' ? `The template would be redacted by ${rules.map((r) => `"${r}"`).join(', ') || 'a guardrail'}; remove that text and try again.` : (d.reason ?? 'A guardrail refused this template.');
+    throw new HttpProblem(422, d.action === 'block' ? 'Blocked by guardrail' : d.action === 'redact' ? 'Refused by guardrail' : 'Held by guardrail', `This template cannot be ${verb}. ${what}`, { extensions: { step: 'guardrail', action: d.action, rules } });
+  }
+
   async create(p: Principal, input: { name: string; description?: string | null; workspaceId: string | null; label: Label; body: string; variables?: VariableDef[]; notes?: string | null }): Promise<TemplateRow> {
     await this.assertScope(p, input.workspaceId, input.label);
     await this.assertNameFree(p.tenantId, input.workspaceId, input.name);
     const vars = this.checkVariables(input.body, input.variables ?? []);
     const id = ulid();
+    await this.guard(p, input.body, input.label, input.workspaceId, id, 'save');
     const t = Date.now();
     const vid = ulid();
     // Sealed before the transaction: the key lookup must not wait on the connection the transaction holds.
@@ -201,6 +216,7 @@ export class PromptService {
     const t = await this.get(p, id);
     if (t.state === 'retired') throw conflict('A retired template cannot change.');
     const vars = this.checkVariables(input.body, input.variables ?? []);
+    await this.guard(p, input.body, t.label, t.workspace_id, t.id, 'save');
     const version = t.version + 1;
     const vid = ulid();
     await this.db('prompt_versions').insert({ id: vid, tenant_id: t.tenant_id, template_id: t.id, version, body: await this.s().keys.seal(t.tenant_id, input.body, `prompt:${vid}`), variables: JSON.stringify(vars), notes: input.notes ?? null, created_by: p.userId, created_at: Date.now() });
@@ -216,6 +232,7 @@ export class PromptService {
     if (publishing) {
       const v = version ?? before.version;
       if (v < 1 || v > before.version) throw badRequest(`Version ${v} does not exist.`);
+      await this.guard(p, (await this.version(before, v)).body, before.label, before.workspace_id, before.id, 'publish');
       upd.published_version = v;
     }
     await this.db('prompt_templates').where({ id }).update(upd);

@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { ulid } from 'ulid';
 import { z } from 'zod';
 import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
 import { clears, LABELS } from '../../authz/labels.js';
@@ -175,7 +176,18 @@ export function tenantAdminRoutes(s: Services): Router {
 
   const retentionView = async (tenantId: string) => {
     const r = (await s.db('chat_retention').where({ tenant_id: tenantId }).first()) as { conversation_days: number | null; updated_by: string | null; updated_at: number; last_run_at: number | null; last_purged: number | null } | undefined;
-    return { conversationDays: r?.conversation_days == null ? null : Number(r.conversation_days), updatedBy: r?.updated_by ?? null, updatedAt: r ? Number(r.updated_at) : null, lastRunAt: r?.last_run_at == null ? null : Number(r.last_run_at), lastPurged: r?.last_purged == null ? null : Number(r.last_purged), sweepMinutes: s.cfg.CHAT_RETENTION_SWEEP_MINUTES };
+    return { conversationDays: r?.conversation_days == null ? null : Number(r.conversation_days), updatedBy: r?.updated_by ?? null, updatedAt: r ? Number(r.updated_at) : null, lastRunAt: r?.last_run_at == null ? null : Number(r.last_run_at), lastPurged: r?.last_purged == null ? null : Number(r.last_purged), sweepMinutes: s.cfg.CHAT_RETENTION_SWEEP_MINUTES, scopes: await retentionScopes(tenantId) };
+  };
+
+  /** Sprint 16 (B-707): shorter periods for a workspace or a user; the shortest period that applies wins. */
+  const retentionScopes = async (tenantId: string) => {
+    const rows = (await s.db('chat_retention_scopes').where({ tenant_id: tenantId }).orderBy([{ column: 'scope' }, { column: 'conversation_days' }])) as { id: string; scope: 'workspace' | 'user'; scope_id: string; conversation_days: number; updated_by: string | null; updated_at: number }[];
+    const out = [];
+    for (const x of rows) {
+      const name = x.scope === 'workspace' ? ((await s.tenants.workspace(tenantId, x.scope_id))?.name ?? null) : ((await s.users.get(tenantId, x.scope_id))?.display_name ?? null);
+      out.push({ id: x.id, scope: x.scope, scopeId: x.scope_id, name, conversationDays: Number(x.conversation_days), updatedBy: x.updated_by, updatedAt: Number(x.updated_at) });
+    }
+    return out;
   };
 
   r.get('/tenants/:tid/retention', manage, async (req, res) => {
@@ -193,11 +205,47 @@ export function tenantAdminRoutes(s: Services): Router {
     res.json(await retentionView(t.id));
   });
 
+  /**
+   * A retention period for one workspace or one user of the tenant (null removes it). It can only shorten what applies
+   * to their conversations: the shortest of the tenant's, the workspace's and the owner's periods wins.
+   */
+  r.put('/tenants/:tid/retention/scopes', manage, async (req, res) => {
+    const t = await loadTenant(req);
+    const body = parseBody(z.object({ scope: z.enum(['workspace', 'user']), scopeId: z.string().length(26), conversationDays: z.number().int().min(1).max(3650).nullable() }).strict(), req.body);
+    const target = body.scope === 'workspace' ? await s.tenants.workspace(t.id, body.scopeId) : await s.users.get(t.id, body.scopeId);
+    if (!target) throw notFound(body.scope === 'workspace' ? 'Workspace' : 'User');
+    const where = { tenant_id: t.id, scope: body.scope, scope_id: body.scopeId };
+    const before = (await s.db('chat_retention_scopes').where(where).first('conversation_days')) as { conversation_days: number } | undefined;
+    if (body.conversationDays == null) await s.db('chat_retention_scopes').where(where).delete();
+    else {
+      const row = { conversation_days: body.conversationDays, updated_by: principalOf(req).userId, updated_at: Date.now() };
+      if (!(await s.db('chat_retention_scopes').where(where).update(row))) await s.db('chat_retention_scopes').insert({ id: ulid(), ...where, ...row });
+    }
+    await audit(req, t.id, 'tenant.retention.scope.updated', { slug: t.slug, [body.scope]: body.scopeId }, { scope: body.scope, before: before ? Number(before.conversation_days) : null, after: body.conversationDays });
+    res.json(await retentionView(t.id));
+  });
+
+  // ---------- conversation sharing settings (Sprint 16, B-706) ----------
+
+  r.get('/tenants/:tid/sharing', manage, async (req, res) => {
+    res.json(await s.sharing.settings((await loadTenant(req)).id));
+  });
+
+  /** Anonymous share links are off until a tenant admin turns them on; they only ever open `public` conversations. */
+  r.put('/tenants/:tid/sharing', manage, async (req, res) => {
+    const t = await loadTenant(req);
+    const body = parseBody(z.object({ anonymousLinks: z.boolean(), anonymousMaxHours: z.number().int().min(1).max(30 * 24).optional() }).strict(), req.body);
+    const before = await s.sharing.settings(t.id);
+    const after = await s.sharing.setSettings(t.id, principalOf(req).userId, body);
+    await audit(req, t.id, 'tenant.sharing.updated', { slug: t.slug }, { before, after: { anonymousLinks: after.anonymousLinks, anonymousMaxHours: after.anonymousMaxHours } });
+    res.json(after);
+  });
+
   /** Applies the policy now, as the schedule would. */
   r.post('/tenants/:tid/retention/run', manage, async (req, res) => {
     const t = await loadTenant(req);
     const policy = await retentionView(t.id);
-    if (policy.conversationDays == null) throw conflict('This tenant keeps conversations until their owners delete them; set a retention period first.');
+    if (policy.conversationDays == null && !policy.scopes.length) throw conflict('This tenant keeps conversations until their owners delete them; set a retention period first.');
     const job = await s.jobs.enqueue({ tenantId: t.id, type: 'chat.retention', payload: { tenantId: t.id }, createdBy: principalOf(req).userId, maxAttempts: 1 });
     await audit(req, t.id, 'tenant.retention.run', { slug: t.slug }, { days: policy.conversationDays, job: job.id });
     res.status(202).json({ jobId: job.id });
