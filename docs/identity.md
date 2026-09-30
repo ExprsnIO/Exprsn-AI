@@ -118,10 +118,20 @@ The full permission lists are in [`server/src/authz/permissions.ts`](../server/s
 2. If the user has a second factor, the session is at stage `mfa` for five minutes: TOTP, a passkey, or a recovery
    code completes it. If the user's roles require one and none is set up, the stage is `enroll`, and only factor
    enrolment is allowed. Completing either issues a **new** session token.
-3. Sessions end after `SESSION_IDLE_MINUTES` of inactivity or `SESSION_ABSOLUTE_HOURS` in total, on sign-out, or when
+3. If an admin set or reset the account's local password (or created the account with a password), the session then
+   moves to stage `password`: only `POST /api/me/password` is allowed until the user chooses their own password.
+4. Sessions end after `SESSION_IDLE_MINUTES` of inactivity or `SESSION_ABSOLUTE_HOURS` in total, on sign-out, or when
    revoked (by the user, an admin, or disabling the account). Revocation closes the session's live connections.
 
 Five failed attempts lock the account for `LOCKOUT_DURATION_MINUTES`; the client address has a higher limit.
+
+Local accounts can change their password in Settings (the current password is required and a wrong one counts toward
+the lockout; the change signs out every other session and OAuth grant), reset it with a single-use link by email from
+the sign-in screen, and be reset by an identity admin (a temporary password to change at next sign-in, or a link).
+Directory accounts change their password in the directory. New passwords pass the policy and, with
+`BREACHED_PASSWORDS`, a breached-password check. Creating API keys, removing a factor and regenerating recovery codes
+need a password or factor check within `STEPUP_WINDOW_SECONDS` (signing in counts); Settings asks for it when needed.
+The account owner gets a security notice (console and email) for each of these changes. Routes: [api.md](api.md#sprint-11-account-self-service).
 
 ## Federation (Sprint 9)
 

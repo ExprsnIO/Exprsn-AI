@@ -185,12 +185,17 @@ filter, private `/tmp`, only the state directory writable.
   30 minutes.
 - Key-encryption keys cannot be re-wrapped: changing `DATA_KEY` or `KMS_PROVIDER` makes existing tenant data keys
   unreadable. `kms:rotate` adds a data-key version under the same key-encryption key.
-- Sensitive account changes (creating API keys, removing a second factor, regenerating recovery codes) need a
-  signed-in browser session but not a fresh re-authentication; step-up with a recent-factor window is planned (ASVS
-  3.7.1).
-- Local accounts have no self-service password change and no admin password reset, and an admin-set initial password
-  is not forced to change at first sign-in. The password policy refuses a short local list of common passwords, not a
-  full breached-password corpus (ASVS 2.1.5 to 2.1.7, 2.3.1).
+- Step-up (`STEPUP_WINDOW_SECONDS`) accepts the password only from accounts whose store checks passwords (local, LDAP,
+  SQL); an account from an upstream OIDC or SAML provider with no second factor cannot step up and signs in again
+  instead. OAuth grant revocation, which also needs step-up, arrives with Sprint 14.
+- The breached-password check is off by default (`BREACHED_PASSWORDS=off`): the range API is on the internet, so an
+  air-gapped site needs an internal mirror or the offline file. When a source cannot be reached the password is
+  accepted (fail open) and `password.breach_check.unavailable` is audited. Directory passwords (LDAP, SQL) are never
+  checked here; the directory's own policy applies.
+- A password reset request answers the same whether or not the account exists, but the server does a little more
+  work (a token row and an email hand-off) when it does, so response time is not strictly constant. Reset and invite
+  links need `SMTP_URL`. An admin password reset ends the account's sessions and OAuth grants but leaves its API keys,
+  which are separate credentials (revoke them in the user's detail or by disabling the account).
 - Users cannot list or revoke the OAuth grants and consents they gave to applications; only admins can, by disabling
   the client or the user (ASVS 3.5.1).
 - Failed bearer-token and API-key attempts are refused before the `/api` rate limiter, so they are not throttled
@@ -200,6 +205,6 @@ filter, private `/tmp`, only the state directory writable.
   checked address.
 - Media and image previews are served inline from the console's origin with server-chosen content types; there is no
   `CSP: sandbox` and no separate download domain.
-- Users are not notified (console or email) when their factors, API keys or sessions change; the changes are audited
-  only.
+- Security notices cover password, factor, recovery-code, API-key and session changes; a new sign-in does not send
+  one. Email notices need `SMTP_URL` and an address on the account.
 - Rate limits are per instance (in memory); quotas are shared through the database.

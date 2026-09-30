@@ -6,9 +6,10 @@ shell does for every screen, how it was checked, and what is still open.
 
 ## Modes
 
-Settings → Appearance → **Accessibility** has three choices. The choice is stored in this browser (`exprsn.a11y` in
-`localStorage`), like the theme. The server profile has no appearance field, so the setting does not follow the user to
-other devices.
+Settings → Appearance → **Accessibility** has three choices. The choice is stored with the account
+(`PATCH /api/me/preferences`) and applied at every sign-in, so it follows the user to other browsers and devices. A copy
+is kept in this browser (`exprsn.a11y` in `localStorage`) so the sign-in screen uses it too. The theme stays per
+browser.
 
 | Choice | Effect |
 | --- | --- |
@@ -51,7 +52,15 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
 - **Buttons and tables**: `UI.iconbtn` always has an `aria-label`; an icon-only button a screen builds by hand gets its
   `title` as its name. `UI.table` headers have `scope="col"` (an empty actions header gets hidden text). Clickable
   table rows are focusable and open with Enter or Space.
-- **State**: tabs mark the active one with `aria-current`, segmented controls and chips use `aria-pressed`, toggles are
+- **Tabs**: `UI.tabs` renders the ARIA tabs pattern: a `tablist` of `tab` buttons with `aria-selected`, only the
+  selected tab in the tab order, Left and Right arrows (wrapping), Home and End moving between tabs with selection
+  following focus, and the selected tab labelling the `tabpanel` that follows the list (`aria-controls`,
+  `aria-labelledby`; set by the accessibility pass).
+- **Single-pointer alternatives** (WCAG 2.5.7): a Workflows step moves with the Move buttons in its inspector (20 px a
+  press) as well as by dragging, and connects with "Connect from here" then a click on the target; Classifier levels
+  have Up and Down buttons as well as drag and drop.
+- **Headings**: every screen has an `h1`; in Chat it is the conversation title (or "New conversation") in the header.
+- **State**: segmented controls and chips use `aria-pressed`, toggles are
   `role="switch"` with `aria-checked`, classification bars and meter tracks are hidden from assistive technology (the
   level and value are in the text).
 - **Target size**: the smallest button (`.btn.xs`) is 24 px high (WCAG 2.5.8).
@@ -99,14 +108,13 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
 
 ## Known gaps
 
-- The mode is stored per browser, not per user, because the profile API has no appearance field.
 - axe ran on the default state of each screen. States reached through the "States" popover, drawers opened from rows
   and streaming chat were not scanned; dialogs were checked with the keyboard walk only.
-- Chat has no `h1`; entering it focuses `main`, which is announced by its label.
-- Screens use the tab look (`UI.tabs`) without the full ARIA tabs pattern (`tablist`/`tabpanel` and arrow keys); the
-  active tab is marked with `aria-current`.
-- Two drag interactions have no single-pointer alternative yet (WCAG 2.5.7): moving a step on the Workflows canvas
-  (its layout position only) and reordering levels on Classifiers (which the server refuses anyway).
+- The tab panel is the element right after the tab list; where a screen renders the tab's content as several
+  siblings, only the first is marked as the panel. For Sprint 11, axe (WCAG 2.2 AA tags) ran on the sign-in forms
+  (password, forgot, reset), Chat, Memory, Settings, Classifiers, User stores and Training with no violations, and a
+  keyboard walk checked the tabs (arrows, End, wrapping, focus kept while the tab loads); the full Playwright suite was
+  not re-run.
 - Code line numbers and breadcrumb separators use `--faint` and are below 4.5:1 in Standard; they are decorative and
   hidden from assistive technology.
 - Reflow at 320 px wide and 200 % text zoom were not measured; wide tables scroll horizontally inside their panel.
