@@ -25,7 +25,13 @@ the maintainers rather than in issues.
 - Revoking a session or disabling a user takes effect on the next request and closes live sockets.
 - API keys are HMAC'd at rest, shown once, and never widen their owner's permissions.
 - Helmet headers: strict CSP (`default-src 'self'`, no inline script, `frame-ancestors 'none'`), HSTS behind HTTPS,
-  `no-referrer`, `nosniff`. JSON bodies are capped at 256 KB. Rate limits per user and per address.
+  `no-referrer`, `nosniff`. JSON bodies are capped at 256 KB. Rate limits per user and per address, and per address
+  on the public sign-in, SAML, device and Kerberos endpoints.
+- Every API answer is `Cache-Control: no-store`. Request logs redact authorization codes, state, PKCE verifiers,
+  device codes, SAML messages and tokens from URLs, and the CSRF header. `/readyz` names a failing dependency
+  without its error detail.
+- Signing in again with a password ends the session the browser already held.
+- The OWASP ASVS 4.0.3 level 2 assessment, with evidence and follow-ups, is in [asvs.md](asvs.md).
 
 ## Authorisation
 
@@ -160,4 +166,21 @@ filter, private `/tmp`, only the state directory writable.
   30 minutes.
 - Key-encryption keys cannot be re-wrapped: changing `DATA_KEY` or `KMS_PROVIDER` makes existing tenant data keys
   unreadable. `kms:rotate` adds a data-key version under the same key-encryption key.
+- Sensitive account changes (creating API keys, removing a second factor, regenerating recovery codes) need a
+  signed-in browser session but not a fresh re-authentication; step-up with a recent-factor window is planned (ASVS
+  3.7.1).
+- Local accounts have no self-service password change and no admin password reset, and an admin-set initial password
+  is not forced to change at first sign-in. The password policy refuses a short local list of common passwords, not a
+  full breached-password corpus (ASVS 2.1.5 to 2.1.7, 2.3.1).
+- Users cannot list or revoke the OAuth grants and consents they gave to applications; only admins can, by disabling
+  the client or the user (ASVS 3.5.1).
+- Failed bearer-token and API-key attempts are refused before the `/api` rate limiter, so they are not throttled
+  (keys are 256-bit random).
+- Pool instance, zone endpoint, connection and image backend URLs are chosen by operators and are not checked against
+  internal or link-local addresses. Git sources refuse link-local hosts, but git's own DNS lookup is not pinned to the
+  checked address.
+- Media and image previews are served inline from the console's origin with server-chosen content types; there is no
+  `CSP: sandbox` and no separate download domain.
+- Users are not notified (console or email) when their factors, API keys or sessions change; the changes are audited
+  only.
 - Rate limits are per instance (in memory); quotas are shared through the database.

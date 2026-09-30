@@ -13,7 +13,10 @@ export function healthRoutes(s: Services, state: { shuttingDown: boolean }): Rou
     res.json({ status: 'ok' });
   });
 
-  /** Readiness: database reachable and fully migrated, KMS and blob store answering, and not draining. */
+  /**
+   * Readiness: database reachable and fully migrated, KMS and blob store answering, and not draining. The endpoint
+   * is public, so a failing dependency is reported as "unavailable" and its error (hosts, paths, drivers) is logged.
+   */
   r.get('/readyz', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const checks: Record<string, string> = {};
@@ -26,13 +29,16 @@ export function healthRoutes(s: Services, state: { shuttingDown: boolean }): Rou
       checks.migrations = pending ? `${pending} pending` : 'ok';
       if (pending) ok = false;
     } catch (err) {
-      checks.database = (err as Error).message;
+      s.log.warn({ err: (err as Error).message }, 'readiness: database unavailable');
+      checks.database = 'unavailable';
       ok = false;
     }
     // Without the KMS nothing sealed opens; without the blob store exports, attachments and checkpoints fail.
     const [kms, blobs] = await Promise.all([s.kms.health(), s.blobs.health()]);
-    checks.kms = kms.ok ? 'ok' : kms.detail;
-    checks.blobs = blobs.ok ? 'ok' : blobs.detail;
+    if (!kms.ok) s.log.warn({ detail: kms.detail }, 'readiness: KMS unavailable');
+    if (!blobs.ok) s.log.warn({ detail: blobs.detail }, 'readiness: blob store unavailable');
+    checks.kms = kms.ok ? 'ok' : 'unavailable';
+    checks.blobs = blobs.ok ? 'ok' : 'unavailable';
     if (!kms.ok || !blobs.ok) ok = false;
     res.status(ok ? 200 : 503).json({ status: ok ? 'ready' : 'not ready', checks });
   });

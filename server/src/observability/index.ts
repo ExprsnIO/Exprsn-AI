@@ -7,11 +7,55 @@ export function createLogger(level: string, pretty: boolean): Logger {
     level,
     base: { service: 'exprsn-ai' },
     redact: {
-      paths: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]', '*.password', '*.bindPassword', '*.secret', '*.token', '*.code'],
+      paths: [
+        'req.headers.authorization',
+        'req.headers["proxy-authorization"]',
+        'req.headers.cookie',
+        'req.headers["x-csrf-token"]',
+        'res.headers["set-cookie"]',
+        '*.password',
+        '*.bindPassword',
+        '*.secret',
+        '*.token',
+        '*.code'
+      ],
       censor: '[redacted]'
     },
     ...(pretty ? { transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:HH:MM:ss.l' } } } : {})
   });
+}
+
+/** Query parameters that carry credentials or one-time codes in protocol flows (OAuth, SAML, device, upstream). */
+const SECRET_PARAMS = new Set(['code', 'state', 'token', 'access_token', 'id_token', 'refresh_token', 'client_secret', 'code_verifier', 'user_code', 'device_code', 'samlrequest', 'samlresponse', 'relaystate', 'h', 'password', 'key', 'signature']);
+
+/** A request URL for the logs: the values of credential-bearing query parameters are replaced. */
+export function redactUrl(url: string | undefined): string | undefined {
+  if (!url) return url;
+  const q = url.indexOf('?');
+  if (q < 0) return url;
+  const parts = url.slice(q + 1).split('&').map((kv) => {
+    const eq = kv.indexOf('=');
+    const name = eq < 0 ? kv : kv.slice(0, eq);
+    let key = name;
+    try {
+      key = decodeURIComponent(name.replace(/\+/g, ' '));
+    } catch {
+      /* keep the raw name */
+    }
+    return eq >= 0 && SECRET_PARAMS.has(key.toLowerCase()) ? `${name}=[redacted]` : kv;
+  });
+  return `${url.slice(0, q)}?${parts.join('&')}`;
+}
+
+/** The pino-http request serializer's output with credential-bearing query values removed from url and query. */
+export function redactRequest<T extends { url?: string; query?: Record<string, unknown> }>(req: T): T {
+  req.url = redactUrl(req.url);
+  if (req.query && typeof req.query === 'object') {
+    const q: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.query)) q[k] = SECRET_PARAMS.has(k.toLowerCase()) ? '[redacted]' : v;
+    req.query = q;
+  }
+  return req;
 }
 
 const TRACEPARENT = /^[\da-f]{2}-([\da-f]{32})-[\da-f]{16}-[\da-f]{2}$/;

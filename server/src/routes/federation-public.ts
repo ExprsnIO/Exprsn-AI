@@ -10,6 +10,8 @@ import { loadPrincipal, sessionTokenFrom, setSessionCookie } from '../http/middl
 import { splitPrincipal } from '../federation/kerberos.js';
 import { AuthorizeError, OAuthError, type AuthzRequest, type SignedInUser, type TenantCtx } from '../federation/oidc.js';
 import { SamlError } from '../federation/saml.js';
+import { JwtError } from '../federation/jose.js';
+import { UpstreamError } from '../federation/upstream.js';
 import { CONSENT_REMEMBER_DAYS } from '../federation/service.js';
 import type { SessionRow } from '../identity/sessions.js';
 import type { Services } from '../services.js';
@@ -27,6 +29,17 @@ export const safeReturn = (v: unknown): string | null =>
   typeof v === 'string' && v.length <= 4000 && /^\/(t\/[a-z0-9][a-z0-9-]{0,62}\/)?(oauth\/authorize\?|saml\/continue\?|device(\?|$))/.test(v) && !v.includes('\\') ? v : null;
 
 const FED_COOKIE = 'exai_fed';
+
+/**
+ * What a public page may say about a failed upstream sign-in: our own checks (state, nonce, signature, issuer) are
+ * named, while anything else (network errors, refused internal addresses, driver errors) gets `fallback` and goes
+ * to the log only.
+ */
+export const publicReason = (err: unknown, fallback: string): string => (err instanceof UpstreamError || err instanceof SamlError ? err.message : fallback);
+
+/** Browser sign-in endpoints and userinfo: requests per client address per minute (token endpoints have their own). */
+export const SIGN_IN_POINTS = 120;
+const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/auth/negotiate'];
 
 /** First value of each string field; repeated OAuth parameters are refused (RFC 6749 3.1). */
 function formOf(body: unknown): Record<string, string> {
@@ -58,6 +71,7 @@ export function federationPublicRoutes(s: Services): Router {
   const smallForm = express.urlencoded({ extended: false, limit: '64kb', parameterLimit: 50 });
   const largeForm = express.urlencoded({ extended: false, limit: '1mb', parameterLimit: 20 });
   const tokenLimiter = new RateLimiterMemory({ points: 60, duration: 60 });
+  const signInLimiter = new RateLimiterMemory({ points: SIGN_IN_POINTS, duration: 60 });
   const fed = () => s.federation;
 
   const tenantOf = async (req: Request): Promise<TenantCtx | null> => {
@@ -90,6 +104,20 @@ export function federationPublicRoutes(s: Services): Router {
   /** Asks the browser to re-check the session from our origin and resume at `url`, or sign in first. */
   const continuePage = (res: Response, url: string) =>
     page(res, 200, 'Sign in to continue', `<p class="fg2" style="margin:0">Checking your session…</p><noscript><p class="fg2">Sign in to the console, then open this address again.</p></noscript><div><a class="btn primary" href="/#/signin" data-signin>Sign in</a></div>`, { mode: 'continue', data: { continue: url } });
+
+  // Sign-in pages, SAML and upstream callbacks (which parse up to 1 MB of XML) and Kerberos are throttled per address.
+  r.use(SIGN_IN_PATHS, async (req, res, next) => {
+    try {
+      await signInLimiter.consume(req.ip ?? 'unknown');
+      next();
+    } catch (rej) {
+      if (rej instanceof Error) return next(rej);
+      const ms = (rej as { msBeforeNext?: number }).msBeforeNext ?? 1000;
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil(ms / 1000))));
+      if (req.path.startsWith('/oauth/userinfo')) return void res.status(429).setHeader('Cache-Control', 'no-store').json({ error: 'slow_down', error_description: 'Too many requests.' });
+      errorPage(res, 429, 'Too many requests', 'Too many sign-in requests from this address. Wait a minute and try again.', req);
+    }
+  });
 
   // ---------- sessions ----------
 
@@ -302,7 +330,9 @@ export function federationPublicRoutes(s: Services): Router {
     try {
       res.json(await fed().oidc.userinfo(t, token));
     } catch (err) {
-      res.status(401).setHeader('WWW-Authenticate', `Bearer error="invalid_token", error_description="${(err as Error).message.replace(/"/g, "'")}"`).json({ error: 'invalid_token', error_description: (err as Error).message });
+      if (!(err instanceof JwtError)) s.log.warn({ err, trace_id: req.traceId }, 'userinfo failed');
+      const why = err instanceof JwtError ? err.message.replace(/["\\\r\n]/g, "'") : 'The access token could not be verified.';
+      res.status(401).setHeader('WWW-Authenticate', `Bearer error="invalid_token", error_description="${why}"`).json({ error: 'invalid_token', error_description: why });
     }
   };
   r.get('/oauth/userinfo', userinfo);
@@ -430,7 +460,8 @@ export function federationPublicRoutes(s: Services): Router {
       res.setHeader('Cache-Control', 'no-store');
       res.redirect(302, out.url);
     } catch (err) {
-      errorPage(res, 502, 'Sign-in could not start', (err as Error).message, req);
+      if (!(err instanceof UpstreamError)) s.log.warn({ err, provider: providerId, trace_id: req.traceId }, 'upstream sign-in could not start');
+      errorPage(res, 502, 'Sign-in could not start', publicReason(err, 'The identity provider could not be reached. Try again later, or ask an identity admin.'), req);
     }
   };
   r.get('/federation/oidc/start', start('oidc'));
@@ -444,7 +475,8 @@ export function federationPublicRoutes(s: Services): Router {
     } catch (err) {
       await s.audit.append({ tenantId: t.id, action: 'auth.login.failed', kind: 'auth', actor: { ip: req.ip ?? null }, target: { kind: 'upstream' }, detail: { reason: (err as Error).message.slice(0, 300) }, traceId: req.traceId });
       s.metrics.logins.inc({ result: 'invalid', kind: 'upstream' });
-      errorPage(res, 400, 'Sign-in failed', (err as Error).message, req);
+      if (!(err instanceof UpstreamError || err instanceof SamlError)) s.log.warn({ err, trace_id: req.traceId }, 'upstream sign-in failed');
+      errorPage(res, 400, 'Sign-in failed', publicReason(err, 'The sign-in could not be completed. Start again, or ask an identity admin with the trace id below.'), req);
     }
   };
 

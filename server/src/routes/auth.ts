@@ -120,6 +120,8 @@ export function authRoutes(s: Services): Router {
       throw forbidden(REFUSALS[prov.reason] ?? 'Sign-in refused.', { reason: prov.reason });
     }
     await s.throttle.succeed(keys.account);
+    // A new sign-in in this browser ends the session its cookie held before (ASVS 3.2.1), as federated sign-ins do.
+    if (req.authSession) await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
 
     const methods = await s.mfa.methods(prov.user.id);
     const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);

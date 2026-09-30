@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { ZodError } from 'zod';
-import { traceIdFrom } from '../observability/index.js';
+import { redactRequest, traceIdFrom } from '../observability/index.js';
 import { authRoutes } from '../routes/auth.js';
 import { meRoutes } from '../routes/me.js';
 import { healthRoutes } from '../routes/health.js';
@@ -34,7 +34,7 @@ import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platfo
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import type { Services } from '../services.js';
-import { authenticate, csrfProtection } from './middleware.js';
+import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -59,6 +59,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
     pinoHttp({
       logger: s.log,
       genReqId: (req) => (req as express.Request).traceId,
+      // Authorization codes, SAML messages, device codes and similar never reach the logs.
+      serializers: { req: redactRequest },
       autoLogging: { ignore: (req) => req.url === '/healthz' || req.url === '/readyz' },
       customLogLevel: (_req, res, err) => (err || res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info')
     })
@@ -99,6 +101,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
+  // API answers carry per-user data: never stored by the browser or an intermediary (routes may override).
+  api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
   api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path)) ? next() : json(req, res, next)));

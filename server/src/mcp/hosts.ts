@@ -28,6 +28,12 @@ never.addSubnet('fe80::', 10, 'ipv6');
 never.addSubnet('ff00::', 8, 'ipv6');
 never.addAddress('::', 'ipv6');
 
+/** Link-local (cloud metadata), unspecified, multicast and broadcast addresses, which no outbound call may reach. */
+export function isNeverAddress(ip: string): boolean {
+  const addr = mappedV4(ip) ?? ip;
+  return isIP(addr) !== 0 && never.check(addr, famOf(addr));
+}
+
 export interface AllowList {
   hosts: string[];
   networks: BlockList;
