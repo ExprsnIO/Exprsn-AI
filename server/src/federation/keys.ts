@@ -1,10 +1,22 @@
-import { createPrivateKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import type { Services } from '../services.js';
 import { PLATFORM_SCOPE } from '../platform/datakeys.js';
-import type { Jwk } from './jose.js';
-import { selfSignedCertificate } from './x509.js';
+import type { SigningKeyType } from '../platform/kms.js';
+import type { Jwk, JwsSigner } from './jose.js';
+import { selfSignedCertificate, selfSignedRsaCertificate } from './x509.js';
 
-export type KeyUse = 'oidc' | 'saml';
+/** oidc: ES256 token signing; saml: RS256 SAML signing; saml-enc: RSA-OAEP decryption of upstream encrypted assertions. */
+export type KeyUse = 'oidc' | 'saml' | 'saml-enc';
+
+/** A signing key that lives in the KMS: `private_sealed` holds this prefix and the KMS key name, never key material. */
+const KMS_REF = 'kms:';
+
+/** A signer for the current key: JWS (and XML-DSig) signatures through a local key or the KMS. */
+export interface KeySigner extends JwsSigner {
+  row: KeyRow;
+  /** True when the private key is in the KMS and never in this process. */
+  remote: boolean;
+}
 export type KeyState = 'next' | 'signing' | 'retired';
 
 export interface KeyRow {
@@ -63,28 +75,51 @@ export class SigningKeys {
     return `federation-key:${tenantId}:${kid}`;
   }
 
+  /** Signing in the KMS: OpenBao transit when KMS_PROVIDER=openbao. Decryption keys (saml-enc) stay sealed locally. */
+  private kmsSigns(use: KeyUse): boolean {
+    const kms = this.s().kms;
+    return use !== 'saml-enc' && typeof kms.createSigningKey === 'function' && typeof kms.sign === 'function';
+  }
+
   private async insert(tenantId: string, use: KeyUse, activatesAt: number): Promise<KeyRow> {
     const t = Date.now();
     const kid = kidFor(activatesAt);
-    let publicKey: KeyObject;
-    let privateKey: KeyObject;
-    let certificate: string | null = null;
-    if (use === 'oidc') ({ publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' }));
-    else {
-      ({ publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 }));
+    const alg = use === 'oidc' ? 'ES256' : use === 'saml' ? 'RS256' : 'RSA-OAEP';
+    const certificateFor = async (publicKey: KeyObject, signRsa: (tbs: Buffer) => Promise<Buffer>) => {
       const tenant = await this.s().tenants.byId(tenantId);
-      certificate = selfSignedCertificate({ publicKey, privateKey, commonName: `${new URL(this.s().cfg.FEDERATION_ISSUER ?? this.s().cfg.PUBLIC_URL).hostname} SAML IdP`, organization: tenant?.name ?? 'Exprsn-AI', days: 3 * 365 }).toString('base64');
+      const host = new URL(this.s().cfg.FEDERATION_ISSUER ?? this.s().cfg.PUBLIC_URL).hostname;
+      return (await selfSignedRsaCertificate({ publicKey, signRsa, commonName: `${host} SAML ${use === 'saml' ? 'IdP' : 'SP encryption'}`, organization: tenant?.name ?? 'Exprsn-AI', days: 3 * 365 })).toString('base64');
+    };
+    let publicKey: KeyObject;
+    let privateSealed: string;
+    let certificate: string | null = null;
+    if (this.kmsSigns(use)) {
+      const kms = this.s().kms;
+      const name = `${this.s().cfg.OPENBAO_KEY_PREFIX}fed-${kid}`.toLowerCase();
+      const type: SigningKeyType = use === 'oidc' ? 'ecdsa-p256' : 'rsa-2048';
+      publicKey = createPublicKey(await kms.createSigningKey!(name, type));
+      if (use === 'saml') certificate = await certificateFor(publicKey, (tbs) => kms.sign!(name, 'rsa-2048', tbs));
+      privateSealed = `${KMS_REF}${name}`;
+    } else {
+      let privateKey: KeyObject;
+      if (use === 'oidc') ({ publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' }));
+      else {
+        ({ publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 }));
+        certificate = selfSignedCertificate({ publicKey, privateKey, commonName: `${new URL(this.s().cfg.FEDERATION_ISSUER ?? this.s().cfg.PUBLIC_URL).hostname} SAML ${use === 'saml' ? 'IdP' : 'SP encryption'}`, organization: (await this.s().tenants.byId(tenantId))?.name ?? 'Exprsn-AI', days: 3 * 365 }).toString('base64');
+      }
+      const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+      privateSealed = await this.s().keys.sealer(PLATFORM_SCOPE).seal(pem, this.aad(tenantId, kid));
+      this.cache.set(kid, privateKey);
     }
-    const jwk = { ...(publicKey.export({ format: 'jwk' }) as Jwk), kid, use: 'sig', alg: use === 'oidc' ? 'ES256' : 'RS256' };
-    const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const jwk = { ...(publicKey.export({ format: 'jwk' }) as Jwk), kid, use: use === 'saml-enc' ? 'enc' : 'sig', alg };
     const row = {
       kid,
       tenant_id: tenantId,
       use,
-      alg: jwk.alg,
+      alg,
       state: activatesAt <= t ? 'signing' : 'next',
       public_jwk: JSON.stringify(jwk),
-      private_sealed: await this.s().keys.sealer(PLATFORM_SCOPE).seal(pem, this.aad(tenantId, kid)),
+      private_sealed: privateSealed,
       certificate,
       created_at: t,
       activates_at: activatesAt,
@@ -92,8 +127,12 @@ export class SigningKeys {
       removes_at: null
     };
     await this.db('federation_keys').insert(row);
-    this.cache.set(kid, privateKey);
     return fromRow(row);
+  }
+
+  /** Is this key's private half in the KMS (and so usable while KMS signing is on)? */
+  static inKms(row: Pick<KeyRow, 'private_sealed'>): boolean {
+    return row.private_sealed.startsWith(KMS_REF);
   }
 
   async list(tenantId: string, use: KeyUse = 'oidc'): Promise<KeyRow[]> {
@@ -119,17 +158,46 @@ export class SigningKeys {
       keys = await this.list(tenantId, use);
     }
     const signing = keys.find((k) => k.state === 'signing');
+    if (signing && this.kmsSigns(use) && !SigningKeys.inKms(signing)) {
+      // KMS signing was turned on: a key whose private half is in this process stops signing now (it stays published
+      // for the overlap window, so what it signed keeps verifying) and a key held in the KMS replaces it.
+      const next = await this.insert(tenantId, use, now);
+      await this.db('federation_keys').where({ kid: signing.kid }).update({ state: 'retired', retires_at: now, removes_at: now + Math.max(this.overlapMs(), DAY) });
+      this.cache.delete(signing.kid);
+      return next;
+    }
     if (signing) return signing;
     return this.insert(tenantId, use, now);
   }
 
-  /** The key that signs now, and its private key. */
-  async signer(tenantId: string, use: KeyUse = 'oidc'): Promise<{ row: KeyRow; key: KeyObject }> {
+  /** The key that signs now, as a signer: ES256 (raw r||s) for OIDC, RS256 (PKCS#1 v1.5) for SAML. */
+  async signer(tenantId: string, use: 'oidc' | 'saml' = 'oidc'): Promise<KeySigner> {
     const row = await this.advance(tenantId, use);
+    const alg = use === 'oidc' ? 'ES256' : 'RS256';
+    if (SigningKeys.inKms(row)) {
+      const kms = this.s().kms;
+      if (!kms.sign) throw new Error(`Key ${row.kid} is held in a KMS that is no longer configured.`);
+      const name = row.private_sealed.slice(KMS_REF.length);
+      const type: SigningKeyType = use === 'oidc' ? 'ecdsa-p256' : 'rsa-2048';
+      return { row, kid: row.kid, alg, remote: true, sign: (data) => kms.sign!(name, type, data) };
+    }
+    const key = await this.privateKey(row);
+    return { row, kid: row.kid, alg, remote: false, sign: async (data) => (alg === 'ES256' ? cryptoSign('sha256', data, { key, dsaEncoding: 'ieee-p1363' }) : cryptoSign('sha256', data, key)) };
+  }
+
+  /** The tenant's SAML SP decryption key (RSA-OAEP) and its certificate, for upstream encrypted assertions. */
+  async decrypter(tenantId: string): Promise<{ row: KeyRow; key: KeyObject }> {
+    const row = await this.advance(tenantId, 'saml-enc');
     return { row, key: await this.privateKey(row) };
   }
 
+  /** Key ids whose private key is held in this process right now (tests: none for signing keys with KMS signing). */
+  cachedKids(): string[] {
+    return [...this.cache.keys()];
+  }
+
   private async privateKey(row: KeyRow): Promise<KeyObject> {
+    if (SigningKeys.inKms(row)) throw new Error(`Key ${row.kid} is held in the KMS.`);
     const hit = this.cache.get(row.kid);
     if (hit) return hit;
     const pem = await this.s().keys.sealer(PLATFORM_SCOPE).open(row.private_sealed, this.aad(row.tenant_id, row.kid));

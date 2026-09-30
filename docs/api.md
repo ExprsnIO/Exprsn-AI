@@ -918,3 +918,59 @@ Audit actions: `oidc.authorized`, `oidc.consent.granted`/`denied`, `oidc.token.i
 `federation.test_login`, and `auth.login*` with `target.kind` `oidc`, `saml` or `kerberos`.
 
 Access tokens whose audience is `<issuer>/api` are also accepted by the console API as `Authorization: Bearer <jwt>`, like API keys: the token's scopes narrow the user's roles, the client, grant, user and tenant must still be active, and an admin-role user's token must carry a second factor in `amr`.
+
+## Sprint 14: Federation, second part
+
+Revocation and introspection, logout, pushed and signed authorization requests, DPoP, re-authentication, SAML single
+logout and encrypted assertions, and signing in OpenBao transit. Discovery now advertises `introspection_endpoint`,
+`end_session_endpoint`, `pushed_authorization_request_endpoint`, `request_parameter_supported`,
+`request_uri_parameter_supported`, `request_object_signing_alg_values_supported` and
+`dpop_signing_alg_values_supported` (`ES256`, `RS256`), and front- and back-channel logout support (with `sid`).
+
+### Protocol endpoints (outside `/api`, under the tenant's issuer)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /oauth/revoke` (form, client auth) `token, token_type_hint?` | RFC 7009. A refresh token revokes its family; an access token goes on the deny-list (by `jti`, kept until it would have expired), so the API, `userinfo` and introspection refuse it at once on every instance. Only the client the token was issued to can revoke it; anything else answers 200 without effect |
+| `POST /oauth/introspect` (form, confidential client auth) `token, token_type_hint?` | RFC 7662. `{active: true, token_type: Bearer\|DPoP\|refresh_token, scope, client_id, sub, username, iss, aud?, iat, exp, jti?, cnf?, auth_time?, act?, tenant}` for a live token issued to the calling client; `{active: false}` for anything revoked, expired, unknown or issued to another client. Public clients get `401 invalid_client` |
+| `POST /oauth/par` (form, client auth) authorization parameters or `request` | RFC 9126: validates the request as `/oauth/authorize` would and answers `201 {request_uri: "urn:ietf:params:oauth:request_uri:…", expires_in: 60}`. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in (ten minutes) |
+| `GET /oauth/authorize` | Also: `request_uri` (a pushed request, with `client_id`), `request` (a request object signed ES256 or RS256 with a key in the client's registered `jwks`; `iss` the client, `aud` the issuer, `exp` within an hour, `jti` single use; only its parameters are used), `prompt=login` and `max_age` (the page asks to sign in again: it signs the session out and resumes after a new sign-in; with `prompt=none` the answer is `login_required`). A client with `parRequired` must push its requests |
+| `POST /oauth/token` | Also: a `DPoP` header (RFC 9449 proof: `typ dpop+jwt`, ES256 or RS256 with the public JWK in the header, `htm` POST, `htu` the token endpoint, `iat` within `DPOP_PROOF_MAX_AGE_SECONDS`, single-use `jti`) binds the tokens to the key: `token_type: DPoP` and `cnf.jkt` in the access token; the refresh token only refreshes with a proof from the same key. `invalid_dpop_proof` when a proof is bad, or missing for a client with `dpopRequired` |
+| `GET/POST /oauth/userinfo` | Also accepts `Authorization: DPoP <token>` with a proof (`htu` the userinfo endpoint, `ath` the token hash); a DPoP-bound token sent as Bearer is refused |
+| `GET /oauth/logout`, `POST /oauth/logout` (form) `id_token_hint?, client_id?, post_logout_redirect_uri?, state?` | RP-initiated logout. The hint (an ID token from this issuer, expired or not) names the client and user; `post_logout_redirect_uri` must be registered exactly for that client. Answers a confirmation page whose form posts back (`handle, decision=logout\|stay`) from our origin, so the SameSite=Strict session cookie is present and a cross-site sign-out is impossible. Signing out ends the session (and its refresh tokens), then shows a page that loads each front-channel logout URL (`?iss=&sid=`) in hidden frames (CSP `frame-src` allows exactly those origins, on this page only) and continues to the redirect with `state`. When the session came from an upstream SAML IdP with a logout endpoint, the browser goes there first (signed LogoutRequest) and comes back through `/federation/saml/slo`. A hint for another user is refused |
+| `GET /saml/metadata` | Also lists `SingleLogoutService` (both bindings) at `<issuer>/saml/slo` |
+| `GET /saml/slo?SAMLRequest=&RelayState=&SigAlg=&Signature=`, `POST /saml/slo` (form) | IdP single logout. A signed LogoutRequest from a registered SP (a certificate is required) ends the sign-in sessions it names by NameID and SessionIndex, tells the other SPs (HTTP-Redirect LogoutRequests) and OIDC clients (front-channel) in frames, and answers with a signed LogoutResponse over the SP's binding. A `SAMLResponse` here (an SP answering a frame) just shows the signed-out page |
+| `GET /federation/saml/slo`, `POST /federation/saml/slo` (form) | SP single logout for upstream SAML IdPs: a signed LogoutRequest from the provider ends the sessions it names and gets a LogoutResponse signed with the tenant's SAML key; a LogoutResponse to a logout started here continues to the relying party |
+| `GET /federation/saml/:providerId` | Our SP metadata now carries a signing certificate (the tenant's SAML key), an encryption certificate (AES-256-GCM, RSA-OAEP) and `SingleLogoutService` |
+| `POST /federation/saml/acs` | Also accepts one `EncryptedAssertion` (AES-GCM content, RSA-OAEP key transport with SHA-1 or SHA-256; CBC and RSA 1.5 refused), decrypted with the tenant's SP key, then checked as before |
+
+Access tokens carry `jti`; ID tokens from a browser session carry `sid`. Back-channel logout tokens (`typ
+logout+jwt`, `events` with `http://schemas.openid.net/event/backchannel-logout`, `sid`, `sub`, two minutes) are posted
+as `logout_token` to each client with a `backchannelLogoutUri` that the session signed in to, by a
+`federation.backchannel` job (retried; the host must pass the upstream checks: internal, or in
+`FEDERATION_ALLOWED_HOSTS`). This happens whenever the session ends: sign-out in the console or at `/oauth/logout`, a
+revocation by the user or an admin, a disabled user or tenant.
+
+The console API accepts `Authorization: DPoP <token>` with a `DPoP` proof whose `htu` is `PUBLIC_URL`'s origin plus the
+request path.
+
+### Me
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /me/grants` | The applications the caller consented to or holds live tokens for: `[{clientId, name, type, scopes, consentedAt, consentExpiresAt, activeGrants, lastUsedAt, createdAt}]` |
+| `DELETE /me/grants/:clientId` (browser session) | Revokes the caller's grant to that application: the consent is forgotten, every refresh-token family is revoked, and every access token issued so far is refused (deny-list); `{revoked, clientId, consents, refreshTokens}`. The user gets a `security` notification (also on a new consent) |
+
+### Admin (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/federation` | Also `signingInKms` (true with `KMS_PROVIDER=openbao`), `idp.sloUrl`, `upstream.sloUrl` |
+| `POST /admin/federation/oidc/clients`, `PATCH …/:id` | Also `postLogoutRedirectUris` (exact, like redirect URIs), `frontchannelLogoutUri`, `backchannelLogoutUri` (https, or http on loopback), `jwks` (a JWK set of one to five public EC P-256 or RSA-2048+ keys for request objects; `null` removes it), `parRequired`, `dpopRequired`. The client view adds these (keys as `{kid, kty}`) |
+| `GET /admin/federation/saml/sps`, `POST …/parse` | Also `sloUrl`, `sloBinding: redirect\|post`, `encryptionCert` and `encryptAssertions` (parse: `encryptionCertificate`, `encryptionCert`) |
+| `POST /admin/federation/saml/sps` `{…, encryptAssertions?}` | Assertions are encrypted by default for an SP whose metadata has a valid encryption certificate |
+| `PATCH /admin/federation/saml/sps/:id` `{…, encryptAssertions?}` | Turns encryption on or off (`409` without a valid encryption certificate) |
+
+Audit actions: `oidc.token.revoked` (`detail.token`), `oidc.par.pushed`, `oidc.reauth.required`,
+`oidc.grant.revoked_by_user`, `oidc.logout.backchannel`, `auth.logout` (`detail.via: end_session`), `saml.slo`,
+`saml.slo.upstream`, `saml.slo.refused`.

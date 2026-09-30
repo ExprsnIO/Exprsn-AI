@@ -83,11 +83,15 @@ export function authenticate(s: Services): RequestHandler {
   return async (req, _res, next) => {
     const auth = req.headers.authorization;
     if (auth) {
-      const m = /^Bearer\s+(\S+)$/i.exec(auth);
-      if (!m?.[1]) throw unauthorized('Malformed Authorization header.');
+      // Sprint 14: `DPoP <token>` with a DPoP proof header, for sender-constrained OAuth access tokens (RFC 9449).
+      const m = /^(Bearer|DPoP)\s+(\S+)$/i.exec(auth);
+      if (!m?.[2]) throw unauthorized('Malformed Authorization header.');
+      const scheme = m[1]!.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
+      m[1] = m[2];
+      if (scheme === 'dpop' && !m[1].startsWith('eyJ')) throw unauthorized('The DPoP scheme is only for OAuth access tokens.');
       // OAuth access tokens from the OIDC provider (JWTs), narrowed to their scopes like API keys.
       if (m[1].startsWith('eyJ')) {
-        const p = await s.federation.principalFromAccessToken(m[1]);
+        const p = await s.federation.principalFromAccessToken(m[1], { scheme, dpop: { proof: req.header('dpop'), method: req.method, url: `${new URL(s.cfg.PUBLIC_URL).origin}${req.originalUrl}` } });
         if (!p) throw new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } });
         req.principal = p;
         p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;

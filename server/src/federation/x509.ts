@@ -55,9 +55,16 @@ const OID = { sha256WithRSA: '1.2.840.113549.1.1.11', ecdsaWithSHA256: '1.2.840.
 
 const name = (cn: string, org: string) => der.seq(der.set(der.seq(der.oid(OID.organization), der.utf8(org))), der.set(der.seq(der.oid(OID.commonName), der.utf8(cn))));
 
-/** A self-signed certificate (DER) for `publicKey`, signed by `privateKey` (RSA → sha256WithRSAEncryption, EC → ecdsa-with-SHA256). */
-export function selfSignedCertificate(opts: { publicKey: KeyObject; privateKey: KeyObject; commonName: string; organization?: string; notBefore?: Date; days: number }): Buffer {
-  const rsa = opts.privateKey.asymmetricKeyType === 'rsa';
+interface CertParams {
+  publicKey: KeyObject;
+  commonName: string;
+  organization?: string;
+  notBefore?: Date;
+  days: number;
+}
+
+/** The to-be-signed part of a self-signed certificate and its signature algorithm identifier. */
+function tbsCertificate(opts: CertParams, rsa: boolean): { tbs: Buffer; alg: Buffer } {
   const alg = rsa ? der.seq(der.oid(OID.sha256WithRSA), der.nul()) : der.seq(der.oid(OID.ecdsaWithSHA256));
   const from = opts.notBefore ?? new Date(Date.now() - 5 * 60_000);
   const to = new Date(from.getTime() + opts.days * 86_400_000);
@@ -69,13 +76,26 @@ export function selfSignedCertificate(opts: { publicKey: KeyObject; privateKey: 
     3,
     der.seq(
       der.seq(der.oid(OID.basicConstraints), tlv(0x01, Buffer.from([0xff])), tlv(0x04, der.seq())),
-      // digitalSignature only.
-      der.seq(der.oid(OID.keyUsage), tlv(0x01, Buffer.from([0xff])), tlv(0x04, tlv(0x03, Buffer.from([0x07, 0x80]))))
+      // digitalSignature and keyEncipherment (the same certificate type serves SAML signing and encryption keys).
+      der.seq(der.oid(OID.keyUsage), tlv(0x01, Buffer.from([0xff])), tlv(0x04, tlv(0x03, Buffer.from([0x05, 0xa0]))))
     )
   );
   const tbs = der.seq(der.explicit(0, der.int(2)), der.int(serial), alg, subject, der.seq(der.time(from), der.time(to)), subject, spki, extensions);
+  return { tbs, alg };
+}
+
+/** A self-signed certificate (DER) for `publicKey`, signed by `privateKey` (RSA → sha256WithRSAEncryption, EC → ecdsa-with-SHA256). */
+export function selfSignedCertificate(opts: CertParams & { privateKey: KeyObject }): Buffer {
+  const rsa = opts.privateKey.asymmetricKeyType === 'rsa';
+  const { tbs, alg } = tbsCertificate(opts, rsa);
   const signature = rsa ? sign('sha256', tbs, opts.privateKey) : sign('sha256', tbs, { key: opts.privateKey, dsaEncoding: 'der' });
   return der.seq(tbs, alg, der.bits(signature));
+}
+
+/** The same for an RSA key held in a KMS: `signRsa` returns a PKCS#1 v1.5 SHA-256 signature. */
+export async function selfSignedRsaCertificate(opts: CertParams & { signRsa: (tbs: Buffer) => Promise<Buffer> }): Promise<Buffer> {
+  const { tbs, alg } = tbsCertificate(opts, true);
+  return der.seq(tbs, alg, der.bits(await opts.signRsa(tbs)));
 }
 
 export const pemOf = (derBytes: Buffer): string => `-----BEGIN CERTIFICATE-----\n${derBytes.toString('base64').replace(/(.{64})/g, '$1\n').replace(/\n$/, '')}\n-----END CERTIFICATE-----\n`;
