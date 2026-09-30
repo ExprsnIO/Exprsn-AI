@@ -6,6 +6,7 @@ export default defineConfig({
     exclude: ['test/integration/**'],
     environment: 'node',
     pool: 'forks',
-    testTimeout: 20000
+    testTimeout: 20000,
+    setupFiles: ['test/setup-loopback.ts']
   }
 });

@@ -12,6 +12,7 @@ import { createLogger, Metrics } from '../src/observability/index.js';
 import { createServices, type ServiceOverrides, type Services } from '../src/services.js';
 import { bootstrap } from '../src/bootstrap.js';
 import { hashPassword } from '../src/identity/passwords.js';
+import { closeLoopback, serveOnLoopback } from './loopback.js';
 import type { Label } from '../src/authz/labels.js';
 
 export const PASSWORD = 'correct horse battery staple';
@@ -48,11 +49,14 @@ export async function harness(overrides: Record<string, string> = {}, services: 
   const s = createServices(cfg, db, createLogger('silent', false), new Metrics(), services);
   await bootstrap(s);
   const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
+  const app = createApp(s);
+  await serveOnLoopback(app);
   return {
     s,
-    app: createApp(s),
+    app,
     tenantId: tenant!.id,
     close: async () => {
+      await closeLoopback(app);
       await s.close();
       await db.destroy();
     }
