@@ -250,7 +250,7 @@ export function platformAdminRoutes(s: Services): Router {
 
   r.get('/platform/backups', async (_req, res) => {
     const [backups, drills, alert] = await Promise.all([ops.backups.list(), ops.backups.drills(), ops.backups.alert()]);
-    res.json({ backups: backups.map(backupView), drills: drills.map(drillView), alert, rpoMinutes: s.cfg.PLATFORM_BACKUP_RPO_MINUTES, rtoMinutes: s.cfg.PLATFORM_BACKUP_RTO_MINUTES, everyMinutes: s.cfg.PLATFORM_BACKUP_MINUTES, retain: s.cfg.PLATFORM_BACKUP_RETAIN, dbClient: s.cfg.DB_CLIENT, blobStore: s.blobs.kind, kms: s.kms.kind });
+    res.json({ backups: backups.map(backupView), drills: drills.map(drillView), alert, rpoMinutes: s.cfg.PLATFORM_BACKUP_RPO_MINUTES, rtoMinutes: s.cfg.PLATFORM_BACKUP_RTO_MINUTES, everyMinutes: s.cfg.PLATFORM_BACKUP_MINUTES, retain: s.cfg.PLATFORM_BACKUP_RETAIN, dbClient: s.cfg.DB_CLIENT, blobStore: s.blobs.kind, kms: s.kms.kind, blobsBackedUp: s.cfg.PLATFORM_BACKUP_BLOBS });
   });
 
   r.post('/platform/backups', async (req, res) => {
