@@ -21,9 +21,11 @@ const item = z
   .strict()
   .refine((x) => (x.match === 'any') === (x.value == null), 'a model or profile item names it; an "any" item does not');
 const currency = z.string().regex(/^[A-Za-z]{3}$/);
+const taxView = (x: { name: string; ratePpm: number }) => ({ name: x.name, ratePercent: x.ratePpm / 10_000 });
 
 /**
- * Billing (Sprint 13). Price books are platform-wide and kept by holders of `billing:manage` (system admins); a
+ * Billing (Sprint 13, and Sprint 19: books owned by a tenant, a currency and taxes per tenant). Price books are kept by
+ * holders of `billing:manage` (system admins), platform-wide or for one tenant; a
  * tenant's statements are read with `billing:read` (tenant admins, auditors). System admins may name another tenant
  * with `?tenant=`.
  */
@@ -51,15 +53,19 @@ export function billingAdminRoutes(s: Services): Router {
 
   // ---------- price books ----------
 
-  r.get('/billing/price-books', read, async (_req, res) => {
-    res.json({ books: (await b.books()).map(bookView), meters: METERS, provider: b.providerName });
+  r.get('/billing/price-books', read, async (req, res) => {
+    const p = principalOf(req);
+    // System admins see every book; others see the platform books and their tenant's own (B-1005).
+    const books = p.roles.includes('system-admin') ? await b.books() : await b.books(p.tenantId);
+    res.json({ books: books.map(bookView), meters: METERS, provider: b.providerName });
   });
 
   r.post('/billing/price-books', manage, async (req, res) => {
     const p = principalOf(req);
-    const body = parseBody(z.object({ name: z.string().trim().min(1).max(100), currency: currency.default('USD'), isDefault: z.boolean().default(false), items: z.array(item).max(500).default([]) }).strict(), req.body);
+    const body = parseBody(z.object({ name: z.string().trim().min(1).max(100), currency: currency.default('USD'), isDefault: z.boolean().default(false), items: z.array(item).max(500).default([]), tenantId: id26.nullable().optional() }).strict(), req.body);
+    if (body.tenantId && !(await s.tenants.byId(body.tenantId))) throw notFound('Tenant');
     const book = await b.createBook(p.userId, body);
-    await audit(req, 'billing.price-book.created', { priceBook: book.id, name: book.name }, { currency: book.currency, items: book.items.length, isDefault: book.is_default });
+    await audit(req, 'billing.price-book.created', { priceBook: book.id, name: book.name, ...(book.tenant_id ? { tenant: book.tenant_id } : {}) }, { currency: book.currency, items: book.items.length, isDefault: book.is_default, tenant: book.tenant_id }, book.tenant_id ?? undefined);
     res.status(201).json(bookView(book));
   });
 
@@ -77,18 +83,32 @@ export function billingAdminRoutes(s: Services): Router {
     const tenantId = await tenantOf(req);
     const x = await s.integrations.get(tenantId);
     const book = await b.bookFor(tenantId);
-    res.json({ tenantId, priceBookId: x.priceBookId, effectiveBook: book ? bookView(book) : null, billingCustomer: x.billingCustomer, provider: b.providerName });
+    res.json({ tenantId, priceBookId: x.priceBookId, effectiveBook: book ? bookView(book) : null, billingCustomer: x.billingCustomer, billingCurrency: x.billingCurrency, taxRates: x.taxRates.map(taxView), provider: b.providerName, reconciliation: !!s.cfg.STRIPE_WEBHOOK_SECRET });
   });
 
   r.put('/billing/tenants/:tenantId', requirePermission(s, 'billing:manage', (req) => ({ tenantId: String(req.params.tenantId) })), async (req, res) => {
     const tenantId = parseBody(id26, req.params.tenantId);
     if (!(await s.tenants.byId(tenantId))) throw notFound('Tenant');
-    const body = parseBody(z.object({ priceBookId: id26.nullable().optional(), billingCustomer: z.string().trim().regex(/^[A-Za-z0-9_-]{1,100}$/).nullable().optional() }).strict(), req.body);
-    if (body.priceBookId) await b.book(body.priceBookId);
+    const body = parseBody(
+      z
+        .object({
+          priceBookId: id26.nullable().optional(),
+          billingCustomer: z.string().trim().regex(/^[A-Za-z0-9_-]{1,100}$/).nullable().optional(),
+          billingCurrency: currency.nullable().optional(),
+          taxRates: z.array(z.object({ name: z.string().trim().min(1).max(40), ratePercent: z.number().min(0).max(100) }).strict()).max(5).optional()
+        })
+        .strict(),
+      req.body
+    );
     const before = await s.integrations.get(tenantId);
-    const after = await s.integrations.set(tenantId, body, principalOf(req).userId);
-    await audit(req, 'billing.tenant.updated', { tenant: tenantId }, { before: { priceBookId: before.priceBookId, billingCustomer: before.billingCustomer }, after: { priceBookId: after.priceBookId, billingCustomer: after.billingCustomer } }, tenantId);
-    res.json({ tenantId, priceBookId: after.priceBookId, billingCustomer: after.billingCustomer });
+    const cur = body.billingCurrency !== undefined ? body.billingCurrency : before.billingCurrency;
+    const bookId = body.priceBookId !== undefined ? body.priceBookId : before.priceBookId;
+    if (bookId) await b.checkAssignable(tenantId, bookId, cur);
+    const patch = { ...(body.priceBookId !== undefined ? { priceBookId: body.priceBookId } : {}), ...(body.billingCustomer !== undefined ? { billingCustomer: body.billingCustomer } : {}), ...(body.billingCurrency !== undefined ? { billingCurrency: body.billingCurrency } : {}), ...(body.taxRates ? { taxRates: body.taxRates.map((x) => ({ name: x.name, ratePpm: Math.round(x.ratePercent * 10_000) })) } : {}) };
+    const after = await s.integrations.set(tenantId, patch, principalOf(req).userId);
+    const summary = (x: typeof after) => ({ priceBookId: x.priceBookId, billingCustomer: x.billingCustomer, billingCurrency: x.billingCurrency, taxRates: x.taxRates.map(taxView) });
+    await audit(req, 'billing.tenant.updated', { tenant: tenantId }, { before: summary(before), after: summary(after) }, tenantId);
+    res.json({ tenantId, ...summary(after) });
   });
 
   // ---------- statements ----------

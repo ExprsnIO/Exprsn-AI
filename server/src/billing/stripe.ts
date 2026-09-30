@@ -1,3 +1,5 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
 /*
  * The billing provider seam. `StripeProvider` creates an invoice through Stripe's REST API with plain `fetch`
  * (form-encoded, idempotency keys per statement and line), so a retried push never bills twice. No Stripe SDK.
@@ -58,4 +60,31 @@ export class StripeProvider implements BillingProvider {
     if (typeof inv.id !== 'string') throw new Error('Stripe returned no invoice id');
     return inv.id;
   }
+}
+
+/**
+ * Checks a `Stripe-Signature` header (B-1005): `t=<unix seconds>` and one or more `v1=<hex>` signatures, each an
+ * HMAC-SHA256 of `<t>.<raw body>` keyed with the endpoint's signing secret. The timestamp must be within
+ * `toleranceSeconds` of now, which bounds replays; `v0` (test-mode legacy) signatures are ignored.
+ */
+export function verifyStripeSignature(secret: string, header: string | undefined, rawBody: Buffer | string, toleranceSeconds = 300, now = Date.now()): { ok: true; timestamp: number } | { ok: false; reason: string } {
+  if (!header) return { ok: false, reason: 'no Stripe-Signature header' };
+  let t: number | null = null;
+  const v1: string[] = [];
+  for (const part of header.split(',')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
+    if (k === 't' && /^\d{1,12}$/.test(v)) t = Number(v);
+    else if (k === 'v1' && /^[0-9a-f]{64}$/i.test(v)) v1.push(v.toLowerCase());
+  }
+  if (t == null || !v1.length) return { ok: false, reason: 'the header has no timestamp or v1 signature' };
+  if (Math.abs(now / 1000 - t) > toleranceSeconds) return { ok: false, reason: 'the timestamp is outside the tolerance' };
+  const expected = createHmac('sha256', secret).update(`${t}.`).update(typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody).digest();
+  const match = v1.some((sig) => {
+    const b = Buffer.from(sig, 'hex');
+    return b.length === expected.length && timingSafeEqual(b, expected);
+  });
+  return match ? { ok: true, timestamp: t } : { ok: false, reason: 'no signature matches' };
 }
