@@ -219,7 +219,10 @@
       }
 
       root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}</style><div class="page">' + UI.pagehead('Imports and platform', 'Everything that runs here arrived through one signed import path', UI.btn('Run restore drill', { attrs: 'data-drill', disabled: !lastBackup }) + UI.btn('Start expedited import', { kind: 'primary', attrs: 'data-expedited' }))
-        + strip + tabs + body
+        + strip
+        // B-802: local and reset passwords are only checked against breach lists when BREACHED_PASSWORDS is set.
+        + (sum.passwords && sum.passwords.breachedCheck === 'off' ? UI.notice('<b>New passwords are not checked against breached-password lists.</b> Set <span class="mono">BREACHED_PASSWORDS</span> to <span class="mono">hibp</span> (with an internal mirror in <span class="mono">BREACHED_HIBP_URL</span>), <span class="mono">file</span> or <span class="mono">both</span> so that known-breached passwords are refused.', 'warn') : '')
+        + tabs + body
         + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(self.states) + '</div></div>'
         + '<aside class="inspector">' + insp + '</aside>';
       if (st.focusStale && st.tab !== 'mirrors') st.focusStale = false;

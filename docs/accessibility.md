@@ -54,8 +54,18 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   table rows are focusable and open with Enter or Space.
 - **Tabs**: `UI.tabs` renders the ARIA tabs pattern: a `tablist` of `tab` buttons with `aria-selected`, only the
   selected tab in the tab order, Left and Right arrows (wrapping), Home and End moving between tabs with selection
-  following focus, and the selected tab labelling the `tabpanel` that follows the list (`aria-controls`,
-  `aria-labelledby`; set by the accessibility pass).
+  following focus, and the selected tab labelling one `tabpanel` (`aria-controls`, `aria-labelledby`; set by the
+  accessibility pass). Since 1.2.0 (B-1103) the panel holds everything after the list up to the next tab list: when a
+  screen renders a tab's content as several siblings, `App.tabPanel` wraps them in one element that repeats the parent's
+  flex layout.
+- **Reflow** (WCAG 1.4.10, B-1102): at 640 px and below, rows of controls, tab lists and segmented controls wrap, long
+  words break, and single-column grids may shrink below their content's width, so no screen scrolls sideways at 320 px
+  (400 % zoom) or 640 px (200 %). Tables and code blocks that are wider than the window scroll inside themselves; the
+  accessibility pass marks each one `data-scrolls`, makes it a named keyboard stop (`role="region"`, `tabindex="0"`) and
+  `app.css` gives it a scrollbar that stays visible.
+- **Faint text** (B-1104): `--faint` is for rules and fills only. Text that looks faint (code line numbers, breadcrumb
+  separators, step separators) uses `--faint-text`: 4.63:1 or more on every Standard light surface, 4.9:1 or more on
+  the dark ones, and the `--muted` values (7:1) in Enhanced.
 - **Single-pointer alternatives** (WCAG 2.5.7): a Workflows step moves with the Move buttons in its inspector (20 px a
   press) as well as by dragging, and connects with "Connect from here" then a click on the target; Classifier levels
   have Up and Down buttons as well as drag and drop.
@@ -108,15 +118,16 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
 
 ## Known gaps
 
-- axe ran on the default state of each screen. States reached through the "States" popover, drawers opened from rows
-  and streaming chat were not scanned; dialogs were checked with the keyboard walk only.
-- The tab panel is the element right after the tab list; where a screen renders the tab's content as several
-  siblings, only the first is marked as the panel. For Sprint 11, axe (WCAG 2.2 AA tags) ran on the sign-in forms
-  (password, forgot, reset), Chat, Memory, Settings, Classifiers, User stores and Training with no violations, and a
-  keyboard walk checked the tabs (arrows, End, wrapping, focus kept while the tab loads); the full Playwright suite was
-  not re-run.
-- Code line numbers and breadcrumb separators use `--faint` and are below 4.5:1 in Standard; they are decorative and
-  hidden from assistive technology.
-- Reflow at 320 px wide and 200 % text zoom were not measured; wide tables scroll horizontally inside their panel.
+- The Playwright suite (B-1101, `e2e/tests/y-accessibility.spec.ts`) checks every screen, each of its design states
+  (the "States" popover, which also opens the drawers and dialogs the boards describe), the sign-in screen and a
+  streaming chat answer, in light and dark, and fails on any finding. It uses an in-page checker
+  (`e2e/tests/support/a11y.ts`) modelled on axe-core's WCAG A/AA rules (contrast with alpha and opacity, names,
+  roles and ARIA references, required parents and children, one tab panel per tab list, aria-hidden focus, scrolling
+  regions, nested controls, lists, language and title), because axe-core is not a dependency of the suite. It does
+  not cover every axe rule (for example `aria-allowed-attr` per role, `target-size`, or contrast over background
+  images, which it skips), and it checks the Standard mode only; Enhanced was last scanned with axe-core by hand in
+  Sprint 10. `e2e/tests/y-reflow.spec.ts` checks reflow at 320 and 640 px on every screen.
+- Reflow is checked on each screen's default state; dialogs and drawers are full-width at narrow sizes but were not
+  measured one by one.
 - No screen-reader session (NVDA, JAWS, VoiceOver) has been recorded yet; the checks above are automated or keyboard
   only.

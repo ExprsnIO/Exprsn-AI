@@ -73,3 +73,63 @@ export function checkPasswordPolicy(password: string, username: string): Passwor
   if (CONTEXT_WORDS.some((w) => lower.replace(/[^a-z]/g, '').includes(w))) return { ok: false, reason: 'The password must not contain the name of this service.' };
   return { ok: true };
 }
+
+// ---------- Sprint 17 (B-802): strength meter ----------
+
+export interface PasswordRule {
+  id: 'length' | 'max' | 'username' | 'repeated' | 'common' | 'service';
+  label: string;
+  ok: boolean;
+}
+
+/** The policy's rules one by one, for the console's strength meter (the same checks as checkPasswordPolicy). */
+export function passwordRules(password: string, username: string): PasswordRule[] {
+  const lower = password.toLowerCase();
+  return [
+    { id: 'length', label: 'At least 12 characters', ok: password.length >= 12 },
+    { id: 'max', label: 'At most 256 characters', ok: password.length <= 256 },
+    { id: 'username', label: 'Does not contain the username', ok: !username || !lower.includes(username.toLowerCase()) },
+    { id: 'repeated', label: 'Not one repeated character', ok: !/^(.)\1+$/.test(password) },
+    { id: 'common', label: 'Not one of the most common passwords', ok: !(COMMON_PASSWORDS.has(lower) || COMMON_PASSWORDS.has(lower.replace(/\s+/g, ''))) },
+    { id: 'service', label: 'Does not contain the name of this service', ok: !CONTEXT_WORDS.some((w) => lower.replace(/[^a-z]/g, '').includes(w)) }
+  ];
+}
+
+const SEQUENCES = ['abcdefghijklmnopqrstuvwxyz', '0123456789', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+
+/**
+ * A rough entropy estimate: the character pool raised to the length, where characters that repeat the one before,
+ * continue a run (abc, 123, qwe, in either direction) or belong to a common or context word count for little.
+ * It is guidance for people, not a guarantee; the policy and the breached check are what refuse a password.
+ */
+export function estimateStrength(password: string, username: string): { bits: number; score: 0 | 1 | 2 | 3 | 4; label: string } {
+  let pool = 0;
+  if (/[a-z]/.test(password)) pool += 26;
+  if (/[A-Z]/.test(password)) pool += 26;
+  if (/\d/.test(password)) pool += 10;
+  if (/[\x20-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/.test(password)) pool += 33;
+  if (/[^\x20-\x7e]/.test(password)) pool += 100;
+  const lower = password.toLowerCase();
+  let effective = 0;
+  for (let i = 0; i < password.length; i++) {
+    const prev = lower[i - 1];
+    const cur = lower[i]!;
+    if (prev === cur) {
+      effective += 0.1;
+      continue;
+    }
+    const run = prev !== undefined && SEQUENCES.some((seq) => {
+      const a = seq.indexOf(prev);
+      const b = seq.indexOf(cur);
+      return a >= 0 && b >= 0 && Math.abs(a - b) === 1;
+    });
+    effective += run ? 0.25 : 1;
+  }
+  let bits = effective * Math.log2(Math.max(pool, 1));
+  const rules = passwordRules(password, username);
+  if (!rules.find((r) => r.id === 'common')!.ok || !rules.find((r) => r.id === 'repeated')!.ok) bits = Math.min(bits, 10);
+  if (!rules.find((r) => r.id === 'username')!.ok || !rules.find((r) => r.id === 'service')!.ok) bits = Math.min(bits, 20);
+  bits = Math.round(bits);
+  const score = bits < 28 ? 0 : bits < 40 ? 1 : bits < 60 ? 2 : bits < 80 ? 3 : 4;
+  return { bits, score, label: ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong'][score]! };
+}

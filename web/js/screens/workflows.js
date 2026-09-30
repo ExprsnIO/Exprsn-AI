@@ -456,7 +456,7 @@
         + (st.conflict ? UI.notice('<b>The draft changed since you opened it.</b> ' + esc(st.conflict) + ' Your unsaved edits stay here until you reload.', 'warn', UI.btn('Reload the draft', { size: 'sm', attrs: 'data-reloaddraft' })) : '')
         + (st.parseError && !viewing ? UI.notice('<b>The draft cannot be checked.</b> ' + esc(st.parseError), 'danger') : '')
         + problem
-        + '<div class="wf-scroll"><div class="wf-canvas" tabindex="0" aria-label="Workflow canvas" style="width:' + canvasW + 'px;height:' + canvasH + 'px">' + svg + nodeHtml + '<div style="position:absolute;right:12px;top:12px;display:flex;gap:6px">' + (manage ? UI.btn(st.starting ? 'Starting' : 'Dry run', { size: 'sm', icon: 'play', attrs: 'data-dryrun', disabled: !!st.starting }) : '') + '</div></div></div>'
+        + '<div class="wf-scroll" data-scroll-x data-scroll-2d><div class="wf-canvas" tabindex="0" aria-label="Workflow canvas" style="width:' + canvasW + 'px;height:' + canvasH + 'px">' + svg + nodeHtml + '<div style="position:absolute;right:12px;top:12px;display:flex;gap:6px">' + (manage ? UI.btn(st.starting ? 'Starting' : 'Dry run', { size: 'sm', icon: 'play', attrs: 'data-dryrun', disabled: !!st.starting }) : '') + '</div></div></div>'
         + '<div class="wf-toolbar">'
         + (manage ? UI.btn('Dry run', { size: 'sm', icon: 'play', attrs: 'data-dryrun', disabled: !!st.starting }) : '')
         + UI.btn('Start run', { size: 'sm', icon: 'play', attrs: 'data-startrun', disabled: !wf.publishedVersion || !!st.starting, title: wf.publishedVersion ? 'Runs the published version ' + wf.publishedVersion : 'Publish a version first' })

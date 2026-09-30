@@ -87,7 +87,8 @@
     },
     tabs(items, active, attrs) {
       // The ARIA tabs pattern: a tablist of tabs with one in the tab order (arrow keys, Home and End move between them,
-      // see the keydown handler); App.a11yPass gives each tab an id and ties the selected one to the panel after the list.
+      // see the keydown handler); App.a11yPass gives each tab an id and ties the selected one to App.tabPanel, the one panel
+      // holding everything after the list.
       return '<div class="tabs" role="tablist" aria-label="Sections" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; const on = o.id === active; return '<button type="button" role="tab" data-tab="' + esc(o.id) + '" class="' + (on ? 'active' : '') + '" aria-selected="' + (on ? 'true' : 'false') + '" tabindex="' + (on ? '0' : '-1') + '">' + esc(o.label) + (o.count != null ? ' <span class="count">' + o.count + '</span>' : '') + '</button>'; }).join('') + '</div>';
     },
     seg(items, active, attrs) {
@@ -255,7 +256,12 @@
       if (hash) { if (location.hash === hash) App.render(); else location.hash = hash; return; }
       App.navigate(next); if (App.parse().route === next) App.render();
     },
-    async signOut() { try { await api('POST', '/api/auth/logout'); } catch (e) { /* already gone */ } App.sessionEnded(); },
+    async signOut() {
+      let r = null; try { r = await api('POST', '/api/auth/logout'); } catch (e) { /* already gone */ }
+      App.sessionEnded();
+      // Front-channel logout (B-808): the signed-out page loads each application's logout frame, then returns here.
+      if (r && typeof r.next === 'string' && /^\/(t\/[a-z0-9][a-z0-9-]{0,62}\/)?oauth\/logged-out\?handle=[A-Za-z0-9_-]+$/.test(r.next)) location.assign(r.next);
+    },
     /** Clears local state after sign-out, revocation or expiry. */
     sessionEnded(message) {
       const was = state.signedIn; state.signedIn = false; state.csrf = null; App.me = null; state.screenState = {};
@@ -606,6 +612,29 @@
       if (key.caret && typeof el.setSelectionRange === 'function') { try { el.setSelectionRange(key.caret[0], key.caret[1]); } catch (e) { /* not a text field */ } }
       const r = el.getBoundingClientRect(); if ((r.bottom < 0 || r.top > window.innerHeight) && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
     },
+    /** The one tabpanel for a tab list (B-1103): everything after the list up to the next tab list, wrapped in a
+     *  single element when it is more than one (the wrapper repeats the parent's flex layout, so nothing moves). */
+    tabPanel(list) {
+      const parent = list.parentElement; if (!parent) return null;
+      const after = [];
+      for (let n = list.nextElementSibling; n && n.getAttribute('role') !== 'tablist'; n = n.nextElementSibling) if (!/^(STYLE|SCRIPT|TEMPLATE)$/.test(n.tagName)) after.push(n);
+      if (!after.length) return null;
+      const first = after[0];
+      const usable = (el) => /^(DIV|SECTION)$/.test(el.tagName) && (!el.getAttribute('role') || el.getAttribute('role') === 'tabpanel');
+      if (after.length === 1 && usable(first)) return first;
+      const cs = getComputedStyle(parent);
+      if (/grid/.test(cs.display)) return usable(first) ? first : null;
+      const focused = document.activeElement;
+      let wrap = first.hasAttribute('data-tabpanel-wrap') ? first : null;
+      if (!wrap) {
+        wrap = document.createElement('div'); wrap.setAttribute('data-tabpanel-wrap', '');
+        if (/flex/.test(cs.display)) wrap.style.cssText = 'display:flex;flex-direction:' + cs.flexDirection + ';flex-wrap:' + cs.flexWrap + ';align-items:' + cs.alignItems + ';gap:' + cs.gap + ';flex:1 0 auto;min-width:0';
+        parent.insertBefore(wrap, first);
+      }
+      after.forEach((el) => { if (el !== wrap) wrap.appendChild(el); });
+      if (focused && focused !== document.activeElement && document.contains(focused) && typeof focused.focus === 'function') focused.focus({ preventScroll: true });
+      return wrap;
+    },
     /** Fills in what screens leave out: names for icon-only buttons and placeholder-only fields, header scope, and
      *  keyboard access to clickable table rows (Enter or Space clicks the row; see the keydown handler). */
     a11yPass(root) {
@@ -616,14 +645,28 @@
       });
       $$('thead th:not([scope])', root).forEach((th) => th.setAttribute('scope', 'col'));
       $$('table.dt tbody tr.row:not([tabindex])', root).forEach((tr) => tr.setAttribute('tabindex', '0'));
+      // Scrolling tables and code (B-1102): a keyboard stop, a name, and data-scrolls, which app.css gives a scrollbar
+      // that stays visible, so a table that is wider than a narrow window reads as scrollable.
+      $$('.tablewrap,.codebox,pre,[data-scroll-x]', root).forEach((el) => {
+        const scrolls = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+        if (scrolls && !el.hasAttribute('data-scrolls')) {
+          el.setAttribute('data-scrolls', '');
+          if (!el.hasAttribute('tabindex')) { el.setAttribute('tabindex', '0'); el.setAttribute('data-scroll-tab', ''); }
+          if (!el.getAttribute('role')) el.setAttribute('role', 'region');
+          if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', el.matches('.codebox,pre') ? 'Code, scrollable' : el.hasAttribute('data-scroll-2d') ? 'Diagram, scrollable' : 'Table, scrolls sideways');
+        } else if (!scrolls && el.hasAttribute('data-scrolls')) {
+          el.removeAttribute('data-scrolls');
+          if (el.hasAttribute('data-scroll-tab')) { el.removeAttribute('tabindex'); el.removeAttribute('data-scroll-tab'); el.removeAttribute('role'); el.removeAttribute('aria-label'); }
+        }
+      });
       // Tabs: ids, one tab in the tab order, and the selected tab labels the panel that follows the list.
       $$('[role="tablist"]', root).forEach((list) => {
         const tabs = $$('[role="tab"]', list); if (!tabs.length) return;
         tabs.forEach((t) => { if (!t.id) t.id = uid('tab'); });
         const cur = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
         if (!cur && !tabs.some((t) => t.getAttribute('tabindex') === '0')) tabs[0].setAttribute('tabindex', '0');
-        const panel = list.nextElementSibling;
-        if (!cur || !panel || !/^(DIV|SECTION)$/.test(panel.tagName) || (panel.getAttribute('role') && panel.getAttribute('role') !== 'tabpanel')) return;
+        const panel = cur ? App.tabPanel(list) : null;
+        if (!panel) return;
         if (!panel.id) panel.id = uid('tabpanel');
         panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', cur.id);
         tabs.forEach((t) => { if (t === cur) t.setAttribute('aria-controls', panel.id); else t.removeAttribute('aria-controls'); });
@@ -668,6 +711,8 @@
   let passTimer = null;
   const schedulePass = () => { if (passTimer) return; passTimer = setTimeout(() => { passTimer = null; App.a11yPass($('#main')); App.a11yPass($('#overlay')); }, 150); };
   if (window.MutationObserver) document.addEventListener('DOMContentLoaded', () => new MutationObserver(schedulePass).observe(document.body, { childList: true, subtree: true }));
+  // A narrower window (or zoom) can make a table scroll: the pass marks it again (B-1102).
+  window.addEventListener('resize', schedulePass);
   document.addEventListener('click', (e) => {
     const sk = e.target.closest && e.target.closest('#skip-link');
     if (sk) { e.preventDefault(); const m = $('#main'); if (m) { const h = m.querySelector('h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus(); } else m.focus(); } }

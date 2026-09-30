@@ -17,6 +17,7 @@ import * as m015 from './015_integrations.js';
 import * as m016 from './016_federation2.js';
 import * as m017 from './017_ops.js';
 import * as m018 from './018_chat_depth.js';
+import * as m019 from './019_identity3.js';
 import * as m020 from './020_platform3.js';
 import * as m021 from './021_integrations2.js';
 
@@ -45,6 +46,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '016_federation2': m016,
   '017_ops': m017,
   '018_chat_depth': m018,
+  '019_identity3': m019,
   '020_platform3': m020,
   '021_integrations2': m021
 };

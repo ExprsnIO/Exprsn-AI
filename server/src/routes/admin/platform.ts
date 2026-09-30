@@ -77,7 +77,9 @@ export function platformAdminRoutes(s: Services): Router {
       ...summary,
       bundles: { total: bundles.length, ready: bundles.filter((b) => b.state === 'ready to promote').length, rejected: bundles.filter((b) => b.state === 'rejected').length, expedited: bundles.filter((b) => b.expedited && b.state !== 'in production' && b.state !== 'rejected').length },
       certificates: { total: views.length, expiring: views.filter((c) => c.status === 'expiring' || c.status === 'expired').length, nextExpiry: next ? { name: next.name, days: next.days } : null },
-      mirrors: { total: mirrors.length, stale: mirrors.map(mirrorView).filter((m) => m.stale).length }
+      mirrors: { total: mirrors.length, stale: mirrors.map(mirrorView).filter((m) => m.stale).length },
+      // Sprint 17 (B-802): Platform warns while new passwords are not checked against breached-password lists.
+      passwords: { breachedCheck: s.cfg.BREACHED_PASSWORDS }
     });
   });
 

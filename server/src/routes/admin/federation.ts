@@ -11,7 +11,9 @@ import { badRequest, conflict, forbidden, notFound } from '../../http/problem.js
 import { CLIENT_TYPES, clientJwks, DEVICE_GRANT, EXCHANGE_GRANT, OAuthError, isConfidential, type ClientRow, type Grant, type TenantCtx } from '../../federation/oidc.js';
 import { certInfo, NAMEID_FORMATS, parseSpMetadata, type SpRow } from '../../federation/saml.js';
 import { isKnownScope, SCOPE_GROUPS } from '../../federation/scopes.js';
-import type { parseIdpMetadata } from '../../federation/upstream.js';
+import { parseIdpMetadata } from '../../federation/upstream.js';
+import { idpSnapshot, spSnapshot, type MetadataSourceRow } from '../../federation/metadata.js';
+import type { FederationProposalRow, ProposalActor } from '../../federation/proposals.js';
 import { signJwtWith, verifyJwt } from '../../federation/jose.js';
 import type { KeyRow } from '../../federation/keys.js';
 import { XmlError } from '../../federation/xml.js';
@@ -123,6 +125,7 @@ const spView = (sp: SpRow) => ({
   sloBinding: sp.slo_binding,
   encryptionCert: certInfo(sp.encryption_certificate),
   encryptAssertions: sp.encrypt_assertions,
+  signResponse: sp.sign_response,
   status: sp.status,
   lastUsedAt: sp.last_used_at,
   createdAt: sp.created_at
@@ -166,6 +169,8 @@ export function federationAdminRoutes(s: Services): Router {
       jwks: c.jwks.map((k) => ({ kid: k.kid ?? null, kty: k.kty })),
       parRequired: c.par_required,
       dpopRequired: c.dpop_required,
+      introspect: c.introspect,
+      introspectPending: !!(await fed().proposals.pendingFor(c.tenant_id, 'client.introspect', c.id)),
       confidential: isConfidential(c),
       secretCreatedAt: c.secret_created_at,
       serviceUserId: c.service_user_id,
@@ -316,6 +321,112 @@ export function federationAdminRoutes(s: Services): Router {
     res.json({ client: await clientView((await fed().oidc.getClient(c.tenant_id, c.id))!) });
   });
 
+  /**
+   * B-806: who a client may introspect for. Narrowing to its own tokens applies at once; letting it introspect every
+   * client's access tokens (a resource server) is a proposal that a second identity admin approves.
+   */
+  r.post('/federation/oidc/clients/:id/introspect', async (req, res) => {
+    const p = principalOf(req);
+    const c = await loadClient(req);
+    const body = parseBody(z.object({ mode: z.enum(['own', 'any']), reason: z.string().trim().max(500).optional() }).strict(), req.body);
+    if (body.mode === 'own') {
+      await fed().oidc.setIntrospect(c.tenant_id, c.id, 'own');
+      const pending = await fed().proposals.pendingFor(c.tenant_id, 'client.introspect', c.id);
+      if (pending) await s.db('federation_proposals').where({ id: pending.id, state: 'pending' }).update({ state: 'superseded', decided_by: p.userId, decided_at: Date.now(), note: 'Narrowed to own tokens.' });
+      await audit(req, 'federation.client.introspect_changed', { client: c.client_id, name: c.name }, { before: c.introspect, after: 'own' });
+      return void res.json({ client: await clientView((await fed().oidc.getClient(c.tenant_id, c.id))!), proposal: null });
+    }
+    if (!isConfidential(c)) throw conflict('Public clients cannot introspect tokens.');
+    if (c.introspect === 'any') throw conflict('This client already introspects every client\'s tokens.');
+    const proposal = await fed().proposals.propose(c.tenant_id, { kind: 'client.introspect', targetId: c.id, name: c.name, payload: { mode: 'any' }, summary: `Let ${c.name} (${c.client_id}) introspect access tokens issued to every client in this tenant.${body.reason ? ` Reason: ${body.reason}` : ''}` }, { tenantId: p.tenantId, userId: p.userId, username: p.username, ip: ip(req), traceId: req.traceId });
+    res.status(202).json({ client: await clientView(c), proposal: proposalView(proposal) });
+  });
+
+  // ---------- proposals (introspection rights, fetched metadata) ----------
+
+  const proposalView = (x: FederationProposalRow) => ({ id: x.id, kind: x.kind, targetId: x.target_id, name: x.name, summary: x.summary, state: x.state, proposedBy: x.proposed_by, proposedAt: x.proposed_at, decidedBy: x.decided_by, decidedAt: x.decided_at, note: x.note });
+  const actorOf = (req: Request): ProposalActor => {
+    const p = principalOf(req);
+    return { tenantId: p.tenantId, userId: p.userId, username: p.username, ip: ip(req), traceId: req.traceId };
+  };
+
+  r.get('/federation/proposals', async (req, res) => {
+    const q = parseBody(z.object({ state: z.enum(['pending', 'approved', 'rejected', 'withdrawn', 'superseded']).optional() }), req.query);
+    const p = principalOf(req);
+    res.json((await fed().proposals.list(p.tenantId, q.state ? { state: q.state } : {})).map((x) => ({ ...proposalView(x), mine: x.proposed_by === p.userId })));
+  });
+
+  const decision = z.object({ note: z.string().trim().max(500).optional() });
+  r.post('/federation/proposals/:id/approve', async (req, res) => {
+    const body = parseBody(decision, req.body ?? {});
+    res.json(proposalView(await fed().proposals.approve(actorOf(req), String(req.params.id), body.note ?? null)));
+  });
+  r.post('/federation/proposals/:id/reject', async (req, res) => {
+    const body = parseBody(decision, req.body ?? {});
+    res.json(proposalView(await fed().proposals.reject(actorOf(req), String(req.params.id), body.note ?? null)));
+  });
+  r.post('/federation/proposals/:id/withdraw', async (req, res) => {
+    res.json(proposalView(await fed().proposals.withdraw(actorOf(req), String(req.params.id))));
+  });
+
+  // ---------- fetched SAML metadata (B-807) ----------
+
+  const sourceView = (x: MetadataSourceRow) => ({ id: x.id, kind: x.kind, url: x.url, fetchedAt: x.fetched_at, error: x.error });
+
+  r.get('/federation/metadata', async (req, res) => {
+    res.json((await fed().metadata.sources(principalOf(req).tenantId)).map(sourceView));
+  });
+
+  /** Fetches a source now; a changed certificate or endpoint becomes a proposal. */
+  r.post('/federation/metadata/:id/refresh', async (req, res) => {
+    const p = principalOf(req);
+    if (!(await fed().metadata.source(p.tenantId, String(req.params.id)))) throw notFound('Metadata source');
+    const out = await fed().metadata.refresh(p.tenantId, String(req.params.id));
+    await audit(req, 'federation.metadata.refreshed', { target: String(req.params.id) }, { state: out.state, proposal: out.proposal?.id ?? null, error: out.error ?? null });
+    res.json({ state: out.state, error: out.error ?? null, proposal: out.proposal ? proposalView(out.proposal) : null, source: sourceView((await fed().metadata.source(p.tenantId, String(req.params.id)))!) });
+  });
+
+  /**
+   * Starts (or changes) fetching the metadata of a registered SP or upstream SAML IdP from a URL. The URL must serve
+   * metadata for the same entity; if its certificates or endpoints differ from what is in force, the difference is
+   * proposed for approval rather than applied.
+   */
+  r.put('/federation/metadata/:id', async (req, res) => {
+    const p = principalOf(req);
+    const id = String(req.params.id);
+    const body = parseBody(z.object({ url: z.url().max(2000) }).strict(), req.body);
+    const sp = await fed().saml.get(p.tenantId, id);
+    const idp = sp ? undefined : await s.providers.get(p.tenantId, id);
+    if (!sp && (!idp || idp.kind !== 'saml')) throw notFound('Service provider or SAML identity provider');
+    let xml: string;
+    try {
+      xml = await fed().metadata.fetch(body.url);
+    } catch (err) {
+      throw badRequest(`The metadata could not be fetched: ${(err as Error).message}`);
+    }
+    let entity: string;
+    try {
+      entity = sp ? parseSpMetadata(xml).entityId : parseIdpMetadata(xml).entityId;
+    } catch (err) {
+      throw badRequest(`The metadata could not be read: ${(err as Error).message}`);
+    }
+    const current = sp ? sp.entity_id : (idp!.config as unknown as SamlUpstreamConfig).entityId;
+    if (entity !== current) throw badRequest(`That URL serves metadata for ${entity}, not ${current}.`);
+    await fed().metadata.register(p.tenantId, sp ? 'sp' : 'idp', id, body.url, sp ? spSnapshot(sp) : idpSnapshot(idp!.config as unknown as SamlUpstreamConfig));
+    const out = await fed().metadata.refresh(p.tenantId, id);
+    await audit(req, 'federation.metadata.source_set', { target: id, kind: sp ? 'sp' : 'idp' }, { url: body.url, state: out.state, proposal: out.proposal?.id ?? null });
+    res.json({ state: out.state, proposal: out.proposal ? proposalView(out.proposal) : null, source: sourceView((await fed().metadata.source(p.tenantId, id))!) });
+  });
+
+  r.delete('/federation/metadata/:id', async (req, res) => {
+    const p = principalOf(req);
+    const src = await fed().metadata.source(p.tenantId, String(req.params.id));
+    if (!src) throw notFound('Metadata source');
+    await fed().metadata.forget(p.tenantId, src.id);
+    await audit(req, 'federation.metadata.source_removed', { target: src.id, kind: src.kind }, { url: src.url });
+    res.status(204).end();
+  });
+
   // ---------- SAML service providers ----------
 
   r.get('/federation/saml/sps', async (req, res) => {
@@ -341,22 +452,34 @@ export function federationAdminRoutes(s: Services): Router {
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(100),
-        xml: z.string().min(1).max(512 * 1024),
+        xml: z.string().min(1).max(512 * 1024).optional(),
+        /** B-807: fetch the metadata from a URL instead (checked like upstream providers; refreshed daily). */
+        metadataUrl: z.url().max(2000).optional(),
         nameIdFormat: z.enum(Object.keys(NAMEID_FORMATS) as [keyof typeof NAMEID_FORMATS]).optional(),
         attributeMap: z.record(z.enum(['username', 'email', 'displayName', 'groups', 'roles', 'clearance']), z.string().trim().max(300)).optional(),
-        encryptAssertions: z.boolean().optional()
-      }),
+        encryptAssertions: z.boolean().optional(),
+        signResponse: z.boolean().optional()
+      }).refine((b) => !!b.xml !== !!b.metadataUrl, 'Give the metadata XML or its URL.'),
       req.body
     );
-    const meta = parseMeta(body.xml);
+    let xml = body.xml ?? '';
+    if (body.metadataUrl) {
+      try {
+        xml = await fed().metadata.fetch(body.metadataUrl);
+      } catch (err) {
+        throw badRequest(`The metadata could not be fetched: ${(err as Error).message}`);
+      }
+    }
+    const meta = parseMeta(xml);
     if (await fed().saml.byEntity(p.tenantId, meta.entityId)) throw conflict('A service provider with that entity ID is registered.');
     if (meta.signedRequests && !meta.certificate) throw badRequest('The metadata asks for signed requests but has no signing certificate.');
     try {
       // Assertions are encrypted for an SP that publishes an encryption certificate (still valid), unless turned off.
       const encrypt = body.encryptAssertions ?? (!!meta.encryptionCertificate && !meta.encryptionCert?.expired);
       if (encrypt && (!meta.encryptionCertificate || meta.encryptionCert?.expired)) throw badRequest('The metadata has no valid encryption certificate, so assertions cannot be encrypted for it.');
-      const sp = await fed().saml.create(p.tenantId, { name: body.name, entityId: meta.entityId, acsUrls: meta.acsUrls, nameIdFormat: body.nameIdFormat ?? meta.nameIdFormat, certificate: meta.certificate, signedRequests: meta.signedRequests && !meta.cert?.expired, attributeMap: body.attributeMap ?? {}, sloUrl: meta.sloUrl, sloBinding: meta.sloBinding, encryptionCertificate: meta.encryptionCertificate, encryptAssertions: encrypt });
-      await audit(req, 'federation.saml_sp.created', { sp: sp.id, name: sp.name, entity: sp.entity_id }, { acs: meta.acsUrls.map((a) => a.url), cert: meta.cert?.fingerprint ?? null, slo: meta.sloUrl, encryptionCert: meta.encryptionCert?.fingerprint ?? null, encryptAssertions: encrypt });
+      const sp = await fed().saml.create(p.tenantId, { name: body.name, entityId: meta.entityId, acsUrls: meta.acsUrls, nameIdFormat: body.nameIdFormat ?? meta.nameIdFormat, certificate: meta.certificate, signedRequests: meta.signedRequests && !meta.cert?.expired, attributeMap: body.attributeMap ?? {}, sloUrl: meta.sloUrl, sloBinding: meta.sloBinding, encryptionCertificate: meta.encryptionCertificate, encryptAssertions: encrypt, signResponse: !!body.signResponse });
+      if (body.metadataUrl) await fed().metadata.register(p.tenantId, 'sp', sp.id, body.metadataUrl, spSnapshot(meta));
+      await audit(req, 'federation.saml_sp.created', { sp: sp.id, name: sp.name, entity: sp.entity_id }, { acs: meta.acsUrls.map((a) => a.url), cert: meta.cert?.fingerprint ?? null, slo: meta.sloUrl, encryptionCert: meta.encryptionCert?.fingerprint ?? null, encryptAssertions: encrypt, signResponse: !!body.signResponse, metadataUrl: body.metadataUrl ?? null });
       res.status(201).json(spView(sp));
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A service provider with that name exists.');
@@ -368,14 +491,14 @@ export function federationAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const sp = await fed().saml.get(p.tenantId, String(req.params.id));
     if (!sp) throw notFound('Service provider');
-    const body = parseBody(z.object({ status: z.enum(['active', 'disabled']).optional(), signedRequests: z.boolean().optional(), nameIdFormat: z.enum(Object.keys(NAMEID_FORMATS) as [keyof typeof NAMEID_FORMATS]).optional(), encryptAssertions: z.boolean().optional() }).strict(), req.body);
+    const body = parseBody(z.object({ status: z.enum(['active', 'disabled']).optional(), signedRequests: z.boolean().optional(), nameIdFormat: z.enum(Object.keys(NAMEID_FORMATS) as [keyof typeof NAMEID_FORMATS]).optional(), encryptAssertions: z.boolean().optional(), signResponse: z.boolean().optional() }).strict(), req.body);
     if (body.encryptAssertions && (!sp.encryption_certificate || certInfo(sp.encryption_certificate)?.expired)) throw conflict('This service provider has no valid encryption certificate. Upload fresh metadata first.');
     const signed = body.signedRequests ?? sp.signed_requests;
     const expired = certInfo(sp.certificate)?.expired ?? true;
     if (body.status === 'active' && signed && expired) throw conflict('Its signing certificate has expired. Upload fresh metadata, or enable it with signed requests off.');
     if (body.signedRequests && !sp.certificate) throw conflict('This service provider has no certificate to verify signed requests.');
     const row = await fed().saml.update(p.tenantId, sp.id, body);
-    await audit(req, 'federation.saml_sp.updated', { sp: sp.id, name: sp.name }, { before: { status: sp.status, signedRequests: sp.signed_requests, nameIdFormat: sp.nameid_format, encryptAssertions: sp.encrypt_assertions }, after: body });
+    await audit(req, 'federation.saml_sp.updated', { sp: sp.id, name: sp.name }, { before: { status: sp.status, signedRequests: sp.signed_requests, nameIdFormat: sp.nameid_format, encryptAssertions: sp.encrypt_assertions, signResponse: sp.sign_response }, after: body });
     res.json(spView(row!));
   });
 
@@ -384,6 +507,7 @@ export function federationAdminRoutes(s: Services): Router {
     const sp = await fed().saml.get(p.tenantId, String(req.params.id));
     if (!sp) throw notFound('Service provider');
     await fed().saml.remove(p.tenantId, sp.id);
+    await fed().metadata.forget(p.tenantId, sp.id);
     await audit(req, 'federation.saml_sp.deleted', { sp: sp.id, name: sp.name, entity: sp.entity_id });
     res.status(204).end();
   });
@@ -451,6 +575,8 @@ export function federationAdminRoutes(s: Services): Router {
     const position = Math.max(0, ...(await s.providers.list(p.tenantId)).map((x) => x.position)) + 10;
     try {
       const row = await s.providers.create(p.tenantId, { name: body.name, kind: body.protocol, position: Math.min(position, 10000), enabled: true, config });
+      // B-807: SAML metadata given as a URL is fetched again on a schedule; changes wait for approval.
+      if (body.protocol === 'saml' && /^https?:\/\//.test(body.source)) await fed().metadata.register(p.tenantId, 'idp', row.id, body.source, idpSnapshot(config as unknown as SamlUpstreamConfig));
       await audit(req, 'identity.provider.created', { provider: row.id, name: row.name, kind: row.kind }, { config: row.config });
       res.status(201).json(await upstreamView(t, row));
     } catch (err) {

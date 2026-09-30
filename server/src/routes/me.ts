@@ -9,7 +9,8 @@ import { AccountService } from '../identity/account.js';
 import { LoginThrottle } from '../identity/lockout.js';
 import { securityAlert, type SecurityAlertInput } from '../identity/security-alerts.js';
 import { toClient as notificationView } from '../platform/notifications.js';
-import { badRequest, forbidden, HttpProblem, notFound, tooManyRequests, unauthorized } from '../http/problem.js';
+import { badRequest, conflict, forbidden, HttpProblem, notFound, tooManyRequests, unauthorized } from '../http/problem.js';
+import { setFedCookie } from './federation-public.js';
 import type { Services } from '../services.js';
 
 export function meRoutes(s: Services): Router {
@@ -67,6 +68,8 @@ export function meRoutes(s: Services): Router {
       s.account.passwordHome(p.tenantId, p.userId)
     ]);
     const passwordStepUp = home.kind === 'local' || home.stores.some((x) => x.kind === 'ldap' || x.kind === 'sql');
+    // B-803: a session from an upstream OIDC or SAML provider can step up by signing in there again.
+    const upstream = await upstreamOf(req);
     res.json({
       user: { id: p.userId, username: p.username, displayName: p.displayName, clearance: p.clearance },
       roles: p.roles.map((id) => ({ id, name: getRole(id)?.name ?? id })),
@@ -81,7 +84,8 @@ export function meRoutes(s: Services): Router {
       stepUp: {
         windowSeconds: s.cfg.STEPUP_WINDOW_SECONDS,
         authAt: req.authSession ? AccountService.authTime(req.authSession) : null,
-        methods: [...(passwordStepUp ? ['password'] : []), ...methods.filter((m) => m !== 'recovery')]
+        methods: [...(passwordStepUp ? ['password'] : []), ...methods.filter((m) => m !== 'recovery'), ...(upstream ? ['upstream'] : [])],
+        upstream: upstream ? { name: upstream.name, protocol: upstream.kind } : null
       }
     });
   });
@@ -180,6 +184,47 @@ export function meRoutes(s: Services): Router {
     const at = await s.sessions.markAuthenticated(req.authSession!.id);
     await audit(req, 'auth.step_up', {}, { method }, 'auth');
     res.json({ authAt: at, windowSeconds: s.cfg.STEPUP_WINDOW_SECONDS, method });
+  });
+
+  // ---------- step-up at the upstream identity provider (Sprint 17, B-803) ----------
+
+  /** The enabled upstream OIDC or SAML provider the current session signed in with, if any. */
+  async function upstreamOf(req: Request) {
+    const id = req.authSession?.provider_id;
+    if (!id) return null;
+    const row = await s.providers.get(req.authSession!.tenant_id, id);
+    return row && row.enabled && (row.kind === 'oidc' || row.kind === 'saml') ? row : null;
+  }
+
+  /**
+   * Starts a re-authentication at the upstream IdP the session came from (`prompt=login` and `max_age=0`, or SAML
+   * `ForceAuthn`). The pending state is bound to this browser (the federation cookie) and to this session; the
+   * console follows the returned URL.
+   */
+  r.post('/step-up/upstream', browser, async (req, res) => {
+    const p = principalOf(req);
+    const row = await upstreamOf(req);
+    if (!row) throw conflict('This session did not sign in through an upstream identity provider. Confirm with your password or a second factor instead.');
+    const t = (await s.federation.tenantById(p.tenantId))!;
+    const binding = { sessionId: req.authSession!.id, userId: p.userId };
+    const out = row.kind === 'oidc' ? await s.federation.upstream.startOidc(t, row.id, null, binding) : await s.federation.upstream.startSaml(t, row.id, null, binding);
+    setFedCookie(res, s, out.browser, row.kind === 'saml' ? 'none' : 'lax');
+    await audit(req, 'auth.step_up.started', { provider: row.name, kind: row.kind }, { method: 'upstream' }, 'auth');
+    res.json({ url: out.url, provider: row.name });
+  });
+
+  /** Redeems the handle the upstream callback left for this session; only then does the step-up time move. */
+  r.post('/step-up/upstream/complete', browser, async (req, res) => {
+    const p = principalOf(req);
+    const { handle } = parseBody(z.object({ handle: z.string().min(1).max(100) }), req.body);
+    const out = await s.federation.upstream.takeStepUp(p.tenantId, handle, req.authSession!.id);
+    if (!out || out.userId !== p.userId) {
+      await audit(req, 'auth.step_up.failed', {}, { method: 'upstream', reason: 'unknown, expired or another session' }, 'auth');
+      throw badRequest('This confirmation is unknown, has expired, or belongs to another session. Try again.');
+    }
+    const at = await s.sessions.markAuthenticated(req.authSession!.id);
+    await audit(req, 'auth.step_up', {}, { method: out.method }, 'auth');
+    res.json({ authAt: at, windowSeconds: s.cfg.STEPUP_WINDOW_SECONDS, method: out.method });
   });
 
   // ---------- workspace ----------

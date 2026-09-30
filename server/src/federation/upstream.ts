@@ -39,7 +39,19 @@ interface PendingUpstream {
   nonce?: string;
   verifier?: string;
   requestId?: string;
+  /** Sprint 17 (B-803): a step-up re-authentication for this console session and user, started at `startedAt`. */
+  stepUp?: StepUpBinding;
+  startedAt?: number;
 }
+
+/** The console session a step-up at the upstream IdP was started from; the result counts only for it. */
+export interface StepUpBinding {
+  sessionId: string;
+  userId: string;
+}
+
+/** How much older than the step-up request an upstream authentication may be (clock skew). */
+const STEPUP_SKEW_MS = 60_000;
 
 /** What an upstream SAML sign-in leaves for single logout: the subject and session as the IdP named them. */
 export interface SamlSubject {
@@ -84,6 +96,11 @@ export class Upstream {
     if (!res.ok) throw new UpstreamError(`${url} answered HTTP ${res.status}.`);
     if (text.length > 1_000_000) throw new UpstreamError(`${url} returned too much data.`);
     return text;
+  }
+
+  /** SAML metadata from a URL, through the same outbound checks as the providers themselves (B-807). */
+  fetchMetadata(url: string): Promise<string> {
+    return this.get(url, 'application/samlmetadata+xml, application/xml');
   }
 
   private async getJson<T>(url: string): Promise<T> {
@@ -242,21 +259,27 @@ export class Upstream {
   }
 
   /** Starts an upstream OIDC sign-in: authorization code with PKCE (S256), nonce and state. */
-  async startOidc(t: TenantCtx, providerId: string, returnTo: string | null): Promise<{ url: string; browser: string }> {
+  async startOidc(t: TenantCtx, providerId: string, returnTo: string | null, stepUp?: StepUpBinding): Promise<{ url: string; browser: string }> {
     const row = await this.provider(t.id, providerId, 'oidc');
     const cfg = row.config as unknown as OidcUpstreamConfig;
     const doc = await this.discovery(cfg);
     const browser = randomToken(24);
     const nonce = randomToken(24);
     const verifier = randomBytes(48).toString('base64url');
-    const state = await this.savePending(t.id, { providerId: row.id, browser: this.digest(`browser:${browser}`), returnTo, nonce, verifier });
+    const state = await this.savePending(t.id, { providerId: row.id, browser: this.digest(`browser:${browser}`), returnTo, nonce, verifier, ...(stepUp ? { stepUp, startedAt: Date.now() } : {}) });
     const url = new URL(doc.authorization_endpoint);
-    url.search = new URLSearchParams({ response_type: 'code', client_id: cfg.clientId, redirect_uri: this.redirectUri(t), scope: cfg.scopes.includes('openid') ? cfg.scopes : `openid ${cfg.scopes}`, state, nonce, code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256' }).toString();
+    const params = new URLSearchParams({ response_type: 'code', client_id: cfg.clientId, redirect_uri: this.redirectUri(t), scope: cfg.scopes.includes('openid') ? cfg.scopes : `openid ${cfg.scopes}`, state, nonce, code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256' });
+    // B-803: a step-up asks the IdP to authenticate the user again now, and to say when it did (auth_time).
+    if (stepUp) {
+      params.set('prompt', 'login');
+      params.set('max_age', '0');
+    }
+    url.search = params.toString();
     return { url: url.toString(), browser };
   }
 
   /** Completes an upstream OIDC sign-in: code exchange, then ID token verification against the upstream key set. */
-  async finishOidc(t: TenantCtx, query: Record<string, unknown>, browser: string | undefined): Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null }> {
+  async finishOidc(t: TenantCtx, query: Record<string, unknown>, browser: string | undefined): Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; stepUp?: StepUpBinding }> {
     const pending = await this.takePending(t.id, typeof query.state === 'string' ? query.state : undefined, browser);
     if (typeof query.error === 'string') throw new UpstreamError(`The identity provider refused the sign-in: ${query.error}${typeof query.error_description === 'string' ? ` (${query.error_description.slice(0, 200)})` : ''}.`);
     if (typeof query.code !== 'string' || !query.code) throw new UpstreamError('The identity provider returned no code.');
@@ -280,6 +303,8 @@ export class Upstream {
       claims = verifyJwt(body.id_token, await this.jwks(doc, true), { issuer: cfg.issuer, audience: cfg.clientId, algs: cfg.algs });
     }
     if (claims.nonce !== pending.nonce) throw new UpstreamError('The ID token nonce does not match this sign-in.');
+    // A step-up counts only when the IdP says it authenticated the user after we asked (max_age=0 requires auth_time).
+    if (pending.stepUp && (typeof claims.auth_time !== 'number' || claims.auth_time * 1000 < (pending.startedAt ?? 0) - STEPUP_SKEW_MS)) throw new UpstreamError('The identity provider did not sign you in again, so this does not confirm it is you. Try again.');
     const sub = claimString(claims.sub);
     if (!sub) throw new UpstreamError('The ID token has no subject.');
     const username = claimString(claims[cfg.usernameClaim])?.toLowerCase() ?? null;
@@ -287,7 +312,8 @@ export class Upstream {
     return {
       row,
       returnTo: pending.returnTo,
-      user: { externalId: sub, username, displayName: claimString(claims[cfg.displayNameClaim]) ?? username, email: claimString(claims[cfg.emailClaim]), groups: claimList(claims[cfg.groupsClaim]).slice(0, 500) }
+      user: { externalId: sub, username, displayName: claimString(claims[cfg.displayNameClaim]) ?? username, email: claimString(claims[cfg.emailClaim]), groups: claimList(claims[cfg.groupsClaim]).slice(0, 500) },
+      ...(pending.stepUp ? { stepUp: pending.stepUp } : {})
     };
   }
 
@@ -319,13 +345,14 @@ export class Upstream {
   }
 
   /** Starts an upstream SAML sign-in with an AuthnRequest over the HTTP-Redirect binding. */
-  async startSaml(t: TenantCtx, providerId: string, returnTo: string | null): Promise<{ url: string; browser: string }> {
+  async startSaml(t: TenantCtx, providerId: string, returnTo: string | null, stepUp?: StepUpBinding): Promise<{ url: string; browser: string }> {
     const row = await this.provider(t.id, providerId, 'saml');
     const cfg = row.config as unknown as SamlUpstreamConfig;
     const browser = randomToken(24);
     const requestId = `_${randomBytes(20).toString('hex')}`;
-    const relay = await this.savePending(t.id, { providerId: row.id, browser: this.digest(`browser:${browser}`), returnTo, requestId });
-    const xml = `<samlp:AuthnRequest xmlns:samlp="${NS.samlp}" xmlns:saml="${NS.saml}" ID="${requestId}" Version="2.0" IssueInstant="${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}" Destination="${escAttr(cfg.ssoUrl)}" AssertionConsumerServiceURL="${escAttr(this.acsUrl(t))}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>${escText(this.spEntityId(t, row))}</saml:Issuer></samlp:AuthnRequest>`;
+    const relay = await this.savePending(t.id, { providerId: row.id, browser: this.digest(`browser:${browser}`), returnTo, requestId, ...(stepUp ? { stepUp, startedAt: Date.now() } : {}) });
+    // B-803: ForceAuthn makes the IdP authenticate the user again rather than reuse its session.
+    const xml = `<samlp:AuthnRequest xmlns:samlp="${NS.samlp}" xmlns:saml="${NS.saml}" ID="${requestId}" Version="2.0" IssueInstant="${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}" Destination="${escAttr(cfg.ssoUrl)}" AssertionConsumerServiceURL="${escAttr(this.acsUrl(t))}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"${stepUp ? ' ForceAuthn="true"' : ''}><saml:Issuer>${escText(this.spEntityId(t, row))}</saml:Issuer></samlp:AuthnRequest>`;
     const url = new URL(cfg.ssoUrl);
     url.searchParams.set('SAMLRequest', deflateRawSync(Buffer.from(xml, 'utf8')).toString('base64'));
     url.searchParams.set('RelayState', relay);
@@ -338,7 +365,7 @@ export class Upstream {
    * response) by a registered certificate. An encrypted assertion is decrypted with our SP key first (AES-GCM with
    * RSA-OAEP only); unsolicited assertions are refused.
    */
-  async finishSaml(t: TenantCtx, form: Record<string, string>, browser: string | undefined): Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject: SamlSubject }> {
+  async finishSaml(t: TenantCtx, form: Record<string, string>, browser: string | undefined): Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject: SamlSubject; stepUp?: StepUpBinding }> {
     const pending = await this.takePending(t.id, form.RelayState, browser);
     const row = await this.provider(t.id, pending.providerId, 'saml');
     const cfg = row.config as unknown as SamlUpstreamConfig;
@@ -407,6 +434,10 @@ export class Upstream {
     const nameIdEl = child(subject, NS.saml, 'NameID');
     const nameId = textOf(nameIdEl).trim();
     const sessionIndex = attr(child(assertion, NS.saml, 'AuthnStatement'), 'SessionIndex') ?? null;
+    if (pending.stepUp) {
+      const instant = Date.parse(attr(child(assertion, NS.saml, 'AuthnStatement'), 'AuthnInstant') ?? '');
+      if (!Number.isFinite(instant) || instant < (pending.startedAt ?? 0) - STEPUP_SKEW_MS) throw new UpstreamError('The identity provider did not sign you in again, so this does not confirm it is you. Try again.');
+    }
     const attrs = new Map<string, string[]>();
     for (const st of elements(assertion, NS.saml, 'AttributeStatement')) {
       for (const a of elements(st, NS.saml, 'Attribute')) attrs.set(attr(a, 'Name') ?? '', elements(a, NS.saml, 'AttributeValue').map((v) => textOf(v).trim()));
@@ -418,8 +449,32 @@ export class Upstream {
       row,
       returnTo: pending.returnTo,
       user: { externalId: nameId, username, displayName: first(cfg.displayNameAttribute) ?? username, email: first(cfg.emailAttribute), groups: (attrs.get(cfg.groupsAttribute) ?? []).slice(0, 500) },
-      subject: { nameId: nameId.slice(0, 500), nameIdFormat: attr(nameIdEl, 'Format')?.slice(0, 200) ?? null, sessionIndex: sessionIndex?.slice(0, 200) ?? null }
+      subject: { nameId: nameId.slice(0, 500), nameIdFormat: attr(nameIdEl, 'Format')?.slice(0, 200) ?? null, sessionIndex: sessionIndex?.slice(0, 200) ?? null },
+      ...(pending.stepUp ? { stepUp: pending.stepUp } : {})
     };
+  }
+
+  /**
+   * B-803: records a verified upstream re-authentication for the console session it was started from. The console
+   * (same origin, so the SameSite=Strict session cookie is sent) redeems the single-use handle, and only then does
+   * the session's step-up time move.
+   */
+  async saveStepUp(tenantId: string, binding: StepUpBinding, providerId: string, method: string): Promise<string> {
+    const handle = randomToken(24);
+    await this.s().db('federation_pending').insert({ id: this.digest(`stepup:${handle}`), tenant_id: tenantId, kind: 'stepup', data: JSON.stringify({ ...binding, providerId, method }), expires_at: Date.now() + 5 * 60_000 });
+    return handle;
+  }
+
+  /** Redeems a step-up handle for `sessionId` (single use). Null when unknown, expired or for another session. */
+  async takeStepUp(tenantId: string, handle: string, sessionId: string): Promise<{ userId: string; providerId: string; method: string } | null> {
+    if (!/^[A-Za-z0-9_-]{32}$/.test(handle)) return null;
+    const id = this.digest(`stepup:${handle}`);
+    const row = (await this.s().db('federation_pending').where({ id, tenant_id: tenantId, kind: 'stepup' }).first()) as { data: string; expires_at: number } | undefined;
+    if (!row) return null;
+    const data = json<StepUpBinding & { providerId: string; method: string }>(row.data, { sessionId: '', userId: '', providerId: '', method: '' });
+    if (!safeEqual(data.sessionId, sessionId)) return null;
+    if (!(await this.s().db('federation_pending').where({ id }).delete()) || Number(row.expires_at) < Date.now()) return null;
+    return { userId: data.userId, providerId: data.providerId, method: data.method };
   }
 
   /** Remembers an upstream SAML session (NameID, SessionIndex) against the console session it created. */

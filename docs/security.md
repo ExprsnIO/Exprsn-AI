@@ -110,9 +110,10 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
-- First-factor enrolment: an admin with no second factor enrols one at first sign-in, so until then the account is
-  protected by its password alone. Have new admins sign in and enrol promptly; an identity admin can reset factors
-  (which forces re-enrolment) if an account may have been enrolled by someone else.
+- First-factor enrolment: `admin:create --enrol-link` (1.2.0) gives the first admin a single-use link that sets the
+  password and opens a session that can only enrol a second factor, so that account is never usable with a password
+  alone. Admins created with a password (the CLI without the flag, or by an identity admin in the console) still enrol
+  their factor at first sign-in and are protected by the password until then; have them sign in and enrol promptly.
 - Guardrails: while an answer streams, the deterministic `model-output` rules screen it sentence by sentence and the
   guard-model and classifier rules check the text so far in the background (Sprint 16). With
   `CHAT_GUARD_HOLDBACK_SENTENCES` ≥ 1 (the default) a sentence is shown only after a clean verdict covers it; with 0
@@ -142,9 +143,6 @@ filter, private `/tmp`, only the state directory writable.
   expire at its TTL. Writes through a connection are refused outright. Hosts must be internal unless
   `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. The MySQL
   classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
-- SQL user stores: the database host is checked before connecting, but the driver resolves the name again when it
-  dials (LDAP stores and data connections dial the checked address). The connection string comes from a reference the
-  operator allowed, which narrows the window to someone who controls that DNS name.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
   to N times each limit. The failed-bearer throttle is per address: clients behind one NAT share it.
@@ -218,23 +216,28 @@ filter, private `/tmp`, only the state directory writable.
   and rebuilt by reindexing.
 - Clock skew is measured against the database server, and against NTP when `NTP_SERVER` is set: one unauthenticated
   SNTP query (no NTS), so a spoofed answer on the path could hide skew; it is a check, not a time source.
-- Federation: the SAML IdP signs the assertion, not the whole response, with RSA-SHA256 only; SP metadata is pasted,
-  never fetched. Upstream SAML accepts only exclusive C14N with RSA-SHA256 or ECDSA-SHA256 over SHA-256 digests and
+- Federation: the SAML IdP signs with RSA-SHA256 only: the assertion always, and the whole response too when the
+  service provider is set to it. SP and upstream IdP metadata can be fetched from a URL (through the upstream host
+  checks) and are refreshed every `FEDERATION_METADATA_REFRESH_HOURS`; a changed certificate or endpoint waits for an
+  identity admin's approval, and metadata naming another entity ID is refused. Pasted metadata is never refreshed. Upstream SAML accepts only exclusive C14N with RSA-SHA256 or ECDSA-SHA256 over SHA-256 digests and
   refuses IdP-initiated responses; upstream SAML's browser binding needs HTTPS (a `SameSite=None; Secure` cookie).
   Encrypted assertions use AES-GCM with RSA-OAEP only (CBC and RSA 1.5 are refused, so an IdP that only offers those
   must send them unencrypted).
 - Logout: front-channel logout relies on the browser loading the relying parties' pages in frames with their own
   cookies, which browsers that block third-party cookies prevent; back-channel logout does not depend on the browser.
-  Signing out in the console (`POST /api/auth/logout`) reaches back-channel clients only; front-channel frames and
-  SP-initiated upstream SAML logout happen at `/oauth/logout`. SAML SPs that only take HTTP-POST single logout are not
+  Signing out in the console (`POST /api/auth/logout`) reaches back-channel clients and, through the signed-out page
+  it opens, front-channel clients and SAML SPs with a redirect-binding logout endpoint; SP-initiated upstream SAML
+  logout still happens only at `/oauth/logout`. SAML SPs that only take HTTP-POST single logout are not
   told when another SP or a relying party starts the sign-out (their sessions end at their own timeout).
   `prompt=login` and `max_age` re-authentication sign the current session out first, which also signs the user out of
   that session's other applications.
-- DPoP: the server does not issue `DPoP-Nonce` values (RFC 9449 section 8 is optional), so a proof's freshness rests on
-  `iat` within `DPOP_PROOF_MAX_AGE_SECONDS` and the single-use `jti`. The API checks `htu` against `PUBLIC_URL`, so a
-  reverse proxy that serves the API under another origin or path prefix makes DPoP-bound calls fail.
-- Token introspection answers only for tokens issued to the calling client; a separate resource server that needs to
-  introspect other clients' tokens is not supported.
+- DPoP: server nonces (RFC 9449 section 8) are required only with `DPOP_NONCES=true` (off by default, so clients
+  that cannot retry with a nonce keep working); without them a proof's freshness rests on `iat` within
+  `DPOP_PROOF_MAX_AGE_SECONDS` and the single-use `jti`. Nonces are an HMAC of the time window, valid for one to two
+  `DPOP_NONCE_SECONDS` periods on every instance. Set `API_PUBLIC_URL` when a proxy serves the API under another origin
+  or path prefix, or DPoP-bound API calls fail the `htu` check.
+- Token introspection: a client registered as a resource server (`introspect: any`, set under dual control) sees every
+  client's access tokens in its tenant; refresh tokens introspect only for the client they were issued to.
 - Kerberos needs the optional `kerberos` npm module (GSSAPI bindings) and a keytab on the host; it is not bundled.
   Mapping takes the principal's user part and looks it up in the tenant's user stores; realms map to tenants only
   through the per-tenant realm allow-list.
@@ -249,16 +252,22 @@ filter, private `/tmp`, only the state directory writable.
   reported as failed rather than re-signed. OpenBao's own key
   versions are rotated and re-wrapped in OpenBao (`transit/keys/<name>/rotate`, `transit/rewrap`).
 - Step-up (`STEPUP_WINDOW_SECONDS`) accepts the password only from accounts whose store checks passwords (local, LDAP,
-  SQL); an account from an upstream OIDC or SAML provider with no second factor cannot step up and signs in again
-  instead.
+  SQL). A session from an upstream OIDC or SAML provider steps up by signing in there again (`prompt=login` and
+  `max_age=0`, or `ForceAuthn`); it counts only when the IdP reports a fresh authentication (`auth_time` or
+  `AuthnInstant` after the request), as the same upstream account, redeemed by the same console session. An IdP that
+  ignores these requests cannot be used for step-up.
+- New sign-in notices tell a device by a long-lived signed cookie, so a cleared cookie jar or a private window counts
+  as a new browser; a network is the /24 or /48 of the address the server sees (`req.ip`, so configure the trusted
+  proxy). An account's first sign-in is recorded without a notice. With `BREACHED_PASSWORDS` using the range API, the
+  strength meter queries it (k-anonymity prefix only) as the user types, throttled per session or link.
 - The breached-password check is off by default (`BREACHED_PASSWORDS=off`): the range API is on the internet, so an
   air-gapped site needs an internal mirror or the offline file. When a source cannot be reached the password is
   accepted (fail open) and `password.breach_check.unavailable` is audited. Directory passwords (LDAP, SQL) are never
   checked here; the directory's own policy applies.
 - A password reset request answers the same whether or not the account exists, but the server does a little more
   work (a token row and an email hand-off) when it does, so response time is not strictly constant. Reset and invite
-  links need `SMTP_URL`. An admin password reset ends the account's sessions and OAuth grants but leaves its API keys,
-  which are separate credentials (revoke them in the user's detail or by disabling the account).
+  links need `SMTP_URL`. An admin password reset ends the account's sessions and OAuth grants and, unless the admin
+  unticks it, its API keys.
 - OpenAI-compatible API (`/v1`): requests are stateless and nothing is stored as a conversation. Knowledge and memory
   context apply only when asked for (`X-Exprsn-Knowledge`, `X-Exprsn-Memory`), and the profile's read-only tools run
   on the server only with `X-Exprsn-Tools: profile` (write and destructive tools are never offered there); otherwise

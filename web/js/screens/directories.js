@@ -174,15 +174,18 @@
             if (rp) rp.addEventListener('click', () => {
               ctx.modal({ title: 'Reset the password for ' + esc(u.username), body: UI.notice('The current password stops working at once and every session and application of this account is signed out.', 'warn')
                 + UI.field('How', UI.select([{ value: 'temporary', label: 'Set a temporary password they change at next sign-in' }, { value: 'link', label: 'Email them a single-use link' + (u.email ? '' : ' (no email address)') }], 'temporary', 'data-rpmode'))
-                + '<div data-rptemp>' + UI.field('Temporary password', UI.input('', { type: 'password', attrs: 'data-rppw autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.') + '</div>',
+                + '<div data-rptemp>' + UI.field('Temporary password', UI.input('', { type: 'password', attrs: 'data-rppw autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.') + App.passwordMeter.html() + '</div>'
+                + UI.check('Also revoke their API keys', true, 'data-rpkeys'),
                 actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reset password', { kind: 'danger', attrs: 'data-rpgo' }),
                 onMount(m) {
                   const mode = m.querySelector('[data-rpmode]'); const temp = m.querySelector('[data-rptemp]');
                   mode.addEventListener('change', () => { temp.hidden = mode.value !== 'temporary'; });
+                  App.passwordMeter.attach(m.querySelector('[data-rppw]'), temp.querySelector('[data-pwmeter]'), () => ({ username: u.username }));
                   m.querySelector('[data-rpgo]').addEventListener('click', async () => {
                     const body = mode.value === 'temporary' ? { mode: 'temporary', password: m.querySelector('[data-rppw]').value } : { mode: 'link' };
+                    body.revokeApiKeys = m.querySelector('[data-rpkeys]').checked;
                     if (body.mode === 'temporary' && !body.password) { ctx.toast('Enter a temporary password.', 'warn'); return; }
-                    try { const r = await App.post('/api/admin/users/' + encodeURIComponent(u.id) + '/password', body); App.closeOverlay(); ctx.toast(r.mode === 'link' ? (r.linkSent ? 'Password reset. A link was emailed to ' + esc(u.username) + '.' : 'Password reset, but the email could not be sent. Set a temporary password instead.') : 'Temporary password set. ' + esc(u.username) + ' changes it at next sign-in.', r.mode === 'link' && !r.linkSent ? 'warn' : 'ok'); reload(); } catch (err) { App.fail(err, 'Password not reset'); }
+                    try { const r = await App.post('/api/admin/users/' + encodeURIComponent(u.id) + '/password', body); App.closeOverlay(); ctx.toast((r.mode === 'link' ? (r.linkSent ? 'Password reset. A link was emailed to ' + esc(u.username) + '.' : 'Password reset, but the email could not be sent. Set a temporary password instead.') : 'Temporary password set. ' + esc(u.username) + ' changes it at next sign-in.') + (r.apiKeysRevoked ? ' ' + r.apiKeysRevoked + ' API key' + (r.apiKeysRevoked === 1 ? '' : 's') + ' revoked.' : ''), r.mode === 'link' && !r.linkSent ? 'warn' : 'ok'); reload(); } catch (err) { App.fail(err, 'Password not reset'); }
                   });
                 } });
             });
@@ -193,12 +196,13 @@
         ctx.modal({ title: 'Create local account', body: UI.notice('Local accounts are for bootstrap and break-glass use. Everyone else should come from a directory.', 'info')
           + '<div class="formgrid">' + UI.field('Username', UI.input('', { attrs: 'data-nu maxlength="190" autocomplete="off"' })) + UI.field('Display name', UI.input('', { attrs: 'data-nd maxlength="200"' })) + UI.field('Email', UI.input('', { type: 'email', attrs: 'data-ne' })) + UI.field('Clearance', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal', 'data-nc')) + '</div>'
           + UI.check('Email an invitation to set a password instead (needs an email address)', false, 'data-ninv')
-          + '<div data-npwrap>' + UI.field('Initial password', UI.input('', { type: 'password', attrs: 'data-np autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.')
+          + '<div data-npwrap>' + UI.field('Initial password', UI.input('', { type: 'password', attrs: 'data-np autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.') + App.passwordMeter.html()
           + UI.check('Must change it at first sign-in', true, 'data-nmc') + '</div>'
           + '<div class="hstack wrap gap6" style="row-gap:6px">' + (st.roles || []).map((r) => UI.check(r.name, r.id === 'member', 'data-nr="' + esc(r.id) + '"')).join('') + '</div>',
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create account', { kind: 'primary', attrs: 'data-nsave' }),
           onMount(m) {
             const inv = m.querySelector('[data-ninv]'); inv.addEventListener('change', () => { m.querySelector('[data-npwrap]').hidden = inv.checked; });
+            App.passwordMeter.attach(m.querySelector('[data-np]'), m.querySelector('[data-npwrap] [data-pwmeter]'), () => ({ username: m.querySelector('[data-nu]').value.trim() }));
             m.querySelector('[data-nsave]').addEventListener('click', async () => {
               const body = { username: m.querySelector('[data-nu]').value.trim(), displayName: m.querySelector('[data-nd]').value.trim(), email: m.querySelector('[data-ne]').value.trim() || null, clearance: m.querySelector('[data-nc]').value, roles: Array.prototype.slice.call(m.querySelectorAll('[data-nr]:checked')).map((c) => c.dataset.nr) };
               if (inv.checked) body.invite = true; else { body.password = m.querySelector('[data-np]').value; body.mustChange = m.querySelector('[data-nmc]').checked; }
