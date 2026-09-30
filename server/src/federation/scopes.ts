@@ -17,7 +17,8 @@ export const SCOPE_GROUPS: { scopes: string[]; grants: string; consent: string }
   { scopes: ['tools:manage', 'agents:manage', 'mcp:manage', 'workflows:manage'], grants: 'Tool, agent and workflow registry', consent: 'admin only' },
   { scopes: ['guardrails:manage', 'classifiers:manage', 'flags:review'], grants: 'Guardrail rule sets, classifiers and flags', consent: 'admin only' },
   { scopes: ['training:submit', 'training:manage'], grants: 'Datasets and fine-tune jobs', consent: 'admin only' },
-  { scopes: ['tenant:manage', 'users:manage', 'identity:manage', 'zones:manage', 'platform:manage', 'connections:manage', 'knowledge:manage', 'audit:read', 'usage:read'], grants: 'Administration and audit', consent: 'admin only' }
+  { scopes: ['tenant:manage', 'users:manage', 'identity:manage', 'zones:manage', 'platform:manage', 'connections:manage', 'knowledge:manage', 'audit:read', 'usage:read'], grants: 'Administration and audit', consent: 'admin only' },
+  { scopes: ['webhooks:manage', 'prompts:manage', 'billing:read', 'billing:manage'], grants: 'Webhooks, the prompt library and billing', consent: 'admin only' }
 ];
 
 export const isWorkspaceScope = (p: string): boolean => WORKSPACE.includes(p as Permission);

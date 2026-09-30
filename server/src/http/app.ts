@@ -33,6 +33,11 @@ import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
+import { openAiRoutes } from '../openai/routes.js';
+import { sharingRoutes } from '../routes/sharing.js';
+import { promptRoutes } from '../routes/prompts.js';
+import { integrationAdminRoutes } from '../routes/admin/integrations.js';
+import { billingAdminRoutes } from '../routes/admin/billing.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -98,6 +103,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(federationPublicRoutes(s));
   // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
   app.use(acmeChallengeRoutes(s));
+  // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
+  app.use('/v1', openAiRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
@@ -149,6 +156,11 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', zoneAdminRoutes(s));
   api.use('/admin', platformAdminRoutes(s));
   api.use('/admin', federationAdminRoutes(s));
+  // Sprint 13: integrations.
+  api.use(sharingRoutes(s));
+  api.use(promptRoutes(s));
+  api.use('/admin', integrationAdminRoutes(s));
+  api.use('/admin', billingAdminRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

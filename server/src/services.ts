@@ -60,6 +60,13 @@ import { OpsService } from './ops/service.js';
 import { createAcme, type AcmeClient } from './ops/acme.js';
 import { FederationService } from './federation/service.js';
 import { createKerberos, type KerberosVerifier } from './federation/kerberos.js';
+import { TenantIntegrations } from './integrations/hosts.js';
+import { WebhookService } from './webhooks/service.js';
+import { PromptService } from './prompts/service.js';
+import { ConversationSharing } from './chat/sharing.js';
+import { BillingService } from './billing/service.js';
+import { StripeProvider, type BillingProvider } from './billing/stripe.js';
+import { OpenAiService } from './openai/service.js';
 
 export interface Services {
   cfg: Config;
@@ -128,6 +135,18 @@ export interface Services {
   /** Sprint 9: OIDC provider, SAML IdP, upstream federation, Kerberos SPNEGO and device flow. */
   federation: FederationService;
   kerberos: KerberosVerifier;
+  /** Sprint 13: per-tenant integration settings (outbound host allow-list, price book, billing customer). */
+  integrations: TenantIntegrations;
+  /** Sprint 13: outbound webhooks, signed deliveries as jobs with retries and a circuit breaker. */
+  webhooks: WebhookService;
+  /** Sprint 13: the prompt library. */
+  prompts: PromptService;
+  /** Sprint 13: conversation shares and exports. */
+  sharing: ConversationSharing;
+  /** Sprint 13: price books and monthly statements from the usage meter. */
+  billing: BillingService;
+  /** Sprint 13: the OpenAI-compatible API behind /v1. */
+  openai: OpenAiService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -145,6 +164,8 @@ export interface ServiceOverrides {
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
+  /** Sprint 13: the billing provider (tests use a fake Stripe). */
+  billingProvider?: BillingProvider | null;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -192,7 +213,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK } });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t) });
   tools.useWorkflows(workflows);
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
@@ -278,8 +299,19 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     acme: overrides.acme ?? createAcme(cfg),
     federation: new FederationService(() => s),
     kerberos: overrides.kerberos ?? createKerberos(cfg),
+    // Sprint 13 services read their collaborators through `s`.
+    integrations: new TenantIntegrations(db),
+    webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS }),
+    prompts: new PromptService(() => s),
+    sharing: new ConversationSharing(() => s),
+    billing: new BillingService(
+      () => s,
+      overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
+    ),
+    openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
     close: async () => {
       scheduler.stop();
+      s.webhooks.close();
       await denials.flushAll().catch(() => undefined);
       chat.close();
       await gateway.stop();
@@ -298,6 +330,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.zones.registerJobs();
   s.ops.registerJobs();
   s.federation.registerJobs();
+  s.webhooks.registerJobs();
+  s.webhooks.listen();
+  s.sharing.registerJobs();
+  jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
 }
@@ -332,4 +368,5 @@ export function startSchedules(s: Services): void {
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
   s.federation.schedule(s.scheduler, activeTenants);
+  if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
 }

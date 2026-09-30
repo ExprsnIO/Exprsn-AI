@@ -583,6 +583,7 @@ export class AgentService {
       if (err instanceof Pause) {
         await this.finish(run, err.state, { error: err.message, usage });
         if (err.state === 'waiting') {
+          this.bus.emitLocal(TOPICS.integrationEvent, { tenantId: run.tenant_id, type: 'approval.requested', label: run.label, id: `agent-approval:${run.id}:${usage.steps}`, data: { kind: 'agent', run: run.id, agent: run.agent_name } });
           const approvers = await this.notifications.usersWithRoles(run.tenant_id, ['tool-admin']);
           await this.notifications.notify({ tenantId: run.tenant_id, userIds: [run.user_id, ...approvers], kind: 'agent', title: `Run ${run.id.slice(-4).toLowerCase()} of ${run.agent_name} is waiting on approval`, body: err.message, route: 'runs', label: run.label }).catch(() => undefined);
         }

@@ -2,6 +2,8 @@ import { lookup } from 'node:dns/promises';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
+import type { AllowList } from '../mcp/hosts.js';
+import { tenantHostProblem } from '../integrations/hosts.js';
 
 /*
  * HTTP steps may only call internal hosts. The host name is resolved once, every address must be private, and the
@@ -43,6 +45,8 @@ export interface InternalRequest {
   allowHosts: readonly string[];
   allowLoopback: boolean;
   maxBytes?: number;
+  /** The tenant's own allow-list (B-303): when it has entries, the host must be on it as well. */
+  tenantAllow?: AllowList | null;
 }
 
 export interface InternalResponse {
@@ -66,6 +70,8 @@ export async function internalRequest(r: InternalRequest): Promise<InternalRespo
   if (!addrs.length) throw new HttpStepError(`${host} does not resolve.`);
   const bad = addrs.find((a) => !isInternalAddress(a.address, r.allowLoopback));
   if (bad) throw new HttpStepError(`${host} resolves to ${bad.address}, which is not an internal address. HTTP steps only call internal hosts.`);
+  const refused = tenantHostProblem(host, addrs.map((a) => a.address), r.tenantAllow ?? null);
+  if (refused) throw new HttpStepError(refused);
   const target = addrs[0]!;
   const max = r.maxBytes ?? 1024 * 1024;
 
