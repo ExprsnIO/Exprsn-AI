@@ -125,17 +125,23 @@ filter, private `/tmp`, only the state directory writable.
   could not run still refuses the turn, and compare and `/v1` still refuse a held prompt.
 - The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
   labelled cases (the console warns below 200 per label).
-- Knowledge: row-level permissions of source databases are not mapped to chunk access; a database source's chunks
-  carry the connection's label and the knowledge base's access. Database sources sync by watermark on a schedule (no
-  logical replication). A citation's passage is chosen by word overlap with the answer (the best-matching sentences of
-  the chunk), not by the model saying what it quoted.
+- Knowledge: row-level access for database sources comes from an access column the curator names (groups or users per
+  row), not from the source database's own grants or row-level security policies; groups are matched against the
+  groups the user's identities carried at their last sign-in or directory sync, so a change in the directory applies
+  from then. Rows the reader may not see are dropped after ranking candidates, so a result list can be shorter than
+  asked. Logical replication (PostgreSQL tables with `pgoutput`) needs `wal_level=logical`, a publication the database
+  owner creates and the REPLICATION attribute on the connection's account; replicated changes are applied as they
+  arrive (no back-pressure beyond one transaction at a time), and a delete is matched by the id column only when it is
+  the primary key or the table has `REPLICA IDENTITY FULL`. A slot whose stream stops keeps WAL on the database until
+  the stream resumes or the source is removed (which drops it). Views and MySQL sources sync by watermark. A
+  citation's passage is chosen by word overlap with the answer (the best-matching sentences of the chunk), not by the
+  model saying what it quoted.
 - Data connections: PostgreSQL, MySQL and OpenSearch; a username and password sealed with the tenant key, or (SQL
   engines) OpenBao dynamic database credentials. Dynamic leases are held per instance and revoked when a connection
   is removed, its credential changes, or the instance shuts down cleanly; an instance that dies leaves its lease to
   expire at its TTL. Writes through a connection are refused outright. Hosts must be internal unless
-  `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. MySQL
-  tables are not a knowledge source yet, and the MySQL classifier refuses vendor syntax it cannot lex safely rather
-  than asking for confirmation.
+  `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. The MySQL
+  classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
 - SQL user stores: the database host is checked before connecting, but the driver resolves the name again when it
   dials (LDAP stores and data connections dial the checked address). The connection string comes from a reference the
   operator allowed, which narrows the window to someone who controls that DNS name.
@@ -143,7 +149,8 @@ filter, private `/tmp`, only the state directory writable.
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
   to N times each limit. The failed-bearer throttle is per address: clients behind one NAT share it.
 - Scripts need docker or podman on the host; with `SCRIPT_RUNNER=none`, or when no runtime answers, runs are refused.
-  The sandbox relies on the container runtime's isolation (no gVisor or Firecracker).
+  The sandbox relies on the container runtime's isolation unless `SCRIPT_RUNTIME=runsc` puts containers under gVisor
+  (the host must have it installed and registered with the engine); there is no Firecracker option.
 - Tools: in chat, profiles offer only read-only tools that need no confirmation; write and destructive tools need an
   approval, which agent runs and workflows provide. MCP servers are checked against internal addresses after DNS
   resolution; hosts in `MCP_ALLOWED_HOSTS` (never link-local) are trusted by the operator. Tool results pass the
@@ -151,12 +158,13 @@ filter, private `/tmp`, only the state directory writable.
   itself has already run), a redaction replaces it. Agent runs propose memories only through the `remember` tool
   when their definition allows it; a model without tool calling cannot propose any.
 - Workflows: the HTTP step may call any private address (narrowed by `WORKFLOW_HTTP_HOSTS` and by the tenant's
-  allowed hosts when they are set). Run events go live only to the person who started the run; approvers see pending
-  approvals through `GET /api/workflow-approvals` and the notification. A workflow published as a tool is pinned to one
-  version, cannot be called from another workflow, and when it pauses for an approval its caller gets an error while
-  the run continues on its own; a tool step's own approval pause has a fixed 24-hour timeout.
+  allowed hosts when they are set). Run events go live to the person who started the run and to the holders of the
+  approval roles it asked for. A workflow published as a tool is pinned to one version and cannot be called from
+  another workflow; when it pauses for an approval an agent run awaits it, but chat and the registry test harness get
+  an error while the run continues on its own.
 - Images and media frames are checked by the classifier at `IMAGE_SAFETY_URL`; without one, images are marked "not
-  classified" rather than blocked.
+  classified" rather than blocked unless `IMAGE_SAFETY_REQUIRED` is set, which withholds them (the default is off, so
+  a platform without a classifier still generates images).
 - Resumable streams: an answer is marked interrupted only after `CHAT_STREAM_LEASE_SECONDS` without a heartbeat, and
   the stored text is the last snapshot (up to two seconds behind what clients saw). Continuing it relies on the
   model carrying on from an assistant prefill, which Ollama supports but a model may phrase imperfectly. An answer
@@ -250,9 +258,11 @@ filter, private `/tmp`, only the state directory writable.
   can only end the stream with `finish_reason: content_filter`; the default `checked` mode sends the answer after the
   check, at the cost of time to first token.
 - Webhooks: a delivery carries the audit event's target and detail (within the webhook's label ceiling) to the
-  endpoint, so the endpoint must be trusted with them. Deliveries to one endpoint are not ordered, and receivers should
-  de-duplicate by the event id (a replay reuses it). The signing secret is sealed at rest but is a shared secret, not a
-  key pair. Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
+  endpoint, so the endpoint must be trusted with them. Deliveries are not ordered unless the webhook asks for it; ordered
+  delivery keeps the order in which this instance queued events (instances queue independently, so events raised on
+  two instances at the same moment may interleave), and receivers should still de-duplicate by the event id (a replay
+  reuses it). The HMAC secret is sealed at rest and shared with the receiver; Ed25519 signing uses a per-tenant key
+  whose private half is sealed with the tenant key and held in memory while signing (not in the KMS). Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
   against the operator's rules and the tenant's list, as for MCP servers.
 - Conversation sharing: readers of a user or workspace share can watch an answer stream (Sprint 16), answer text only
   (no thinking); a revocation or a label rising above them ends it at once, but a reader removed from a shared
@@ -261,8 +271,10 @@ filter, private `/tmp`, only the state directory writable.
   moment, expire within the tenant's limit (72 hours by default), are rate-limited per client address
   (`SHARE_ANONYMOUS_PER_MINUTE`, shared through Redis when set) and are audited with the address; anyone holding the
   link can read the conversation until then, and the address is only as reliable as the proxy settings.
-- Billing: price books are platform-wide; there is no currency conversion, tax or proration, and a pushed Stripe invoice
-  is not reconciled back (no inbound Stripe webhook). Statements are computed from `usage_records`, so usage deleted
+- Billing: there is no currency conversion or proration; a tenant with a currency is priced only from books in it.
+  Taxes are flat percentages of the priced subtotal, without tax registration numbers, exemptions or jurisdictions.
+  The Stripe webhook reconciles paid, failed and voided invoices by the Stripe-Signature HMAC with a timestamp
+  tolerance; refunds, credit notes and disputes are not reconciled. Statements are computed from `usage_records`, so usage deleted
   with a tenant's data is gone from later recomputations; push a finished month to keep it.
 - Prompt templates pass the `user-input` checkpoint when they are saved and when a version is published (Sprint 16);
   a template published before a rule existed stays usable until it is published again, and the filled text still

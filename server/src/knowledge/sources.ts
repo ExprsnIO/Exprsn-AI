@@ -19,6 +19,8 @@ export interface SourceItem {
   version: string | null;
   size: number;
   read(): Promise<Buffer>;
+  /** Row-level access entries (database sources with an access column); undefined for other sources. */
+  acl?: string[] | null;
 }
 
 // ---------- S3 ----------

@@ -32,6 +32,7 @@ import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
+import { integrationPublicRoutes } from '../routes/integrations-public.js';
 import { openAiRoutes } from '../openai/routes.js';
 import { sharingRoutes } from '../routes/sharing.js';
 import { promptRoutes } from '../routes/prompts.js';
@@ -109,6 +110,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(federationPublicRoutes(s));
   // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
   app.use(acmeChallengeRoutes(s));
+  // Sprint 19: published webhook signing keys and the Stripe webhook (public; signatures are the authentication).
+  app.use(integrationPublicRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 

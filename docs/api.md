@@ -1326,3 +1326,67 @@ owner's. `POST …/retention/run` needs at least one period. The purge audit add
 `POST /prompts`, `POST /prompts/:id/versions` and publishing (`POST /prompts/:id/state {state: published}`) pass the
 body through the `user-input` checkpoint: a block, hold or redaction refuses with `422` (`step: guardrail`, `action`,
 `rules`) and nothing changes.
+
+## Sprint 19: Knowledge, integrations and workflows
+
+### Knowledge sources (`knowledge:manage` or manage access on the base)
+
+| Route | Notes |
+| --- | --- |
+| `GET /knowledge/connections` | PostgreSQL and MySQL connections: `[{id, name, engine, label, objects, columns}]` |
+| `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …" \| "mysql: …", connectionId, idColumn?, watermarkColumn?, accessColumn?, accessKind?: group \| user, replication?, publication?}` | MySQL tables and views sync by watermark like PostgreSQL (names default to the connection's database). `accessColumn` (B-1002) names who may retrieve each row: a list of directory groups (`accessKind: group`, the default) or usernames, emails or user ids (`user`), as a comma or semicolon list, a JSON array or a PostgreSQL array. The list is carried onto the row's document and chunks; search, chat context and the document list for members drop rows that do not name the reader or one of their groups (matched case-insensitively against the groups of the user's identities); an empty value admits nobody. `replication: true` (B-1003, PostgreSQL tables only, `409` for views and MySQL) streams changes through logical replication (`publication` defaults to `exprsn_knowledge`) |
+| `GET /knowledge/bases/:id` | Each database source carries `replication: {state: starting \| streaming \| fallback \| stopped, slot, publication, lsn, lastChangeAt, changes, error}` when it asked for it |
+| `DELETE /knowledge/sources/:id` | Also stops the source's stream and drops its replication slot |
+
+Replication: the database owner runs `CREATE PUBLICATION exprsn_knowledge FOR TABLE <table>`, the connection's account
+has the `REPLICATION` attribute and the server runs with `wal_level=logical`. The slot is `exprsn_<source id>`
+(pgoutput, created on first use). Inserts and updates become documents at once, deletes remove them (the id column must
+be the primary key, or the table `REPLICA IDENTITY FULL`), a truncate empties the source; each transaction is
+acknowledged only after it is applied. One instance holds each stream (a lease renewed every
+`KNOWLEDGE_REPLICATION_TICK_MS`). When the stream cannot run, `replication.state` is `fallback` with the reason and the
+source keeps syncing by watermark on its schedule; the watermark schedule also runs beside a healthy stream.
+
+### Webhooks (`webhooks:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `POST /admin/webhooks` `{…, ordered?, signing?: hmac \| ed25519}` | `ordered`: deliveries go out one at a time in the order events were queued (`X-Exprsn-Sequence`); a delivery that keeps failing holds the ones after it until it gives up. `signing: ed25519` signs with the tenant's key instead of the shared secret (the first such webhook creates the key; audited `webhook.signing-key.created`) |
+| `PATCH /admin/webhooks/:id` `{…, ordered?, signing?}` | Turning `ordered` off sends anything waiting for its turn |
+| `GET /admin/webhooks/signing-key` | `{active: {kid, publicKey, createdAt} \| null, retired: [{kid, publicKey, retiredAt}], jwksUrl}` |
+| `POST /admin/webhooks/signing-key/rotate` | A new Ed25519 key; the previous one stays published as `retired`. Audited `webhook.signing-key.rotated` |
+| `GET /webhooks/keys/:tenant` (public, outside `/api`) | The tenant's signing keys as a JWKS: `{keys: [{kty: OKP, crv: Ed25519, x, kid, use: sig, alg: EdDSA, status}]}` |
+
+An Ed25519 delivery carries `X-Exprsn-Signature-Ed25519` (base64 signature over `"<X-Exprsn-Timestamp>.<body>"`) and
+`X-Exprsn-Key-Id` (the `kid`) instead of `X-Exprsn-Signature`. The private key is sealed with the tenant key.
+
+### Billing
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/billing/price-books` | System admins see every book; others the platform books and their tenant's own. Books carry `tenantId` (null: platform) |
+| `POST /admin/billing/price-books` `{…, tenantId?}` (`billing:manage`) | A book only that tenant may use; one default among the platform books and one among each tenant's |
+| `GET /admin/billing/settings?tenant=` | Adds `billingCurrency`, `taxRates: [{name, ratePercent}]` and `reconciliation` (whether the Stripe webhook is configured) |
+| `PUT /admin/billing/tenants/:tenantId` `{priceBookId?, billingCustomer?, billingCurrency?, taxRates?}` (`billing:manage`) | With a currency, only books in it are used (`409` when assigning another; no conversion). The effective book is the assigned one, else the tenant's own default, else the platform default. Up to five taxes, each a percentage of the priced subtotal |
+| `GET /admin/billing/statements/:month` | Adds `subtotalMicros`, `taxMicros`, `taxes: [{name, ratePpm, amountMicros}]` (the total includes them), `paidAt`, `providerStatus`; `state` may also be `paid`, `payment failed` or `void` |
+| `POST /billing/stripe/webhook` (public, outside `/api`) | Stripe events, authenticated by `Stripe-Signature` (`t=`, `v1=` HMAC-SHA256 of `"<t>.<raw body>"` with `STRIPE_WEBHOOK_SECRET`, within `STRIPE_WEBHOOK_TOLERANCE_SECONDS`; `400` otherwise, `404` when no secret is set). `invoice.paid`/`invoice.payment_succeeded` mark the statement with that invoice `paid`, `invoice.payment_failed` marks it `payment failed`, `invoice.voided` marks it `void`; paid and void are final. Each event id is applied once (a redelivery answers `{duplicate: true}`); every verified event is acknowledged with `200`. Audited in the statement's tenant: `billing.statement.paid`/`payment-failed`/`voided` |
+
+A pushed invoice gets one extra invoice item per tax. Statements in `pushed`, `paid`, `payment failed` or `void` are
+final: compute and push answer `409`.
+
+### Workflows and agent runs
+
+- A workflow published as a tool that pauses on an approval returns a pending result: an agent run that called it
+  waits (its step is `waiting` with `meta.awaiting: {kind: workflow-run, id}`, and `POST /runs/:id/steps/:n/decision`
+  answers `409` for it) and is queued again when the workflow run finishes, continuing with the run's output or its
+  failure as the tool result. Other callers get the pending message as an error, as before.
+- Guardrail and tool steps take `approvalTimeoutMs` (60 s to 7 days, default 24 h) for the approval they pause for.
+- Run events (`workflow.run`, `workflow.step`) also go to the holders of the approval roles a run asked for (cleared for
+  its label), and `workflow.approval` tells them when an approval is requested or decided.
+
+### Images and scripts
+
+- `GET /images/backends` adds `safety.required` (`IMAGE_SAFETY_REQUIRED`): with it on and no classifier, generated
+  images end `withheld` (not stored; audited `image.withheld` with `reason: not classified`) and sampled video frames
+  are withheld.
+- `GET /scripts/runtime` adds `runtime` (`SCRIPT_RUNTIME`, e.g. `runsc`) and `runtimeProblem`; the runner reports itself
+  as `docker (runsc)`, passes `--runtime=runsc`, and refuses runs when the engine does not know the runtime.

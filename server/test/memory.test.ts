@@ -44,7 +44,7 @@ describe('memory', () => {
     expect(added.history).toEqual([expect.objectContaining({ version: 1, note: 'added here', actor: 'MARA' })]);
     const raw = await h.s.db('memories').where({ id: added.id }).first();
     expect(raw.content).toMatch(/^v2\./);
-    expect(raw.content).not.toContain('Q3');
+    expect(raw.content).not.toContain('Finance Ops');
     expect(await h.s.db('vectors').where({ collection: 'memory', id: added.id })).toHaveLength(1);
 
     const restricted = (await me.post('/api/memory', { text: 'Supplier IBAN for Contoso payments', label: 'restricted' }).expect(403)).body;

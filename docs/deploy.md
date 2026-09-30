@@ -84,6 +84,10 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `ACME_DNS_WEBHOOK_URL`, `ACME_DNS_WEBHOOK_SECRET` (`_FILE`) | — | The signed DNS hook (below) |
 | `ACME_DNS_RFC2136_SERVER`, `ACME_DNS_RFC2136_ZONE`, `ACME_DNS_TSIG_NAME`, `ACME_DNS_TSIG_SECRET` (`_FILE`), `ACME_DNS_TSIG_ALGORITHM` | —, —, —, —, `hmac-sha256` | RFC 2136 dynamic update: the zone's primary, the zone, and the TSIG key (secret in base64, as in a BIND key file) |
 | `ACME_CERT_DIR` | — | Sprint 15: every instance writes issued and renewed certificates here as `<name>/fullchain.pem`, `cert.pem`, `chain.pem`, `privkey.pem` |
+| `KNOWLEDGE_REPLICATION`, `KNOWLEDGE_REPLICATION_TICK_MS` | `on`, `10000` | Sprint 19: logical replication for PostgreSQL knowledge sources that ask for it (`off` keeps every source on watermarks); how often each worker instance claims and renews streams (a lease lasts three ticks). The database needs `wal_level=logical`, a publication for the table and an account with the REPLICATION attribute |
+| `STRIPE_WEBHOOK_SECRET` (`_FILE`), `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | —, `300` | Sprint 19: the signing secret of the Stripe webhook endpoint pointed at `https://<host>/billing/stripe/webhook` (events `invoice.paid`, `invoice.payment_failed`, `invoice.voided`); unset, the route answers 404 |
+| `IMAGE_SAFETY_REQUIRED` | `false` | Sprint 19: without an image-safety classifier, withhold generated images and sampled video frames instead of marking them "not classified" |
+| `SCRIPT_RUNTIME` | — | Sprint 19: OCI runtime for script containers, e.g. `runsc` for gVisor (install it and register it with the engine, `docker info` must list it); runs are refused when the engine does not know it |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 

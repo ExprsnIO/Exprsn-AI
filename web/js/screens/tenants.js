@@ -75,8 +75,8 @@
     const ig = st.integ = st.integ || {};
     if (ig.loading || ig.loaded) return;
     ig.loading = true;
-    Promise.all([App.can('webhooks:manage') ? App.get('/api/admin/webhooks') : null, App.can('tenant:manage') ? App.get('/api/admin/integrations/hosts') : null])
-      .then(([hooks, hosts]) => { Object.assign(ig, { hooks, hosts, loaded: true, error: null }); if (hooks && !hooks.webhooks.some((w) => w.id === ig.sel)) ig.sel = hooks.webhooks.length ? hooks.webhooks[0].id : null; })
+    Promise.all([App.can('webhooks:manage') ? App.get('/api/admin/webhooks') : null, App.can('tenant:manage') ? App.get('/api/admin/integrations/hosts') : null, App.can('webhooks:manage') ? App.get('/api/admin/webhooks/signing-key').catch(() => null) : null])
+      .then(([hooks, hosts, signingKey]) => { Object.assign(ig, { hooks, hosts, signingKey, loaded: true, error: null }); if (hooks && !hooks.webhooks.some((w) => w.id === ig.sel)) ig.sel = hooks.webhooks.length ? hooks.webhooks[0].id : null; })
       .catch((err) => { ig.error = err; ig.loaded = true; })
       .finally(() => { ig.loading = false; if (App.state.route === 'tenants') ctx.rerender(); });
   }
@@ -98,18 +98,23 @@
     if (sel && !(ig.deliveries && ig.deliveries[sel.id]) && ig.delLoading !== sel.id) integDeliveries(st, ctx, sel.id);
     const dl = sel && ig.deliveries ? ig.deliveries[sel.id] : null;
     const s = ig.hooks.settings;
-    let h = '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Events from this tenant are posted to your endpoints as signed JSON. <span class="mono">X-Exprsn-Signature</span> is <span class="mono">sha256=</span> HMAC-SHA256 of <span class="mono">&lt;X-Exprsn-Timestamp&gt;.&lt;body&gt;</span> with the webhook\'s secret. Failed deliveries are retried ' + esc(s.maxAttempts - 1) + ' times with growing gaps; ' + esc(s.breakerThreshold) + ' failures in a row pause the endpoint for ' + esc(Math.round(s.breakerCooldownMs / 60000)) + ' min.</span>'
+    let h = '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Events from this tenant are posted to your endpoints as signed JSON. <span class="mono">X-Exprsn-Signature</span> is <span class="mono">sha256=</span> HMAC-SHA256 of <span class="mono">&lt;X-Exprsn-Timestamp&gt;.&lt;body&gt;</span> with the webhook\'s secret, or, for webhooks signed with Ed25519, <span class="mono">X-Exprsn-Signature-Ed25519</span> over the same text with the key named in <span class="mono">X-Exprsn-Key-Id</span>. Ordered webhooks send one delivery at a time in event order (<span class="mono">X-Exprsn-Sequence</span>). Failed deliveries are retried ' + esc(s.maxAttempts - 1) + ' times with growing gaps; ' + esc(s.breakerThreshold) + ' failures in a row pause the endpoint for ' + esc(Math.round(s.breakerCooldownMs / 60000)) + ' min.</span>'
       + UI.btn('New webhook', { kind: 'primary', icon: 'plus', attrs: 'data-whnew' }) + '</div>';
-    h += UI.table(['Name', 'Endpoint', 'Events', 'Up to', 'State', 'Breaker', 'Last delivery'], list.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(w.url) + '</span>', esc(w.events.join(', ')), UI.label(w.maxLabel, { sm: true }), UI.pill(w.state, w.state === 'active' ? 'ok' : 'outline'), w.breaker === 'open' ? UI.pill('open', 'danger') : UI.pill('closed', 'ok'), esc(w.lastDeliveryAt ? whWhen(w.lastDeliveryAt) + ', ' + (w.lastStatus || '') : 'never')], attrs: 'data-whsel="' + esc(w.id) + '"', selected: sel && sel.id === w.id })), { minWidth: '760px', emptyTitle: 'No webhooks', emptyText: 'Add one to post audit actions, job states, flags and approvals to an internal endpoint.' });
+    h += UI.table(['Name', 'Endpoint', 'Events', 'Up to', 'State', 'Breaker', 'Last delivery'], list.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>' + (w.ordered ? ' ' + UI.pill('ordered', 'outline') : '') + (w.signing === 'ed25519' ? ' ' + UI.pill('Ed25519', 'outline') : ''), '<span class="mono" style="overflow-wrap:anywhere">' + esc(w.url) + '</span>', esc(w.events.join(', ')), UI.label(w.maxLabel, { sm: true }), UI.pill(w.state, w.state === 'active' ? 'ok' : 'outline'), w.breaker === 'open' ? UI.pill('open', 'danger') : UI.pill('closed', 'ok'), esc(w.lastDeliveryAt ? whWhen(w.lastDeliveryAt) + ', ' + (w.lastStatus || '') : 'never')], attrs: 'data-whsel="' + esc(w.id) + '"', selected: sel && sel.id === w.id })), { minWidth: '760px', emptyTitle: 'No webhooks', emptyText: 'Add one to post audit actions, job states, flags and approvals to an internal endpoint.' });
     if (sel) {
       h += (sel.breaker === 'open' ? UI.notice('<b>Paused after ' + esc(sel.failures) + ' failed attempts.</b> Deliveries wait until ' + esc(whWhen(sel.retryAt)) + '; the first one after that is a trial that closes the breaker when it succeeds.', 'warn') : '')
-        + UI.panel(esc(sel.name), UI.kv([['Endpoint', '<span class="mono">' + esc(sel.url) + '</span>'], ['Events', esc(sel.events.join(', '))], ['Carries events up to', UI.label(sel.maxLabel, { sm: true })], ['Consecutive failures', esc(sel.failures)], ['Created', esc(whWhen(sel.createdAt))]], 2), {
+        + UI.panel(esc(sel.name), UI.kv([['Endpoint', '<span class="mono">' + esc(sel.url) + '</span>'], ['Events', esc(sel.events.join(', '))], ['Carries events up to', UI.label(sel.maxLabel, { sm: true })], ['Consecutive failures', esc(sel.failures)], ['Signed with', sel.signing === 'ed25519' ? 'Ed25519, the published key below' : 'HMAC-SHA256, the webhook\'s secret'], ['Delivery order', sel.ordered ? 'one at a time, in event order' : 'as they come'], ['Created', esc(whWhen(sel.createdAt))]], 2), {
           actions: UI.btn('Send test', { size: 'sm', attrs: 'data-whtest' }) + UI.btn('Edit', { size: 'sm', kind: 'ghost', attrs: 'data-whedit' }) + UI.btn('Rotate secret', { size: 'sm', kind: 'ghost', attrs: 'data-whrotate' })
             + UI.btn(sel.state === 'active' ? 'Disable' : 'Enable', { size: 'sm', kind: 'ghost', attrs: 'data-whtoggle' }) + UI.btn('Delete', { size: 'sm', kind: 'danger', attrs: 'data-whdel' }) })
         + '<div class="hstack"><span class="eyebrow grow">Delivery log</span>' + UI.btn('Refresh', { size: 'xs', kind: 'ghost', icon: 'refresh', attrs: 'data-whrefresh' }) + '</div>'
         + (!dl ? UI.notice('Loading…', 'info') : dl.error ? UI.problem('Deliveries could not be loaded', dl.error.message, dl.error.problem && dl.error.problem.trace_id)
           : UI.table(['Event', 'State', 'Attempts', 'Answer', 'Next attempt', 'Created', ''], dl.deliveries.map((d) => [esc(d.event) + (d.replayOf ? ' <span class="muted">replay</span>' : ''), UI.pill(d.state, WH_TONE[d.state] || ''), esc(d.attempts), esc(d.statusCode != null ? d.statusCode : '') + (d.error ? ' <span class="muted">' + esc(d.error) + '</span>' : ''), esc(d.state === 'pending' ? whWhen(d.nextAttemptAt) : ''), esc(whWhen(d.createdAt)), UI.btn('Replay', { size: 'xs', kind: 'ghost', attrs: 'data-whreplay="' + esc(d.id) + '"' })]), { minWidth: '720px', emptyTitle: 'No deliveries yet', emptyText: 'Send a test, or wait for a subscribed event.' })
             + (dl.withheld ? '<div class="muted" style="font-size:12px">' + esc(dl.withheld) + ' deliveries above your clearance are not listed.</div>' : ''));
+    }
+    const k = ig.signingKey;
+    if (k) {
+      h += UI.panel('Ed25519 signing key', (k.active ? UI.kv([['Key id', '<span class="mono">' + esc(k.active.kid) + '</span>'], ['Public key (JWK x)', '<span class="mono" style="overflow-wrap:anywhere">' + esc(k.active.publicKey) + '</span>'], ['Published at', '<span class="mono" style="overflow-wrap:anywhere">' + esc(k.jwksUrl) + '</span>'], ['Created', esc(whWhen(k.active.createdAt))], ['Earlier keys, still published', esc(String(k.retired.length))]], 1)
+        : '<p class="fg2" style="margin:0;font-size:12px">No key yet. The first webhook signed with Ed25519 creates one; receivers verify with the public key published at <span class="mono">' + esc(k.jwksUrl) + '</span>, with no shared secret.</p>'), { actions: UI.btn(k.active ? 'Rotate key' : 'Create key', { size: 'sm', kind: 'ghost', attrs: 'data-whkey' }) });
     }
     return h;
   }
@@ -133,7 +138,9 @@
     ctx.modal({
       title: existing ? 'Edit webhook' : 'New webhook', cls: 'wide',
       body: '<div class="formgrid">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-whname maxlength="100"' })) + UI.field('Endpoint URL', UI.input(existing ? existing.url : '', { attrs: 'data-whurl maxlength="2000"', placeholder: 'https://hooks.corp.internal/exprsn' }), 'Checked now and at every delivery against the internal-address rules and this tenant\'s allowed hosts.')
-        + UI.field('Carry events up to', UI.select(labels, existing ? existing.maxLabel : 'internal', 'data-whlabel'), 'Events labelled above this are not sent.') + '</div>'
+        + UI.field('Carry events up to', UI.select(labels, existing ? existing.maxLabel : 'internal', 'data-whlabel'), 'Events labelled above this are not sent.')
+        + UI.field('Signature', UI.select([{ value: 'hmac', label: 'HMAC-SHA256 with a shared secret' }, { value: 'ed25519', label: 'Ed25519 with the published key' }], existing ? existing.signing : 'hmac', 'data-whsigning'), 'Ed25519 lets receivers verify with a public key instead of holding a secret.')
+        + UI.field('Delivery order', UI.select([{ value: '', label: 'As they come (faster)' }, { value: 'ordered', label: 'One at a time, in event order' }], existing && existing.ordered ? 'ordered' : '', 'data-whordered'), 'In order, a delivery that keeps failing holds the ones after it until it gives up.') + '</div>'
         + '<div class="field" role="group" aria-label="Events"><span class="fl">Events</span><div class="tn-pick">' + groups.map((g) => '<label class="tn-pickrow"><input type="checkbox" data-whev value="' + esc(g.pattern) + '"' + (chosen.indexOf(g.pattern) >= 0 ? ' checked' : '') + '><span class="mono">' + esc(g.pattern) + '</span><span class="muted" style="font-size:12px">' + esc(g.description) + '</span></label>').join('') + '</div></div>'
         + UI.field('Other events, comma separated', UI.input(custom.join(', '), { attrs: 'data-whcustom', placeholder: 'prompt.published, tenant.hosts.updated' }), 'Any audit action name, or a prefix ending in .*')
         + '<div data-err></div>',
@@ -141,7 +148,7 @@
       onMount(m) {
         m.querySelector('[data-whsave]').addEventListener('click', async (e) => {
           const events = Array.prototype.slice.call(m.querySelectorAll('[data-whev]:checked')).map((i) => i.value).concat(m.querySelector('[data-whcustom]').value.split(',').map((x) => x.trim()).filter(Boolean));
-          const body = { name: m.querySelector('[data-whname]').value.trim(), url: m.querySelector('[data-whurl]').value.trim(), events, maxLabel: m.querySelector('[data-whlabel]').value };
+          const body = { name: m.querySelector('[data-whname]').value.trim(), url: m.querySelector('[data-whurl]').value.trim(), events, maxLabel: m.querySelector('[data-whlabel]').value, signing: m.querySelector('[data-whsigning]').value, ordered: m.querySelector('[data-whordered]').value === 'ordered' };
           m.querySelector('[data-err]').innerHTML = '';
           if (!body.name || !body.url || !events.length) { m.querySelector('[data-err]').innerHTML = UI.notice('A name, an endpoint and at least one event are needed.', 'warn'); return; }
           e.target.disabled = true;
@@ -185,6 +192,13 @@
       const ok = await ctx.confirm({ title: 'Rotate the signing secret?', tone: 'danger', body: 'Deliveries from now on are signed with the new secret. Update the receiver before the next event, or it will refuse them.', ok: 'Rotate secret' });
       if (!ok) return;
       try { const r = await App.post(wUrl() + '/secret', {}); secretModal(ctx, w.name, r.secret); } catch (err) { App.fail(err, 'Could not rotate the secret'); }
+    });
+    ctx.on('click', '[data-whkey]', async () => {
+      const k = ig.signingKey;
+      const rotating = !!(k && k.active);
+      const ok = await ctx.confirm({ title: rotating ? 'Rotate the Ed25519 key?' : 'Create an Ed25519 key?', tone: rotating ? 'danger' : 'info', body: rotating ? 'Deliveries from now on are signed with a new key. The old key stays published so receivers can still verify deliveries signed before; receivers that pin a key id must fetch the key list again.' : 'A key pair is created for this tenant. The private key is sealed and never shown; the public key is published.', ok: rotating ? 'Rotate key' : 'Create key' });
+      if (!ok) return;
+      try { ig.signingKey = await App.post('/api/admin/webhooks/signing-key/rotate', {}); ctx.toast(rotating ? 'Key rotated. Audit entry written.' : 'Key created. Audit entry written.', 'ok'); ctx.rerender(); } catch (err) { App.fail(err, 'Could not change the key'); }
     });
     ctx.on('click', '[data-whtoggle]', async () => {
       const w = sel(); if (!w) return;

@@ -45,10 +45,19 @@ export function tenantHostProblem(host: string, addresses: readonly string[], li
   return `${h} is not on this tenant's list of allowed hosts.`;
 }
 
+/** A tax applied to a tenant's statements (B-1005): a name and a rate in parts per million (20% is 200000). */
+export interface TaxRate {
+  name: string;
+  ratePpm: number;
+}
+
 export interface IntegrationSettings {
   allowedHosts: string[];
   priceBookId: string | null;
   billingCustomer: string | null;
+  /** B-1005: the tenant's billing currency; price books in another currency are not used for it. */
+  billingCurrency: string | null;
+  taxRates: TaxRate[];
   updatedBy: string | null;
   updatedAt: number | null;
 }
@@ -63,17 +72,21 @@ export class TenantIntegrations {
       allowedHosts: json<string[]>(r?.allowed_hosts, []),
       priceBookId: (r?.price_book_id as string | null) ?? null,
       billingCustomer: (r?.billing_customer as string | null) ?? null,
+      billingCurrency: (r?.billing_currency as string | null) ?? null,
+      taxRates: json<TaxRate[]>(r?.tax_rates, []),
       updatedBy: (r?.updated_by as string | null) ?? null,
       updatedAt: r?.updated_at == null ? null : Number(r.updated_at)
     };
   }
 
-  async set(tenantId: string, patch: Partial<Pick<IntegrationSettings, 'allowedHosts' | 'priceBookId' | 'billingCustomer'>>, by: string): Promise<IntegrationSettings> {
+  async set(tenantId: string, patch: Partial<Pick<IntegrationSettings, 'allowedHosts' | 'priceBookId' | 'billingCustomer' | 'billingCurrency' | 'taxRates'>>, by: string): Promise<IntegrationSettings> {
     const cur = await this.get(tenantId);
     const row = {
       allowed_hosts: JSON.stringify(patch.allowedHosts ?? cur.allowedHosts),
       price_book_id: patch.priceBookId !== undefined ? patch.priceBookId : cur.priceBookId,
       billing_customer: patch.billingCustomer !== undefined ? patch.billingCustomer : cur.billingCustomer,
+      billing_currency: patch.billingCurrency !== undefined ? (patch.billingCurrency?.toUpperCase() ?? null) : cur.billingCurrency,
+      tax_rates: JSON.stringify(patch.taxRates ?? cur.taxRates),
       updated_by: by,
       updated_at: Date.now()
     };

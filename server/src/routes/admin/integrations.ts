@@ -66,20 +66,50 @@ export function integrationAdminRoutes(s: Services): Router {
 
   r.post('/webhooks', hooks, async (req, res) => {
     const p = principalOf(req);
-    const b = parseBody(z.object({ name: z.string().trim().min(1).max(100), url, events, maxLabel: z.enum(LABELS).default('internal') }).strict(), req.body);
+    const b = parseBody(z.object({ name: z.string().trim().min(1).max(100), url, events, maxLabel: z.enum(LABELS).default('internal'), ordered: z.boolean().default(false), signing: z.enum(['hmac', 'ed25519']).default('hmac') }).strict(), req.body);
     if (!clears(p.clearance, b.maxLabel)) throw forbidden(`Your clearance is ${p.clearance}; a webhook cannot carry ${b.maxLabel} events.`, { step: 'clearance' });
+    if (b.signing === 'ed25519') await ensureKey(req);
     const { row, secret } = await refused(() => w.create(p.tenantId, p.userId, b));
-    await audit(req, 'webhook.created', { webhook: row.id, name: row.name }, { url: row.url, events: row.events, maxLabel: row.max_label });
+    await audit(req, 'webhook.created', { webhook: row.id, name: row.name }, { url: row.url, events: row.events, maxLabel: row.max_label, ordered: row.ordered, signing: row.signing });
     res.status(201).json({ ...webhookView(row, w.o.breakerCooldownMs), secret });
   });
 
   r.patch('/webhooks/:id', hooks, async (req, res) => {
     const p = principalOf(req);
-    const b = parseBody(z.object({ name: z.string().trim().min(1).max(100).optional(), url: url.optional(), events: events.optional(), maxLabel: z.enum(LABELS).optional(), state: z.enum(['active', 'disabled']).optional() }).strict(), req.body);
+    const b = parseBody(z.object({ name: z.string().trim().min(1).max(100).optional(), url: url.optional(), events: events.optional(), maxLabel: z.enum(LABELS).optional(), state: z.enum(['active', 'disabled']).optional(), ordered: z.boolean().optional(), signing: z.enum(['hmac', 'ed25519']).optional() }).strict(), req.body);
     if (b.maxLabel && !clears(p.clearance, b.maxLabel)) throw forbidden(`Your clearance is ${p.clearance}; a webhook cannot carry ${b.maxLabel} events.`, { step: 'clearance' });
+    if (b.signing === 'ed25519') await ensureKey(req);
     const { before, after } = await refused(() => w.update(p.tenantId, parseBody(id26, req.params.id), b));
-    await audit(req, after.state !== before.state ? (after.state === 'active' ? 'webhook.enabled' : 'webhook.disabled') : 'webhook.updated', { webhook: after.id, name: after.name }, { changed: Object.keys(b), url: after.url, events: after.events, maxLabel: after.max_label });
+    await audit(req, after.state !== before.state ? (after.state === 'active' ? 'webhook.enabled' : 'webhook.disabled') : 'webhook.updated', { webhook: after.id, name: after.name }, { changed: Object.keys(b), url: after.url, events: after.events, maxLabel: after.max_label, ordered: after.ordered, signing: after.signing });
     res.json(webhookView(after, w.o.breakerCooldownMs));
+  });
+
+  // ---------- Ed25519 signing key (B-1004) ----------
+
+  const keyView = async (tenantId: string) => {
+    const t = await s.tenants.byId(tenantId);
+    const keys = await w.signingKeys(tenantId);
+    const active = keys.find((k) => k.state === 'active') ?? null;
+    return { active: active ? { kid: active.id, publicKey: active.public_key, createdAt: Number(active.created_at) } : null, retired: keys.filter((k) => k.state === 'retired').map((k) => ({ kid: k.id, publicKey: k.public_key, retiredAt: k.retired_at == null ? null : Number(k.retired_at) })), jwksUrl: `${s.cfg.PUBLIC_URL.replace(/\/$/, '')}/webhooks/keys/${t?.slug ?? tenantId}` };
+  };
+
+  /** The first Ed25519 webhook creates the tenant's key pair. */
+  const ensureKey = async (req: Request) => {
+    const p = principalOf(req);
+    if (await w.activeKey(p.tenantId)) return;
+    const { row } = await w.createKey(p.tenantId, p.userId);
+    await audit(req, 'webhook.signing-key.created', { key: row.id }, { publicKey: row.public_key });
+  };
+
+  r.get('/webhooks/signing-key', hooks, async (req, res) => {
+    res.json(await keyView(principalOf(req).tenantId));
+  });
+
+  r.post('/webhooks/signing-key/rotate', hooks, async (req, res) => {
+    const p = principalOf(req);
+    const { row, retired } = await w.createKey(p.tenantId, p.userId);
+    await audit(req, retired ? 'webhook.signing-key.rotated' : 'webhook.signing-key.created', { key: row.id }, { publicKey: row.public_key, retired });
+    res.json(await keyView(p.tenantId));
   });
 
   r.post('/webhooks/:id/secret', hooks, async (req, res) => {
