@@ -116,7 +116,7 @@ type LookupCb = (err: NodeJS.ErrnoException | null, address: string | LookupAddr
  * An undici dispatcher whose connections may only reach allowed addresses: the DNS lookup made for each connection
  * is checked, so the address actually dialled is the one that was checked.
  */
-export function guardedAgent(allow: AllowList, timeoutMs: number): Agent {
+export function guardedAgent(allow: AllowList, timeoutMs: number, extra?: (host: string, addresses: string[]) => string | null): Agent {
   const lookup = (hostname: string, options: { all?: boolean; family?: number } & Record<string, unknown>, cb: LookupCb) => {
     dnsLookup(hostname, { ...options, all: true, verbatim: true }, (err, list) => {
       if (err) return cb(err, '', 0);
@@ -124,6 +124,8 @@ export function guardedAgent(allow: AllowList, timeoutMs: number): Agent {
         const p = addressProblem(a.address, hostname.toLowerCase(), allow);
         if (p) return cb(Object.assign(new HostRefused(p), { code: 'EREFUSED' }), '', 0);
       }
+      const q = extra?.(hostname.toLowerCase(), list.map((a) => a.address));
+      if (q) return cb(Object.assign(new HostRefused(q), { code: 'EREFUSED' }), '', 0);
       if (options.all) return cb(null, list);
       const first = list[0]!;
       cb(null, first.address, first.family);

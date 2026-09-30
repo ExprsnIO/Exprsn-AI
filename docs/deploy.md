@@ -52,6 +52,13 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `MEDIA_WHISPER_BIN`, `MEDIA_WHISPER_MODEL`, `MEDIA_WORK_DIR` | — | whisper.cpp for transcripts (without it the transcribe preset is unavailable); scratch directory for media jobs |
 | `IMAGE_BACKENDS` | `[]` | Image workers as JSON: `[{id, kind: comfyui\|diffusers, url, label?, model?, workflow?, concurrency?}]` |
 | `IMAGE_SAFETY_URL`, `IMAGE_SAFETY_THRESHOLD` | —, `0.5` | Image-safety classifier for generated images and video frames; without it images are marked "not classified" |
+| `OPENAI_STREAM_MODE` | `checked` | The OpenAI-compatible API at `/v1`: `checked` streams an answer after the output guardrail has passed it; `live` streams tokens as they are generated (a later block can only end the stream with `finish_reason: content_filter`) |
+| `WEBHOOK_ALLOWED_HOSTS` | — | Webhook endpoints must resolve to internal addresses; this comma list (hosts, `*.domain`, CIDRs) allows others. Tenants can narrow further on the Tenants screen |
+| `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_MAX_ATTEMPTS`, `WEBHOOK_RETRY_BASE_MS` | `10000`, `6`, `30000` | Per-attempt timeout; attempts per delivery; first retry delay, doubling each attempt (capped at six hours) |
+| `WEBHOOK_BREAKER_THRESHOLD`, `WEBHOOK_BREAKER_COOLDOWN_MS` | `5`, `300000` | Consecutive failed attempts that open an endpoint's circuit breaker, and how long it stays open before a trial delivery |
+| `BILLING_PROVIDER` | `none` | `stripe` lets a system admin push a finished month's statement as a Stripe invoice |
+| `STRIPE_SECRET_KEY` (`_FILE`), `STRIPE_API_URL`, `STRIPE_DAYS_UNTIL_DUE` | —, `https://api.stripe.com`, `30` | Stripe restricted key (invoice items and invoices, write), API base (a mirror or proxy in air-gapped installs), invoice terms |
+| `BILLING_CLOSE_MINUTES` | `360` | How often the scheduler closes last month's statements (0 turns off) |
 | `SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_HOURS` | `30`, `12` | Session lifetime |
 | `LOCKOUT_MAX_ATTEMPTS`, `LOCKOUT_WINDOW_MINUTES`, `LOCKOUT_DURATION_MINUTES` | `5`, `15`, `15` | Sign-in lockout |
 | `STEPUP_WINDOW_SECONDS` | `300` | Creating API keys, removing a second factor and regenerating recovery codes need a password or factor check this recent (signing in counts) |

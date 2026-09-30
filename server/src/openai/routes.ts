@@ -1,0 +1,201 @@
+import express, { Router, type ErrorRequestHandler, type Request, type Response } from 'express';
+import { RateLimiterMemory } from 'rate-limiter-flexible';
+import { ulid } from 'ulid';
+import { ZodError } from 'zod';
+import { LABELS, isLabel, type Label } from '../authz/labels.js';
+import { authenticate, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { HttpProblem } from '../http/problem.js';
+import type { Services } from '../services.js';
+import { apiProblem, chatBody, embeddingsBody, type CompletionResult } from './service.js';
+
+/*
+ * `/v1`: the OpenAI-compatible API. Bearer credentials only (an API key or an OAuth access token); the session cookie
+ * is never read here, so no CSRF token is needed. Errors use OpenAI's shape `{ error: { message, type, code, param } }`
+ * rather than problem+json, because that is what OpenAI clients parse. The data label of a request is `internal`
+ * unless the `X-Data-Label` header says otherwise; `X-Workspace` picks the workspace as it does for `/api`.
+ */
+
+const typeFor = (status: number): string =>
+  status === 400 || status === 404 || status === 409 || status === 413 || status === 422 ? 'invalid_request_error' : status === 401 ? 'authentication_error' : status === 403 ? 'permission_error' : status === 429 ? 'rate_limit_error' : 'api_error';
+
+export function openAiError(err: unknown): { status: number; body: { error: { message: string; type: string; code: string | null; param: string | null } }; headers: Record<string, string> } {
+  if (err instanceof ZodError) {
+    const i = err.issues[0];
+    return { status: 400, headers: {}, body: { error: { message: i ? `${i.path.join('.') || 'body'}: ${i.message}` : 'The request did not validate.', type: 'invalid_request_error', code: 'invalid_request', param: i?.path.join('.') || null } } };
+  }
+  if (err instanceof HttpProblem) {
+    const ext = err.extensions;
+    let code = typeof ext.code === 'string' ? ext.code : null;
+    if (!code) {
+      if (err.status === 401) code = 'invalid_api_key';
+      else if (err.status === 403) code = typeof ext.step === 'string' ? `denied_${ext.step}` : 'permission_denied';
+      else if (err.status === 429) code = typeof ext.limit === 'string' ? 'insufficient_quota' : 'rate_limit_exceeded';
+      else if (err.status === 400 && Array.isArray(ext.errors)) code = 'invalid_request';
+    }
+    let message = err.detail ?? err.title;
+    const first = Array.isArray(ext.errors) ? (ext.errors[0] as { path?: string; message?: string } | undefined) : undefined;
+    if (first?.message) message = `${first.path ? `${first.path}: ` : ''}${first.message}`;
+    return { status: err.status, headers: err.headers, body: { error: { message, type: typeFor(err.status), code, param: typeof ext.param === 'string' ? ext.param : (first?.path ?? null) } } };
+  }
+  const e = err as { type?: string };
+  if (e?.type === 'entity.parse.failed') return { status: 400, headers: {}, body: { error: { message: 'The body is not valid JSON.', type: 'invalid_request_error', code: 'invalid_json', param: null } } };
+  if (e?.type === 'entity.too.large') return { status: 413, headers: {}, body: { error: { message: 'The request body is too large.', type: 'invalid_request_error', code: 'request_too_large', param: null } } };
+  return { status: 500, headers: {}, body: { error: { message: 'Something went wrong on our side. Quote the X-Trace-Id header if you report it.', type: 'api_error', code: 'internal_error', param: null } } };
+}
+
+const labelOf = (req: Request): Label => {
+  const h = req.header('x-data-label');
+  if (h == null || h === '') return 'internal';
+  if (!isLabel(h)) throw apiProblem(400, `X-Data-Label must be one of ${LABELS.join(', ')}.`, 'invalid_label', 'X-Data-Label');
+  return h;
+};
+
+const completion = (r: CompletionResult) => ({
+  id: r.id,
+  object: 'chat.completion',
+  created: r.created,
+  model: r.model,
+  system_fingerprint: null,
+  choices: [{ index: 0, message: { role: 'assistant', content: r.toolCalls.length && !r.content ? null : r.content, ...(r.toolCalls.length ? { tool_calls: r.toolCalls } : {}), refusal: null }, logprobs: null, finish_reason: r.finishReason }],
+  usage: r.usage
+});
+
+export function openAiRoutes(s: Services): Router {
+  const r = Router();
+  const limiter = new RateLimiterMemory({ points: 600, duration: 60 });
+  const auth = authenticate(s);
+
+  r.use((_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+  r.use(express.json({ limit: '8mb', strict: true }));
+  r.use((req, res, next) => {
+    if (!req.headers.authorization) throw new HttpProblem(401, 'Unauthorized', 'Send an API key or an access token as "Authorization: Bearer <credential>".', { extensions: { code: 'missing_api_key' } });
+    return auth(req, res, next);
+  });
+  r.use(requireAuth());
+  r.use(async (req, _res, next) => {
+    try {
+      await limiter.consume(principalOf(req).userId);
+    } catch (x) {
+      const ms = (x as { msBeforeNext?: number }).msBeforeNext ?? 1000;
+      throw new HttpProblem(429, 'Too many requests', 'Slow down: too many requests.', { headers: { 'Retry-After': String(Math.max(1, Math.ceil(ms / 1000))) } });
+    }
+    next();
+  });
+  const invoke = requirePermission(s, 'inference:invoke');
+
+  r.get('/models', invoke, async (req, res) => {
+    res.json({ object: 'list', data: await s.openai.models(principalOf(req)) });
+  });
+
+  r.get('/models/:id', invoke, async (req, res) => {
+    const m = (await s.openai.models(principalOf(req))).find((x) => x.id === String(req.params.id));
+    if (!m) throw apiProblem(404, `The model ${String(req.params.id)} does not exist or you do not have access to it.`, 'model_not_found', 'model');
+    res.json(m);
+  });
+
+  r.post('/chat/completions', invoke, async (req, res) => {
+    const p = principalOf(req);
+    const body = chatBody.parse(req.body);
+    const label = labelOf(req);
+    const ac = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) ac.abort(new Error('client went away'));
+    });
+    if (!body.stream) {
+      res.json(completion(await s.openai.chat(p, body, label, ac.signal)));
+      return;
+    }
+    await stream(res, s, async (send) => {
+      const base = { object: 'chat.completion.chunk', model: body.model, system_fingerprint: null };
+      const id = `chatcmpl-${ulid()}`;
+      const created = Math.floor(Date.now() / 1000);
+      let opened = false;
+      const open = () => {
+        if (opened) return;
+        opened = true;
+        send({ ...base, id, created, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, logprobs: null, finish_reason: null }] });
+      };
+      const result = await s.openai.chat(p, body, label, ac.signal, {
+        id,
+        onDelta: (text) => {
+          open();
+          send({ ...base, id, created, choices: [{ index: 0, delta: { content: text }, logprobs: null, finish_reason: null }] });
+        }
+      });
+      if (!opened) {
+        open();
+        // Checked mode: the answer is released after the output checkpoint, in one piece.
+        if (result.content) send({ ...base, id, created, choices: [{ index: 0, delta: { content: result.content }, logprobs: null, finish_reason: null }] });
+      }
+      result.toolCalls.forEach((c, index) => send({ ...base, id, created, choices: [{ index: 0, delta: { tool_calls: [{ index, id: c.id, type: 'function', function: { name: c.function.name, arguments: c.function.arguments } }] }, logprobs: null, finish_reason: null }] }));
+      send({ ...base, id, created, choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: result.finishReason }] });
+      if (body.stream_options?.include_usage) send({ ...base, id, created, choices: [], usage: result.usage });
+    });
+  });
+
+  r.post('/embeddings', invoke, async (req, res) => {
+    const body = embeddingsBody.parse(req.body);
+    const ac = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) ac.abort(new Error('client went away'));
+    });
+    res.json(await s.openai.embeddings(principalOf(req), body, labelOf(req), ac.signal));
+  });
+
+  r.use(() => {
+    throw apiProblem(404, 'Unknown API route.', 'unknown_url');
+  });
+  r.use(openAiErrorHandler(s));
+  return r;
+}
+
+/** Server-sent events: `data: <json>` per chunk, comments as keep-alives while nothing is sent, `data: [DONE]` last. */
+async function stream(res: Response, s: Services, body: (send: (o: unknown) => void) => Promise<void>): Promise<void> {
+  let started = false;
+  const start = () => {
+    if (started) return;
+    started = true;
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+  };
+  const write = (line: string) => {
+    start();
+    res.write(line);
+    (res as unknown as { flush?: () => void }).flush?.();
+  };
+  // Nothing is sent until the first chunk, so a refusal before generation (an unknown model, a quota, a guardrail)
+  // is still an ordinary HTTP error; a comment every 10 s keeps proxies from timing out while the answer is checked.
+  const keepAlive = setInterval(() => write(': keep-alive\n\n'), 10_000);
+  try {
+    await body((o) => write(`data: ${JSON.stringify(o)}\n\n`));
+    write('data: [DONE]\n\n');
+  } catch (err) {
+    clearInterval(keepAlive);
+    if (!started) throw err;
+    const e = openAiError(err);
+    if (e.status >= 500) s.log.error({ err }, 'openai stream failed');
+    if (!res.writableEnded) write(`data: ${JSON.stringify(e.body)}\n\n`);
+  } finally {
+    clearInterval(keepAlive);
+    if (started && !res.writableEnded) res.end();
+  }
+}
+
+export function openAiErrorHandler(s: Pick<Services, 'log'>): ErrorRequestHandler {
+  return (err, req, res, _next) => {
+    const e = openAiError(err);
+    if (e.status >= 500) s.log.error({ err, trace_id: req.traceId }, 'openai api error');
+    if (res.headersSent) {
+      if (!res.writableEnded) res.destroy();
+      return;
+    }
+    for (const [k, v] of Object.entries(e.headers)) res.setHeader(k, v);
+    res.status(e.status).json(e.body);
+  };
+}

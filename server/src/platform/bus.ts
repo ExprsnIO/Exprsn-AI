@@ -83,5 +83,20 @@ export const TOPICS = {
   poolState: 'pool.state',
   auditAppended: 'audit.appended',
   /** Agent-run steps and script runs: `{ userId?, tenantId?, perm?, event, data }`. */
-  runEvent: 'run.event'
+  runEvent: 'run.event',
+  /**
+   * Events for outbound webhooks that are not audit appends or job states (flags, approvals), emitted locally on the
+   * instance where they happen: `{ tenantId, type, label, id, data }`.
+   */
+  integrationEvent: 'integration.event'
 } as const;
+
+export interface IntegrationEvent {
+  tenantId: string;
+  /** Event type, e.g. `flag.created` or `approval.requested`. */
+  type: string;
+  label: 'public' | 'internal' | 'confidential' | 'restricted';
+  /** Stable id of the occurrence, so a subscription receives it once. */
+  id: string;
+  data: Record<string, unknown>;
+}

@@ -179,7 +179,10 @@ export class FlagService {
   }
 
   private async event(f: FlagRow, action: string, actor: string | null, note: string | null): Promise<void> {
-    await this.db('guard_flag_events').insert({ id: ulid(), tenant_id: f.tenant_id, flag_id: f.id, action, actor, note: note?.slice(0, 500) ?? null, created_at: Date.now() });
+    const eventId = ulid();
+    await this.db('guard_flag_events').insert({ id: eventId, tenant_id: f.tenant_id, flag_id: f.id, action, actor, note: note?.slice(0, 500) ?? null, created_at: Date.now() });
+    // Outbound webhooks (Sprint 13): the fact of the change, never the flagged text.
+    this.bus.emitLocal(TOPICS.integrationEvent, { tenantId: f.tenant_id, type: `flag.${action}`, label: f.label, id: `flag-event:${eventId}`, data: { flag: flagRef(f), id: f.id, action, severity: f.severity, checkpoint: f.checkpoint } });
     // Only the fact of a change goes over the socket; reviewers fetch the flag through the API, redacted for them.
     this.bus.publish(TOPICS.poolState, { tenantId: f.tenant_id, perm: 'flags:review', event: 'flags.changed', data: { id: f.id, ref: flagRef(f), action, severity: f.severity } });
   }
