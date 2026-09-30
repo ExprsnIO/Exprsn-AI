@@ -147,6 +147,7 @@
         const bodyOf = (s) => {
           const d = s.detail || {};
           if (s.lane === 'think') return (s.meta.proposal && s.meta.proposal.length ? 'proposal: call ' + s.meta.proposal.join(', ') : 'answer: ' + clip(d.content, 120));
+          if (s.state === 'waiting' && s.meta.awaiting) return 'waiting on workflow run ' + String(s.meta.awaiting.id || '').slice(-6).toLowerCase() + ', started ' + clock(s.createdAt);
           if (s.state === 'waiting') return 'waiting on approval: ' + (s.meta.approvers || '') + ', requested ' + clock(s.createdAt);
           if (s.lane === 'calc') return (d.arguments && d.arguments.expression ? d.arguments.expression : '') + (d.result && d.result.decimal ? ' = ' + clip(d.result.decimal, 24) : d.error ? ': ' + clip(d.error, 80) : '');
           return d.error ? clip(d.error, 120) : clip(JSON.stringify(d.result), 120);
@@ -159,6 +160,7 @@
           const divider = (tone, text) => '<div class="runs-div"><div></div><div class="runs-divline' + (tone ? ' ' + tone : '') + '"><span class="rule"></span><span>' + text + '</span><span class="rule"></span></div></div>';
           if (s.state === 'denied') h += divider('danger', 'Refused: ' + esc(clip((s.detail || {}).error, 160)) + ' The reason goes back to the thinking step as data.');
           else if (s.state === 'rejected') h += divider('danger', 'Rejected by ' + esc((s.meta.approval && s.meta.approval.by) || 'the approver') + '. Nothing was run; the next thinking step hears why.');
+          else if (s.state === 'waiting' && s.meta.awaiting) h += divider('info', 'The workflow waits on ' + esc(s.meta.approvers || 'its approvers') + '. This run holds its checkpoint and continues with the result when the workflow finishes.');
           else if (s.state === 'waiting') h += divider('info', 'Approval requested from ' + esc(s.meta.approvers || 'an approver') + ', ' + Math.round((Date.now() - s.createdAt) / 60000) + ' min ago. The run holds its checkpoint until a decision.');
           else if (s.lane !== 'think' && s.meta.approval) h += divider('', 'Approved by ' + esc(s.meta.approval.by || '') + '.');
           if (s.meta.warning) h += divider('', esc(s.meta.warning));
@@ -179,12 +181,13 @@
           } else {
             const ap = sel.meta.approval;
             kv = [['Tool', '<span class="mono">' + esc(sel.meta.tool || sel.title) + '</span> ' + esc(sel.meta.version || '') + (sel.meta.impl === 'mcp' ? ' <span class="muted">(MCP server ' + esc(String(sel.meta.tool).split('.')[0]) + ')</span>' : '')], ['Side effect class', sidePill(sel.meta.sideEffect)], ['Tool ceiling', sel.meta.ceiling ? UI.label(sel.meta.ceiling, { sm: true }) : ''], ['Arguments', '<span class="mono">' + esc(clip(JSON.stringify(d.arguments || {}), 300)) + '</span>']];
-            if (sel.state === 'waiting') kv.push(['Must approve', esc(sel.meta.approvers || '')], ['Requested', esc(clock(sel.createdAt)) + ', from the run'], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['If nobody approves', 'the run keeps its checkpoint; cancel it to stop']);
+            if (sel.state === 'waiting' && sel.meta.awaiting) kv.push(['Waiting on', 'workflow run <span class="mono">' + esc(String(sel.meta.awaiting.id || '').slice(-6).toLowerCase()) + '</span>'], ['Started', esc(clock(sel.createdAt))], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['When it finishes', 'this run continues with its result, or its failure']);
+            else if (sel.state === 'waiting') kv.push(['Must approve', esc(sel.meta.approvers || '')], ['Requested', esc(clock(sel.createdAt)) + ', from the run'], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['If nobody approves', 'the run keeps its checkpoint; cancel it to stop']);
             else kv.push(['Outcome', sel.state === 'ok' ? UI.pill('ok', 'ok') : '<span style="color:var(--danger-fg)">' + esc(d.error || sel.state) + '</span>'], ['Duration', secs(sel.meta.durationMs)], ['Guardrail', esc(sel.meta.decision || 'not reached')], ['Typed result', sel.meta.valid == null ? '<span class="muted">no output schema</span>' : UI.pill(sel.meta.valid ? 'matches output schema' : 'schema mismatch', sel.meta.valid ? 'ok' : 'danger')]);
             if (ap) kv.push([ap.decision === 'approved' ? 'Approved by' : 'Rejected by', esc(ap.by || '') + (ap.note ? ': ' + esc(ap.note) : '')]);
             kv.push(['Label', UI.label(v.label, { sm: true })]);
-            const canDecide = sel.state === 'waiting' && (sel.meta.sideEffect === 'destructive' ? App.can('tools:manage') && !owner : owner || App.can('tools:manage'));
-            actions = sel.state === 'waiting' ? (canDecide ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>' : UI.notice('Waiting for ' + esc(sel.meta.approvers || 'an approver') + '.', 'info'))
+            const canDecide = sel.state === 'waiting' && !sel.meta.awaiting && (sel.meta.sideEffect === 'destructive' ? App.can('tools:manage') && !owner : owner || App.can('tools:manage'));
+            actions = sel.state === 'waiting' ? (canDecide ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>' : UI.notice(sel.meta.awaiting ? 'Waiting for the workflow to finish. Its approvers decide on the Workflows screen.' : 'Waiting for ' + esc(sel.meta.approvers || 'an approver') + '.', 'info'))
               : bad(sel) ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + sel.n + '"' }) : UI.btn('Show result segment', { attrs: 'data-segment' });
           }
         }
@@ -198,7 +201,7 @@
         const answer = st.showAnswer && v.output ? '<section class="panel" id="runs-answer"><div class="phead"><div class="eyebrow">Final answer, step ' + (steps.length ? steps[steps.length - 1].n : '') + '</div><span class="muted" style="font-size:12px">Select a figure to see the calculating step that produced it</span></div><div class="serif" style="font-size:15px;line-height:1.6;white-space:pre-wrap">' + traceFigures(v.output, steps) + '</div></section>' : '';
         const notice = v.state === 'budget' ? UI.notice('<b>Budget stop.</b> ' + esc(v.error || '') + ' The last checkpoint is kept; raise the limit to resume from it.', 'warn', owner || App.can('agents:manage') ? UI.btn('Raise limit and resume', { size: 'sm', attrs: 'data-raise' }) : '')
           : v.state === 'failed' ? UI.notice('<b>Failed.</b> ' + esc(v.error || ''), 'danger', owner || App.can('agents:manage') ? UI.btn('Replay from step', { size: 'sm', attrs: 'data-replay="' + (steps.find(bad) || steps[steps.length - 1] || { n: 1 }).n + '"' }) : '')
-            : v.state === 'waiting' ? UI.notice('<b>Waiting on approval.</b> ' + esc(v.error || ''), 'info')
+            : v.state === 'waiting' ? UI.notice('<b>' + (steps.some((x) => x.state === 'waiting' && x.meta.awaiting) ? 'Waiting on a workflow.' : 'Waiting on approval.') + '</b> ' + esc(v.error || ''), 'info')
               : v.state === 'cancelled' ? UI.notice(esc(v.error || 'Cancelled.'), 'warn') : '';
         const canControl = owner || App.can('agents:manage');
         page = '<div class="page runs-page">'

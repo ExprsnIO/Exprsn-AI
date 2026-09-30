@@ -90,7 +90,7 @@ export const CONFIGS = {
   model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text') }).strict(),
   transform: z.object({ fields: z.record(propName, template).refine((f) => Object.keys(f).length > 0 && Object.keys(f).length <= 50, 'Between 1 and 50 fields') }).strict(),
   branch: z.object({ left: template.min(1), op: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists']), right: z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]).optional() }).strict(),
-  guardrail: z.object({ checkpoint: z.enum(CHECKPOINTS).default('context'), text: template.min(1), approverRole: z.string().max(63).default('workflow-admin') }).strict(),
+  guardrail: z.object({ checkpoint: z.enum(CHECKPOINTS).default('context'), text: template.min(1), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict(),
   approval: z.object({ role: z.string().min(1).max(63), timeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000), show: template.default('') }).strict(),
   http: z
     .object({
@@ -103,7 +103,7 @@ export const CONFIGS = {
   calc: z.object({ expression: template.min(1).max(2000) }).strict(),
   wait: z.object({ ms: z.number().int().min(1000).max(LIMITS.maxWaitMs) }).strict(),
   /** `args` maps the tool's argument names to templates; without it the step passes on the matching fields of its input. */
-  tool: z.object({ tool: z.string().max(200).default(''), args: z.union([z.record(propName, template), template]).optional(), approverRole: z.string().max(63).default('workflow-admin') }).strict()
+  tool: z.object({ tool: z.string().max(200).default(''), args: z.union([z.record(propName, template), template]).optional(), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict()
 } satisfies Record<NodeKind, z.ZodType>;
 
 export type NodeConfig<K extends NodeKind> = z.infer<(typeof CONFIGS)[K]>;

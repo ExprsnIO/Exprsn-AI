@@ -38,11 +38,34 @@ export interface RunResult {
  */
 export interface ScriptRunner {
   readonly name: string;
+  /** The OCI runtime containers run under (runsc for gVisor), when one is configured. */
+  readonly ociRuntime?: string | null;
   available(): Promise<boolean>;
   run(req: RunRequest, signal?: AbortSignal): Promise<RunResult>;
 }
 
 export class RunnerUnavailable extends Error {}
+
+/** Runs the engine's CLI for a check (version, info); a missing binary answers code null. */
+export type Probe = (bin: string, args: string[]) => Promise<{ code: number | null; stdout: string }>;
+
+const spawnProbe: Probe = (bin, args) =>
+  new Promise((resolve) => {
+    const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    p.stdout.on('data', (c: Buffer) => {
+      if (out.length < 65_536) out += c.toString('utf8');
+    });
+    const t = setTimeout(() => p.kill('SIGKILL'), 5000);
+    p.on('error', () => {
+      clearTimeout(t);
+      resolve({ code: null, stdout: '' });
+    });
+    p.on('close', (code) => {
+      clearTimeout(t);
+      resolve({ code, stdout: out });
+    });
+  });
 
 /** Collects a stream up to a byte cap, then drains the rest. */
 function capture(stream: NodeJS.ReadableStream, cap: number) {
@@ -69,25 +92,53 @@ function capture(stream: NodeJS.ReadableStream, cap: number) {
  * argument to the interpreter, stdin as the script's input; nothing is mounted from the host.
  */
 export class ContainerRunner implements ScriptRunner {
+  private readonly runtime: string | null;
+  private readonly probe: Probe;
+  /** Why the configured runtime cannot be used, after `available()` looked (for the runtime view). */
+  runtimeProblem: string | null = null;
+
   constructor(
     private readonly bin: 'docker' | 'podman',
-    private readonly images: Record<Language, string>
-  ) {}
-
-  get name(): string {
-    return this.bin;
+    private readonly images: Record<Language, string>,
+    opts: { runtime?: string | null; probe?: Probe } = {}
+  ) {
+    this.runtime = opts.runtime ?? null;
+    this.probe = opts.probe ?? spawnProbe;
   }
 
-  available(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const p = spawn(this.bin, ['version'], { stdio: 'ignore' });
-      const t = setTimeout(() => p.kill('SIGKILL'), 5000);
-      p.on('error', () => resolve(false));
-      p.on('close', (code) => {
-        clearTimeout(t);
-        resolve(code === 0);
-      });
-    });
+  /** `docker`, or `docker (runsc)` when an OCI runtime such as gVisor is configured (B-1008). */
+  get name(): string {
+    return this.runtime ? `${this.bin} (${this.runtime})` : this.bin;
+  }
+
+  /** The OCI runtime passed with --runtime, or null for the engine's default (runc). */
+  get ociRuntime(): string | null {
+    return this.runtime;
+  }
+
+  /**
+   * The engine answers, and when a runtime is configured, the engine knows it: `docker info` lists it under
+   * Runtimes (podman is asked to use it). A missing runtime makes the runner unavailable: runs are refused rather
+   * than silently falling back to runc.
+   */
+  async available(): Promise<boolean> {
+    const v = await this.probe(this.bin, ['version']);
+    if (v.code !== 0) return false;
+    if (!this.runtime) return true;
+    if (this.bin === 'docker') {
+      const r = await this.probe(this.bin, ['info', '--format', '{{json .Runtimes}}']);
+      let names: string[];
+      try {
+        names = Object.keys(JSON.parse(r.stdout.trim() || '{}') as Record<string, unknown>);
+      } catch {
+        names = [];
+      }
+      this.runtimeProblem = r.code === 0 && names.includes(this.runtime) ? null : `docker does not list the ${this.runtime} runtime (docker info: ${names.join(', ') || 'none'}).`;
+    } else {
+      const r = await this.probe(this.bin, ['--runtime', this.runtime, 'info', '--format', '{{.Host.OCIRuntime.Name}}']);
+      this.runtimeProblem = r.code === 0 ? null : `podman cannot use the ${this.runtime} runtime.`;
+    }
+    return this.runtimeProblem == null;
   }
 
   args(req: RunRequest): string[] {
@@ -95,6 +146,7 @@ export class ContainerRunner implements ScriptRunner {
     const cmd = req.language === 'python' ? ['python3', '-I', '-c', req.source] : ['node', '--input-type=module', '-e', req.source];
     return [
       'run', '--rm', '-i',
+      ...(this.runtime ? [`--runtime=${this.runtime}`] : []),
       '--name', `exai-script-${req.id.toLowerCase()}`,
       '--network', 'none',
       '--read-only',
@@ -113,7 +165,24 @@ export class ContainerRunner implements ScriptRunner {
     ];
   }
 
-  run(req: RunRequest, signal?: AbortSignal): Promise<RunResult> {
+  private runtimeChecked: Promise<boolean> | null = null;
+
+  /**
+   * Runs one script. With a runtime configured, the engine is asked once whether it has it; without it every run
+   * is refused (never run under runc instead).
+   */
+  async run(req: RunRequest, signal?: AbortSignal): Promise<RunResult> {
+    if (this.runtime) {
+      this.runtimeChecked ??= this.available();
+      if (!(await this.runtimeChecked)) {
+        this.runtimeChecked = null; // look again next time: the operator may install it
+        throw new RunnerUnavailable(this.runtimeProblem ?? `${this.bin} is not available.`);
+      }
+    }
+    return this.exec(req, signal);
+  }
+
+  private exec(req: RunRequest, signal?: AbortSignal): Promise<RunResult> {
     const started = Date.now();
     const cap = req.limits.outputKb * 1024;
     return new Promise((resolve, reject) => {
@@ -163,16 +232,23 @@ export class UnavailableRunner implements ScriptRunner {
 /** Picks docker or podman, whichever answers first, at first use. */
 export class AutoRunner implements ScriptRunner {
   private picked: Promise<ScriptRunner> | null = null;
-  constructor(private readonly images: Record<Language, string>) {}
+  constructor(
+    private readonly images: Record<Language, string>,
+    private readonly runtime: string | null = null
+  ) {}
 
   get name(): string {
-    return 'auto';
+    return this.runtime ? `auto (${this.runtime})` : 'auto';
+  }
+
+  get ociRuntime(): string | null {
+    return this.runtime;
   }
 
   private pick(): Promise<ScriptRunner> {
     this.picked ??= (async () => {
       for (const bin of ['docker', 'podman'] as const) {
-        const r = new ContainerRunner(bin, this.images);
+        const r = new ContainerRunner(bin, this.images, { runtime: this.runtime });
         if (await r.available()) return r;
       }
       return new UnavailableRunner();
@@ -189,9 +265,9 @@ export class AutoRunner implements ScriptRunner {
   }
 }
 
-export function createScriptRunner(cfg: { SCRIPT_RUNNER: 'auto' | 'docker' | 'podman' | 'none'; SCRIPT_IMAGE_PYTHON: string; SCRIPT_IMAGE_NODE: string }): ScriptRunner {
+export function createScriptRunner(cfg: { SCRIPT_RUNNER: 'auto' | 'docker' | 'podman' | 'none'; SCRIPT_IMAGE_PYTHON: string; SCRIPT_IMAGE_NODE: string; SCRIPT_RUNTIME?: string | undefined }): ScriptRunner {
   const images = { python: cfg.SCRIPT_IMAGE_PYTHON, javascript: cfg.SCRIPT_IMAGE_NODE };
   if (cfg.SCRIPT_RUNNER === 'none') return new UnavailableRunner();
-  if (cfg.SCRIPT_RUNNER === 'auto') return new AutoRunner(images);
-  return new ContainerRunner(cfg.SCRIPT_RUNNER, images);
+  if (cfg.SCRIPT_RUNNER === 'auto') return new AutoRunner(images, cfg.SCRIPT_RUNTIME ?? null);
+  return new ContainerRunner(cfg.SCRIPT_RUNNER, images, { runtime: cfg.SCRIPT_RUNTIME ?? null });
 }

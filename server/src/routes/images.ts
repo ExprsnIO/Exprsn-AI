@@ -24,7 +24,7 @@ export function imageRoutes(s: Services): Router {
   };
 
   r.get('/images/backends', gen, (_req, res) => {
-    res.json({ backends: im.backends(), safety: { classifier: s.imageSafety.name === 'none' ? null : s.imageSafety.name, threshold: s.cfg.IMAGE_SAFETY_THRESHOLD } });
+    res.json({ backends: im.backends(), safety: { classifier: s.imageSafety.name === 'none' ? null : s.imageSafety.name, threshold: s.cfg.IMAGE_SAFETY_THRESHOLD, required: s.cfg.IMAGE_SAFETY_REQUIRED } });
   });
 
   r.get('/images/quota', gen, async (req, res) => {

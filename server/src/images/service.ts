@@ -34,6 +34,8 @@ export interface ImageDeps {
   backends: ImageBackend[];
   safety: () => ImageSafety;
   safetyThreshold: number;
+  /** IMAGE_SAFETY_REQUIRED (B-1007): an image nothing classified is withheld, not stored as "not classified". */
+  safetyRequired?: boolean;
   guardrails: () => Guardrails;
   /** KMS key that signs provenance manifests. */
   provenanceKey: string;
@@ -268,7 +270,7 @@ export class ImageService {
   /** The stored image (with its provenance chunk) and the signed sidecar. */
   async image(p: Principal, id: string): Promise<{ data: Buffer; type: string; row: ImageRow; provenance: (Provenance & { signature: string; key: string }) | null }> {
     const r = await this.row(p, id);
-    if (r.state !== 'succeeded' || !r.blob_key) throw conflict(r.state === 'withheld' ? 'This image was withheld by the image-safety classifier and not stored.' : `This image is ${r.state}.`);
+    if (r.state !== 'succeeded' || !r.blob_key) throw conflict(r.state === 'withheld' ? (r.safety_score == null ? 'This image was withheld because no image-safety classifier is configured, and not stored.' : 'This image was withheld by the image-safety classifier and not stored.') : `This image is ${r.state}.`);
     const sealed = await this.d.blobs.get(r.blob_key);
     if (!sealed) throw notFound('Image content');
     const data = await this.d.keys.openBytes(r.tenant_id, sealed.toString(), `image:${r.id}`);
@@ -359,6 +361,13 @@ export class ImageService {
         const reviewers = await this.d.notifications.usersWithRoles(r.tenant_id, ['flag-reviewer', 'guardrail-admin']);
         await this.d.notifications.notify({ tenantId: r.tenant_id, userIds: reviewers, kind: 'flag', title: 'Generated image withheld', body: `Image ${r.id.slice(-6)} scored ${verdict.score.toFixed(2)} on ${verdict.classifier} and was discarded.`, route: 'flags', label: r.label });
         return { state: 'withheld', score: verdict.score };
+      }
+
+      if (!verdict && this.d.safetyRequired) {
+        // No classifier looked at it and the operator requires one: it is not stored.
+        await this.update(r, { state: 'withheld', stage: 'Withheld: no image-safety classifier is configured', safety_score: null, gpu_ms: gpuMs, step: r.steps, finished_at: Date.now() });
+        await this.d.audit.append({ tenantId: r.tenant_id, action: 'image.withheld', kind: 'system', actor: { service: 'images' }, target: { image: r.id, backend: backend.id }, label: r.label, detail: { reason: 'not classified', required: true, seed: r.seed, promptSha256: r.prompt_hash } });
+        return { state: 'withheld', reason: 'not classified' };
       }
 
       const manifest: Provenance = {

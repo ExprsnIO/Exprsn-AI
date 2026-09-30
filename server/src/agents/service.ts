@@ -12,7 +12,7 @@ import type { Notifications } from '../platform/notifications.js';
 import type { QuotaService } from '../tenancy/quotas.js';
 import type { Gateway, ResolvedProfile } from '../gateway/gateway.js';
 import type { ChatMessage } from '../gateway/ollama.js';
-import type { ToolDispatcher, ToolOutcome, ResolvedTool } from '../registry/dispatch.js';
+import type { PendingResult, ToolDispatcher, ToolOutcome, ResolvedTool } from '../registry/dispatch.js';
 import { MAX_BUDGETS, type AgentBudgets, type AgentDefinition, type EntryRow, type RegistryService } from '../registry/service.js';
 
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'budget';
@@ -74,6 +74,8 @@ interface PendingCall {
   decision?: 'approved' | 'rejected';
   decidedBy?: string;
   note?: string | null;
+  /** B-1006: the call started work that finishes later (a workflow run waiting on an approval); the run awaits it. */
+  awaiting?: PendingResult;
 }
 
 /** What a checkpoint holds: everything needed to continue (or replay) from the end of a step. */
@@ -86,7 +88,12 @@ const TERMINAL: RunState[] = ['succeeded', 'failed', 'cancelled'];
 const EMPTY_USAGE: RunUsage = { steps: 0, tokens: 0, toolCalls: 0, calcCalls: 0, wallMs: 0, gpuMs: 0 };
 
 class Pause extends Error {
-  constructor(readonly state: 'waiting' | 'budget', message: string) {
+  constructor(
+    readonly state: 'waiting' | 'budget',
+    message: string,
+    /** Set when the run waits on a pending tool result rather than on an approval of its own. */
+    readonly awaiting: PendingResult | null = null
+  ) {
     super(message);
   }
 }
@@ -351,6 +358,7 @@ export class AgentService {
     const step = (await this.db('agent_steps').where({ run_id: r.id, n }).first()) as StepRow | undefined;
     if (!step || step.state !== 'waiting') throw conflict('That step is not waiting on an approval.');
     const meta = json<Record<string, unknown>>(step.meta, {});
+    if (meta.awaiting) throw conflict('That step waits on a workflow run, not on an approval here; it continues when the workflow finishes.');
     const side = String(meta.sideEffect ?? 'write');
     const toolAdmin = effectivePermissions(p).has('tools:manage');
     if (side === 'destructive' && (!toolAdmin || r.user_id === p.userId)) throw forbidden('A destructive call needs a tool admin other than the run\'s owner.', { step: 'dual-control' });
@@ -366,6 +374,26 @@ export class AgentService {
     await this.audit.append({ tenantId: r.tenant_id, action: decision === 'approve' ? 'agent.call.approved' : 'agent.call.rejected', kind: 'admin', actor: actorFrom(p), target: { run: r.id, step: n, tool: meta.tool }, label: r.label, detail: { sideEffect: side, note } });
     await this.enqueue(r);
     return { decision: call.decision };
+  }
+
+  /**
+   * B-1006: a pending tool result this run awaits is ready (the workflow run finished). The run is queued again once,
+   * and picks the result up from where it paused.
+   */
+  async resumeAwaiting(tenantId: string, runId: string): Promise<boolean> {
+    const r = (await this.db('agent_runs').where({ tenant_id: tenantId, id: runId }).first()) as RunRow | undefined;
+    if (!r) return false;
+    const n = await this.db('agent_runs').where({ id: r.id, state: 'waiting' }).update({ state: 'queued', updated_at: Date.now() });
+    if (n !== 1) return false;
+    await this.enqueue(r);
+    return true;
+  }
+
+  /** Whether an awaited workflow run has reached a final state (read from its table, as the dispatcher does). */
+  private async awaitedDone(p: PendingResult): Promise<boolean> {
+    if (p.kind !== 'workflow-run') return false;
+    const w = (await this.db('workflow_runs').where({ id: p.id }).first('state')) as { state: string } | undefined;
+    return !w || ['succeeded', 'failed', 'rejected', 'cancelled'].includes(w.state);
   }
 
   /** A new run that reuses steps before `from` and continues from the checkpoint before it, with the same label and budget. */
@@ -521,11 +549,28 @@ export class AgentService {
           const stepN = call.step ?? n + 1;
           if (isNew && usage.steps >= budgets.steps) await budgetStop(`Stopped at ${usage.steps} of ${budgets.steps} steps.`);
           if (isNew && tool && usage.toolCalls >= budgets.toolCalls) await budgetStop(`Stopped at ${usage.toolCalls} of ${budgets.toolCalls} tool calls.`);
+          const awaited = !!call.awaiting;
           let outcome: ToolOutcome;
-          if (!tool) outcome = { name: call.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `tool_unavailable: ${call.name} is not one of this agent's tools${hidden.length ? ` (hidden: ${hidden.map((h) => `${h.name}, ${h.reason}`).join('; ')})` : ''}.` };
+          if (tool && call.awaiting) outcome = await this.tools.awaitResult({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal }, tool, call.arguments, call.awaiting);
+          else if (!tool) outcome = { name: call.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `tool_unavailable: ${call.name} is not one of this agent's tools${hidden.length ? ` (hidden: ${hidden.map((h) => `${h.name}, ${h.reason}`).join('; ')})` : ''}.` };
           else if (call.decision === 'rejected') outcome = { name: tool.entry.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `Rejected by ${call.decidedBy ?? 'the approver'}${call.note ? `: ${call.note}` : ''}. Nothing was run.` };
           else outcome = await this.tools.call({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, approved: call.decision === 'approved' }, tool, call.arguments);
 
+          if (outcome.pending) {
+            // B-1006: the call is running elsewhere (a workflow paused on an approval). Keep the step waiting and
+            // pause without a worker; the run is queued again when the result is ready.
+            if (!awaited) {
+              if (isNew) usage.steps++;
+              if (tool) usage.toolCalls++;
+              n = Math.max(n, stepN);
+              call.step = stepN;
+              call.awaiting = outcome.pending;
+              await this.addStep(run, stepN, { lane: 'do', title: tool!.entry.name, state: 'waiting', meta: this.toolMeta(tool!, outcome, { waitingSince: Date.now(), awaiting: outcome.pending, approvers: `the approvers of workflow run ${outcome.pending.id.slice(-6).toLowerCase()}` }), detail: { arguments: call.arguments, reason: outcome.error } });
+              tick();
+              await this.checkpoint(run, stepN, { messages, pending }, usage);
+            }
+            throw new Pause('waiting', outcome.error ?? 'Waiting on a tool result.', outcome.pending);
+          }
           if (outcome.needsApproval) {
             if (isNew) usage.steps++;
             n = Math.max(n, stepN);
@@ -537,8 +582,8 @@ export class AgentService {
           }
           n = Math.max(n, stepN);
           if (isNew) usage.steps++;
-          if (tool && !outcome.denied && isNew) usage.toolCalls++;
-          else if (tool && call.decision === 'approved') usage.toolCalls++;
+          if (tool && !awaited && !outcome.denied && isNew) usage.toolCalls++;
+          else if (tool && !awaited && call.decision === 'approved') usage.toolCalls++;
           const calc = tool?.entry.impl === 'builtin' && tool.entry.definition.builtin === 'calculate';
           if (calc && outcome.ok) usage.calcCalls++;
           const state: StepState = call.decision === 'rejected' ? 'rejected' : outcome.denied ? 'denied' : outcome.ok ? 'ok' : 'failed';
@@ -626,6 +671,11 @@ export class AgentService {
       tick();
       if (err instanceof Pause) {
         await this.finish(run, err.state, { error: err.message, usage });
+        if (err.awaiting) {
+          // The awaited run may have finished while this one was pausing: then continue at once.
+          if (await this.awaitedDone(err.awaiting)) await this.resumeAwaiting(run.tenant_id, run.id);
+          return { state: err.state, awaiting: err.awaiting };
+        }
         if (err.state === 'waiting') {
           this.bus.emitLocal(TOPICS.integrationEvent, { tenantId: run.tenant_id, type: 'approval.requested', label: run.label, id: `agent-approval:${run.id}:${usage.steps}`, data: { kind: 'agent', run: run.id, agent: run.agent_name } });
           const approvers = await this.notifications.usersWithRoles(run.tenant_id, ['tool-admin']);
