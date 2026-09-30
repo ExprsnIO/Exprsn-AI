@@ -249,6 +249,11 @@ describe('data connections', () => {
       const conn = await registerLedger(a);
       const curator = await client(h, 'cura', ['member', 'knowledge-curator'], 'confidential');
       const kb = (await curator.post('/api/knowledge/bases', { name: 'Finance KB', label: 'internal', embedModel: 'nomic-embed-text' }).expect(201)).body;
+      // the source form lists the connection and its allow-listed objects, never the credential
+      const listed = (await curator.get('/api/knowledge/connections').expect(200)).body;
+      expect(listed).toEqual([{ id: conn.id, name: conn.name, label: conn.label, objects: expect.arrayContaining(['ledger.cost_centres']), columns: expect.objectContaining({ 'ledger.cost_centres': expect.arrayContaining(['updated_at']) }) }]);
+      expect(JSON.stringify(listed)).not.toMatch(/password|credential/i);
+      await (await client(h, 'plain', ['member'])).get('/api/knowledge/connections').expect(403);
       await curator.post(`/api/knowledge/bases/${kb.id}/sources`, { kind: 'database', location: 'pg: ledger.payroll_lines', connectionId: conn.id }).expect(409);
       const src = (await curator.post(`/api/knowledge/bases/${kb.id}/sources`, { kind: 'database', location: 'pg: ledger.cost_centres', connectionId: conn.id }).expect(201)).body;
       expect(src).toMatchObject({ location: 'pg: ledger.cost_centres', labelFloor: 'confidential', config: { object: 'ledger.cost_centres', idColumn: 'id', watermarkColumn: 'updated_at' } });

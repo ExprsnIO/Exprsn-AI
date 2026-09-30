@@ -68,6 +68,13 @@ export function knowledgeRoutes(s: Services): Router {
     });
   });
 
+  /** PostgreSQL connections a curator may read a view through: names and allow-listed objects, never credentials. */
+  r.get('/knowledge/connections', read, async (req, res) => {
+    const p = principalOf(req);
+    if (!effectivePermissions(p).has('knowledge:manage')) throw forbidden('Adding a source needs the knowledge curator role.', { step: 'role', action: 'knowledge:manage' });
+    res.json((await s.connections.list(p.tenantId)).filter((c) => c.engine === 'postgres').map((c) => ({ id: c.id, name: c.name, label: c.label, objects: c.allow_list, columns: Object.fromEntries((c.schema ?? []).filter((o) => c.allow_list.includes(o.name)).map((o) => [o.name, o.columns.map((x) => x.name)])) })));
+  });
+
   // ---------- knowledge bases ----------
 
   r.get('/knowledge/bases', read, async (req, res) => {

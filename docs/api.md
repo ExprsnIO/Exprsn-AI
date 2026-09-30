@@ -219,6 +219,7 @@ above the caller's clearance are filtered inside every query: they are never lis
 | `POST /knowledge/search` `{kbIds, query, k?, rerank?}` | Test search as the caller: `{hits: [hit], ceiling, vectorSkipped, vectorStore}` |
 | `GET /knowledge/models` | `{embedding: [{name, label, state}], rerankers: [...]}`: approved models for the forms |
 | `GET /knowledge/principals` | Curators: `{workspaces, users, profiles}` to share with |
+| `GET /knowledge/connections` | Curators: `[{id, name, label, objects, columns}]`, the PostgreSQL connections and allow-listed objects a database source can read (never credentials) |
 | `GET /conversations/:id/knowledge` (`context:read`) | Bases attached to one of the caller's conversations |
 | `PUT /conversations/:id/knowledge` `{kbIds}` (`context:write`) | Attaches bases the caller can read to the conversation |
 
