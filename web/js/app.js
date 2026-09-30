@@ -144,7 +144,7 @@
       { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', live: true }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', live: true }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', live: true },
       { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', live: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', live: true }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
       { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
-      { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', sprint: 9 },
+      { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
       { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];

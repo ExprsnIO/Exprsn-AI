@@ -85,6 +85,14 @@ export function authenticate(s: Services): RequestHandler {
     if (auth) {
       const m = /^Bearer\s+(\S+)$/i.exec(auth);
       if (!m?.[1]) throw unauthorized('Malformed Authorization header.');
+      // OAuth access tokens from the OIDC provider (JWTs), narrowed to their scopes like API keys.
+      if (m[1].startsWith('eyJ')) {
+        const p = await s.federation.principalFromAccessToken(m[1]);
+        if (!p) throw new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } });
+        req.principal = p;
+        p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+        return next();
+      }
       const key = await s.apiKeys.verify(m[1]);
       if (!key) throw new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } });
       const p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });

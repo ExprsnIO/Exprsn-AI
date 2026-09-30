@@ -29,6 +29,12 @@
     return UI.notice('<b>' + esc(p.title || 'Sign-in failed') + '.</b> ' + esc(p.detail || err.message || '') + (p.trace_id ? ' <span class="mono muted" style="font-size:11px">trace ' + esc(p.trace_id) + '</span>' : ''), p.status === 429 ? 'warn' : 'danger');
   };
 
+  // A protocol page (OIDC authorize, SAML SSO, device approval) that needed a sign-in keeps its address here.
+  const CONTINUE = 'exprsn.continue';
+  const safeContinue = (v) => (typeof v === 'string' && /^\/(t\/[a-z0-9][a-z0-9-]{0,62}\/)?(oauth\/authorize\?|saml\/continue\?|device(\?|$))/.test(v) && v.indexOf('\\') < 0 ? v : null);
+  const pendingContinue = () => { try { return safeContinue(sessionStorage.getItem(CONTINUE)); } catch (e) { return null; } };
+  const takeContinue = () => { const v = pendingContinue(); try { sessionStorage.removeItem(CONTINUE); } catch (e) { /* storage blocked */ } return v; };
+
   App.register({
     id: 'signin', title: 'Sign in', summary: 'Directory password, second factor, first-time enrolment', crumb: ['Sign in'], live: true,
     render(root, ctx) {
@@ -62,7 +68,9 @@
           + (st.showTenant ? '<div class="field"><label for="t">Tenant</label><input class="input" id="t" value="' + esc(st.tenant || '') + '" autocomplete="organization" placeholder="for example northwind"></div>' : '')
           + '<div class="field"><label for="u">Username</label><input class="input" id="u" value="' + esc(st.username || '') + '" autocomplete="username" autocapitalize="none" spellcheck="false"></div>'
           + '<div class="field"><label for="p">Password</label><input class="input" id="p" type="password" autocomplete="current-password"></div>'
-          + '<div class="vstack gap6">' + UI.btn(st.busy ? 'Signing in…' : 'Sign in', { kind: 'primary', attrs: 'data-signin' + busy }) + '</div>'
+          + '<div class="vstack gap6">' + UI.btn(st.busy ? 'Signing in…' : 'Sign in', { kind: 'primary', attrs: 'data-signin' + busy })
+          + (st.options && st.options.kerberos ? UI.btn('Sign in with Kerberos', { icon: 'key', attrs: 'data-fedstart="' + esc(st.options.kerberos.start) + '"' }) : '')
+          + (st.options ? st.options.upstream.map((u) => UI.btn('Sign in with ' + u.name, { attrs: 'data-fedstart="' + esc(u.start) + '"' })).join('') : '') + '</div>'
           + '<div class="hstack" style="justify-content:space-between;font-size:12px"><a href="#" data-tenant>' + (st.showTenant ? 'Use the default tenant' : 'Sign in to another tenant') + '</a></div>';
       }
       root.innerHTML = '<div class="page" style="align-items:center;justify-content:center">'
@@ -73,7 +81,21 @@
       if (focus) focus.focus();
 
       const run = async (fn) => { if (st.busy) return; st.busy = true; st.error = null; ctx.rerender(); try { await fn(); } catch (err) { st.error = err; } finally { st.busy = false; if (App.state.route === 'signin') ctx.rerender(); } };
-      const finish = async (session) => { Object.keys(st).forEach((k) => { delete st[k]; }); await App.signIn(session); };
+      const finish = async (session) => {
+        const next = takeContinue();
+        Object.keys(st).forEach((k) => { delete st[k]; });
+        if (next) { location.assign(next); return; }
+        await App.signIn(session);
+      };
+      // Upstream identity providers and Kerberos, offered next to the password form (loaded once per tenant).
+      const tenantKey = st.tenant || '';
+      if (st.mode === 'form' && st.optionsFor !== tenantKey && !st.optionsLoading) {
+        st.optionsLoading = true;
+        App.get('/api/auth/sign-in-options' + (tenantKey ? '?tenant=' + encodeURIComponent(tenantKey) : ''))
+          .then((o) => { st.options = o; }, () => { st.options = null; })
+          .finally(() => { st.optionsFor = tenantKey; st.optionsLoading = false; if (App.state.route === 'signin' && st.mode === 'form') ctx.rerender(); });
+      }
+      const startFederated = (url) => { const c = pendingContinue(); location.assign(url + (url.indexOf('?') < 0 ? '?' : '&') + 'return=' + encodeURIComponent(c || '')); };
 
       const signin = () => {
         // Read the form before run() re-renders it.
@@ -93,6 +115,7 @@
 
       ctx.on('submit', '[data-form]', (e) => { e.preventDefault(); if (st.mode === 'form') signin(); else if (ctx.$('[data-totp]')) ctx.$('[data-totp]').click(); else if (ctx.$('[data-confirmtotp]')) ctx.$('[data-confirmtotp]').click(); else if (ctx.$('[data-recovery]')) ctx.$('[data-recovery]').click(); });
       ctx.on('click', '[data-signin]', (e) => { e.preventDefault(); signin(); });
+      ctx.on('click', '[data-fedstart]', (e, t) => { e.preventDefault(); startFederated(t.dataset.fedstart); });
       ctx.on('click', '[data-tenant]', (e) => { e.preventDefault(); st.showTenant = !st.showTenant; if (!st.showTenant) st.tenant = ''; ctx.rerender(); });
       ctx.on('click', '[data-restart]', (e) => { e.preventDefault(); App.post('/api/auth/logout').catch(() => null); const u = st.username; Object.keys(st).forEach((k) => { delete st[k]; }); st.username = u; ctx.rerender(); });
       ctx.on('click', '[data-userecovery]', (e, t) => { e.preventDefault(); st.useRecovery = t.dataset.userecovery === '1'; st.error = null; ctx.rerender(); });
