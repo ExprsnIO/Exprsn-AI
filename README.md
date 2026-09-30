@@ -2,14 +2,17 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** Sprints 0 to 8 are done: identity and access; tenancy, quotas, audit and platform services (KMS with
-per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync); the Ollama gateway (pools,
-instances, the model catalogue with dual-control approval, profiles with canary and rollback); chat and compare with
-streaming, branches, attachments, exact calculation and metering; guardrails at eleven checkpoints with classifiers
-and a flag queue; knowledge bases with hybrid search, memory and read-only data connections; the tool registry, MCP
-servers, agent runs and a script sandbox; and workflows, media processing and image generation. Every console screen
-is live except Training, Zones, Platform and Identity, which show example data with a "Prototype data" banner until
-Sprint 9 connects them. See [Sprints.md](Sprints.md).
+**Status:** release candidate `1.0.0-rc.1`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
+the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
+rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
+checkpoints with classifiers and a flag queue; knowledge bases with hybrid search, memory and read-only data
+connections; the tool registry, MCP servers, agent runs and a script sandbox; workflows, media processing and image
+generation; and training, network zones, platform operations (signed import bundles, mirrors, ACME, backups and
+restore drills) and federation (OIDC provider, SAML IdP, upstream OIDC and SAML, Kerberos, device flow). Every console
+screen is live. Sprint 10 added a Helm chart with NetworkPolicies, supply-chain scanning, a streaming load test,
+runbooks, an OWASP ASVS level 2 review, AA and AAA accessibility modes and a Playwright suite across the console. See
+[Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 
@@ -18,8 +21,9 @@ Sprint 9 connects them. See [Sprints.md](Sprints.md).
 | [`server/`](server) | Node.js 22, TypeScript, Express 5 and Socket.io. Users sign in against a per-tenant chain of user stores (OpenLDAP, PostgreSQL / MySQL / SQLite user tables, local accounts), with TOTP, passkeys and recovery codes, role and clearance based access, API keys, and a per-tenant SHA-256 audit chain with signed checkpoints. It is the only component that talks to Ollama. The application database is PostgreSQL, MySQL or SQLite (Knex); Redis, OpenBao, S3 and SMTP are optional |
 | [`web/`](web) | The user workspace and admin console, served by the server. Plain HTML, CSS and JavaScript with no build step and a strict CSP |
 | [`design/prototype/`](design/prototype/README.md) | The clickable specification (27 screens, example data). Open `design/prototype/index.html` in a browser |
-| [`deploy/`](deploy) | Dockerfile; Compose for production, development and GPU hosts; systemd unit and installer for bare metal; an example identity YAML |
-| [`docs/`](docs) | [Plan and decisions](docs/PLAN.md), [API](docs/api.md), [identity](docs/identity.md), [deployment](docs/deploy.md), [security](docs/security.md) |
+| [`deploy/`](deploy) | Dockerfile; Compose for production, development and GPU hosts; a Helm chart with NetworkPolicies; systemd unit and installer for bare metal; an example identity YAML |
+| [`e2e/`](e2e/README.md) | The Playwright suite that drives every console screen against a real server and test fakes |
+| [`docs/`](docs) | [Plan and decisions](docs/PLAN.md), [API](docs/api.md), [identity](docs/identity.md), [deployment](docs/deploy.md), [security](docs/security.md), [ASVS assessment](docs/asvs.md), [accessibility](docs/accessibility.md), [runbooks](docs/runbooks/README.md), [load testing](docs/loadtest.md) |
 
 ## Run it locally
 

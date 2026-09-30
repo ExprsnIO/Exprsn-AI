@@ -11,17 +11,19 @@ has three parts:
 | --- | --- |
 | `server/` | The application server (npm workspace `@exprsn-ai/server`): Node.js 22, TypeScript strict, Express 5, Socket.io 4, Knex |
 | `web/` | The console the server serves: the prototype's screen modules, wired to the API screen by screen |
+| `e2e/` | Playwright suite across every console screen (its own package, not a workspace member) |
 | `design/prototype/` | The clickable design prototype. It is the specification for behaviour and copy, with example data only |
 | `deploy/` | Dockerfile, Compose (production, development, GPU), Helm chart with NetworkPolicies, bare-metal systemd unit and installer, example identity YAML |
-| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `loadtest.md`, `runbooks/` |
+| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `asvs.md`, `accessibility.md`, `loadtest.md`, `runbooks/` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
 
 Sprints 0 to 9 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
 models, pools and profiles; chat, compare and metering; guardrails, classifiers and flags; knowledge, memory and
 connections; registry, MCP servers, agent runs and scripts; workflows, media and images; training, zones, platform
-operations and federation). Every console screen is live. Sprint 10 (hardening and release) is in progress: the Helm
-chart, supply-chain CI, the streaming load test and the runbooks are in; the ASVS review, accessibility modes, the
-Playwright suite across the console and the 1.0 release remain. Check `Sprints.md` before starting work.
+operations and federation), and Sprint 10 (hardening) is at release candidate `1.0.0-rc.1`: Helm chart, supply-chain
+CI, streaming load test, runbooks, the ASVS L2 review (`docs/asvs.md`), AA/AAA accessibility modes
+(`docs/accessibility.md`) and the Playwright suite in `e2e/`. Every console screen is live. Check `Sprints.md` and the
+known gaps in `docs/security.md` before starting work.
 
 ## Commands
 
@@ -41,6 +43,8 @@ npm run test:integration -w server           # each block runs when its variable
 for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
 helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
+cd e2e && npm ci && CHROME=/opt/pw-browsers/chromium npx playwright test   # console end-to-end suite across every screen
+                                           # (starts its own server on SQLite with the test fakes; see e2e/README.md)
 ```
 
 Local setup: `cp server/.env.example server/.env`, fill `SESSION_SECRET` (`openssl rand -hex 32`) and `DATA_KEY`
@@ -49,7 +53,9 @@ MySQL user stores is `docker compose -f deploy/docker/compose.dev.yml up --build
 that file).
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, build and the console parse check; integration tests
-against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; and a container build that must answer `/readyz`.
+against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; a container build that must answer `/readyz`; npm audit,
+CycloneDX SBOMs and a Trivy image scan; Helm lint and render; the in-process streaming load test; and the Playwright
+console suite.
 
 Tests never need a real Ollama: `server/test/fake-ollama.ts` speaks enough of its API (version, tags, ps, show, pull,
 delete, generate, streamed chat with thinking and tool calls) and is also handy for driving the console by hand
@@ -167,6 +173,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   bell and the workspace switcher (`App.switchWorkspace`), and the `NAV` entries' `perm`, `live` and `sprint` fields.
   A screen without `live: true` (on its `NAV` entry or its `App.register` definition) gets the "Prototype data"
   banner.
+- Accessibility: `App.setA11y` and the `:root[data-a11y="aaa"]` tokens in `app.css` give the Enhanced (AAA) mode;
+  `UI.field` labels its control and dialogs are `inert`-backed with focus return. Keep new markup keyboard-operable and
+  labelled (`docs/accessibility.md`).
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
   streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.

@@ -19,7 +19,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 7 | Registry, MCP servers, agent runs, scripts | Registry, MCP servers, Runs, Scripts | **Done** |
 | 8 | Workflows, media, images | Workflows, Media, Images | **Done** |
 | 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | **Done** |
-| 10 | Hardening and release | all | **In progress** |
+| 10 | Hardening and release | all | **Release candidate** (1.0.0-rc.1) |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -476,13 +476,13 @@ Delivered in `server/src/federation`, `server/src/identity/providers/federated.t
 key rotation; a device is approved from the console; a SAML SP receives a signed assertion; an upstream OIDC user is
 provisioned by group mapping; Kerberos signs a user in with the fake verifier (`federation.test.ts`).
 
-## Sprint 10: Hardening and release (in progress)
+## Sprint 10: Hardening and release (release candidate)
 
 OWASP ASVS level 2 review; dependency scanning and SBOM; load test of the streaming path; Helm chart and
 NetworkPolicies; backup, restore and incident runbooks; accessibility (AA and AAA modes); a Playwright suite across
 every screen; the 1.0 release.
 
-**Progress (infrastructure).** A Helm chart (`deploy/helm/exprsn-ai`, 1.0.0-rc.1) runs the server as a hardened
+**Infrastructure.** A Helm chart (`deploy/helm/exprsn-ai`, 1.0.0-rc.1) runs the server as a hardened
 Deployment (UID 1000, read-only root filesystem, no capabilities, `RuntimeDefault` seccomp, no service-account token,
 startup and liveness probes on `/healthz`, readiness on `/readyz`) with a Service, an Ingress with WebSocket-friendly
 timeouts, a PodDisruptionBudget, an optional HorizontalPodAutoscaler and ServiceMonitor, and a ConfigMap. Every secret
@@ -497,5 +497,59 @@ render and kubeconform job, and an in-process streaming load test; Dependabot wa
 Compose. `server/loadtest/stream.ts` measures the streaming path (time to first token, tokens per second, p50, p95 and
 p99, errors) in-process on the fake Ollama or against a running stack, with the 1.0 targets in `docs/loadtest.md`.
 Runbooks for backup and restore, incident response and upgrades are in `docs/runbooks/`, and `docs/deploy.md` has a
-Kubernetes section. Remaining for Sprint 10: the OWASP ASVS level 2 review, accessibility (AA and AAA modes), the
-Playwright suite across every screen, and the 1.0 release.
+Kubernetes section.
+
+**OWASP ASVS 4.0.3 level 2 review.** [docs/asvs.md](docs/asvs.md) assesses the server and its deployment files
+chapter by chapter (V1 to V14, 71 requirement groups): 37 met, 27 partly met, none wholly unmet and 7 not applicable,
+each with file and test evidence and a follow-up. The review closed the gaps that were safe to fix now, each with a
+test in `server/test/asvs.test.ts`: every `/api` answer is sent with `Cache-Control: no-store`; the public `/readyz`
+and the federation error pages and userinfo no longer echo internal errors (hosts, paths, driver messages); the
+browser sign-in, SAML and upstream callback and Kerberos endpoints outside `/api` are throttled per address; request
+logs redact authorization codes, PKCE verifiers, device codes, SAML messages and CSRF tokens; local-account passwords
+are checked against common and service-named passwords; an admin cannot remove their only second factor when their
+roles (however granted) require one; a password sign-in revokes the session the browser already held; and git
+knowledge sources refuse link-local (cloud metadata) hosts. The larger follow-ups (step-up re-authentication for
+sensitive account changes, self-service password change, a full breached-password check, shared rate limits across
+instances, user revocation of OAuth grants) are listed at the end of the assessment and in the security known gaps.
+
+**Accessibility (AA and AAA modes).** The console now targets WCAG 2.2 AA by default and has an Enhanced (AAA) mode
+(Settings → Appearance → Accessibility: Follow system, Standard (AA), Enhanced (AAA); stored in the browser like the
+theme). Follow system switches to Enhanced when the browser asks for more contrast. Enhanced redefines the colour tokens
+under `:root[data-a11y="aaa"]` for light and dark (text at 7:1 or more on every surface), and adds 44 px targets, a focus
+ring on every focused element, underlined links, no motion, no shadows and longer-lived toasts. Reduced motion is always
+honoured, and forced-colour modes keep state visible. The shell now provides a skip link, `main`/`nav`/`header`
+landmarks, `aria-current` on the active nav item and breadcrumb, focus moved to the heading on screen change and kept on
+re-render, labelled `inert`-backed dialogs with a focus trap, Esc and focus return, keyboard popovers, the command
+palette as an ARIA combobox and listbox, toasts in a live region with Dismiss and pause, `UI.field` labels and hint
+descriptions, `scope` on table headers, keyboard-operable clickable rows, 3:1 field borders (`--control`), 24 px minimum
+buttons, and a single-key shortcut switch (WCAG 2.1.4). axe-core reports no WCAG A/AA violations (and no AAA contrast
+violations in Enhanced) on sign-in and all 26 screens in light and dark; the measured contrast ratios and the known gaps
+are in `docs/accessibility.md`.
+
+**Console end-to-end suite.** `e2e/` holds a Playwright suite (its own package, not a workspace member)
+that drives every console screen against the real server. `e2e/server.ts` builds the services on a temporary SQLite
+file with generated secrets, runs the migrations and the bootstrap, starts the test fakes from `server/test` (Ollama,
+MCP server, script sandbox, ffmpeg, image worker and safety classifier, GPU trainer, ACME directory), seeds a pool with
+approved models and published profiles, a workspace, a flag and a staged training file, creates system admins (one
+with a pre-enrolled authenticator, one that enrols at first sign-in), an ML admin and a member, and serves `web/`.
+A setup project signs every account in through the sign-in screen, including the second-factor step and first-time
+enrolment. One spec per sidebar screen exercises a primary action end to end: a streamed chat answer and a two-column
+comparison from the fake Ollama, an agent run, a knowledge base with an uploaded document, a memory added and
+forgotten, a media job and a generated image, a model import pulled, evaluated and approved by a second admin, a
+profile published, a pool added and a model loaded through the planner, a dataset scrubbed and a confidential training
+job approved by a different admin, a registry agent approved by a second admin, an MCP server registered and a tool
+approved, a workflow published and run, a script run in the sandbox, a connection registered and tested, a guardrail
+live test and a new rule set, a flag confirmed, text classified, a checkpoint signed and the audit chain verified, a
+workspace created, "Test a login", an OIDC client whose secret is shown once, zones seeded and a new zone approved by
+a second system admin, a backup with a restore drill and an ACME certificate, and an API key shown once, used and
+revoked from Settings. Sign-in refusals and the "not permitted" page are covered, and every screen is opened in light
+and dark as a system admin and as a member, on the fresh server and again at the end. Any console error, page error
+or unexpected 4xx/5xx fails the test. 41 tests, about two minutes; CI runs them in the "Console end-to-end
+(Playwright)" job and keeps the report and traces of a failed run. The suite found and fixed a crash on the
+Connections screen when no connection is registered, and a "Test a login" preview that ignored directly granted
+roles.
+
+**Release.** The workspace, the server and the chart are versioned `1.0.0-rc.1`, with the changes since the design
+prototype in [CHANGELOG.md](CHANGELOG.md). Tagging `v1.0.0` and publishing the image and chart are left to the
+maintainers once the release candidate has been deployed and reviewed; the open items are the known gaps in
+[docs/security.md](docs/security.md), [docs/asvs.md](docs/asvs.md) and [docs/accessibility.md](docs/accessibility.md).
