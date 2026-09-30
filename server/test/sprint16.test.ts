@@ -49,8 +49,8 @@ async function finished(h: Harness, messageId: string) {
   }, 8000);
 }
 
-async function apiKey(h: Harness, userId: string) {
-  return (await h.s.apiKeys.create({ tenantId: h.tenantId, userId, name: `k-${ulid()}`, scopes: ['inference:invoke', 'models:read', 'chat:read'] as never[], ttlDays: 30 })).key;
+async function apiKey(h: Harness, userId: string, scopes = ['inference:invoke', 'models:read', 'chat:read', 'knowledge:read', 'memory:write', 'tools:invoke']) {
+  return (await h.s.apiKeys.create({ tenantId: h.tenantId, userId, name: `k-${ulid()}`, scopes: scopes as never[], ttlDays: 30 })).key;
 }
 
 const send = (c: Client, method: 'post' | 'put' | 'patch' | 'delete', url: string, body: object = {}) => c.agent[method](url).set('x-csrf-token', c.csrf).send(body);
@@ -82,19 +82,17 @@ describe('guard model while streaming (B-703): the stream guard', () => {
     const releases: Release[] = [];
     const model = screen('SECRETX', 'block', 15);
     const g = new StreamGuard(allow, undefined, { screen: model, holdback: 1, limiter: new CheckLimiter(4), onRelease: (r) => void releases.push(r) });
-    // window 1 waits for its verdict; generation goes on (hold-back 1)
+    // Nothing is released before its verdict, and the generation never waits for one.
     expect((await g.push('Fine start. ')).text).toBe('');
-    // window 2 is the second waiting window: the stream waits for the verdict on window 1, which releases it
-    expect(await g.push('Then SECRETX here. ')).toMatchObject({ text: '' });
+    expect((await g.push('Then SECRETX here. ')).text).toBe('');
+    expect((await g.push('And more. ')).text).toBe('');
+    await until(() => releases.some((r) => r.halted));
+    // The first verdict released the first window; the next one, covering the rest, blocked.
     expect(releases.map((r) => r.text).join('')).toBe('Fine start. ');
-    // window 3: the verdict over windows 1 and 2 blocks, and nothing after window 1 is ever released
-    const third = await g.push('And more. ');
-    expect(third.halted).toBe(true);
-    expect(releases.some((r) => r.halted)).toBe(true);
+    expect((await g.push('Even more. ')).halted).toBe(true);
     await g.finish();
     expect(g.released).toBe('Fine start. ');
     expect(g.unreleased).toBe('');
-    expect(model.seen.every((t) => !t.includes('And more'))).toBe(true);
   });
 
   it('with hold-back 0 releases at once and lets a verdict stop only what follows', async () => {
@@ -106,18 +104,20 @@ describe('guard model while streaming (B-703): the stream guard', () => {
     expect(g.released).toBe('Then SECRETX here. ');
   });
 
-  it('keeps the last windows for the full check, and a failed check stops release', async () => {
+  it('keeps N - 1 windows of look-ahead, leaves the last ones for the full check, and stops on a failed check', async () => {
     const g = new StreamGuard(allow, undefined, { screen: screen(null, 'block', 5), holdback: 2, limiter: new CheckLimiter(1), onRelease: () => undefined });
     await g.push('One. ');
     await g.push('Two. ');
-    await g.push('Three');
+    await g.push('Three. ');
+    await until(() => g.released === 'One. Two. ');
     await g.finish();
-    expect(g.released + g.unreleased).toBe('One. Two. Three');
+    expect(g.unreleased).toBe('Three. ');
     g.markReleased();
-    expect(g.released).toBe('One. Two. Three');
+    expect(g.released).toBe('One. Two. Three. ');
     const failing = new StreamGuard(allow, undefined, { screen: async () => Promise.reject(new Error('down')), holdback: 1, limiter: new CheckLimiter(1), onRelease: () => undefined });
     await failing.push('A. ');
     await failing.push('B. ');
+    await sleep(10);
     await failing.push('C. ');
     expect(failing.released).toBe('');
     await failing.finish();
@@ -203,6 +203,10 @@ describe('sprint 16: chat and AI depth', () => {
     expect(denied.body.error).toMatchObject({ code: 'knowledge_base_not_found', param: 'X-Exprsn-Knowledge' });
     expect(ollama.requests.filter((x) => x.path === '/api/chat').length).toBe(before);
     expect(JSON.stringify(ollama.requests.filter((x) => x.path === '/api/chat'))).not.toContain('9,900,000');
+    // a key without the knowledge:read scope cannot ask for retrieval
+    const narrow = await apiKey(h, reader.user.id, ['inference:invoke']);
+    const scoped = await request(h.app).post('/v1/chat/completions').set('authorization', `Bearer ${narrow}`).set('x-exprsn-knowledge', finance.id).send({ model: 'general', messages: [{ role: 'user', content: 'x' }] }).expect(403);
+    expect(scoped.body.error).toMatchObject({ code: 'denied_scope', param: 'X-Exprsn-Knowledge' });
     await request(h.app).post('/v1/chat/completions').set('authorization', `Bearer ${key}`).set('x-exprsn-knowledge', 'not-an-id').send({ model: 'general', messages: [{ role: 'user', content: 'x' }] }).expect(400);
     // without the header nothing is retrieved and no extension field is added
     const plain = await request(h.app).post('/v1/chat/completions').set('authorization', `Bearer ${key}`).send({ model: 'general', messages: [{ role: 'user', content: 'Hello' }] }).expect(200);

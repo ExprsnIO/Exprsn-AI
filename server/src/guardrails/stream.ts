@@ -13,12 +13,16 @@ import type { GuardDecision, GuardFinding } from './types.js';
  *
  * Sprint 16 (B-703): with a model screen (the enforced guard-model and classifier rules), each window the
  * deterministic rules passed is also checked by the model screen in the background, over the whole text so far. Checks
- * never block the event loop: they are promises, at most one in flight per stream (a newer check covers every window
- * screened since), and at most `CheckLimiter.max` per instance. With a hold-back of N ≥ 1 a screened window is
- * released only once a clean verdict covers it; up to N windows may wait for that while generation goes on, and the
- * next one waits for the verdict in flight (so a verdict always lands before more text is released). With N = 0 a
- * window is released at once and a verdict can only stop what follows. An unsafe verdict halts or holds like the
- * deterministic rules; a check that fails stops further release (what is left goes out after the full check).
+ * never block the event loop or the generation: they are promises, at most one in flight per stream (a newer check
+ * covers every window screened since), and at most `CheckLimiter.max` per instance. With a hold-back of N ≥ 1 a
+ * screened window is released only once a clean verdict covers it and the N - 1 windows after it (so each released
+ * sentence was judged with that much of what follows); the last windows of an answer go out after the full check on
+ * the finished answer. With N = 0 a window is released at once and a verdict can only stop what follows. An unsafe
+ * verdict halts or holds like the deterministic rules; a check that cannot run stops further release (the rest goes
+ * out after the full check, which decides with the rules' own onError).
+ *
+ * The generation never waits for a verdict: a guard model served from the same busy pool as the answers cannot
+ * deadlock them, it only delays what is shown.
  * The full check still runs once on the finished answer and can replace what was released.
  */
 export const MAX_HOLD_CHARS = 240;
@@ -78,7 +82,7 @@ export class CheckLimiter {
 export interface ModelScreen {
   /** The guard-model and classifier rules over the text so far. */
   screen: Screen;
-  /** Screened windows that may wait for a verdict before `push` waits too (0: release at once). */
+  /** Windows kept back behind the verdicts: a window is released once a verdict covers it and the N - 1 after it (0: at once). */
   holdback: number;
   limiter: CheckLimiter;
   /** Releases (and halts or holds) decided by a verdict that arrived outside `push`. */
@@ -222,11 +226,8 @@ export class StreamGuard {
     if (this.failed) return { text: '', halted: false, held: false, decision: d };
     this.queue.push(w);
     // The last window is not checked here: the full check on the finished answer decides it.
-    if (last) return { text: '', halted: false, held: false, decision: d };
-    this.kick();
-    // Back-pressure: more than N windows waiting means the next one waits for the verdict in flight.
-    while (this.queue.length > m.holdback && !this.stopped() && !this.failed && this.inflight) await this.inflight;
-    return this.stopped() ?? { text: '', halted: false, held: false, decision: d };
+    if (!last) this.kick();
+    return { text: '', halted: false, held: false, decision: d };
   }
 
   /** Releases a window (with its redactions and a verdict's). */
@@ -272,7 +273,8 @@ export class StreamGuard {
     }
     this.checkedTo = upTo;
     let text = '';
-    while (this.queue.length && this.queue[0]!.to <= upTo) text += this.show(this.queue.shift()!, d.action === 'redact' ? d.findings : []);
+    const n = Math.max(1, m.holdback);
+    while (this.queue.length >= n && this.queue[n - 1]!.to <= upTo) text += this.show(this.queue.shift()!, d.action === 'redact' ? d.findings : []);
     if (text) m.onRelease({ text, halted: false, held: false, decision: d });
   }
 }

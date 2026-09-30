@@ -235,7 +235,8 @@ export class GuardrailEngine implements Guardrails {
   /**
    * The model half of the streaming screen (Sprint 16): the enforced rules the deterministic screen leaves out (guard
    * model, classifiers), resolved once. The returned function runs them together on the text so far and records
-   * nothing. A rule that cannot run holds when it fails closed (or the turn is sensitive), as in `check`.
+   * nothing. A rule that cannot run makes the function reject when it would fail closed (the caller stops releasing and
+   * leaves the decision to the full check); one that would fail open is skipped.
    */
   async streamModelScreen(input: Omit<GuardInput, 'text'>): Promise<((text: string) => Promise<GuardDecision>) | null> {
     const agent = typeof input.meta?.agent === 'string' ? input.meta.agent : null;
@@ -247,8 +248,10 @@ export class GuardrailEngine implements Guardrails {
       const findings: Recorded[] = [];
       for (const { a, r } of results) {
         const base = { ruleId: a.rule.id, ruleName: a.rule.name, setId: a.set.id, version: a.version, pending: a.pending, stage: 'enforce' as const };
+        // A rule that cannot run here stops release while streaming; the full check on the finished answer then
+        // decides with the rule's own onError (and records it), so a busy guard model never holds an answer by itself.
         if (r.error) {
-          if (a.rule.onError === 'closed' || sensitive) findings.push({ ...base, action: 'require-approval', detail: `unavailable: ${r.error}`, error: 'closed' });
+          if (a.rule.onError === 'closed' || sensitive) throw new Error(`${a.rule.name}: ${r.error}`);
           continue;
         }
         if (!r.hit) continue;

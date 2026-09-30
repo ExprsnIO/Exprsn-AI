@@ -61,8 +61,8 @@ export interface Guardrails {
   /**
    * The model half of the streaming screen (Sprint 16): the enforced guard-model and classifier rules at a checkpoint,
    * loaded once, as a function over the text so far, for background checks while an answer streams. Nothing is
-   * recorded; a rule that cannot run holds when it would fail closed and is skipped otherwise (the full `check` on the
-   * finished text records it). Null when no such rule applies.
+   * recorded; a rule that cannot run rejects when it would fail closed and is skipped otherwise (the full `check` on
+   * the finished text decides and records it). Null when no such rule applies.
    */
   streamModelScreen?(input: Omit<GuardInput, 'text'>): Promise<((text: string) => Promise<GuardDecision>) | null>;
 }

@@ -3,6 +3,7 @@ import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { ulid } from 'ulid';
 import { ZodError } from 'zod';
 import { LABELS, isLabel, type Label } from '../authz/labels.js';
+import { authorize } from '../authz/policy.js';
 import { authenticate, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import { HttpProblem } from '../http/problem.js';
 import type { Services } from '../services.js';
@@ -128,6 +129,12 @@ export function openAiRoutes(s: Services): Router {
     const body = chatBody.parse(req.body);
     const label = labelOf(req);
     const ext = extensionsOf(req);
+    // Each extension reads more than inference does: it needs its own permission (and scope, for a key or token).
+    for (const [on, action, header] of [[!!ext.knowledge?.length, 'knowledge:read', 'X-Exprsn-Knowledge'], [!!ext.memory, 'memory:write', 'X-Exprsn-Memory'], [!!ext.serverTools, 'tools:invoke', 'X-Exprsn-Tools']] as const) {
+      if (!on) continue;
+      const d = authorize(p, action);
+      if (!d.allow) throw new HttpProblem(403, 'Forbidden', `${header} needs ${action}: ${d.reason}`, { extensions: { code: `denied_${d.step}`, param: header, step: d.step, action } });
+    }
     const ac = new AbortController();
     res.on('close', () => {
       if (!res.writableFinished) ac.abort(new Error('client went away'));
