@@ -49,7 +49,7 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U exprsn"], interval: 3s, timeout: 3s, retries: 30 }
 
   mysql:
-    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+    image: mysql:9.6@sha256:c5df04bee1a42b74a5841c6409e669cf62126cd0416f00c1cea8ab933b9361b9
     environment: { MYSQL_ROOT_PASSWORD: dev-root, MYSQL_DATABASE: portal, MYSQL_USER: exprsn, MYSQL_PASSWORD: exprsn }
     volumes: ["./sql/mysql-partner.sql:/docker-entrypoint-initdb.d/10-partner.sql:ro"]
     ports: ["3306:3306"]
