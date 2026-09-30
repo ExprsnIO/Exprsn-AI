@@ -243,7 +243,12 @@ const base = z.object({
     WEBAUTHN_RP_NAME: z.string().default('Exprsn-AI'),
 
     WEB_ROOT: z.string().default(defaultWebRoot),
-    METRICS_TOKEN: z.string().min(16).optional()
+    METRICS_TOKEN: z.string().min(16).optional(),
+
+    /** Sprint 12, chat: a streaming answer whose instance is silent this long is interrupted (and can be continued). */
+    CHAT_STREAM_LEASE_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+    /** How often each tenant's conversation retention policy is applied. */
+    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

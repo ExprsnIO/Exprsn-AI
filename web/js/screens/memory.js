@@ -9,7 +9,7 @@
   const DAY = 86400000;
   const EXPIRY = [{ value: '', label: 'never' }, { value: '30', label: 'in 30 days' }, { value: '90', label: 'in 90 days' }, { value: '365', label: 'in a year' }, { value: 'date', label: 'on a date…' }];
 
-  const from = (m) => (m.origin === 'chat' ? 'Chat, ' + short(m.createdAt) : m.origin === 'extraction' ? 'Extraction, ' + short(m.createdAt) : m.scope === 'workspace' ? (m.author || 'a member') + ', ' + short(m.createdAt) : m.scope === 'agent' ? 'Agent, ' + short(m.createdAt) : 'You told me, ' + short(m.createdAt));
+  const from = (m) => (m.origin === 'chat' ? 'Chat, ' + short(m.createdAt) : m.origin === 'extraction' ? 'Extraction, ' + short(m.createdAt) : m.origin === 'agent' ? 'Proposed by an agent run, ' + short(m.createdAt) : m.scope === 'workspace' ? (m.author || 'a member') + ', ' + short(m.createdAt) : m.scope === 'agent' ? 'Agent, ' + short(m.createdAt) : 'You told me, ' + short(m.createdAt));
   const expires = (m) => (m.expiresAt ? day(m.expiresAt) : 'none');
   const by = (m) => (m.state === 'proposed' ? (m.origin === 'extraction' ? 'Post-turn extraction job' : (m.author || 'a member') + ', proposed') : m.acceptedBy ? (m.author && m.author !== m.acceptedBy ? m.author + ', accepted by ' + m.acceptedBy : 'You, accepted a proposal') : m.author || 'You');
 
@@ -71,7 +71,7 @@
         : st.tab === 'workspace' ? [esc(m.text), esc(m.type), UI.label(m.label, { sm: true }), esc(m.author || ''), esc(expires(m)), statePill(m.state)]
           : [esc(m.text), esc(m.ownerId || ''), UI.label(m.label, { sm: true }), esc(from(m)), esc(expires(m)), statePill(m.state)]);
 
-      const sourceLink = (m) => (m.source ? '<a href="#" data-goconvo="' + esc(m.source.conversationId) + '">' + esc(m.source.title || 'a conversation') + '</a>' : esc(from(m)));
+      const sourceLink = (m) => (m.source ? '<a href="#" data-goconvo="' + esc(m.source.conversationId) + '">' + esc(m.source.title || 'a conversation') + '</a>' : m.run ? '<a href="#" data-gorun="' + esc(m.run) + '">Agent run ' + esc(m.run.slice(-6).toLowerCase()) + '</a>' : esc(from(m)));
       const scopeText = (m) => (m.scope === 'user' ? 'you, across conversations' : m.scope === 'workspace' ? esc(ws ? ws.name : 'the workspace') : esc(m.ownerId || 'the agent') + ', across runs');
       const inspector = sel ? '<div class="hstack"><div class="eyebrow grow">Selected memory</div>' + statePill(sel.state) + '</div><div style="font-size:15px;font-weight:600">' + esc(sel.text) + '</div>'
         + UI.kv([['Label', UI.label(sel.label, { sm: true }) + (canEdit(sel) && sel.state === 'active' ? ' ' + UI.btn('Relabel', { kind: 'ghost', size: 'xs', attrs: 'data-relabel' }) : '')], ['Source', sourceLink(sel)], ['Written by', esc(by(sel))], ['Expires', esc(sel.expiresAt ? day(sel.expiresAt) : 'never')], ['Backend', esc(sel.backend) + (sel.embedded ? ', with a vector' : '')], ['Scope', scopeText(sel)]], 1)
@@ -111,6 +111,7 @@
       ctx.on('click', '[data-dismissexp]', () => { st.exp = null; ctx.rerender(); });
       ctx.on('click', '[data-goguard]', (e) => { e.preventDefault(); ctx.navigate('guardrails'); });
       ctx.on('click', '[data-goconvo]', (e, t) => { e.preventDefault(); ctx.navigate('chat', { convo: t.dataset.goconvo }); });
+      ctx.on('click', '[data-gorun]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { run: t.dataset.gorun }); });
       ctx.on('click', '[data-pick]', (e, t) => {
         const host = t.closest('.relative'); const ex = host.querySelector('.dropdown'); ctx.$$('.dropdown').forEach((d) => d.remove()); if (ex) return;
         const d = document.createElement('div'); d.className = 'dropdown';

@@ -1,5 +1,6 @@
 import { Router, type Request, type RequestHandler } from 'express';
 import { z } from 'zod';
+import { AGENT_TYPES } from '../../memory/service.js';
 import { actorFrom } from '../../audit/chain.js';
 import { authorize } from '../../authz/policy.js';
 import { LABELS } from '../../authz/labels.js';
@@ -13,7 +14,9 @@ const semver = z.string().trim().regex(/^\d+\.\d+\.\d+(?:-[\w.]+)?$/, 'A semanti
 const entryName = z.string().trim().regex(/^[a-z0-9][a-z0-9_.:-]{0,119}$/i, 'Letters, digits and . _ : -, for example ledger.query');
 const schemaObj = z.record(z.string(), z.unknown());
 const budgets = z.object({ steps: z.number().int().min(1).max(MAX_BUDGETS.steps), tokens: z.number().int().min(100).max(MAX_BUDGETS.tokens), wallSeconds: z.number().int().min(5).max(MAX_BUDGETS.wallSeconds), toolCalls: z.number().int().min(0).max(MAX_BUDGETS.toolCalls) });
-const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), budgets });
+/** An agent's memory policy (Sprint 12): whether its runs may propose memories, of which types, and how many per run. */
+const memoryPolicy = z.object({ write: z.enum(['off', 'propose']).default('off'), types: z.array(z.enum(AGENT_TYPES)).min(1).max(AGENT_TYPES.length).default([...AGENT_TYPES]), maxPerRun: z.number().int().min(1).max(20).default(3) }).strict();
+const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), budgets, memory: memoryPolicy.optional() });
 const skillDef = z.object({ instructions: z.string().max(100_000), tools: z.array(entryName).max(32).default([]) });
 const scriptDef = z.object({ scriptId: z.string().length(26) });
 

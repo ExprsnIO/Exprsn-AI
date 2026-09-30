@@ -100,6 +100,12 @@ export function chatRoutes(s: Services): Router {
     res.json(await chat.stop(principalOf(req), String(req.params.id), String(req.params.mid)));
   });
 
+  /** Continues an interrupted or stopped answer from its stored text (Sprint 12). */
+  r.post('/conversations/:id/messages/:mid/continue', write, invoke, async (req, res) => {
+    const body = parseBody(z.object({ profile: z.string().min(1).max(63).optional(), think }), req.body);
+    res.status(202).json(await wrap(() => chat.continue(principalOf(req), String(req.params.id), String(req.params.mid), body))(req));
+  });
+
   r.get('/conversations/:id/messages/:mid/stream', read, async (req, res) => {
     const q = parseBody(z.object({ after: z.coerce.number().int().min(0).default(0) }), req.query);
     res.json(await wrap(() => chat.resume(principalOf(req), String(req.params.id), String(req.params.mid), q.after))(req));

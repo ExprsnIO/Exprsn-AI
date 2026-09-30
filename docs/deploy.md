@@ -64,6 +64,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `IDENTITY_CONFIG` | — | Path to the identity YAML ([identity.md](identity.md)) |
 | `METRICS_TOKEN` (`_FILE`) | — | Bearer token for `/metrics`; without it `/metrics` is off in production |
 | `LOG_LEVEL` | `info` | pino level |
+| `CHAT_STREAM_LEASE_SECONDS`, `CHAT_RETENTION_SWEEP_MINUTES` | `30`, `60` | Sprint 12: a streaming answer whose instance has been silent this long is marked interrupted (the user can continue it); how often each tenant's conversation retention policy runs (0 turns it off). The stream catch-up buffer uses Redis when `REDIS_URL` is set, otherwise the database |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 

@@ -32,6 +32,7 @@ import { GatewayRepo } from './gateway/repo.js';
 import { AttachmentService } from './chat/attachments.js';
 import { CalcWorker } from './chat/calc.js';
 import { ChatService } from './chat/service.js';
+import { DbStreamStore, RedisStreamStore } from './chat/streams.js';
 import type { Guardrails } from './guardrails/types.js';
 import { createGuardrails, type GuardrailModule } from './guardrails/index.js';
 import { RegistryService } from './registry/service.js';
@@ -184,7 +185,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
-  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine);
+  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine, {
+    store: cfg.REDIS_URL ? new RedisStreamStore(cfg.REDIS_URL, keys, log) : new DbStreamStore(db, keys),
+    flags: guard.flags,
+    notifications,
+    leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000
+  });
+  guard.flags.heldAnswer = (tenantId, messageId) => chat.heldText(tenantId, messageId);
   const registry = new RegistryService(db);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
@@ -226,6 +233,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
+  agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
   chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
@@ -288,6 +296,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       scheduler.stop();
       await denials.flushAll().catch(() => undefined);
       chat.close();
+      await chat.store.close();
       await gateway.stop();
       await calc.close();
       siem.close();
@@ -319,6 +328,14 @@ function registerPlatformJobs(s: Services): void {
     return s.sync.syncTenant(tenantId, ctx.progress);
   });
 
+  // Sprint 12: conversation retention, and answers whose generating instance stopped.
+  s.jobs.register('chat.retention', async (p, ctx) => s.chat.purgeExpired(String(p.tenantId ?? ctx.job.tenant_id)));
+  s.jobs.register('chat.sweep', async (p, ctx) => {
+    const interrupted = await s.chat.sweepInterrupted(String(p.tenantId ?? ctx.job.tenant_id));
+    await s.chat.store.expire(24 * 3_600_000);
+    return { interrupted };
+  });
+
   s.jobs.register('audit.checkpoint', async (p, ctx) => {
     const c = await s.checkpoints.create(String(p.tenantId ?? ctx.job.tenant_id), 'scheduler');
     return c ? { seq: c.seq, hash: c.hash } : { skipped: 'head already checkpointed' };
@@ -334,6 +351,8 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
+  s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
+  s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);
   s.training.schedule(s.scheduler, activeTenants);
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);

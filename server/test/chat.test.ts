@@ -113,10 +113,10 @@ describe('chat', () => {
     expect(usage[0]).toMatchObject({ kind: 'chat', model: 'llama3.1:8b', output_tokens: 4 });
     expect(Number(usage[0].gpu_ms)).toBeGreaterThan(0);
 
-    // a client that missed chunks catches up
-    const resume = (await m.agent.get(`/api/conversations/${sent.body.conversationId}/messages/${sent.body.messageId}/stream?after=2`).expect(200)).body;
+    // a client that missed chunks catches up (text is released a sentence at a time, after screening)
+    const resume = (await m.agent.get(`/api/conversations/${sent.body.conversationId}/messages/${sent.body.messageId}/stream?after=0`).expect(200)).body;
     expect(resume.state).toBe('complete');
-    expect(resume.chunks.map((c: { seq: number }) => c.seq)).toEqual([3, 4]);
+    expect(resume.chunks.map((c: { seq: number }) => c.seq)).toEqual(chunks.map((c) => c.seq));
   });
 
   it('refuses a message that would raise the conversation above its workspace\'s ceiling', async () => {
@@ -147,7 +147,7 @@ describe('chat', () => {
     await seed(h, ollama);
     const m = await member();
     ollama.chatDelayMs = 40;
-    ollama.reply = () => ({ content: 'one two three four five six seven eight nine ten eleven twelve' });
+    ollama.reply = () => ({ content: 'One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten. Eleven. Twelve.' });
     const sent = await m.post('/api/chat', { content: 'count', profile: 'general' }).expect(202);
     await new Promise<void>((resolve) => {
       const check = () => (m.events.some((e) => e.event === 'chat.chunk' && e.data.messageId === sent.body.messageId) ? resolve() : setTimeout(check, 10));
@@ -160,7 +160,7 @@ describe('chat', () => {
     const msg = view.messages[1];
     expect(msg.state).toBe('stopped');
     expect(msg.content.length).toBeGreaterThan(0);
-    expect(msg.content.length).toBeLessThan('one two three four five six seven eight nine ten eleven twelve'.length);
+    expect(msg.content.length).toBeLessThan('One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten. Eleven. Twelve.'.length);
     expect((await h.s.db('usage_records').where({ message_id: sent.body.messageId }))[0].output_tokens).toBeGreaterThan(0);
   });
 

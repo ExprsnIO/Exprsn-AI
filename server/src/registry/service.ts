@@ -33,6 +33,14 @@ export interface AgentDefinition {
   tools: string[];
   skills?: string[];
   budgets: AgentBudgets;
+  /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
+  memory?: AgentMemoryPolicy;
+}
+
+export interface AgentMemoryPolicy {
+  write: 'off' | 'propose';
+  types: string[];
+  maxPerRun: number;
 }
 
 export interface EntryRow {

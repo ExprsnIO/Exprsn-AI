@@ -12,6 +12,7 @@ import * as m010 from './010_zones.js';
 import * as m011 from './011_platform_ops.js';
 import * as m012 from './012_federation.js';
 import * as m013 from './013_account.js';
+import * as m014 from './014_chat_hold.js';
 import * as m016 from './016_federation2.js';
 
 interface Migration {
@@ -34,6 +35,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '011_platform_ops': m011,
   '012_federation': m012,
   '013_account': m013,
+  '014_chat_hold': m014,
   '016_federation2': m016
 };
 
