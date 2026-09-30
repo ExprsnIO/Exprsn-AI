@@ -4,9 +4,10 @@ import { json } from '../db/knex.js';
 import { permissionsFor, rolesRequireMfa, type Permission } from '../authz/permissions.js';
 import { isLabel } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
+import { TOPICS } from '../platform/bus.js';
 import { decodeJwt } from './jose.js';
 import { SigningKeys } from './keys.js';
-import { OidcProvider, type TenantCtx } from './oidc.js';
+import { DENIED_TOPIC, OidcProvider, type DpopInput, type TenantCtx } from './oidc.js';
 import { SamlIdp } from './saml.js';
 import { Upstream } from './upstream.js';
 
@@ -97,7 +98,7 @@ export class FederationService {
    * Builds a principal from an access token issued here (for the API's bearer authentication). Scopes narrow the
    * user's roles; admin roles still need a token whose sign-in had a second factor.
    */
-  async principalFromAccessToken(token: string): Promise<Principal | null> {
+  async principalFromAccessToken(token: string, binding?: { scheme: 'bearer' | 'dpop'; dpop: DpopInput }): Promise<Principal | null> {
     let tid: string;
     try {
       tid = String(decodeJwt(token).claims.tid ?? '');
@@ -108,6 +109,8 @@ export class FederationService {
     if (!t) return null;
     const claims = await this.oidc.verifyAccessToken(t, token).catch(() => null);
     if (!claims) return null;
+    // DPoP-bound tokens need a proof from their key for this request; bearer tokens must not claim DPoP.
+    if (binding && !(await this.oidc.checkBinding(claims, token, binding.scheme, binding.dpop).then(() => true, () => false))) return null;
     // Only tokens minted for this API: a token exchanged or requested for another audience is refused here.
     const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (!aud.includes(`${t.issuer}/api`)) return null;
@@ -120,7 +123,11 @@ export class FederationService {
     // Admin roles need a second factor: a token from a sign-in without one is not accepted for such a user.
     if (!mfa && rolesRequireMfa(roles)) return null;
     const perms = permissionsFor(roles);
-    const scopes = String(claims.scope ?? '').split(' ').map((x) => (x.startsWith('inference:invoke:') ? 'inference:invoke' : x)).filter((x): x is Permission => perms.has(x as Permission));
+    const granted = String(claims.scope ?? '').split(' ');
+    const scopes = granted.map((x) => (x.startsWith('inference:invoke:') ? 'inference:invoke' : x)).filter((x): x is Permission => perms.has(x as Permission));
+    // `inference:invoke:<profile>` binds the token to those profiles, unless it also carries plain `inference:invoke`.
+    const bound = granted.filter((x) => x.startsWith('inference:invoke:')).map((x) => x.slice('inference:invoke:'.length));
+    const profiles = bound.length && !granted.includes('inference:invoke') ? bound : null;
     return {
       kind: 'api_key',
       userId: user.id,
@@ -133,7 +140,8 @@ export class FederationService {
       scopes,
       sessionId: null,
       apiKeyId: null,
-      mfa
+      mfa,
+      profiles
     };
   }
 
@@ -143,6 +151,25 @@ export class FederationService {
     s.chain.useFederatedTester((row, steps) => this.upstream.test(row, steps));
     s.jobs.register('federation.keys', async (p, ctx) => this.keys.scheduled(String(p.tenantId ?? ctx.job.tenant_id)));
     s.jobs.register('federation.purge', async () => ({ deleted: await this.oidc.purge() }));
+    // Sprint 14: back-channel logout. A logout token per client, posted through the internal-host checks; a client
+    // that does not answer 200 is retried by the queue.
+    s.jobs.register('federation.backchannel', async (p, ctx) => {
+      const t = await this.tenantById(ctx.job.tenant_id);
+      const client = t ? await this.oidc.byClientId(t.id, String(p.clientId)) : undefined;
+      if (!t || !client?.backchannel_logout_uri || client.status !== 'active') return { skipped: true };
+      const token = await this.oidc.logoutToken(t, client.client_id, String(p.userId), String(p.sid));
+      const status = await this.upstream.postForm(client.backchannel_logout_uri, { logout_token: token });
+      await s.audit.append({ tenantId: t.id, action: 'oidc.logout.backchannel', kind: 'system', actor: { service: 'federation' }, target: { client: client.client_id, name: client.name }, detail: { status, user: String(p.userId) } });
+      return { delivered: true, status };
+    });
+    // Any instance that revokes a session tells every instance; the claim in sessionsEnded delivers each logout once.
+    s.bus.on<string[]>(TOPICS.sessionsRevoked, async (ids) => {
+      if (!Array.isArray(ids) || !ids.length) return;
+      await this.oidc.sessionsEnded(ids);
+      await this.saml.sessionsEnded(ids);
+    });
+    // A token or grant was denied on some instance: drop this instance's cached access-token checks.
+    s.bus.on(DENIED_TOPIC, () => this.oidc.forgetChecks());
   }
 
   /** Adds this area's recurring schedules: key rotation checks and the purge of expired codes and pending state. */

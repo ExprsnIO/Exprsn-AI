@@ -20,10 +20,13 @@ has three parts:
 Sprints 0 to 9 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
 models, pools and profiles; chat, compare and metering; guardrails, classifiers and flags; knowledge, memory and
 connections; registry, MCP servers, agent runs and scripts; workflows, media and images; training, zones, platform
-operations and federation), and Sprint 10 (hardening) is at release candidate `1.0.0-rc.1`: Helm chart, supply-chain
-CI, streaming load test, runbooks, the ASVS L2 review (`docs/asvs.md`), AA/AAA accessibility modes
-(`docs/accessibility.md`) and the Playwright suite in `e2e/`. Every console screen is live. Check `Sprints.md` and the
-known gaps in `docs/security.md` before starting work.
+operations and federation), Sprint 10 (hardening: Helm chart, supply-chain CI, streaming load test, runbooks, the ASVS
+L2 review in `docs/asvs.md`, AA/AAA accessibility modes in `docs/accessibility.md` and the Playwright suite in `e2e/`)
+produced release candidate `1.0.0-rc.1`, and Sprints 11 to 15 (`Backlog-1.1.0.md`: account self-service and security
+notices; streaming guardrails, held answers and resumable streams; the OpenAI-compatible API, webhooks, prompts,
+sharing, export and billing; the second federation sprint; shared rate limits, key re-wrap, dns-01, blob backups and
+restore) are done in version `1.1.0`. Every console screen is live. Check `Sprints.md` and the known gaps in
+`docs/security.md` before starting work.
 
 ## Commands
 
@@ -37,7 +40,7 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate | backup:create | backup:restore-drill>
+npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate | kms:rewrap | backup:create | backup:restore-drill | backup:restore>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
@@ -99,41 +102,56 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   http-01 route), `admin/federation.ts`, `federation-public.ts` (OIDC, SAML, device and Kerberos endpoints mounted at
   the root, outside `/api`), `health.ts`. The full list is `docs/api.md`.
 - **`identity/`**: the per-tenant store chain, adapters in `providers/`, JIT provisioning (roles, clearance and
-  workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys.
+  workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys;
+  `account.ts` (password change, reset tokens, forced change, step-up freshness, preferences), `breached.ts` (HIBP range
+  API and offline file), `security-alerts.ts` (security notices).
 - **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
   pipeline: role → scopes → tenant → clearance → zone ceiling, plus `explain` for the step-by-step view).
 - **`audit/`**: `chain.ts` (append-only per-tenant SHA-256 hash chain, `onAppend` listeners), `checkpoints.ts`
   (KMS-signed checkpoints, verification), `exports.ts` (clearance-gated CSV by job), `siem.ts`.
 - **`platform/`**: the infrastructure interfaces from `docs/PLAN.md`: `kms.ts` (local, OpenBao transit),
   `datakeys.ts` (per-tenant envelope encryption, `Sealer`), `blob.ts` (filesystem, S3 SigV4), `jobs.ts` (`JobQueue`
-  on the database or BullMQ, `Scheduler`), `bus.ts` (in-process events fanned out over Redis), `notifications.ts`.
+  on the database or BullMQ, `Scheduler`), `bus.ts` (in-process events fanned out over Redis), `notifications.ts`,
+  `email-templates.ts` (escaped plain-text and HTML mail), `ratelimit.ts` (counters in memory or one atomic Redis Lua
+  script, shared by the rate limits, the failed-credential throttle and the denial cap), `rewrap.ts` (`kms:rewrap`),
+  `ntp.ts` (SNTP skew).
 - **`tenancy/`**: `quotas.ts` (limits, `admit` → 429, metering, usage reports), `offboarding.ts`.
 - **`gateway/`**: `ollama.ts` (client, NDJSON streaming, mTLS), `repo.ts` (pools, instances, models, placements,
   profiles and versions), `gateway.ts` (poller, memory planner, anti-thrash, slot leases and queue, alias and canary
   resolution, pull, evaluate and rolling-upgrade jobs).
 - **`chat/`**: `service.ts` (conversation trees, sealed content, generation with streaming, tools, fallback and
   metering), `attachments.ts` (quarantine, type sniffing, ClamAV, classifier), `calc.ts` (the exact-calculation
-  worker thread), `context.ts` (context providers for knowledge and memory, citations).
+  worker thread), `context.ts` (context providers for knowledge and memory, citations with passages), `streams.ts`
+  (resumable streams: sequenced catch-up buffer, heartbeats, interrupted answers), `sharing.ts` (read-only shares and
+  exports).
 - **`guardrails/`**: `types.ts` (the checkpoint seam `s.guardrails.check`, which every feature calls with its
   checkpoint), `engine.ts` (checks, precedence platform > tenant > workspace > agent, fail closed, decisions, replay and
   statistics), `sets.ts` (versioned rule sets, dual control for the baseline), `rules.ts` (rule schema, YAML, diff),
   `regex.ts` (RE2), `detectors.ts` (PII and secrets), `model.ts` (guard-model verdicts), `classifiers.ts` and
-  `linear.ts`, `flags.ts` (the review queue).
+  `linear.ts`, `flags.ts` (the review queue, including held answers), `stream.ts` (sentence-by-sentence screening of
+  streamed output).
 - **`knowledge/`** (sources, extraction, chunking, keyword terms, hybrid search with RRF, blue/green reindex),
-  **`memory/`** (scopes, proposals, forget, export), **`connections/`** (PostgreSQL and OpenSearch drivers, query
-  classification, masking) and **`platform/vectors.ts`** (`VectorStore`: table scan or pgvector).
+  **`memory/`** (scopes, proposals, forget, export), **`connections/`** (PostgreSQL, MySQL and OpenSearch drivers,
+  query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
+  **`platform/vectors.ts`** (`VectorStore`: table scan or pgvector).
 - **`registry/`** (entries, checks, schemas, `dispatch.ts`: the one tool dispatcher for chat, agents, workflows and
   the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs
   with lanes, approvals, budgets, checkpoints and replay), **`scripts/`** (`ScriptRunner`: docker or podman sandbox).
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
-  step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg), **`images/`** (`ImageBackend` for ComfyUI
-  and diffusers, safety classifier, signed provenance in the PNG).
+  step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
+  URLs on `MEDIA_ORIGIN`), **`images/`** (`ImageBackend` for ComfyUI and diffusers, safety classifier, signed
+  provenance in the PNG).
 - **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a
   draft model; `TrainerBackend` over HTTP to the Python worker), **`zones/`** (versioned zone specs with dual control,
   ceilings enforced through `gateway.zoneCeiling`, NetworkPolicy/Compose/nftables rendering), **`ops/`** (signed import
-  bundles, mirrors, the ACME client, backups and restore drills), **`federation/`** (OIDC provider with ES256 keys,
-  SAML IdP with XML-DSig, upstream OIDC/SAML stores, device flow, `KerberosVerifier`; OAuth access tokens are accepted
-  by `authenticate`).
+  bundles, mirrors, the ACME client with `dns.ts` for dns-01, backups and restore drills, `restore.ts` for streamed
+  backups and `backup:restore`, `signers.ts` for signer keys under dual control), **`federation/`** (OIDC provider with
+  ES256 keys, SAML IdP with XML-DSig, upstream OIDC/SAML stores, device flow, `KerberosVerifier`, revocation,
+  introspection, logout, PAR, DPoP, `xmlenc.ts` for encrypted assertions, signing in OpenBao transit; OAuth access
+  tokens are accepted by `authenticate`).
+- 1.1.0 modules: **`openai/`** (the `/v1` OpenAI-compatible API), **`webhooks/`** (signed deliveries as jobs, breaker),
+  **`integrations/hosts.ts`** (per-tenant allowed hosts), **`prompts/`** (the prompt library), **`billing/`** (price
+  books, statements, Stripe push).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -145,8 +163,11 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   signs users in, including TOTP; `fake-ollama.ts` also answers embeddings and guard-model verdicts; `fake-mcp.ts`,
   `fake-runner.ts` (scripts) and `sprint8-fakes.ts` (media runner, image backend, safety classifier) stand in for the
   other external workers; `fake-trainer.ts`, `fake-acme.ts` and `fake-idp.ts` stand in for the training worker, an ACME directory and an
-  upstream identity provider; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents);
-  `server/test/integration/` runs the stores and platform paths against real servers.
+  upstream identity provider; `fake-account.ts` (mail, HIBP range API), `sprint13-fakes.ts` (webhook receiver,
+  Stripe) and `fake-openbao.ts` (transit) serve the 1.1.0 suites; `seed-gateway.ts` and `retrieval-seed.ts` seed pools,
+  models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
+  before SuperTest sees it, so another process cannot shadow the port on macOS. `server/test/integration/` runs the
+  stores and platform paths against real servers.
 
 ### Rules for server code (from `docs/PLAN.md`)
 

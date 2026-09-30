@@ -2,6 +2,7 @@ import { createHash, createPublicKey, sign, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { Config } from '../config/index.js';
+import { dns01Value, type DnsProvider } from './dns.js';
 
 /** Where the client publishes http-01 key authorizations; the server answers them at /.well-known/acme-challenge/<token>. */
 export interface AcmeChallengeStore {
@@ -17,6 +18,10 @@ export interface AcmeIssueInput {
   /** DER-encoded PKCS#10 request (`buildCsr`). */
   csr: Buffer;
   challenges: AcmeChallengeStore;
+  /** Sprint 15: answer dns-01 through this provider instead of http-01. */
+  dns?: DnsProvider | null;
+  /** How long to wait after publishing a TXT record before asking the CA to validate. */
+  dnsWaitMs?: number;
   signal?: AbortSignal;
   progress?: (pct: number, message: string) => Promise<void>;
 }
@@ -26,7 +31,7 @@ export interface AcmeClient {
   readonly directoryUrl: string | null;
   /** Creates the account for this key, or finds the existing one; returns the account URL (the JWS `kid`). */
   register(key: KeyObject, contact?: string): Promise<string>;
-  /** Places an order, answers http-01 for every authorization, finalizes with the CSR and returns the PEM chain. */
+  /** Places an order, answers http-01 (or dns-01) for every authorization, finalizes with the CSR and returns the PEM chain. */
   issue(input: AcmeIssueInput): Promise<{ chainPem: string; orderUrl: string }>;
   revoke(input: { key: KeyObject; kid: string; certDer: Buffer; reason?: number }): Promise<void>;
 }
@@ -59,6 +64,7 @@ interface Order {
 interface Authorization {
   status: 'pending' | 'valid' | 'invalid' | 'deactivated' | 'expired' | 'revoked';
   identifier: { type: string; value: string };
+  wildcard?: boolean;
   challenges: { type: string; url: string; token: string; status: string; error?: { detail?: string } }[];
 }
 
@@ -184,24 +190,36 @@ export class HttpAcmeClient implements AcmeClient {
     let order = created.json<Order>();
     await input.progress?.(20, 'Order placed');
     const published: string[] = [];
+    const records: { domain: string; value: string }[] = [];
+    const type = input.dns ? 'dns-01' : 'http-01';
     try {
       for (const [i, authzUrl] of order.authorizations.entries()) {
         const authz = (await this.post(authzUrl, null, key, kid)).json<Authorization>();
         if (authz.status === 'valid') continue;
-        const ch = authz.challenges.find((c) => c.type === 'http-01');
-        if (!ch) throw new AcmeError(`The CA offered no http-01 challenge for ${authz.identifier.value}.`);
-        await input.challenges.publish(ch.token, keyAuthorization(ch.token, key));
-        published.push(ch.token);
+        const ch = authz.challenges.find((c) => c.type === type);
+        if (!ch) throw new AcmeError(`The CA offered no ${type} challenge for ${authz.identifier.value}.`);
+        const ka = keyAuthorization(ch.token, key);
+        if (input.dns) {
+          // The record goes on the base name, also for a wildcard (the CA reports it without the `*.`).
+          const value = dns01Value(ka);
+          await input.dns.present(authz.identifier.value, value);
+          records.push({ domain: authz.identifier.value, value });
+          if (input.dnsWaitMs) await sleep(input.dnsWaitMs, signal);
+        } else {
+          await input.challenges.publish(ch.token, ka);
+          published.push(ch.token);
+        }
         await this.post(ch.url, {}, key, kid);
         const final = await this.poll<Authorization>(authzUrl, key, kid, (a) => a.status !== 'pending', signal);
         if (final.status !== 'valid') {
-          const why = final.challenges.find((c) => c.type === 'http-01')?.error?.detail;
+          const why = final.challenges.find((c) => c.type === type)?.error?.detail;
           throw new AcmeError(`Authorization for ${authz.identifier.value} is ${final.status}${why ? `: ${why}` : ''}.`);
         }
         await input.progress?.(20 + Math.round((40 * (i + 1)) / order.authorizations.length), `Authorized ${authz.identifier.value}`);
       }
     } finally {
       for (const t of published) await input.challenges.remove(t).catch(() => undefined);
+      for (const r of records) await input.dns?.cleanup(r.domain, r.value).catch(() => undefined);
     }
     order = await this.poll<Order>(orderUrl, key, kid, (o) => o.status !== 'pending', signal);
     if (order.status === 'invalid') throw new AcmeError(`The order is invalid${order.error?.detail ? `: ${order.error.detail}` : ''}.`);

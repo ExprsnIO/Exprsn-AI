@@ -220,6 +220,20 @@ export class ZoneService {
     if (labelRank(poolCeiling) > labelRank(z.spec.maxLabel)) throw forbidden(`The ${zone} zone's ceiling is ${z.spec.maxLabel}; a pool in it cannot be cleared for ${poolCeiling} data.`, { step: 'zone', zoneCeiling: z.spec.maxLabel });
   }
 
+  /**
+   * Sprint 15 (B-415): refuses a data connection or MCP server in a zone it cannot be in, once zones are defined: a
+   * zone that is not defined, the external zone in an air-gapped deployment, or (for a labelled member) a zone whose
+   * ceiling is below the member's label.
+   */
+  async assertMemberFits(kind: 'connection' | 'MCP server', zone: string, label: Label | null): Promise<void> {
+    const zones = await this.current();
+    if (!zones.size) return;
+    const z = zones.get(zone);
+    if (!z) throw new HttpProblem(422, 'Unknown zone', `Zone ${zone} is not defined, so a ${kind} cannot be registered in it. Choose one of ${[...zones.keys()].join(', ')}, or define it under Zones first.`, { extensions: { step: 'zone', zone } });
+    if (isExternal(zone, z.spec)) throw forbidden(`The ${zone} zone stays empty: no zone has internet egress in this deployment, so no ${kind} can be registered in it.`, { step: 'zone', zone });
+    if (label && labelRank(label) > labelRank(z.spec.maxLabel)) throw forbidden(`The ${zone} zone's ceiling is ${z.spec.maxLabel}; a ${label} ${kind} cannot be registered in it.`, { step: 'zone', zone, zoneCeiling: z.spec.maxLabel });
+  }
+
   /** Refuses a placement of data labelled above the pool's zone ceiling. */
   async assertAdmits(pool: Pick<PoolRow, 'name' | 'zone'>, label: Label): Promise<void> {
     const zc = await this.ceilingOf(pool.zone);

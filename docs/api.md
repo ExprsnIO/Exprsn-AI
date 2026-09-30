@@ -490,7 +490,7 @@ workflowId, nodeId, state: running|passed|failed|skipped|waiting|blocked, error,
 | `GET /media/assets` | Assets in the workspace up to the caller's clearance |
 | `PUT /media/assets?name=&label=` (body: the file) | `202` asset in quarantine; an ingest job probes it, refuses it above a cap, strips metadata and draws previews (`media.asset` socket event); `413` above the size cap |
 | `GET /media/assets/:id` | `{id, name, kind: video\|audio\|image, format, size, durationMs, width, height, streams, previews, state: quarantined\|probing\|ready\|refused, label, reason, uploadedByName, jobs}` |
-| `GET /media/assets/:id/content` | The file (supports `Range`) |
+| `GET /media/assets/:id/content` | The file (supports `Range`). Sprint 15: media, previews, outputs and images are served with `Content-Security-Policy: sandbox`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Resource-Policy: same-site`; with `MEDIA_ORIGIN` set these reads answer `302` to a signed URL on that origin instead (below) |
 | `GET /media/assets/:id/previews/:i` | Frame-strip thumbnails (video), the waveform (audio) or a preview (image) |
 | `POST /media/assets/:id/jobs` `{preset, params}` | Queues a preset; parameters are validated against its schema and times against the media (`400`): `202` job |
 | `GET /media/jobs/:id` | `{id, assetId, preset, params, encoder: nvenc\|cpu, state, stage, progress, node, outputs: [{index, name, type, size}], result: {words?, frames?, withheld?, withheldAt?, masked?}, label, error}` |
@@ -503,6 +503,16 @@ Presets: `clip-720p` `{start, end, height: 720|480|1080, crop}`, `transcribe-srt
 `frames-1fps` `{start, end, fps: 1|0.5|2, maxFrames: 48|96|200}` (frames pass the image-safety classifier) and
 `normalise-audio` `{loudness, truePeak}`. Transcripts pass the `media` guardrail checkpoint. Socket event:
 `media.job {id, assetId, preset, state, stage, progress, encoder, error, result}`.
+
+#### Media origin (Sprint 15)
+
+With `MEDIA_ORIGIN` set (a separate host name for the same deployment), `GET /media/assets/:id/content`,
+`/media/assets/:id/previews/:i`, `/media/jobs/:id/outputs/:i` and `/images/:id/image` and `/images/:id/download`
+authorise the caller as before (and audit downloads), then redirect to `GET <MEDIA_ORIGIN>/media-content/<token>`
+(outside `/api`, no session). The token is an HMAC-signed `{resource, tenant, user, workspace, exp}` valid for
+`MEDIA_URL_TTL_SECONDS`; the principal is rebuilt from it and the same clearance and workspace checks run again. The
+media host answers only `/media-content/*` and the health checks (404 for everything else). The console's CSP allows
+that origin for `img-src` and `media-src` only.
 
 ### Images (`images:generate`)
 
@@ -604,10 +614,10 @@ recency. Expired memories are purged hourly from every backend.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/connections` | `[connection]` |
-| `POST /admin/connections` `{name, engine: postgres\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?}` | Registers; the credential is sealed with the tenant key and never returned. Other engines are refused |
+| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
 | `GET /admin/connections/:id` | One connection |
-| `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused |
-| `PUT /admin/connections/:id/credential` `{username, password}` | Replaces the credential |
+| `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused; a new zone or label is checked against the zones as on registration |
+| `PUT /admin/connections/:id/credential` `{username, password}` or `{baoRole}` | Replaces the credential with a sealed account, or switches to OpenBao dynamic credentials for that role; any OpenBao lease this instance holds for the connection is revoked |
 | `DELETE /admin/connections/:id` | Refused (`409`) while a knowledge source reads from it |
 | `POST /admin/connections/:id/test` | `{ok, ms, version, readOnly, detail, health}`; an account with write grants is `degraded` |
 | `POST /admin/connections/:id/schema` | Introspects: `{objects, allowed, outside, connection}` |
@@ -617,10 +627,16 @@ recency. Expired memories are purged hourly from every backend.
 | `POST /admin/connections/:id/sync` | `202 {jobs}`: syncs every knowledge source reading from the connection |
 
 A connection: `{id, name, engine, endpoint, database, zone, label, ops, rowLimit, timeoutS, account, hasCredential,
-tls, allowList, piiColumns, schema: [{name, kind, allowed, columns: [{name, type, pii}]}], schemaAt, health,
+credentialSource: static | openbao, baoRole, lease: {username, expiresAt, renewable} | null, tls, allowList, piiColumns, schema: [{name, kind, allowed, columns: [{name, type, pii}]}], schemaAt, health,
 healthDetail, checkedAt, version, syncs: [{kbId, kb, sourceId, object, lastSyncAt, state, docs}]}`. PII columns (by
 name, or marked) and values the classifier recognises (emails, IBANs, cards, national identifiers, phone numbers)
 are masked in every result as `••••` plus the last four characters.
+
+MySQL (Sprint 15): queries are lexed as MySQL does before classification (backslash escapes, double-quoted strings,
+backtick identifiers, `#` comments); `/*! */` executable comments, `--` without a following space, `LOAD_FILE`,
+`SLEEP`, `BENCHMARK`, lock functions, `INTO OUTFILE`, `LOCK IN SHARE MODE` and `REPLACE` are refused. Reads run in
+`START TRANSACTION READ ONLY` with `MAX_EXECUTION_TIME`; unqualified names resolve to the connection's database for
+the allow-list. MySQL tables are not a knowledge source yet (PostgreSQL only).
 
 
 ## Sprint 9: Training
@@ -739,15 +755,19 @@ default tenant's chain with `actor.service = "platform-ops"`.
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /platform/summary` | `{kms: {kind, ok, detail}, blobs, clock: {skewMs, against}, secretsFromFiles: [{name, file}], scanner, staging, licenceAllow, scanFailSeverity, bundleMaxBytes, acme: {directoryUrl, registered, kid, contact, renewDays, checkMinutes}, backup: {everyMinutes, retain, rpoMinutes, rtoMinutes, drillEveryMinutes, dbClient, alert}, keyRotationDays, bundles: {total, ready, rejected, expedited}, certificates: {total, expiring, nextExpiry}, mirrors: {total, stale}}`. `clock.skewMs` is the difference between this server's clock and the database server's |
+| `GET /platform/summary` | `{kms: {kind, ok, detail}, blobs, clock: {skewMs, against}, secretsFromFiles: [{name, file}], scanner, staging, licenceAllow, scanFailSeverity, bundleMaxBytes, acme: {directoryUrl, registered, kid, contact, renewDays, checkMinutes}, backup: {everyMinutes, retain, rpoMinutes, rtoMinutes, drillEveryMinutes, dbClient, alert}, keyRotationDays, bundles: {total, ready, rejected, expedited}, certificates: {total, expiring, nextExpiry}, mirrors: {total, stale}}`. `clock.skewMs` is the difference between this server's clock and the database server's. Sprint 15 adds `clock.ntp: {server, skewMs, offsetMs, delayMs, stratum, error} \| null` (one SNTP query to `NTP_SERVER`; `offsetMs` is positive when this server is behind), `acme.challenge`, `acme.dnsProvider`, `acme.certDir`, `bundleRequireChecks`, `signerProposals` (pending), `mediaOrigin` and `rateLimits: memory \| redis` |
 
 ### Import signer keys
 
 | Method and path | What it does |
 | --- | --- |
 | `GET /platform/signers` | `[{id, name, algorithm, fingerprint, short, publicKeyPem, state, createdAt, revokedAt, revokeReason}]`; `fingerprint` is the sha256 of the SPKI DER (hex), `short` its first three bytes (`3f:9a:c1`) |
-| `POST /platform/signers` `{name, publicKeyPem}` | Registers the public half of an offline signing key (Ed25519 or ECDSA P-256); 201. 400 for any other key type, 409 when already registered |
-| `POST /platform/signers/:id/revoke` `{reason}` | Revokes it; bundles signed by it fail step 2 from then on, including verified bundles not yet promoted |
+| `POST /platform/signers` `{name, publicKeyPem}` | Registers the public half of an offline signing key (Ed25519 or ECDSA P-256). Sprint 15: under dual control. The first key (none registered) is added at once, 201 with the key; after that it is a proposal, `202 {proposal}`, applied when another platform admin approves. 400 for any other key type, 409 when already registered or already proposed |
+| `POST /platform/signers/:id/revoke` `{reason}` | Proposes revoking it: `202 {proposal}`. Once approved by another platform admin, bundles signed by it fail step 2, including verified bundles not yet promoted |
+| `GET /platform/signers/proposals` | `[{id, action: add \| revoke, keyId, name, algorithm, fingerprint, short, reason, state: pending \| approved \| rejected \| withdrawn, proposedBy, proposedByName, proposedAt, decidedBy, decidedByName, decidedAt, note, mine}]`, newest first |
+| `POST /platform/signers/proposals/:id/approve` `{note?}` | Applies the change: `{proposal, key}`. 403 `step: dual-control` for the proposer; 409 once decided |
+| `POST /platform/signers/proposals/:id/reject` `{note?}` | Another admin declines it (the proposer withdraws instead) |
+| `POST /platform/signers/proposals/:id/withdraw` | The proposer withdraws it (403 for anyone else) |
 
 ### Import bundles
 
@@ -777,7 +797,7 @@ findings, blocking, licences, licenceProblems, staging, promotedTo, kindsWithout
 | `GET /platform/bundles` | Newest first, up to 500 |
 | `GET /platform/bundles/:id` | One bundle |
 | `POST /platform/bundles` `{name, transfer: diode \| removable media \| upload, contents?, expedited?, ticket?}` | Opens an import that waits for its transfer; 201. `name` is lower-case letters, digits, `.`, `-`, `_`. An expedited import needs its security ticket (400 without). 409 for a duplicate name |
-| `PUT /platform/bundles/:id/transfer` | The bundle file as the raw body (`Content-Type: application/octet-stream` or `application/x-tar`, never JSON), capped at `PLATFORM_BUNDLE_MAX_BYTES` (413). Stores it in the blob store at `platform/bundles/<id>/transfer.tar`, records its sha256 and queues verification (`ops.bundle.verify`); 202. Accepted while awaiting a transfer or after a rejection |
+| `PUT /platform/bundles/:id/transfer` | The bundle file as the raw body (`Content-Type: application/octet-stream` or `application/x-tar`, never JSON), capped at `PLATFORM_BUNDLE_MAX_BYTES` (413). Streamed (Sprint 15) into the blob store at `platform/bundles/<id>/transfer.tar` (S3: multipart), hashed on the way; queues verification (`ops.bundle.verify`); 202. Verification and promotion stream the archive too, so memory stays flat whatever the size. Accepted while awaiting a transfer or after a rejection. With `PLATFORM_BUNDLE_REQUIRE_CHECKS`, a missing scanner or staging hook fails steps 4 and 6 instead of skipping them, and `POST …/promote` answers 409 for a bundle whose scan or staging did not pass |
 | `POST /platform/bundles/:id/verify` | Runs the pipeline again (for example after a signer key was added); 202. 409 while promoting, in production or already verifying |
 | `POST /platform/bundles/:id/promote` | Only for `ready to promote`; 202 and an `ops.bundle.promote` job that checks the digest and signature again, writes each file to `mirrors/<kind>/sha256/<digest>` with an index at `mirrors/<kind>/index/<bundle>.json`, and records the promotion on every mirror of that kind |
 | `DELETE /platform/bundles/:id` | Deletes a rejected (quarantined) bundle, or one still awaiting its transfer, and its file; 204. The audit event keeps the reason and both the actual and expected signer fingerprints |
@@ -807,7 +827,7 @@ Views: `{id, name, domains, issuedTo, use, method: acme | tracked, state, status
 | Method and path | What it does |
 | --- | --- |
 | `GET /platform/certificates` | By expiry |
-| `POST /platform/certificates` `{domains, issuedTo?, use?: TLS \| mTLS \| LDAPS \| other, autoRenew?}` | Orders from `ACME_DIRECTORY_URL` (409 when unset) with a fresh ECDSA P-256 key and an http-01 challenge; 202 and an `ops.cert.issue` job. The account is registered on first use (ES256 JWS, key sealed with the platform data key) |
+| `POST /platform/certificates` `{domains, issuedTo?, use?: TLS \| mTLS \| LDAPS \| other, autoRenew?}` | Orders from `ACME_DIRECTORY_URL` (409 when unset) with a fresh ECDSA P-256 key and an http-01 challenge, or dns-01 with `ACME_CHALLENGE=dns-01` (wildcards such as `*.apps.internal` need dns-01; 400 otherwise); 202 and an `ops.cert.issue` job. The account is registered on first use (ES256 JWS, key sealed with the platform data key) |
 | `POST /platform/certificates/track` `{pem, issuedTo?, use?}` | Tracks a certificate issued elsewhere (the CA's own, for example) for expiry; refuses PEM that contains a private key |
 | `PATCH /platform/certificates/:id` `{issuedTo?, use?, autoRenew?}` | Edits the description and renewal |
 | `POST /platform/certificates/:id/renew` | ACME only; a new order with a new key. A failed renewal keeps the certificate in place and notifies system admins |
@@ -820,6 +840,20 @@ The sweep (`ops.cert.sweep`, every `ACME_CHECK_MINUTES`) renews ACME certificate
 system admins (socket and email) once a day about certificates that expire within it without renewal, or within 7
 days despite it. The http-01 answer is public: `GET /.well-known/acme-challenge/:token` (outside `/api`, no session)
 returns the key authorization of an order in flight as `text/plain`, 404 otherwise.
+
+dns-01 (Sprint 15): the TXT record `_acme-challenge.<name>` holds base64url(sha256(key authorization)); it is
+published before the CA is asked to validate and removed afterwards, through `ACME_DNS_PROVIDER`:
+
+- `webhook`: `POST ACME_DNS_WEBHOOK_URL` with `{action: present | cleanup, domain, fqdn, value}` and
+  `X-Exprsn-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" with ACME_DNS_WEBHOOK_SECRET>`; any 2xx
+  means done. The URL must be internal unless `PLATFORM_ALLOWED_HOSTS` names it.
+- `rfc2136`: a DNS UPDATE (RFC 2136) over UDP to `ACME_DNS_RFC2136_SERVER` for the zone `ACME_DNS_RFC2136_ZONE`,
+  signed with the TSIG key `ACME_DNS_TSIG_NAME`/`ACME_DNS_TSIG_SECRET` (HMAC-SHA256 or SHA512); the server's answer
+  must carry a valid TSIG too.
+
+After every issue or renewal the bus event `platform.cert.issued` `{certificate, name, serial, notAfter, renewal}`
+goes to every instance; with `ACME_CERT_DIR` set, each writes `<dir>/<name>/fullchain.pem`, `cert.pem`, `chain.pem`
+and `privkey.pem` (0600) atomically (a wildcard's directory is `_wildcard.<name>`) for its reverse proxy to reload.
 
 ### Data keys
 
@@ -834,6 +868,10 @@ A backup is a logical dump of every table of the application database (one repea
 PostgreSQL and MySQL), gzipped, encrypted with a fresh AES-256-GCM key wrapped by the KMS
 (`<OPENBAO_KEY_PREFIX>platform-backups`), and stored with a KMS-signed manifest (tables, row counts, migrations,
 archive digest, wrapped key) at `platform/backups/<id>.bin` and `.manifest.json`. Opening one needs only the KMS.
+Sprint 15: the dump is read a page at a time and streamed through gzip and the cipher into the blob store (S3:
+multipart), never held in memory; with `PLATFORM_BACKUP_BLOBS` (default on) the blob store (everything but
+`platform/backups/`) is archived too, as a tar sealed under its own key at `platform/backups/<id>.blobs.bin`, listed in
+the manifest as `blobs: {objects, bytes, sha256, …}`. Drills authenticate both archives.
 
 | Method and path | What it does |
 | --- | --- |
@@ -844,7 +882,10 @@ archive digest, wrapped key) at `platform/backups/<id>.bin` and `.manifest.json`
 | `POST /platform/backups/alert/acknowledge` | Acknowledges the "backup target missed" alert (raised by `ops.backup.watch` when the newest backup is older than `PLATFORM_BACKUP_RPO_MINUTES`; cleared by the next backup) |
 
 CLI: `exprsn-ai backup:create` and `exprsn-ai backup:restore-drill [--backup <id>]` do the same without the queue
-(the drill exits 2 when it fails).
+(the drill exits 2 when it fails). Sprint 15: `exprsn-ai backup:restore --backup <id> [--from <dir>] [--no-blobs]
+[--force --confirm "replace all data"]` restores into the configured database and blob store (see
+`docs/deploy.md`), and `exprsn-ai kms:rewrap` moves every data key, checkpoint signature and backup to a new
+key-encryption key.
 
 ## Sprint 9: Federation (Identity screen)
 
@@ -918,3 +959,290 @@ Audit actions: `oidc.authorized`, `oidc.consent.granted`/`denied`, `oidc.token.i
 `federation.test_login`, and `auth.login*` with `target.kind` `oidc`, `saml` or `kerberos`.
 
 Access tokens whose audience is `<issuer>/api` are also accepted by the console API as `Authorization: Bearer <jwt>`, like API keys: the token's scopes narrow the user's roles, the client, grant, user and tenant must still be active, and an admin-role user's token must carry a second factor in `amr`.
+
+## Sprint 14: Federation, second part
+
+Revocation and introspection, logout, pushed and signed authorization requests, DPoP, re-authentication, SAML single
+logout and encrypted assertions, and signing in OpenBao transit. Discovery now advertises `introspection_endpoint`,
+`end_session_endpoint`, `pushed_authorization_request_endpoint`, `request_parameter_supported`,
+`request_uri_parameter_supported`, `request_object_signing_alg_values_supported` and
+`dpop_signing_alg_values_supported` (`ES256`, `RS256`), and front- and back-channel logout support (with `sid`).
+
+### Protocol endpoints (outside `/api`, under the tenant's issuer)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /oauth/revoke` (form, client auth) `token, token_type_hint?` | RFC 7009. A refresh token revokes its family; an access token goes on the deny-list (by `jti`, kept until it would have expired), so the API, `userinfo` and introspection refuse it at once on every instance. Only the client the token was issued to can revoke it; anything else answers 200 without effect |
+| `POST /oauth/introspect` (form, confidential client auth) `token, token_type_hint?` | RFC 7662. `{active: true, token_type: Bearer\|DPoP\|refresh_token, scope, client_id, sub, username, iss, aud?, iat, exp, jti?, cnf?, auth_time?, act?, tenant}` for a live token issued to the calling client; `{active: false}` for anything revoked, expired, unknown or issued to another client. Public clients get `401 invalid_client` |
+| `POST /oauth/par` (form, client auth) authorization parameters or `request` | RFC 9126: validates the request as `/oauth/authorize` would and answers `201 {request_uri: "urn:ietf:params:oauth:request_uri:…", expires_in: 60}`. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in (ten minutes) |
+| `GET /oauth/authorize` | Also: `request_uri` (a pushed request, with `client_id`), `request` (a request object signed ES256 or RS256 with a key in the client's registered `jwks`; `iss` the client, `aud` the issuer, `exp` within an hour, `jti` single use; only its parameters are used), `prompt=login` and `max_age` (the page asks to sign in again: it signs the session out and resumes after a new sign-in; with `prompt=none` the answer is `login_required`). A client with `parRequired` must push its requests |
+| `POST /oauth/token` | Also: a `DPoP` header (RFC 9449 proof: `typ dpop+jwt`, ES256 or RS256 with the public JWK in the header, `htm` POST, `htu` the token endpoint, `iat` within `DPOP_PROOF_MAX_AGE_SECONDS`, single-use `jti`) binds the tokens to the key: `token_type: DPoP` and `cnf.jkt` in the access token; the refresh token only refreshes with a proof from the same key. `invalid_dpop_proof` when a proof is bad, or missing for a client with `dpopRequired` |
+| `GET/POST /oauth/userinfo` | Also accepts `Authorization: DPoP <token>` with a proof (`htu` the userinfo endpoint, `ath` the token hash); a DPoP-bound token sent as Bearer is refused |
+| `GET /oauth/logout`, `POST /oauth/logout` (form) `id_token_hint?, client_id?, post_logout_redirect_uri?, state?` | RP-initiated logout. The hint (an ID token from this issuer, expired or not) names the client and user; `post_logout_redirect_uri` must be registered exactly for that client. Answers a confirmation page whose form posts back (`handle, decision=logout\|stay`) from our origin, so the SameSite=Strict session cookie is present and a cross-site sign-out is impossible. Signing out ends the session (and its refresh tokens), then shows a page that loads each front-channel logout URL (`?iss=&sid=`) in hidden frames (CSP `frame-src` allows exactly those origins, on this page only) and continues to the redirect with `state`. When the session came from an upstream SAML IdP with a logout endpoint, the browser goes there first (signed LogoutRequest) and comes back through `/federation/saml/slo`. A hint for another user is refused |
+| `GET /saml/metadata` | Also lists `SingleLogoutService` (both bindings) at `<issuer>/saml/slo` |
+| `GET /saml/slo?SAMLRequest=&RelayState=&SigAlg=&Signature=`, `POST /saml/slo` (form) | IdP single logout. A signed LogoutRequest from a registered SP (a certificate is required) ends the sign-in sessions it names by NameID and SessionIndex, tells the other SPs (HTTP-Redirect LogoutRequests) and OIDC clients (front-channel) in frames, and answers with a signed LogoutResponse over the SP's binding. A `SAMLResponse` here (an SP answering a frame) just shows the signed-out page |
+| `GET /federation/saml/slo`, `POST /federation/saml/slo` (form) | SP single logout for upstream SAML IdPs: a signed LogoutRequest from the provider ends the sessions it names and gets a LogoutResponse signed with the tenant's SAML key; a LogoutResponse to a logout started here continues to the relying party |
+| `GET /federation/saml/:providerId` | Our SP metadata now carries a signing certificate (the tenant's SAML key), an encryption certificate (AES-256-GCM, RSA-OAEP) and `SingleLogoutService` |
+| `POST /federation/saml/acs` | Also accepts one `EncryptedAssertion` (AES-GCM content, RSA-OAEP key transport with SHA-1 or SHA-256; CBC and RSA 1.5 refused), decrypted with the tenant's SP key, then checked as before |
+
+Access tokens carry `jti`; ID tokens from a browser session carry `sid`. Back-channel logout tokens (`typ
+logout+jwt`, `events` with `http://schemas.openid.net/event/backchannel-logout`, `sid`, `sub`, two minutes) are posted
+as `logout_token` to each client with a `backchannelLogoutUri` that the session signed in to, by a
+`federation.backchannel` job (retried; the host must pass the upstream checks: internal, or in
+`FEDERATION_ALLOWED_HOSTS`). This happens whenever the session ends: sign-out in the console or at `/oauth/logout`, a
+revocation by the user or an admin, a disabled user or tenant.
+
+The console API accepts `Authorization: DPoP <token>` with a `DPoP` proof whose `htu` is `PUBLIC_URL`'s origin plus the
+request path.
+
+### Me
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /me/grants` | The applications the caller consented to or holds live tokens for: `[{clientId, name, type, scopes, consentedAt, consentExpiresAt, activeGrants, lastUsedAt, createdAt}]` |
+| `DELETE /me/grants/:clientId` (browser session) | Revokes the caller's grant to that application: the consent is forgotten, every refresh-token family is revoked, and every access token issued so far is refused (deny-list); `{revoked, clientId, consents, refreshTokens}`. The user gets a `security` notification (also on a new consent) |
+
+### Admin (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/federation` | Also `signingInKms` (true with `KMS_PROVIDER=openbao`), `idp.sloUrl`, `upstream.sloUrl` |
+| `POST /admin/federation/oidc/clients`, `PATCH …/:id` | Also `postLogoutRedirectUris` (exact, like redirect URIs), `frontchannelLogoutUri`, `backchannelLogoutUri` (https, or http on loopback), `jwks` (a JWK set of one to five public EC P-256 or RSA-2048+ keys for request objects; `null` removes it), `parRequired`, `dpopRequired`. The client view adds these (keys as `{kid, kty}`) |
+| `GET /admin/federation/saml/sps`, `POST …/parse` | Also `sloUrl`, `sloBinding: redirect\|post`, `encryptionCert` and `encryptAssertions` (parse: `encryptionCertificate`, `encryptionCert`) |
+| `POST /admin/federation/saml/sps` `{…, encryptAssertions?}` | Assertions are encrypted by default for an SP whose metadata has a valid encryption certificate |
+| `PATCH /admin/federation/saml/sps/:id` `{…, encryptAssertions?}` | Turns encryption on or off (`409` without a valid encryption certificate) |
+
+Audit actions: `oidc.token.revoked` (`detail.token`), `oidc.par.pushed`, `oidc.reauth.required`,
+`oidc.grant.revoked_by_user`, `oidc.logout.backchannel`, `auth.logout` (`detail.via: end_session`), `saml.slo`,
+`saml.slo.upstream`, `saml.slo.refused`.
+
+## Sprint 11: Account self-service
+
+Password routes apply to accounts in the tenant's local user store. For an LDAP, SQL or upstream account the password
+is kept by the directory: the change route answers `409 Managed by the directory` naming the stores, and the admin
+reset answers `409`.
+
+### Me
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /me` | Now also returns `preferences {a11y: system\|aa\|aaa}`, `password` (`{managedHere: true, mustChange}` or `{managedHere: false, stores}`) and `stepUp {windowSeconds, authAt, methods}` (`password`, `totp`, `webauthn`) |
+| `PATCH /me/preferences` `{a11y}` | Stores the accessibility mode with the account (it follows the user to every browser) |
+| `POST /me/password` `{currentPassword, newPassword}` | Changes the local password. A wrong current password counts toward the sign-in lockout (`400 Wrong password` with `attempts_remaining`, `429` once locked); the new one must differ from the current one (`reason: reuse`), pass the policy (`reason: policy`) and the breached-password check (`reason: breached`). Ends every other session and every OAuth grant of the user: `{changed, stage, sessionsRevoked, grantsRevoked, csrf?}`. Also serves a session in the `password` stage, which becomes `active` under a new cookie (`csrf` is then the new token) |
+| `POST /me/step-up` `{password}` or `{code}` or `{response}` | Confirms the signed-in user with the password (checked by the store that owns the account), a TOTP code or a passkey assertion; wrong answers count toward the lockout. `{authAt, windowSeconds, method}` |
+| `POST /me/step-up/webauthn/options` | Passkey assertion options for step-up |
+
+Step-up: `POST /me/api-keys`, `DELETE /me/mfa/:id` and `POST /me/mfa/recovery-codes` need a password or factor check
+within `STEPUP_WINDOW_SECONDS` (signing in counts). Outside it they answer `401` with title `Step-up required` and
+`step_up: true`; the session itself stays valid. The password change is its own re-authentication (it requires the
+current password).
+
+### Sign-in (`/api/auth`, public)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /auth/password/forgot` `{identifier, tenant?}` | Username or email. Always `202 {accepted, detail}`, whether or not a matching local account with an email address exists; when one does, a single-use link valid for `PASSWORD_RESET_MINUTES` is emailed. `429` after `PASSWORD_RESET_PER_HOUR` requests an hour for one identifier, or four times that from one address; a third, per-account limit silently stops further emails |
+| `POST /auth/password/reset` `{token, password}` | Sets the password with a reset, admin or invite link. `400 Invalid link` for an unknown, used or expired token. Ends every session and OAuth grant and lifts a sign-in lockout: `{reset, username, tenant}` |
+
+The link is `<PUBLIC_URL>/#/signin?reset=<token>[&tenant=<slug>]`: the token travels in the URL fragment, which
+browsers never send to a server, and the console removes it from the address bar as soon as it loads. Only
+`sha256(token)` is stored.
+
+`POST /auth/login` and the second-factor routes answer `stage: password` when the account's password was set or reset
+by an admin. In that stage the session reaches only `POST /me/password` and `/auth/*` (every other route answers
+`401` with `stage: password`); the second factor, when the account has one, is asked first.
+
+### Users (`users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/users` | Now takes `mustChange` (default `true`: the initial password must be changed at first sign-in), or `invite: true` with an `email` and no `password` to email a single-use link valid for `PASSWORD_INVITE_HOURS` (`{…, invited}`; `409` without an email address or SMTP) |
+| `GET /admin/users/:id` | Now also returns `password {local, mustChange}` |
+| `POST /admin/users/:id/password` `{mode: temporary, password}` or `{mode: link}` | Admin reset of a local account (not your own; only for someone whose roles you could grant). The old password stops working at once and every session and OAuth grant ends. `temporary` sets a password the user must change at next sign-in; `link` emails a single-use link (the admin never sees it). `{mode, mustChange, linkSent, sessionsRevoked, grantsRevoked}` |
+
+Audit actions: `password.changed`, `password.change.failed`, `password.reset.requested`, `password.reset.ignored`,
+`password.reset.completed`, `password.invite.accepted`, `password.breach_check.unavailable`, `user.password_reset`,
+`user.invited`, `auth.step_up`, `auth.step_up.failed`, `auth.login.pending_password`, `user.preferences.updated`.
+
+Security notices (`kind: security`, console and email, never carrying a secret) go to the account owner when their
+password is changed or reset, a factor is added or removed or all are reset by an admin, recovery codes are
+regenerated, an API key is created or revoked, or their sessions are signed out.
+
+## Sprint 12: Chat (streaming guardrails, held answers, resumable streams, agent memory, citations, retention)
+
+### Streaming and output guardrails
+
+Answer text is not sent token by token. It is buffered to a sentence end or line break (or 240 characters without
+one), the whole answer so far is screened by the enforced deterministic `model-output` rules (patterns, PII and
+secret detectors, allow-lists, label, budget and meta rules), and only the part that passed goes out as `chat.chunk`
+(thinking is screened the same way). A `block` stops the generation and nothing more is sent; a `require-approval`
+sends nothing more and lets the answer finish for review; a `redact` sends the new text with the spans replaced.
+The full `model-output` check (guard model and classifiers included) still runs once on the finished answer, as
+before. When no deterministic rule applies at `model-output`, deltas stream as they arrive.
+
+### Held answers (`require-approval` at `model-output`)
+
+The answer is stored whole and sealed with `state: held`; the owner's view and catch-up show `state: held` with empty
+content, thinking, tools and citations, and `chat.status {state: held}` / `chat.done {state: held}` say so. A flag of
+`kind: hold` (action `require-approval`) goes to the review queue.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /flags/:ref` | For a `hold` flag also `held: {messageId, state, content}` (the full answer), or `null` when it is gone; withheld above the reviewer's clearance like the rest |
+| `POST /flags/:ref/decide` `{decision: approved\|rejected, reason?}` | Only for `hold` flags (`409` otherwise; `confirmed`/`dismissed` are refused on them). `approved`: the answer becomes `complete` and visible; `rejected`: it becomes `withdrawn` with the text "This answer was withdrawn after review." Either way the sequence number rises, the owner gets `chat.released {conversationId, messageId, state, seq}` and a notification, and the message's `guard.review` records the decision. A reviewer cannot decide on an answer in their own conversation (`403`, `step: dual-control`). An approval counts as a false positive of the rule, a rejection as a true positive. Audit: `chat.held`, `chat.hold.approved`, `chat.hold.rejected` |
+
+Held and withdrawn answers are never sent back to the model as history.
+
+### Resumable streams
+
+Each chunk carries a sequence number and goes out on the bus. The generating instance writes the chunks, sealed, in
+small batches to a shared catch-up buffer (Redis when `REDIS_URL` is set, the `chat_stream_chunks` table otherwise),
+stores a snapshot of the released text every two seconds and then drops the batches the snapshot covers. It renews
+a heartbeat on the answer; an answer whose heartbeat is older than `CHAT_STREAM_LEASE_SECONDS` is marked
+`interrupted` (by whichever instance notices first: a catch-up, a conversation view, or the `chat.sweep` job), with
+`chat.done {state: interrupted}` and the audit action `chat.interrupted`. An instance shutting down marks its own
+answers interrupted.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /conversations/:id/messages/:mid/stream?after=<seq>` | From any instance. Streaming: `{state, seq, chunks}` with the chunks after `after`, or, for a client behind the last snapshot, `{state, seq, content, thinking, tools}` (the snapshot with the buffered chunks after it applied). Otherwise the stored message as before |
+| `POST /conversations/:id/messages/:mid/continue` `{profile?, think?}` (`chat:write`, `inference:invoke`) | For an `interrupted` or `stopped` answer: generates the rest in place (same message; sequence numbers continue). The model gets the stored text as the start of its turn. `202 {messageId, profile, model, think, from}`; `409` for any other state. The finished answer passes the output check as a whole; usage adds to the stored totals |
+
+### Agent memory write-back
+
+An agent definition may carry `memory: {write: off|propose, types: [progress, quirk], maxPerRun: 1-20}` (default
+off). With `propose`, runs are offered a built-in `remember` tool `{text, type}`; each call becomes a `do` step titled
+`remember` that proposes an `agent`-scope memory (owner: the agent's name, `origin: agent`, `source: {runId}`) through
+the memory checkpoint (tenant policy, the credential ban and the `memory` guardrail rules with `meta.agent`). The
+policy's type list and per-run cap, a text a curator rejected before, and a duplicate are refused as a `denied` step
+whose error the model sees. Proposals wait for a knowledge curator (`POST /memory/:id/accept`); memory views carry
+`run` for them. Audit: `memory.proposed`.
+
+### Citations
+
+Knowledge citations on an answer now also carry `span: [start, end]` (within the cited chunk) and `passage` (that
+text), stored sealed with the answer. A reader whose clearance is below a citation's label gets `passage: null,
+span: null, restricted: true`. Memory citations carry no passage.
+
+### Conversation retention (`tenant:manage`)
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /admin/tenants/:tid/retention` | `{conversationDays, updatedBy, updatedAt, lastRunAt, lastPurged, sweepMinutes}`; `conversationDays: null` keeps conversations until their owners delete them |
+| `PUT /admin/tenants/:tid/retention` `{conversationDays: 1-3650 \| null}` | Sets the policy. Audit: `tenant.retention.updated` |
+| `POST /admin/tenants/:tid/retention/run` | Applies it now as the `chat.retention` job: `202 {jobId}`; `409` without a policy. Audit: `tenant.retention.run` |
+
+The `chat.retention` job (every `CHAT_RETENTION_SWEEP_MINUTES` per tenant) deletes conversations not updated for more
+than the period, with their messages, catch-up buffers and attachments no remaining message uses; conversations with
+an answer still generating wait for the next run. Each purge is audited as `chat.retention.purged` with
+`{days, before, conversations, messages, attachments}`.
+
+## Sprint 13: Integrations
+
+### OpenAI-compatible API (`/v1`, outside `/api`)
+
+Bearer credentials only: an API key or an OAuth access token (`Authorization: Bearer …`). The session cookie is not
+read, so no CSRF token is needed. Every route needs `inference:invoke`. Errors use OpenAI's shape
+`{error: {message, type, code, param}}` (`invalid_request_error`, `authentication_error`, `permission_error`,
+`rate_limit_error`, `api_error`) instead of problem+json; a quota refusal is `429` with `code: insufficient_quota` and
+`Retry-After`, and a guardrail refusal is `400` with `code: content_filter`. `X-Data-Label` (default `internal`) is
+the request's data label, checked against the caller's clearance, the workspace ceiling (`X-Workspace` picks the
+workspace) and the profile's label, as in chat. Usage is metered as kind `api` (chat) or `embed`, with the API key.
+
+| Route | Notes |
+| --- | --- |
+| `GET /v1/models`, `GET /v1/models/:id` | Published profiles and aliases the caller is cleared for (`id` is the profile name), plus approved embedding models: `{object: 'list', data: [{id, object: 'model', created, owned_by, meta}]}` |
+| `POST /v1/chat/completions` `{model, messages, tools?, tool_choice?, temperature?, top_p?, max_tokens? \| max_completion_tokens?, stop?, seed?, presence_penalty?, frequency_penalty?, reasoning_effort?, stream?, stream_options?: {include_usage}}` | Roles `system`, `developer`, `user`, `assistant` (with `tool_calls`), `tool` (`tool_call_id`); images only as `data:` URLs for vision models. Every non-assistant message passes the `user-input` checkpoint (a redaction is what the model sees) and the answer the `model-output` checkpoint (a block replaces it with a notice and `finish_reason: content_filter`). The profile's system prompt goes first. Tool calls are returned to the client (`finish_reason: tool_calls`), never run on the server. Non-streaming: a `chat.completion`. Streaming: server-sent events of `chat.completion.chunk` objects (role, content, indexed `tool_calls`, the finish reason, then `usage` when asked) ending with `data: [DONE]`; with `OPENAI_STREAM_MODE=checked` (default) the content arrives after the output check, with `live` token by token. Nothing is sent before generation, so refusals are ordinary HTTP errors; an error after the stream started is a `data: {error}` event |
+| `POST /v1/embeddings` `{model, input: string \| string[] (≤ 256), encoding_format?: float \| base64}` | An approved catalogue model with the `embedding` capability, through the gateway; inputs pass the `user-input` checkpoint. `dimensions` is refused |
+
+### Outbound webhooks (`webhooks:manage`) and allowed hosts (`tenant:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/integrations/hosts` | The tenant's outbound allow-list `{hosts, updatedAt, operator: {webhooks, workflows}}` |
+| `PUT /admin/integrations/hosts` `{hosts}` | Hostnames, `*.domain`, addresses or CIDR networks. When not empty, workflow HTTP steps and webhooks may only reach hosts on it (on top of the internal-address rules). Audited `tenant.hosts.updated` |
+| `GET /admin/webhooks` | `{webhooks: [{id, name, url, events, maxLabel, state, breaker, failures, openedAt, retryAt, lastDeliveryAt, lastStatus}], events: [{pattern, description}], settings}` |
+| `POST /admin/webhooks` `{name, url, events, maxLabel?}` | `events` are audit action names, prefixes ending in `.*`, or `*`. Besides audit actions: `job.succeeded`/`failed`/`cancelled`, `flag.<action>` and `approval.requested`. The endpoint is checked (internal only unless `WEBHOOK_ALLOWED_HOSTS`, never link-local, and the tenant's list): `422` otherwise. Returns the webhook and its `secret`, once |
+| `PATCH /admin/webhooks/:id` `{name?, url?, events?, maxLabel?, state?: active \| disabled}` | Re-enabling or a new URL closes the breaker |
+| `POST /admin/webhooks/:id/secret` | Rotates the signing secret: `{secret}`, once |
+| `DELETE /admin/webhooks/:id` | With its delivery log |
+| `POST /admin/webhooks/:id/test` | Queues a `webhook.ping` delivery: `202` |
+| `GET /admin/webhooks/:id/deliveries?state=&limit=` | `{deliveries: [{id, event, eventId, label, state: pending \| succeeded \| failed, attempts, statusCode, error, nextAttemptAt, durationMs, replayOf, createdAt, deliveredAt}], withheld}`; deliveries above the caller's clearance are counted, not listed |
+| `POST /admin/webhooks/:id/deliveries/:did/replay` | The same body again, as a new delivery: `202` |
+
+A delivery is a `webhook.deliver` job: `POST` of `{id, type, tenant, label, createdAt, data}` with headers
+`X-Exprsn-Event`, `X-Exprsn-Timestamp` (Unix seconds), `X-Exprsn-Delivery-Id` and
+`X-Exprsn-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>.<body>" with the secret>`. Any `2xx` is success; other
+answers and network errors are retried with exponential backoff (`WEBHOOK_RETRY_BASE_MS`, doubling) up to
+`WEBHOOK_MAX_ATTEMPTS`; a refused host fails at once. `WEBHOOK_BREAKER_THRESHOLD` consecutive failures open the
+endpoint's breaker: deliveries wait `WEBHOOK_BREAKER_COOLDOWN_MS`, then one trial closes or reopens it. Events above a
+webhook's `maxLabel` are never queued; each event is delivered once per webhook (the event id is the dedupe key).
+Audit actions: `webhook.created`/`updated`/`enabled`/`disabled`/`deleted`/`tested`, `webhook.secret.rotated`,
+`webhook.delivery.replayed`, `webhook.breaker.opened`/`closed`.
+
+### Prompt library (`chat:read` to use; `prompts:manage` to write)
+
+| Route | Notes |
+| --- | --- |
+| `GET /prompts?retired=` | `{canManage, templates: [{id, name, description, workspaceId, workspace, scope, label, state, version, publishedVersion}]}`: tenant-wide and the caller's workspaces, up to their clearance; readers see published and deprecated templates only |
+| `GET /prompts/:id` | The template and `versions: [{version, body, variables: [{name, description, default}], notes, createdBy, createdAt}]` (readers: the published version only) |
+| `POST /prompts` `{name, description?, workspaceId?, label?, body, variables?, notes?}` | A draft, version 1. `{{name}}` marks a variable; described variables must appear in the body |
+| `PATCH /prompts/:id` `{name?, description?, label?}` | |
+| `POST /prompts/:id/versions` `{body, variables?, notes?}` | A new version; chat keeps using the published one until it is published |
+| `POST /prompts/:id/state` `{state: published \| deprecated \| retired, version?}` | Lifecycle `draft → published → deprecated → retired`; publishing names the version (default the latest) |
+| `POST /prompts/:id/render` `{variables, version?}` | `{text, template: {id, name, version, label, state}}`; missing variables are a `400` listing `missing`. Values are inserted literally in one pass |
+
+Audit actions: `prompt.created`, `prompt.updated`, `prompt.version.added`, `prompt.published`/`deprecated`/`retired`.
+
+### Conversation sharing and export
+
+| Route | Notes |
+| --- | --- |
+| `GET /conversations/:id/shares` (`chat:read`, owner) | `[{id, kind: user \| workspace \| link, userName, workspaceName, expiresAt, state: active \| revoked \| expired, lastViewedAt}]` |
+| `GET /conversations/:id/share-targets?q=` (`chat:read`, owner) | People and workspaces of the tenant, each with `cleared` for the conversation's label |
+| `POST /conversations/:id/shares` (`chat:write`, owner) `{kind: user, userId}` \| `{kind: workspace, workspaceId}` \| `{kind: link, expiresInHours (1–720)}` | A person must be cleared for the label and a workspace's ceiling must hold it (`403`). A link returns `token` and `url` once; only its HMAC is stored. Audited `conversation.shared` |
+| `DELETE /conversations/:id/shares/:shareId` | Revokes at once. Audited `conversation.share.revoked` |
+| `GET /shared-conversations` (`chat:read`) | What is shared with the caller: `[{conversationId, shareId, kind, title, label, owner, sharedAt, updatedAt}]` |
+| `GET /shared-conversations/:id` | The active branch, read only: `{id, title, label, owner, messages: [{id, role, content, state, profile, model, label, citations, tools, createdAt}], readOnly: true}`. Checked on every read: a live share and clearance for the label as it is now |
+| `POST /shared-links/open` `{token}` | The same view through a link, for a signed-in user of the same tenant (another tenant's link is `404`). Audited `conversation.share.opened` |
+| `POST /conversations/:id/exports` `{format: markdown \| json}` (`chat:read`) | For the owner or a reader, within their clearance: a `conversation.export` job (`202`). Audited `conversation.export.requested` |
+| `GET /conversation-exports?conversation=`, `GET /conversation-exports/:id` | The caller's own exports: `{id, conversationId, format, label, state, file, bytes, error, jobId, createdAt}` |
+| `GET /conversation-exports/:id/download` | The file, if the caller can still read the conversation at its label. Audited `conversation.export.downloaded` |
+
+An export holds the active branch with its sources (citations above the requester's clearance are left out), passes
+the `export` guardrail checkpoint (a block fails it, a redaction is what is written) and is sealed with the tenant key
+in the blob store. Answers that are not complete or stopped (streaming, failed, held) are never shown to readers or
+exported. Audit action on completion: `conversation.export.ready`.
+
+### Billing (`billing:read` to read; `billing:manage` to change)
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/billing/price-books` | `{books: [{id, name, currency, isDefault, state, items}], meters, provider}` |
+| `POST /admin/billing/price-books` `{name, currency?, isDefault?, items}` | Items: `{match: model \| profile \| any, value, usage: <kind> \| *, meter: prompt_tokens \| output_tokens \| thinking_tokens \| gpu_seconds \| requests \| calc_calls, perUnits, unitPriceMicros}` (millionths of the currency unit per `perUnits`). The most specific item wins: profile, then model, then any; a named usage kind beats `*` |
+| `PATCH /admin/billing/price-books/:id` `{name?, currency?, isDefault?, items?, state?: active \| retired}` | The default book cannot be retired |
+| `GET /admin/billing/settings?tenant=` | `{tenantId, priceBookId, effectiveBook, billingCustomer, provider}` |
+| `PUT /admin/billing/tenants/:tenantId` `{priceBookId?, billingCustomer?}` | The tenant's book (none: the default) and its billing customer id |
+| `GET /admin/billing/statements?tenant=` | Stored statements and a preview of the current month: `{current, provider, statements: [{month, state: preview \| open \| closed \| pushed \| push failed, currency, totalMicros, total, totals, lineCount, …}]}` |
+| `GET /admin/billing/statements/:month` (`YYYY-MM`) | The stored statement or a preview: `{month, state, book, currency, totalMicros, totals: {promptTokens, outputTokens, thinkingTokens, gpuSeconds, requests, calcCalls}, lines: [{kind, model, profile, meter, quantity, perUnits, unitPriceMicros, amountMicros, priced}], providerRef, pushError}` |
+| `POST /admin/billing/statements/:month/compute` | Stores (or recomputes) it; a finished month is `closed`. A pushed statement is final (`409`) |
+| `POST /admin/billing/statements/:month/push` | With `BILLING_PROVIDER=stripe`: one Stripe invoice (invoice items per priced line, idempotency keys per statement and line) for the tenant's billing customer. Only a finished month; `409` without a customer; `502` when Stripe refuses |
+| `GET /admin/billing/statements/:month/export?format=csv\|json` | The statement as a file. Audited `billing.statement.exported` |
+
+`?tenant=` names another tenant for system admins. Statements group the month's usage records by kind, model and
+profile, so their totals equal the usage report for the month; usage without a price is kept as zero-amount lines.
+The `billing.close` schedule closes last month's statements. Audit actions: `billing.price-book.created`/`updated`,
+`billing.tenant.updated`, `billing.statement.computed`/`pushed`/`push-failed`/`exported`.
+
+## Sprint 15: Operations
+
+- Rate limits (600 requests a minute per user or address, 30 credential attempts a minute on `/api/auth`) and the
+  authorisation denial cap (20 full `authz.denied` entries a minute per principal) are counted in Redis when
+  `REDIS_URL` is set, with one atomic Lua script per hit, so every instance shares one limit; without Redis, or while
+  it is unreachable, they are counted in memory per instance (the limit still applies).
+- Failed bearer credentials: 20 invalid API keys, access tokens or malformed `Authorization` headers a minute from one
+  address, then `429` with `Retry-After` for every bearer request from that address (a valid key included) until
+  the window ends.
+- Media is sandboxed; see "Media origin" above. Platform routes for signer proposals, dns-01 and backups are under
+  "Sprint 9: Platform operations". Data connections gained MySQL and OpenBao dynamic credentials; MCP server
+  registration and tool approval check zones (`422`/`403 step: zone`, the refusal audited as `mcp.register.refused`).

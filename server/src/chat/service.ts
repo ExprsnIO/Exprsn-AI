@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { ulid } from 'ulid';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
@@ -15,9 +16,19 @@ import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
 import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
 import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
-import { formatContext, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
+import { formatContext, passageSpan, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
+import { StreamGuard, type Release } from '../guardrails/stream.js';
+import type { FlagService } from '../guardrails/flags.js';
+import type { Notifications } from '../platform/notifications.js';
+import { DbStreamStore, type Chunk, type StreamStore } from './streams.js';
 
-export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed';
+export type { Chunk } from './streams.js';
+
+/**
+ * `held`: waiting on a reviewer (invisible to the user); `withdrawn`: rejected by the reviewer; `interrupted`: the
+ * instance generating it stopped, and the stored part can be continued.
+ */
+export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted';
 
 export interface ConversationRow {
   id: string;
@@ -66,13 +77,8 @@ interface MessageRow {
   /** JSON: the guardrail outcome of an answer (Sprint 5). */
   guard?: string | null;
   citations?: string | null;
-}
-
-export interface Chunk {
-  seq: number;
-  delta?: string;
-  thinking?: string;
-  tool?: { name: string; expression: string; result?: { fraction: string; decimal: string; exact: boolean }; error?: string; output?: unknown };
+  generator?: string | null;
+  heartbeat_at?: number | null;
 }
 
 interface Stream {
@@ -80,16 +86,62 @@ interface Stream {
   conversationId: string;
   userId: string;
   tenantId: string;
+  /** Recent chunks, for catch-up from this instance. */
   chunks: Chunk[];
+  /** Chunks not yet written to the shared catch-up buffer. */
+  pending: Chunk[];
   seq: number;
+  /** Everything the model produced (for the final check and storage). */
   content: string;
   thinking: string;
+  /** What was released to the user after screening (what views and snapshots show while streaming). */
+  shown: string;
+  shownThinking: string;
   tools: NonNullable<Chunk['tool']>[];
   state: MessageState;
   ac: AbortController;
   stopRequested: boolean;
+  /** Stopped because this instance is shutting down: the answer is interrupted, not stopped. */
+  shutdown: boolean;
   lastFlush: number;
+  /** Screened-prefix guards for the answer and the thinking (null when no deterministic rule applies). */
+  guard: StreamGuard | null;
+  thinkGuard: StreamGuard | null;
+  /** A streaming screen asked for review: nothing more is released. */
+  held: boolean;
+  /** The streaming screen could not load: nothing is released until the full check has passed the answer. */
+  deferred: boolean;
+  /** Retrieved material of the turn, for the passages stored with the citations. */
+  context: { items: ContextItem[]; citations: Record<string, unknown>[] } | null;
+  /** Store writes and snapshots, one at a time. */
+  io: Promise<void>;
+  timer: NodeJS.Timeout | null;
 }
+
+/** What a continued answer starts from. */
+interface Continuation {
+  content: string;
+  thinking: string;
+  tools: NonNullable<Chunk['tool']>[];
+  seq: number;
+  usage: { promptTokens: number; outputTokens: number; thinkingTokens: number; calcCalls: number; gpuMs: number };
+}
+
+/** Thrown inside the token loop when the streaming screen blocks: the generation stops. */
+class GuardHalt extends Error {}
+
+export interface ChatOptions {
+  /** The shared catch-up buffer (Redis or database); the database when unset. */
+  store?: StreamStore;
+  /** Held answers are filed in the flag queue for a reviewer. */
+  flags?: FlagService;
+  notifications?: Notifications;
+  /** A streaming answer whose generator has not been heard from for this long is interrupted. */
+  leaseMs?: number;
+}
+
+const LIVE: MessageState[] = ['queued', 'streaming'];
+const LOCAL_CHUNKS = 10_000;
 
 export interface Usage {
   promptTokens: number;
@@ -113,6 +165,11 @@ const ATTACHMENT_TEXT_LIMIT = 100_000;
 export class ChatService {
   private readonly streams = new Map<string, Stream>();
   private readonly offStop: () => void;
+  /** This instance, as recorded on the answers it generates. */
+  readonly instance = randomBytes(10).toString('hex');
+  readonly store: StreamStore;
+  private readonly leaseMs: number;
+  private readonly sweeper: NodeJS.Timeout;
   private toolDispatch: ToolDispatcher | null = null;
   /** Knowledge and memory add retrieved context to each answer (`context.ts`). */
   readonly contextProviders: ContextProvider[] = [];
@@ -129,9 +186,15 @@ export class ChatService {
     private readonly attachments: AttachmentService,
     private readonly calc: CalcWorker,
     private readonly log: Logger,
-    private readonly guardrails: Guardrails = allowAll
+    private readonly guardrails: Guardrails = allowAll,
+    private readonly opts: ChatOptions = {}
   ) {
     this.offStop = bus.on<{ messageId: string }>(TOPICS.chatStop, ({ messageId }) => this.abortLocal(messageId));
+    this.store = opts.store ?? new DbStreamStore(db, keys);
+    this.leaseMs = opts.leaseMs ?? 30_000;
+    // Every instance looks for answers whose generator went quiet; marking one is a single conditional update.
+    this.sweeper = setInterval(() => void this.sweepInterrupted().catch((err: Error) => this.log.warn({ err: err.message }, 'interrupted-stream sweep failed')), this.leaseMs);
+    this.sweeper.unref();
   }
 
   /** Registry and MCP tools on a profile's tool list are offered and called through the dispatcher (Sprint 7). */
@@ -141,8 +204,11 @@ export class ChatService {
 
   close(): void {
     this.offStop();
+    clearInterval(this.sweeper);
     for (const st of this.streams.values()) {
+      if (st.timer) clearInterval(st.timer);
       st.stopRequested = true;
+      st.shutdown = true;
       st.ac.abort(new Error('shutting down'));
     }
   }
@@ -215,9 +281,22 @@ export class ChatService {
 
   async deleteConversation(p: Principal, id: string): Promise<void> {
     const c = await this.conversation(p, id);
-    for (const m of (await this.db('messages').where({ conversation_id: c.id }).select('id')) as { id: string }[]) this.abortLocal(m.id);
-    await this.db('messages').where({ conversation_id: c.id }).delete();
-    await this.db('conversations').where({ id: c.id }).delete();
+    await this.removeConversations([c.id]);
+  }
+
+  /** Deletes conversations with their messages and catch-up buffers (the owner's delete, and retention). */
+  private async removeConversations(ids: string[]): Promise<number> {
+    let messages = 0;
+    for (let i = 0; i < ids.length; i += 200) {
+      const batch = ids.slice(i, i + 200);
+      const mids = ((await this.db('messages').whereIn('conversation_id', batch).select('id')) as { id: string }[]).map((m) => m.id);
+      for (const mid of mids) this.abortLocal(mid);
+      await this.store.drop(mids).catch((err: Error) => this.log.warn({ err: err.message }, 'stream buffer not dropped'));
+      await this.db('messages').whereIn('conversation_id', batch).delete();
+      await this.db('conversations').whereIn('id', batch).delete();
+      messages += mids.length;
+    }
+    return messages;
   }
 
   private async message(c: ConversationRow, id: string): Promise<MessageRow> {
@@ -240,20 +319,27 @@ export class ChatService {
   /** The whole tree, opened, for the conversation view. */
   async view(p: Principal, id: string) {
     const c = await this.conversation(p, id);
+    await this.interruptStale(c.id);
     const rows = (await this.db('messages').where({ conversation_id: c.id }).orderBy([{ column: 'created_at' }, { column: 'id' }])) as MessageRow[];
-    const messages = await Promise.all(rows.map((m) => this.messageView(m)));
+    const messages = await Promise.all(rows.map((m) => this.messageView(m, p)));
     return { id: c.id, kind: c.kind, title: await this.open(c.tenant_id, c.id, 'title', c.title), label: c.label, profileId: c.profile_id, workspaceId: c.workspace_id, headId: c.head_id, createdAt: c.created_at, updatedAt: c.updated_at, archived: c.archived_at != null, messages };
   }
 
-  private async messageView(m: MessageRow) {
+  /**
+   * A message as its owner sees it. While streaming, only the screened text. A held answer shows nothing but its
+   * state until a reviewer approves it. A citation's quoted passage is left out when it is above the reader's clearance.
+   */
+  private async messageView(m: MessageRow, p?: Principal) {
     const live = this.streams.get(m.id);
-    const tools = live ? live.tools : json<Chunk['tool'][]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
+    const held = m.state === 'held' && !live;
+    const tools = held ? [] : live ? live.tools : json<Chunk['tool'][]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
+    const citations = held ? [] : json<Record<string, unknown>[]>(await this.open(m.tenant_id, m.id, 'citations', m.citations ?? null), []).map((c) => (c.passage != null && (!p || !clears(p.clearance, c.label as Label)) ? { ...c, passage: null, span: null, restricted: true } : c));
     return {
       id: m.id,
       parentId: m.parent_id,
       role: m.role,
-      content: live ? live.content : ((await this.open(m.tenant_id, m.id, 'content', m.content)) ?? ''),
-      thinking: live ? live.thinking : await this.open(m.tenant_id, m.id, 'thinking', m.thinking),
+      content: held ? '' : live ? live.shown : ((await this.open(m.tenant_id, m.id, 'content', m.content)) ?? ''),
+      thinking: held ? null : live ? live.shownThinking || null : await this.open(m.tenant_id, m.id, 'thinking', m.thinking),
       tools,
       state: live ? live.state : m.state,
       seq: live ? live.seq : Number(m.seq),
@@ -266,7 +352,7 @@ export class ChatService {
       error: m.error,
       label: m.label,
       attachments: json<string[]>(m.attachments, []),
-      citations: json<Record<string, unknown>[]>(await this.open(m.tenant_id, m.id, 'citations', m.citations ?? null), []),
+      citations,
       usage: m.role === 'assistant' && m.completed_at ? { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0), thinkingTokens: Number(m.thinking_tokens ?? 0), calcCalls: Number(m.calc_calls ?? 0), gpuMs: Number(m.gpu_ms ?? 0), firstTokenMs: m.first_token_ms == null ? null : Number(m.first_token_ms) } : null,
       createdAt: Number(m.created_at),
       completedAt: m.completed_at == null ? null : Number(m.completed_at),
@@ -283,7 +369,7 @@ export class ChatService {
     const snap = await this.gateway.snapshot();
     const loaded = new Set(snap.flatMap((x) => x.instances.flatMap((i) => i.loaded.map((l) => l.name))));
     const out = [];
-    for (const row of rows.filter((x) => x.status === 'published')) {
+    for (const row of rows.filter((x) => x.status === 'published' && (!p.profiles || p.profiles.includes(x.name)))) {
       let target: ProfileRow | undefined = row;
       for (let i = 0; target?.alias_of && i < 5; i++) target = rows.find((x) => x.id === target!.alias_of);
       if (!target || target.alias_of || target.status !== 'published') continue;
@@ -324,7 +410,7 @@ export class ChatService {
       throw new HttpProblem(409, 'Profile unavailable', `Profile ${r.profile.name} routes to ${r.model.name}, which is ${r.model.state}.`, { extensions: { profile } });
     }
     if (!clears(p.clearance, r.profile.label)) throw forbidden(`Profile ${r.profile.name} needs ${r.profile.label} clearance.`, { step: 'clearance' });
-    const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label });
+    const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label, profiles: [profile, r.profile.name] });
     if (!d.allow) throw forbidden(d.step === 'zone' ? `This conversation is ${label}; profile ${r.profile.name} only handles data up to ${r.profile.label}.` : d.reason, { step: d.step, action: 'inference:invoke' });
     return r;
   }
@@ -461,39 +547,212 @@ export class ChatService {
       seq: 0,
       canary: m.profile?.canary ?? false,
       created_at: m.created_at,
-      completed_at: m.role === 'user' ? m.created_at : null
+      completed_at: m.role === 'user' ? m.created_at : null,
+      ...(m.role === 'assistant' ? { generator: this.instance, heartbeat_at: Date.now() } : {})
     };
     await this.db('messages').insert(row);
     return row;
   }
 
-  // ---------- stop and resume ----------
+  // ---------- stop, catch-up, interruption, continuation ----------
 
   async stop(p: Principal, conversationId: string, messageId: string): Promise<{ state: MessageState }> {
     const c = await this.conversation(p, conversationId);
     const m = await this.message(c, messageId);
-    if (m.state !== 'queued' && m.state !== 'streaming') return { state: m.state };
+    if (!LIVE.includes(m.state)) return { state: m.state };
     if (!this.abortLocal(messageId)) this.bus.publish(TOPICS.chatStop, { messageId });
     return { state: 'stopped' };
   }
 
   private abortLocal(messageId: string): boolean {
     const st = this.streams.get(messageId);
-    if (!st || st.state === 'complete' || st.state === 'failed' || st.state === 'stopped') return false;
+    if (!st || !LIVE.includes(st.state)) return false;
     st.stopRequested = true;
     st.ac.abort(new Error('stopped'));
     return true;
   }
 
-  /** Chunks after `after` while streaming here; otherwise the stored message. */
+  /**
+   * Catch-up for a client that missed chunks, from any instance. Streaming here: the recent chunks. Streaming on
+   * another instance: the shared buffer's chunks after `after`, or, for a client behind the last stored snapshot, that
+   * snapshot with the buffered chunks after it applied. Otherwise the stored message. Only screened text is returned.
+   */
   async resume(p: Principal, conversationId: string, messageId: string, after: number) {
     const c = await this.conversation(p, conversationId);
     // The message must belong to the caller's conversation before the process-wide stream map is consulted.
-    const m = await this.message(c, messageId);
+    let m = await this.message(c, messageId);
     const st = this.streams.get(m.id);
-    if (st && st.conversationId === c.id) return { state: st.state, seq: st.seq, chunks: st.chunks.filter((x) => x.seq > after) };
-    const v = await this.messageView(m);
+    if (st && st.conversationId === c.id && st.state !== 'held') {
+      const first = st.chunks[0]?.seq ?? st.seq + 1;
+      if (after + 1 >= first || after >= st.seq) return { state: st.state, seq: st.seq, chunks: st.chunks.filter((x) => x.seq > after) };
+      return { state: st.state, seq: st.seq, content: st.shown, thinking: st.shownThinking || null, tools: st.tools, usage: null, error: null };
+    }
+    if (await this.interruptIfStale(m)) m = await this.message(c, messageId);
+    for (let attempt = 0; LIVE.includes(m.state) && !st && attempt < 3; attempt++) {
+      const chunks = await this.store.after(m.tenant_id, m.id, after);
+      const row = await this.message(c, messageId);
+      m = row;
+      if (!LIVE.includes(row.state)) break;
+      const snap = Number(row.seq);
+      if (after >= snap || chunks[0]?.seq === after + 1) return { state: row.state, seq: chunks.length ? chunks[chunks.length - 1]!.seq : Math.max(after, snap), chunks };
+      // Behind the snapshot: the snapshot, then whatever the buffer holds after it.
+      const later = chunks.filter((x) => x.seq > snap);
+      if (later.length && later[0]!.seq !== snap + 1) continue; // a newer snapshot landed between the two reads
+      const v = await this.messageView(row, p);
+      let content = v.content;
+      let thinking = v.thinking ?? '';
+      const tools = [...v.tools];
+      for (const x of later) {
+        if (x.delta) content += x.delta;
+        if (x.thinking) thinking += x.thinking;
+        if (x.tool) tools.push(x.tool);
+      }
+      return { state: row.state, seq: later.length ? later[later.length - 1]!.seq : snap, content, thinking: thinking || null, tools, usage: null, error: null };
+    }
+    const v = await this.messageView(m, p);
     return { state: v.state, seq: v.seq, content: v.content, thinking: v.thinking, tools: v.tools, usage: v.usage, error: v.error };
+  }
+
+  /** A queued or streaming answer that no instance is generating any more: its generator missed the lease. */
+  private stale(m: MessageRow): boolean {
+    if (!LIVE.includes(m.state)) return false;
+    const local = this.streams.get(m.id);
+    if (local && LIVE.includes(local.state)) return false;
+    const beat = m.heartbeat_at != null ? Number(m.heartbeat_at) : Number(m.created_at);
+    return Date.now() - beat > this.leaseMs;
+  }
+
+  private async interruptIfStale(m: MessageRow): Promise<boolean> {
+    return this.stale(m) ? this.markInterrupted(m) : false;
+  }
+
+  private async interruptStale(conversationId: string): Promise<void> {
+    for (const m of (await this.db('messages').where({ conversation_id: conversationId }).whereIn('state', LIVE)) as MessageRow[]) await this.interruptIfStale(m);
+  }
+
+  /** Marks every answer whose generator went quiet (any tenant, or one) as interrupted; returns how many. */
+  async sweepInterrupted(tenantId?: string): Promise<number> {
+    const cutoff = Date.now() - this.leaseMs;
+    const q = this.db('messages')
+      .whereIn('state', LIVE)
+      .andWhere((w) => w.where('heartbeat_at', '<', cutoff).orWhere((x) => x.whereNull('heartbeat_at').andWhere('created_at', '<', cutoff)));
+    if (tenantId) q.andWhere({ tenant_id: tenantId });
+    let n = 0;
+    for (const m of (await q.limit(500)) as MessageRow[]) if (await this.interruptIfStale(m)) n++;
+    return n;
+  }
+
+  /** One conditional update, so only one instance marks (and reports) each interruption. */
+  private async markInterrupted(m: MessageRow): Promise<boolean> {
+    const cutoff = Date.now() - this.leaseMs;
+    const n = await this.db('messages')
+      .where({ id: m.id })
+      .whereIn('state', LIVE)
+      .andWhere((w) => w.where('heartbeat_at', '<', cutoff).orWhereNull('heartbeat_at'))
+      .update({ state: 'interrupted' });
+    if (!n) return false;
+    await this.store.drop([m.id]).catch(() => undefined);
+    const c = (await this.db('conversations').where({ id: m.conversation_id }).first('user_id', 'label')) as { user_id: string; label: Label } | undefined;
+    if (c) {
+      this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, event: 'chat.done', data: { conversationId: m.conversation_id, messageId: m.id, state: 'interrupted', seq: Number(m.seq) } });
+      await this.audit.append({ tenantId: m.tenant_id, action: 'chat.interrupted', kind: 'system', actor: { service: 'chat', user: c.user_id }, target: { conversation: m.conversation_id, message: m.id }, label: c.label, detail: { generator: m.generator ?? null, seq: Number(m.seq) } });
+    }
+    return true;
+  }
+
+  /**
+   * Continues an interrupted (or stopped) answer from its stored text: the same message, its sequence numbers going
+   * on from where they were. The model gets the stored text as the start of its answer and writes the rest; the
+   * finished answer (old and new text) passes the output check as a whole.
+   */
+  async continue(p: Principal, conversationId: string, messageId: string, input: { profile?: string; think?: ThinkLevel }) {
+    const c = await this.conversation(p, conversationId);
+    let m = await this.message(c, messageId);
+    if (await this.interruptIfStale(m)) m = await this.message(c, messageId);
+    const local = this.streams.get(m.id);
+    if (m.role !== 'assistant' || (m.state !== 'interrupted' && m.state !== 'stopped') || (local && LIVE.includes(local.state))) throw conflict(`Only an interrupted or stopped answer can be continued; this one is ${local && LIVE.includes(local.state) ? local.state : m.state}.`);
+    const r = await this.resolveFor(p, input.profile ?? m.profile_id ?? m.profile_name ?? '', c.label);
+    await this.admit(p, c.workspace_id);
+    const think = this.thinkLevel(r.profile, input.think ?? m.think ?? undefined);
+    const from: Continuation = {
+      content: (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '',
+      thinking: (await this.open(m.tenant_id, m.id, 'thinking', m.thinking)) ?? '',
+      tools: json<NonNullable<Chunk['tool']>[]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []),
+      seq: Number(m.seq),
+      usage: { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0), thinkingTokens: Number(m.thinking_tokens ?? 0), calcCalls: Number(m.calc_calls ?? 0), gpuMs: Number(m.gpu_ms ?? 0) }
+    };
+    const claimed = await this.db('messages').where({ id: m.id, state: m.state }).update({ state: 'queued', error: null, completed_at: null, generator: this.instance, heartbeat_at: Date.now(), profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, think, canary: r.canary });
+    if (!claimed) throw conflict('This answer changed while you asked; reload the conversation.');
+    await this.db('conversations').where({ id: c.id }).update({ updated_at: Date.now() });
+    this.start(p, c, { ...m, state: 'queued' }, r, think, c.kind, from);
+    return { messageId: m.id, profile: r.profile.name, model: r.model.name, think, from: from.seq };
+  }
+
+  // ---------- held answers ----------
+
+  /**
+   * A reviewer's decision on a held answer, from the flag queue. Approved: the answer becomes visible as it was
+   * generated. Rejected: it is withdrawn and its text replaced with a notice. The owner is told either way, and a
+   * reviewer never decides on their own answer.
+   */
+  async resolveHold(reviewer: Principal, messageId: string, decision: 'approved' | 'rejected'): Promise<{ conversationId: string; state: MessageState; label: Label }> {
+    const m = (await this.db('messages').where({ tenant_id: reviewer.tenantId, id: messageId }).first()) as MessageRow | undefined;
+    if (!m) throw notFound('Message');
+    if (m.state !== 'held') throw conflict(`This answer is ${m.state}, not held for review.`);
+    const c = (await this.db('conversations').where({ id: m.conversation_id }).first()) as ConversationRow | undefined;
+    if (!c) throw notFound('Conversation');
+    if (c.user_id === reviewer.userId) throw forbidden('This answer was held in your own conversation; another reviewer decides on it.', { step: 'dual-control' });
+    const state: MessageState = decision === 'approved' ? 'complete' : 'withdrawn';
+    const seq = Number(m.seq) + 1;
+    const guard = { ...json<Record<string, unknown>>(m.guard ?? null, {}), review: { decision, by: reviewer.displayName, at: Date.now() } };
+    const upd: Record<string, unknown> = { state, seq, guard: JSON.stringify(guard) };
+    if (decision === 'rejected') Object.assign(upd, { content: await this.seal(m.tenant_id, m.id, 'content', 'This answer was withdrawn after review.'), thinking: null, tools: null, citations: null });
+    const n = await this.db('messages').where({ id: m.id, state: 'held' }).update(upd);
+    if (!n) throw conflict('Another reviewer decided on this answer first.');
+    this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, event: 'chat.released', data: { conversationId: c.id, messageId: m.id, state, seq } });
+    await this.opts.notifications?.notify({ tenantId: m.tenant_id, userIds: [c.user_id], kind: 'chat', title: decision === 'approved' ? 'An answer held for review is now available' : 'An answer held for review was withdrawn', body: decision === 'approved' ? 'A reviewer approved it.' : 'A reviewer rejected it.', route: `chat?id=${c.id}`, label: m.label });
+    return { conversationId: c.id, state, label: m.label };
+  }
+
+  /** The held answer's text for a reviewer cleared for it (the flag detail shows it in full). */
+  async heldText(tenantId: string, messageId: string): Promise<{ conversationId: string; state: MessageState; content: string; label: Label } | null> {
+    const m = (await this.db('messages').where({ tenant_id: tenantId, id: messageId }).first()) as MessageRow | undefined;
+    if (!m) return null;
+    return { conversationId: m.conversation_id, state: m.state, content: (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '', label: m.label };
+  }
+
+  // ---------- retention ----------
+
+  /**
+   * The tenant's retention policy (ASVS 8.3.4): conversations not updated for more than N days are deleted with
+   * their messages, catch-up buffers and the attachments no remaining message uses. Answers still generating are left
+   * for the next run. The purge is audited with its counts.
+   */
+  async purgeExpired(tenantId: string): Promise<{ days: number | null; conversations: number; messages: number; attachments: number }> {
+    const policy = (await this.db('chat_retention').where({ tenant_id: tenantId }).first()) as { conversation_days: number | null } | undefined;
+    const days = policy?.conversation_days == null ? null : Number(policy.conversation_days);
+    if (!days) return { days: null, conversations: 0, messages: 0, attachments: 0 };
+    const cutoff = Date.now() - days * 86_400_000;
+    const busy = this.db('messages').where({ tenant_id: tenantId }).whereIn('state', LIVE).select('conversation_id');
+    let conversations = 0;
+    let messages = 0;
+    let attachments = 0;
+    for (;;) {
+      const ids = ((await this.db('conversations').where({ tenant_id: tenantId }).andWhere('updated_at', '<', cutoff).whereNotIn('id', busy.clone()).limit(500).select('id')) as { id: string }[]).map((x) => x.id);
+      if (!ids.length) break;
+      const used = new Set<string>();
+      for (const r of (await this.db('messages').whereIn('conversation_id', ids).whereNotNull('attachments').select('attachments')) as { attachments: string }[]) for (const a of json<string[]>(r.attachments, [])) used.add(a);
+      messages += await this.removeConversations(ids);
+      conversations += ids.length;
+      for (const aid of used) {
+        const stillUsed = await this.db('messages').where({ tenant_id: tenantId }).andWhere('attachments', 'like', `%${aid}%`).first('id');
+        if (!stillUsed && (await this.attachments.remove(tenantId, aid))) attachments++;
+      }
+      if (ids.length < 500) break;
+    }
+    await this.db('chat_retention').where({ tenant_id: tenantId }).update({ last_run_at: Date.now(), last_purged: conversations });
+    if (conversations) await this.audit.append({ tenantId, action: 'chat.retention.purged', kind: 'system', actor: { service: 'chat.retention' }, target: { tenant: tenantId }, detail: { days, before: cutoff, conversations, messages, attachments } });
+    return { days, conversations, messages, attachments };
   }
 
   // ---------- generation ----------
@@ -502,12 +761,41 @@ export class ChatService {
     this.bus.publish(TOPICS.chatEvent, { userId: st.userId, event, data });
   }
 
-  private start(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare'): void {
-    const st: Stream = { messageId: m.id, conversationId: c.id, userId: p.userId, tenantId: c.tenant_id, chunks: [], seq: 0, content: '', thinking: '', tools: [], state: 'queued', ac: new AbortController(), stopRequested: false, lastFlush: Date.now() };
+  private start(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', from?: Continuation): void {
+    const st: Stream = {
+      messageId: m.id,
+      conversationId: c.id,
+      userId: p.userId,
+      tenantId: c.tenant_id,
+      chunks: [],
+      pending: [],
+      seq: from?.seq ?? 0,
+      content: from?.content ?? '',
+      thinking: from?.thinking ?? '',
+      shown: from?.content ?? '',
+      shownThinking: from?.thinking ?? '',
+      tools: from ? [...from.tools] : [],
+      state: 'queued',
+      ac: new AbortController(),
+      stopRequested: false,
+      shutdown: false,
+      lastFlush: Date.now(),
+      guard: null,
+      thinkGuard: null,
+      held: false,
+      deferred: false,
+      context: null,
+      io: Promise.resolve(),
+      timer: null
+    };
+    // The heartbeat keeps the lease on this answer and writes chunks to the shared buffer while the model is quiet.
+    st.timer = setInterval(() => void this.beat(st), Math.max(250, Math.floor(this.leaseMs / 3)));
+    st.timer.unref();
     this.streams.set(m.id, st);
-    void this.generate(p, c, m, r, think, kind, st)
+    void this.generate(p, c, m, r, think, kind, st, from)
       .catch((err) => this.log.error({ err, message: m.id }, 'generation crashed'))
       .finally(() => {
+        if (st.timer) clearInterval(st.timer);
         // Keep the buffer a little while for clients catching up, then rely on the stored message.
         setTimeout(() => {
           if (this.streams.get(m.id) === st) this.streams.delete(m.id);
@@ -515,27 +803,71 @@ export class ChatService {
       });
   }
 
+  /** Store writes for one stream run one after another, in order. */
+  private io(st: Stream, fn: () => Promise<void>): Promise<void> {
+    const next = st.io.then(fn);
+    st.io = next.catch((err: Error) => this.log.warn({ err: err.message, message: st.messageId }, 'stream store write failed'));
+    return next;
+  }
+
+  private async writePending(st: Stream): Promise<void> {
+    const batch = st.pending.splice(0);
+    if (!batch.length) return;
+    try {
+      await this.store.append(st.tenantId, st.messageId, batch);
+    } catch (err) {
+      st.pending.unshift(...batch);
+      throw err;
+    }
+  }
+
+  private beat(st: Stream): void {
+    if (!LIVE.includes(st.state)) return;
+    void this.io(st, async () => {
+      await this.writePending(st);
+      await this.db('messages').where({ id: st.messageId }).whereIn('state', LIVE).update({ heartbeat_at: Date.now(), generator: this.instance });
+    }).catch(() => undefined);
+  }
+
   private push(st: Stream, chunk: Omit<Chunk, 'seq'>): void {
     const c: Chunk = { seq: ++st.seq, ...chunk };
     st.chunks.push(c);
+    if (st.chunks.length > LOCAL_CHUNKS) st.chunks.splice(0, st.chunks.length - LOCAL_CHUNKS);
+    st.pending.push(c);
+    if (chunk.delta) st.shown += chunk.delta;
+    if (chunk.thinking) st.shownThinking += chunk.thinking;
     this.emit(st, 'chat.chunk', { conversationId: st.conversationId, messageId: st.messageId, ...c });
   }
 
-  private async flush(st: Stream, final: Record<string, unknown> = {}): Promise<void> {
+  /**
+   * Stores the answer. While streaming: a snapshot of the released text at the current sequence number (then the
+   * shared buffer drops what the snapshot covers). At the end (`final`): the answer as checked, and the buffer goes.
+   */
+  private flush(st: Stream, final?: Record<string, unknown>): Promise<void> {
     st.lastFlush = Date.now();
-    await this.db('messages')
-      .where({ id: st.messageId })
-      .update({
-        content: await this.seal(st.tenantId, st.messageId, 'content', st.content),
-        thinking: st.thinking ? await this.seal(st.tenantId, st.messageId, 'thinking', st.thinking) : null,
-        tools: st.tools.length ? await this.seal(st.tenantId, st.messageId, 'tools', JSON.stringify(st.tools)) : null,
-        seq: st.seq,
-        state: st.state,
-        ...final
-      });
+    return this.io(st, async () => {
+      await this.writePending(st);
+      const seq = st.seq;
+      const content = final ? st.content : st.shown;
+      const thinking = final ? st.thinking : st.shownThinking;
+      const tools = st.tools.slice();
+      await this.db('messages')
+        .where({ id: st.messageId })
+        .update({
+          content: await this.seal(st.tenantId, st.messageId, 'content', content),
+          thinking: thinking ? await this.seal(st.tenantId, st.messageId, 'thinking', thinking) : null,
+          tools: tools.length ? await this.seal(st.tenantId, st.messageId, 'tools', JSON.stringify(tools)) : null,
+          seq,
+          state: st.state,
+          heartbeat_at: Date.now(),
+          ...(final ?? {})
+        });
+      if (final) await this.store.drop([st.messageId]);
+      else await this.store.trim(st.messageId, seq);
+    });
   }
 
-  /** The path from the root to a message, opened, as Ollama chat messages (failed answers left out). */
+  /** The path from the root to a message, opened, as Ollama chat messages (failed, held and withdrawn answers left out). */
   private async history(c: ConversationRow, parentId: string, vision: boolean): Promise<ChatMessage[]> {
     const rows = (await this.db('messages').where({ conversation_id: c.id })) as MessageRow[];
     const byId = new Map(rows.map((x) => [x.id, x]));
@@ -543,7 +875,7 @@ export class ChatService {
     for (let cur = byId.get(parentId); cur; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) path.unshift(cur);
     const out: ChatMessage[] = [];
     for (const m of path) {
-      if (m.role === 'assistant' && (m.state === 'failed' || m.state === 'queued')) continue;
+      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn'].includes(m.state)) continue;
       let content = (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '';
       const images: string[] = [];
       for (const aid of json<string[]>(m.attachments, [])) {
@@ -564,7 +896,8 @@ export class ChatService {
 
   /**
    * Asks the context providers for material up to the turn's ceiling, adds it as one delimited system message after
-   * the profile's prompt, raises the conversation's label to the highest item used and records the citations.
+   * the profile's prompt, raises the conversation's label to the highest item used and records the citations. The
+   * items are kept with the stream: when the answer is finished, each knowledge citation gets its passage.
    */
   private async addContext(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], st: Stream): Promise<void> {
     if (!this.contextProviders.length) return;
@@ -584,6 +917,7 @@ export class ChatService {
     messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items) });
     const label = highest(c.label, ...items.map((x) => x.label));
     const citations = items.map((x, i) => ({ n: i + 1, kind: x.tag === 'context' ? 'knowledge' : 'memory', label: x.label, ...x.cite }));
+    st.context = { items, citations };
     await this.db('messages').where({ id: m.id }).update({ citations: await this.seal(c.tenant_id, m.id, 'citations', JSON.stringify(citations)), ...(label !== c.label ? { label } : {}) });
     if (label !== c.label) {
       await this.db('conversations').where({ id: c.id }).update({ label });
@@ -592,14 +926,86 @@ export class ChatService {
     this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'context', label, citations: citations.length });
   }
 
-  private async generate(p: Principal, c: ConversationRow, m: MessageRow, resolved: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', st: Stream): Promise<void> {
+  /**
+   * The citations with the passage of each knowledge chunk the answer draws on: the chunk id (already there), the
+   * span within the chunk and its text, sealed with the rest. Memories get no passage (a forgotten memory must not
+   * live on in old answers).
+   */
+  private async citationsWithPassages(st: Stream): Promise<string | null> {
+    if (!st.context) return null;
+    const { items, citations } = st.context;
+    const out = citations.map((cite, i) => {
+      const it = items[i];
+      if (!it || it.tag !== 'context') return cite;
+      const [s, e] = passageSpan(it.text, st.content);
+      return { ...cite, span: [s, e], passage: it.text.slice(s, e) };
+    });
+    return this.seal(st.tenantId, st.messageId, 'citations', JSON.stringify(out));
+  }
+
+  /** The streaming screen for this answer: the deterministic `model-output` rules, loaded once. */
+  private async startGuards(p: Principal, c: ConversationRow, r: ResolvedProfile, st: Stream, from?: Continuation): Promise<void> {
+    if (!this.guardrails.streamScreen) return;
+    let screen: Awaited<ReturnType<NonNullable<Guardrails['streamScreen']>>>;
+    try {
+      screen = await this.guardrails.streamScreen({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', label: c.label, principal: p, source: { kind: 'message', id: st.messageId }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, via: 'chat' } });
+    } catch (err) {
+      // Without the screen nothing is released until the finished answer has passed the full check.
+      this.log.warn({ err, message: st.messageId }, 'streaming screen unavailable; the answer is sent once checked');
+      st.deferred = true;
+      return;
+    }
+    if (!screen) return;
+    st.guard = new StreamGuard(screen);
+    st.thinkGuard = new StreamGuard(screen);
+    if (from) {
+      st.guard.preload(from.content);
+      st.thinkGuard.preload(from.thinking);
+    }
+  }
+
+  /** Model text goes out only as far as the streaming screen has passed it. */
+  private async release(st: Stream, kind: 'delta' | 'thinking', text: string): Promise<void> {
+    if (st.deferred) return;
+    const g = kind === 'delta' ? st.guard : st.thinkGuard;
+    if (!g) {
+      if (!st.held) this.push(st, { [kind]: text });
+      return;
+    }
+    this.released(st, kind, await g.push(text));
+  }
+
+  private released(st: Stream, kind: 'delta' | 'thinking', out: Release): void {
+    if (out.text && !st.held) this.push(st, { [kind]: out.text });
+    if (out.halted) throw new GuardHalt(out.decision?.reason ?? 'Blocked by a guardrail.');
+    if (out.held && !st.held) {
+      st.held = true;
+      this.emit(st, 'chat.status', { conversationId: st.conversationId, messageId: st.messageId, state: 'held' });
+    }
+  }
+
+  /** The end of the answer, screened like the rest (a block here is decided by the full check that follows). */
+  private async finishGuards(st: Stream): Promise<void> {
+    for (const [g, kind] of [[st.guard, 'delta'], [st.thinkGuard, 'thinking']] as const) {
+      if (!g || st.held || g.halted) continue;
+      try {
+        this.released(st, kind, await g.finish());
+      } catch (err) {
+        if (!(err instanceof GuardHalt)) throw err;
+      }
+    }
+  }
+
+  private async generate(p: Principal, c: ConversationRow, m: MessageRow, resolved: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', st: Stream, from?: Continuation): Promise<void> {
     const usage: Usage = { promptTokens: 0, outputTokens: 0, thinkingTokens: 0, calcCalls: 0, gpuMs: 0, firstTokenMs: null };
     let lease: Lease | null = null;
     let r = resolved;
     const started = Date.now();
     let promptChars = 0;
     let evalCounted = false;
-    this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', profile: r.profile.name, model: r.model.name });
+    let lastWrite = Date.now();
+    const produced = { content: st.content.length, thinking: st.thinking.length };
+    this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', profile: r.profile.name, model: r.model.name, ...(from ? { continuing: from.seq } : {}) });
     try {
       const onPosition = (position: number) => this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', position });
       // The fallback chain: when every slot for a profile stays busy past its queue wait, try its fallback, whose own
@@ -620,13 +1026,16 @@ export class ChatService {
         }
       }
       st.state = 'streaming';
-      await this.db('messages').where({ id: m.id }).update({ state: 'streaming', instance_id: lease.instance.id, model: r.model.name });
+      await this.db('messages').where({ id: m.id }).update({ state: 'streaming', instance_id: lease.instance.id, model: r.model.name, heartbeat_at: Date.now(), generator: this.instance });
       this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: lease.cold ? 'loading' : 'streaming', instance: lease.instance.name, model: r.model.name, profile: r.profile.name });
 
       const messages: ChatMessage[] = [];
       if (r.profile.system_prompt) messages.push({ role: 'system', content: r.profile.system_prompt });
       messages.push(...(await this.history(c, m.parent_id!, r.model.capabilities.includes('vision'))));
       await this.addContext(p, c, m, r, lease, messages, st);
+      // A continued answer: the stored text is the start of the model's turn, which it carries on.
+      if (from?.content) messages.push({ role: 'assistant', content: from.content });
+      await this.startGuards(p, c, r, st, from);
       promptChars = messages.reduce((a, x) => a + x.content.length, 0);
       const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
       // Beyond calculate: published registry and MCP tools, read-only in chat (write and destructive calls need an
@@ -651,12 +1060,12 @@ export class ChatService {
           }
           if (msg?.thinking) {
             st.thinking += msg.thinking;
-            this.push(st, { thinking: msg.thinking });
+            await this.release(st, 'thinking', msg.thinking);
           }
           if (msg?.content) {
             st.content += msg.content;
             roundContent += msg.content;
-            this.push(st, { delta: msg.content });
+            await this.release(st, 'delta', msg.content);
           }
           if (msg?.tool_calls?.length) calls.push(...msg.tool_calls);
           if (chunk.done) {
@@ -666,6 +1075,10 @@ export class ChatService {
             usage.gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
           }
           if (Date.now() - st.lastFlush > 2000) await this.flush(st);
+          else if (Date.now() - lastWrite > 250 && st.pending.length) {
+            lastWrite = Date.now();
+            void this.io(st, () => this.writePending(st)).catch(() => undefined);
+          }
         }
         if (!calls.length || !toolsOn) break;
         messages.push({ role: 'assistant', content: roundContent, tool_calls: calls });
@@ -686,13 +1099,18 @@ export class ChatService {
             }
           }
           st.tools.push(tool);
-          this.push(st, { tool });
+          if (!st.held) this.push(st, { tool });
           messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(tool.result ?? tool.output ?? { error: tool.error }) });
         }
       }
       st.state = 'complete';
     } catch (err) {
-      if (st.stopRequested) st.state = 'stopped';
+      if (err instanceof GuardHalt) {
+        // The streaming screen blocked: stop the model; the full check below withholds the answer.
+        st.state = 'complete';
+        st.ac.abort(err);
+      } else if (st.shutdown) st.state = 'interrupted';
+      else if (st.stopRequested) st.state = 'stopped';
       else {
         st.state = 'failed';
         const e = err as Error;
@@ -703,30 +1121,49 @@ export class ChatService {
     } finally {
       lease?.release(usage.firstTokenMs);
     }
-    const guard = (st.state === 'complete' || st.state === 'stopped') && st.content ? await this.guardOutput(p, c, m, r, st) : null;
+    if (st.state === 'complete' || st.state === 'stopped') await this.finishGuards(st);
+    if (st.state === 'failed' || st.state === 'interrupted') {
+      // Only what passed the screen is kept: an unscreened tail never reaches storage.
+      st.content = st.shown;
+      st.thinking = st.shownThinking;
+    }
+    // A screen that stopped the thinking must withhold the answer even when no answer text was produced.
+    const screened = !!(st.guard?.halted || st.thinkGuard?.halted || st.held);
+    const guard = (st.state === 'complete' || st.state === 'stopped') && (st.content || screened) ? await this.guardOutput(p, c, m, r, st) : null;
+    if (guard?.held) st.state = 'held';
+    if (st.deferred && !guard?.replaced && !guard?.held && (st.state === 'complete' || st.state === 'stopped')) {
+      if (st.thinking) this.push(st, { thinking: st.thinking });
+      if (st.content) this.push(st, { delta: st.content });
+    }
 
     // Metering happens once, on the final chunk; a stopped stream is estimated from what was produced.
-    if (!evalCounted && (st.content || st.thinking)) {
+    const newContent = st.content.length - produced.content;
+    const newThinking = st.thinking.length - produced.thinking;
+    if (!evalCounted && (newContent > 0 || newThinking > 0)) {
       usage.promptTokens = Math.ceil(promptChars / 4);
-      usage.outputTokens = Math.ceil((st.content.length + st.thinking.length) / 4);
+      usage.outputTokens = Math.ceil((Math.max(0, newContent) + Math.max(0, newThinking)) / 4);
     }
     if (usage.outputTokens && st.thinking) usage.thinkingTokens = Math.round((usage.outputTokens * st.thinking.length) / (st.thinking.length + st.content.length || 1));
     const metered = usage.promptTokens + usage.outputTokens > 0;
+    const prior = from?.usage ?? { promptTokens: 0, outputTokens: 0, thinkingTokens: 0, calcCalls: 0, gpuMs: 0 };
+    const passages = st.state !== 'failed' && !(guard?.replaced && guard.decision.action === 'block') ? await this.citationsWithPassages(st) : null;
     await this.flush(st, {
-      completed_at: Date.now(),
-      prompt_tokens: usage.promptTokens,
-      output_tokens: usage.outputTokens,
-      thinking_tokens: usage.thinkingTokens,
-      calc_calls: usage.calcCalls,
-      gpu_ms: Math.round(usage.gpuMs),
+      completed_at: st.state === 'interrupted' ? null : Date.now(),
+      prompt_tokens: prior.promptTokens + usage.promptTokens,
+      output_tokens: prior.outputTokens + usage.outputTokens,
+      thinking_tokens: prior.thinkingTokens + usage.thinkingTokens,
+      calc_calls: prior.calcCalls + usage.calcCalls,
+      gpu_ms: Math.round(prior.gpuMs + usage.gpuMs),
       first_token_ms: usage.firstTokenMs,
-      ...(guard ? { guard: JSON.stringify(guard.summary) } : {})
+      ...(guard ? { guard: JSON.stringify(guard.summary) } : {}),
+      ...(passages ? { citations: passages } : {})
     });
-    // A replaced answer is read back from the store, not from the streamed chunks.
-    if (guard?.replaced && this.streams.get(m.id) === st) this.streams.delete(m.id);
+    // A replaced or held answer is read back from the store, not from the streamed chunks.
+    if ((guard?.replaced || guard?.held) && this.streams.get(m.id) === st) this.streams.delete(m.id);
     if (metered) {
       await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind, profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, conversationId: c.id, messageId: m.id, promptTokens: usage.promptTokens, outputTokens: usage.outputTokens, thinkingTokens: usage.thinkingTokens, calcCalls: usage.calcCalls, gpuMs: usage.gpuMs });
     }
+    if (guard?.held) await this.fileHold(p, c, m, st, guard.decision);
     const error = st.state === 'failed' ? ((await this.db('messages').where({ id: m.id }).first('error')) as { error: string | null } | undefined)?.error : null;
     this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name, ...(guard ? { guard: guard.summary } : {}) });
     for (const fn of this.answerListeners) {
@@ -738,6 +1175,35 @@ export class ChatService {
     }
     if (st.state === 'failed') {
       await this.audit.append({ tenantId: c.tenant_id, action: 'chat.failed', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, profile: r.profile.name, model: r.model.name }, label: c.label, detail: { state: st.state, error: error ?? null } });
+    }
+  }
+
+  /** Files a held answer in the flag queue, where a reviewer cleared for its label approves or rejects it. */
+  private async fileHold(p: Principal, c: ConversationRow, m: MessageRow, st: Stream, d: GuardDecision): Promise<void> {
+    try {
+      const f = d.findings.find((x) => x.stage === 'enforce' && x.action === 'require-approval');
+      const flag = await this.opts.flags!.create({
+        tenantId: c.tenant_id,
+        workspaceId: c.workspace_id,
+        kind: 'hold',
+        checkpoint: 'model-output',
+        ruleId: f?.ruleId ?? null,
+        ruleName: f?.ruleName ?? 'Held for review',
+        setId: f?.setId ?? null,
+        stage: 'enforce',
+        action: 'require-approval',
+        severity: 'medium',
+        label: c.label,
+        text: st.content,
+        span: f?.span ?? null,
+        note: d.reason ?? 'A guardrail held this answer for review.',
+        actor: { user: p.userId, name: p.displayName, via: 'chat' },
+        source: { kind: 'message', id: m.id },
+        conversationId: c.id
+      });
+      await this.audit.append({ tenantId: c.tenant_id, action: 'chat.held', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, flag: `F-${flag.number}` }, label: c.label, detail: { rule: f?.ruleName ?? null, reason: d.reason ?? null } });
+    } catch (err) {
+      this.log.error({ err, message: m.id }, 'held answer could not be filed for review');
     }
   }
 
@@ -754,10 +1220,12 @@ export class ChatService {
   }
 
   /**
-   * The model-output checkpoint, on the finished (or stopped) answer. A block or hold replaces the answer with a
-   * notice; a redaction replaces the flagged spans. Either way the stored answer is what the user sees from then on.
+   * The model-output checkpoint, on the finished (or stopped) answer, with every rule (guard model and classifiers
+   * included). A block replaces the answer with a notice; a hold keeps it, invisible, for a reviewer (or replaces it
+   * when there is no review queue); a redaction replaces the flagged spans. What the streaming screen already
+   * stopped stays stopped. The stored answer is what the user sees from then on.
    */
-  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream): Promise<{ summary: Record<string, unknown>; replaced: boolean } | null> {
+  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream): Promise<{ summary: Record<string, unknown>; replaced: boolean; held: boolean; decision: GuardDecision } | null> {
     let d: GuardDecision;
     try {
       const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
@@ -768,22 +1236,32 @@ export class ChatService {
       this.log.error({ err, message: m.id }, 'model-output guardrail failed');
       d = { action: 'block', text: st.content, findings: [], reason: 'The guardrail check could not run, so the answer is withheld.' };
     }
+    const halt = st.guard?.halted ?? st.thinkGuard?.halted ?? null;
+    const hold = st.held ? (st.guard?.held ?? st.thinkGuard?.held ?? { action: 'require-approval' as const, text: st.content, findings: [], reason: 'Held for review while streaming.' }) : null;
+    if (halt && d.action !== 'block') d = { ...d, action: 'block', reason: halt.reason ?? d.reason ?? 'Blocked by a guardrail.', findings: [...d.findings, ...halt.findings] };
+    else if (hold && d.action !== 'block' && d.action !== 'require-approval') {
+      const reason = hold.reason ?? d.reason;
+      d = { ...d, action: 'require-approval', ...(reason ? { reason } : {}), findings: [...d.findings, ...hold.findings] };
+    }
     const enforced = d.findings.filter((f) => f.stage === 'enforce');
     if (!enforced.length && d.action === 'allow') return null;
     const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))] };
     let replaced = false;
-    if (d.action === 'block' || d.action === 'require-approval') {
+    let held = false;
+    if (d.action === 'require-approval' && this.opts.flags) held = true;
+    else if (d.action === 'block' || d.action === 'require-approval') {
       st.content = `This answer was withheld. ${d.reason ?? ''}`.trim();
+      st.thinking = '';
       replaced = true;
     } else if (d.action === 'redact' && d.text !== st.content) {
       st.content = d.text;
       replaced = true;
     }
-    if (replaced) {
+    if (replaced || held) {
       // Clients holding the streamed text see a higher sequence number on chat.done and read the answer again.
       st.seq++;
       st.chunks = [];
     }
-    return { summary, replaced };
+    return { summary, replaced, held, decision: d };
   }
 }

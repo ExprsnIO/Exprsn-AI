@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -152,7 +152,7 @@ const base = z.object({
 
     // --- Sprint 9: platform operations (edit only inside this block) ---
     /** Import bundles: size cap, Trivy for the SBOM scan (unset: reported as not configured), licence allow-list, staging hook. */
-    PLATFORM_BUNDLE_MAX_BYTES: z.coerce.number().int().min(1024).max(2 * 1024 ** 3 - 1).default(1024 ** 3),
+    PLATFORM_BUNDLE_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 ** 4).default(1024 ** 3),
     PLATFORM_TRIVY_BIN: z.string().optional(),
     PLATFORM_TRIVY_CACHE_DIR: z.string().optional(),
     PLATFORM_SCAN_FAIL_SEVERITY: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).default('HIGH'),
@@ -197,6 +197,82 @@ const base = z.object({
     KERBEROS_KEYTAB: z.string().optional(),
     // --- end federation ---
 
+    // --- Sprint 14: federation (edit only inside this block) ---
+    /** How old a DPoP proof may be (RFC 9449 iat window); its jti is remembered this long so it cannot be replayed. */
+    DPOP_PROOF_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
+    // --- end Sprint 14 federation ---
+    // --- Sprint 11: account self-service (edit only inside this block) ---
+    /** Breached-password check for new passwords: HIBP k-anonymity range API, a local sorted SHA-1 file, both, or off. */
+    BREACHED_PASSWORDS: z.enum(['off', 'hibp', 'file', 'both']).default('off'),
+    /** Base URL of the range API (GET <url>/range/<first 5 hex of SHA-1>); point it at an internal mirror if you have one. */
+    BREACHED_HIBP_URL: z.url().default('https://api.pwnedpasswords.com'),
+    BREACHED_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(3000),
+    /** Uppercase SHA-1 hashes, one per line and sorted, optionally followed by :count (the HIBP "ordered by hash" download). */
+    BREACHED_FILE: z.string().optional(),
+    /** Sensitive account changes need a password or factor check this recent (ASVS 3.7.1). */
+    STEPUP_WINDOW_SECONDS: z.coerce.number().int().min(30).max(24 * 3600).default(300),
+    /** Password reset links by email: lifetime, and requests per hour per identifier and per account (four times that per address). */
+    PASSWORD_RESET_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(60),
+    PASSWORD_RESET_PER_HOUR: z.coerce.number().int().min(1).max(100).default(5),
+    /** Invitations to set a first password (local accounts created with an email instead of a password). */
+    PASSWORD_INVITE_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(72),
+    // --- end account ---
+    // --- Sprint 13: integrations (edit only inside this block) ---
+    /** The OpenAI-compatible API at /v1: `checked` streams the answer after the output guardrail; `live` streams tokens as generated. */
+    OPENAI_STREAM_MODE: z.enum(['checked', 'live']).default('checked'),
+    /** Webhooks: internal hosts only, unless this comma list (hosts, *.domain, CIDRs) names them; tenants narrow further. */
+    WEBHOOK_ALLOWED_HOSTS: z.string().default(''),
+    WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(10_000),
+    WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(6),
+    /** First retry after this long, doubling each attempt (capped at six hours). */
+    WEBHOOK_RETRY_BASE_MS: z.coerce.number().int().min(10).max(3_600_000).default(30_000),
+    /** Consecutive failed attempts that open an endpoint's breaker, and how long it stays open before a trial. */
+    WEBHOOK_BREAKER_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
+    WEBHOOK_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(10).max(24 * 3_600_000).default(5 * 60_000),
+    /** Billing: `none` keeps statements local; `stripe` can push a finished month as a Stripe invoice. */
+    BILLING_PROVIDER: z.enum(['none', 'stripe']).default('none'),
+    STRIPE_SECRET_KEY: z.string().optional(),
+    STRIPE_API_URL: z.url().default('https://api.stripe.com'),
+    STRIPE_DAYS_UNTIL_DUE: z.coerce.number().int().min(0).max(365).default(30),
+    /** How often the scheduler checks that last month's statements are closed (0 turns it off). */
+    BILLING_CLOSE_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(6 * 60),
+    // --- end integrations ---
+    // --- Sprint 15: operations (edit only inside this block) ---
+    /** The previous key-encryption key, for `kms:rewrap` and for reads until it finishes: a local DATA_KEY, or OpenBao. */
+    DATA_KEY_PREVIOUS: z
+      .string()
+      .refine((v) => Buffer.from(v, 'base64').length === 32, 'DATA_KEY_PREVIOUS must be 32 bytes, base64-encoded')
+      .optional(),
+    KMS_PREVIOUS_PROVIDER: z.enum(['local', 'openbao']).optional(),
+    /** Import bundles: refuse to promote a bundle whose scan or staging step did not run. */
+    PLATFORM_BUNDLE_REQUIRE_CHECKS: bool.default(false),
+    /** Backups also archive the blob store (attachments, exports, media, checkpoints). */
+    PLATFORM_BACKUP_BLOBS: bool.default(true),
+    /** ACME challenge type; dns-01 publishes TXT records through ACME_DNS_PROVIDER. */
+    ACME_CHALLENGE: z.enum(['http-01', 'dns-01']).default('http-01'),
+    ACME_DNS_PROVIDER: z.enum(['none', 'webhook', 'rfc2136']).default('none'),
+    ACME_DNS_WEBHOOK_URL: z.url().optional(),
+    ACME_DNS_WEBHOOK_SECRET: z.string().min(16).optional(),
+    /** RFC 2136 dynamic update: the primary server (host or host:port), the zone and the TSIG key. */
+    ACME_DNS_RFC2136_SERVER: z.string().optional(),
+    ACME_DNS_RFC2136_ZONE: z.string().regex(/^[A-Za-z0-9.-]+\.?$/).optional(),
+    ACME_DNS_TSIG_NAME: z.string().regex(/^[A-Za-z0-9.-]+\.?$/).optional(),
+    ACME_DNS_TSIG_SECRET: z.string().optional(),
+    ACME_DNS_TSIG_ALGORITHM: z.enum(['hmac-sha256', 'hmac-sha512']).default('hmac-sha256'),
+    /** Seconds to wait after publishing a TXT record before asking the CA to validate (secondary propagation). */
+    ACME_DNS_WAIT_SECONDS: z.coerce.number().int().min(0).max(3600).default(5),
+    /** Certificate file sink: every instance writes issued and renewed PEMs here for the reverse proxy. */
+    ACME_CERT_DIR: z.string().optional(),
+    /** Media previews and downloads from a separate origin through signed, short-lived URLs. */
+    MEDIA_ORIGIN: z.url().optional(),
+    MEDIA_URL_TTL_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+    /** SNTP server (host or host:port) for the clock-skew check; unset: the database server only. */
+    NTP_SERVER: z.string().optional(),
+    NTP_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
+    /** OpenBao database secrets engine mount for dynamic data-connection credentials. */
+    OPENBAO_DATABASE_MOUNT: z.string().regex(/^[a-z0-9_/-]+$/).default('database'),
+    // --- end operations ---
+
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
     SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
@@ -222,7 +298,12 @@ const base = z.object({
     WEBAUTHN_RP_NAME: z.string().default('Exprsn-AI'),
 
     WEB_ROOT: z.string().default(defaultWebRoot),
-    METRICS_TOKEN: z.string().min(16).optional()
+    METRICS_TOKEN: z.string().min(16).optional(),
+
+    /** Sprint 12, chat: a streaming answer whose instance is silent this long is interrupted (and can be continued). */
+    CHAT_STREAM_LEASE_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+    /** How often each tenant's conversation retention policy is applied. */
+    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
@@ -253,6 +334,27 @@ const schema = base
     }
     if (c.JOB_QUEUE === 'bullmq' && !c.REDIS_URL) {
       ctx.addIssue({ code: 'custom', path: ['REDIS_URL'], message: 'REDIS_URL is required when JOB_QUEUE=bullmq' });
+    }
+    if ((c.BREACHED_PASSWORDS === 'file' || c.BREACHED_PASSWORDS === 'both') && !c.BREACHED_FILE) {
+      ctx.addIssue({ code: 'custom', path: ['BREACHED_FILE'], message: `BREACHED_FILE is required when BREACHED_PASSWORDS=${c.BREACHED_PASSWORDS}` });
+    }
+    if (c.BILLING_PROVIDER === 'stripe' && !c.STRIPE_SECRET_KEY) {
+      ctx.addIssue({ code: 'custom', path: ['STRIPE_SECRET_KEY'], message: 'STRIPE_SECRET_KEY is required when BILLING_PROVIDER=stripe' });
+    }
+    if (c.KMS_PREVIOUS_PROVIDER === 'openbao' && (!c.OPENBAO_ADDR || !c.OPENBAO_TOKEN)) {
+      ctx.addIssue({ code: 'custom', path: ['KMS_PREVIOUS_PROVIDER'], message: 'KMS_PREVIOUS_PROVIDER=openbao needs OPENBAO_ADDR and OPENBAO_TOKEN' });
+    }
+    if (c.KMS_PREVIOUS_PROVIDER === 'local' && !c.DATA_KEY_PREVIOUS && (c.KMS_PROVIDER === 'local' || !c.DATA_KEY)) {
+      ctx.addIssue({ code: 'custom', path: ['DATA_KEY_PREVIOUS'], message: 'KMS_PREVIOUS_PROVIDER=local needs DATA_KEY_PREVIOUS (the old DATA_KEY)' });
+    }
+    if (c.ACME_CHALLENGE === 'dns-01' && c.ACME_DNS_PROVIDER === 'none') {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_PROVIDER'], message: 'ACME_CHALLENGE=dns-01 needs ACME_DNS_PROVIDER (webhook or rfc2136)' });
+    }
+    if (c.ACME_DNS_PROVIDER === 'webhook' && (!c.ACME_DNS_WEBHOOK_URL || !c.ACME_DNS_WEBHOOK_SECRET)) {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_WEBHOOK_URL'], message: 'ACME_DNS_PROVIDER=webhook needs ACME_DNS_WEBHOOK_URL and ACME_DNS_WEBHOOK_SECRET' });
+    }
+    if (c.ACME_DNS_PROVIDER === 'rfc2136' && (!c.ACME_DNS_RFC2136_SERVER || !c.ACME_DNS_RFC2136_ZONE || !c.ACME_DNS_TSIG_NAME || !c.ACME_DNS_TSIG_SECRET)) {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_RFC2136_SERVER'], message: 'ACME_DNS_PROVIDER=rfc2136 needs ACME_DNS_RFC2136_SERVER, ACME_DNS_RFC2136_ZONE, ACME_DNS_TSIG_NAME and ACME_DNS_TSIG_SECRET' });
     }
     if (c.NODE_ENV === 'production' && !c.COOKIE_SECURE) {
       ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'Production requires HTTPS (PUBLIC_URL https://) or COOKIE_SECURE=true behind a TLS proxy' });

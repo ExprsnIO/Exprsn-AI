@@ -502,7 +502,19 @@ export function guardrailRoutes(s: Services): Router {
 
   r.post('/flags/:ref/decide', review, async (req, res) => {
     const { p, ws } = await reviewScope(req);
-    const body = parseBody(z.object({ decision: z.enum(['confirmed', 'dismissed']), reason: z.string().trim().max(500).nullable().optional() }), req.body);
+    const body = parseBody(z.object({ decision: z.enum(['confirmed', 'dismissed', 'approved', 'rejected']), reason: z.string().trim().max(500).nullable().optional() }), req.body);
+    if (body.decision === 'approved' || body.decision === 'rejected') {
+      // A held chat answer (Sprint 12): approving releases it to its owner, rejecting withdraws it.
+      const decision = body.decision;
+      let conversationId: string | null = null;
+      const f = await flags.decideHold(p, ref(req), ws, decision, body.reason ?? null, async (flag) => {
+        if (flag.source_kind !== 'message' || !flag.source_id) throw conflict(`${flagRef(flag)} has no answer attached.`);
+        conversationId = (await s.chat.resolveHold(p, flag.source_id, decision)).conversationId;
+      });
+      await audit(req, `chat.hold.${decision}`, { flag: flagRef(f), message: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
+      res.json(flags.view(f, p));
+      return;
+    }
     const f = await flags.decide(p, ref(req), ws, body.decision, body.reason ?? null);
     let evalCase: string | null = null;
     if (body.decision === 'confirmed') {

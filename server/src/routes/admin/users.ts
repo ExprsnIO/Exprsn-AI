@@ -3,9 +3,11 @@ import { z } from 'zod';
 import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
 import { clears, LABELS } from '../../authz/labels.js';
 import { canGrant, canManage, isRole, ROLES, rolesRequireMfa } from '../../authz/permissions.js';
-import { checkPasswordPolicy, hashPassword } from '../../identity/passwords.js';
+import { hashPassword } from '../../identity/passwords.js';
+import { randomToken } from '../../crypto/index.js';
+import { securityAlert } from '../../identity/security-alerts.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
-import { badRequest, conflict, forbidden, notFound } from '../../http/problem.js';
+import { conflict, forbidden, HttpProblem, notFound } from '../../http/problem.js';
 import type { Services } from '../../services.js';
 
 /** Users, their direct roles and clearance, local accounts, and every session in the tenant. */
@@ -35,7 +37,7 @@ export function userAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const u = await s.users.get(p.tenantId, String(req.params.id));
     if (!u) throw notFound('User');
-    const [roles, identities, factors, sessions, providers] = await Promise.all([s.users.roles(u.id), s.users.identitiesFor(u.id), s.mfa.factors(u.id), s.sessions.listForUser(u.id), s.providers.list(p.tenantId)]);
+    const [roles, identities, factors, sessions, providers, local] = await Promise.all([s.users.roles(u.id), s.users.identitiesFor(u.id), s.mfa.factors(u.id), s.sessions.listForUser(u.id), s.providers.list(p.tenantId), s.account.localCredential(u.id)]);
     const names = new Map(providers.map((x) => [x.id, x.name]));
     res.json({
       id: u.id,
@@ -52,7 +54,8 @@ export function userAdminRoutes(s: Services): Router {
       roles,
       identities: identities.map((i) => ({ provider: names.get(i.provider_id) ?? i.provider_id, externalId: i.external_id, lastSeenAt: i.last_seen_at })),
       factors: factors.map((f) => ({ id: f.id, kind: f.kind, label: f.label, lastUsedAt: f.last_used_at })),
-      sessions: sessions.map((x) => ({ id: x.id, method: x.method, ip: x.ip, lastSeenAt: x.last_seen_at }))
+      sessions: sessions.map((x) => ({ id: x.id, method: x.method, ip: x.ip, lastSeenAt: x.last_seen_at })),
+      password: { local: !!local, mustChange: local?.must_change ?? false }
     });
   });
 
@@ -64,33 +67,47 @@ export function userAdminRoutes(s: Services): Router {
         username: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9._@-]{0,189}$/),
         displayName: z.string().trim().min(1).max(200),
         email: z.email().nullable().default(null),
-        password: z.string().min(1).max(256),
+        password: z.string().min(1).max(256).optional(),
+        /** Instead of a password: email a single-use link to set one (needs an email address and SMTP). */
+        invite: z.boolean().default(false),
+        /** An admin-set initial password must be changed at first sign-in (B-103). */
+        mustChange: z.boolean().default(true),
         roles: z.array(z.string().refine(isRole, 'Unknown role')).min(1),
         clearance: z.enum(LABELS).default('internal')
-      }),
+      })
+        .refine((b) => (b.invite ? !b.password : !!b.password), 'Give a password, or set invite with no password.'),
       req.body
     );
-    const policy = checkPasswordPolicy(body.password, body.username);
-    if (!policy.ok) throw badRequest(policy.reason!);
+    if (body.invite && !body.email) throw conflict('An invitation needs an email address.');
+    if (body.invite && !s.notifications.emailEnabled) throw conflict('Email is not configured (SMTP_URL), so an invitation cannot be sent. Set an initial password instead.');
+    if (body.password) await s.account.checkNewPassword({ tenantId: p.tenantId, username: body.username, password: body.password, actor: p, ip: ip(req), traceId: req.traceId });
     const denied = body.roles.filter((role) => !canGrant(p.roles, role));
     if (denied.length) throw forbidden(`Your roles cannot grant ${denied.join(', ')}.`, { step: 'role' });
     if (!clears(p.clearance, body.clearance)) throw forbidden('You cannot grant a clearance above your own.', { step: 'clearance' });
     const local = (await s.providers.list(p.tenantId)).find((x) => x.kind === 'local');
     if (!local) throw conflict('This tenant has no local user store. Add one under Identity first.');
-    const passwordHash = await hashPassword(body.password); // slow on purpose: outside the transaction
+    // An invited account gets a random password nobody knows until the link sets one. Slow on purpose: outside the transaction.
+    const passwordHash = await hashPassword(body.password ?? randomToken(32));
     try {
       // One transaction: a failure part-way never leaves a user without a credential, identity or roles.
       const user = await s.db.transaction(async (trx) => {
         const users = s.users.within(trx);
         const u = await users.create(p.tenantId, { username: body.username, displayName: body.displayName, email: body.email, clearance: body.clearance, mfaRequired: rolesRequireMfa(body.roles) });
         await users.update(p.tenantId, u.id, { clearance_direct: body.clearance });
-        await trx('local_credentials').insert({ user_id: u.id, password_hash: passwordHash, updated_at: Date.now() });
+        await trx('local_credentials').insert({ user_id: u.id, password_hash: passwordHash, must_change: !body.invite && body.mustChange, updated_at: Date.now() });
         await users.upsertIdentity(u.id, local.id, u.id, []);
         await users.setRoles(u.id, 'direct', body.roles);
         return u;
       });
-      await audit(req, 'user.created', { user: user.id, username: user.username }, { roles: body.roles, clearance: body.clearance, store: local.name });
-      res.status(201).json({ id: user.id, username: user.username });
+      await audit(req, 'user.created', { user: user.id, username: user.username }, { roles: body.roles, clearance: body.clearance, store: local.name, invite: body.invite, mustChange: !body.invite && body.mustChange });
+      let invited = false;
+      if (body.invite) {
+        const tenant = await s.tenants.byId(p.tenantId);
+        const { token } = await s.account.issueToken({ tenantId: p.tenantId, userId: user.id, kind: 'invite', ttlMs: s.cfg.PASSWORD_INVITE_HOURS * 3600_000, createdBy: p.userId });
+        invited = await s.notifications.sendTemplate(body.email, 'invite', { name: user.display_name, username: user.username, actor: p.displayName, tenant: tenant?.name ?? '', hours: s.cfg.PASSWORD_INVITE_HOURS, link: s.account.resetLink(token, p.tenantSlug) });
+        await audit(req, 'user.invited', { user: user.id, username: user.username }, { sent: invited, expiresInHours: s.cfg.PASSWORD_INVITE_HOURS });
+      }
+      res.status(201).json({ id: user.id, username: user.username, ...(body.invite ? { invited } : {}) });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A user with that username exists.');
       throw err;
@@ -164,7 +181,42 @@ export function userAdminRoutes(s: Services): Router {
     await s.db('mfa_recovery_codes').where({ user_id: u.id }).delete();
     const revoked = await s.sessions.revokeAllForUser(u.id);
     await audit(req, 'user.mfa_reset', { user: u.id, username: u.username }, { factorsRemoved: factors.length, sessionsRevoked: revoked });
+    await securityAlert(s, { tenantId: p.tenantId, userId: u.id, event: 'factors.reset_by_admin', detail: `${p.displayName} removed ${factors.length} second factor${factors.length === 1 ? '' : 's'} and signed out your sessions.` });
     res.json({ factorsRemoved: factors.length, sessionsRevoked: revoked });
+  });
+
+  /**
+   * Admin password reset for a local account (B-102): a temporary password the user must change at next sign-in, or
+   * a single-use link by email. Either way the old password stops working and every session and OAuth grant ends.
+   */
+  r.post('/users/:id/password', manage, async (req, res) => {
+    const p = principalOf(req);
+    const u = await s.users.get(p.tenantId, String(req.params.id));
+    if (!u) throw notFound('User');
+    if (u.id === p.userId) throw forbidden('Change your own password from Settings.', { step: 'self' });
+    if (!canManage(p.roles, await s.users.roleIds(u.id))) throw forbidden('This user holds roles you cannot grant, so you cannot reset their password.', { step: 'role' });
+    const body = parseBody(z.discriminatedUnion('mode', [z.object({ mode: z.literal('temporary'), password: z.string().min(1).max(256) }), z.object({ mode: z.literal('link') })]), req.body);
+    if (!(await s.account.localCredential(u.id))) {
+      throw new HttpProblem(409, 'Managed by the directory', 'This account signs in through a directory, which keeps its password. Reset it there.');
+    }
+    if (body.mode === 'link') {
+      if (!u.email) throw conflict('This account has no email address. Set a temporary password instead.');
+      if (!s.notifications.emailEnabled) throw conflict('Email is not configured (SMTP_URL). Set a temporary password instead.');
+      await s.account.scramblePassword(u.id);
+    } else {
+      await s.account.checkNewPassword({ tenantId: p.tenantId, username: u.username, password: body.password, actor: p, ip: ip(req), traceId: req.traceId });
+      await s.account.setPassword(u.id, body.password, true);
+    }
+    const sessionsRevoked = await s.sessions.revokeAllForUser(u.id);
+    const grantsRevoked = await s.account.revokeGrants(p.tenantId, u.id);
+    let sent = false;
+    if (body.mode === 'link') {
+      const { token } = await s.account.issueToken({ tenantId: p.tenantId, userId: u.id, kind: 'admin', ttlMs: s.cfg.PASSWORD_RESET_MINUTES * 60_000, createdBy: p.userId });
+      sent = await s.notifications.sendTemplate(u.email, 'password-set', { name: u.display_name, username: u.username, actor: p.displayName, minutes: s.cfg.PASSWORD_RESET_MINUTES, link: s.account.resetLink(token, p.tenantSlug) });
+    }
+    await audit(req, 'user.password_reset', { user: u.id, username: u.username }, { mode: body.mode, mustChange: body.mode === 'temporary', linkSent: sent, sessionsRevoked, grantsRevoked });
+    await securityAlert(s, { tenantId: p.tenantId, userId: u.id, event: 'password.reset_by_admin', detail: body.mode === 'link' ? `${p.displayName} reset your password and sent a link to choose a new one.` : `${p.displayName} set a temporary password, which you change at your next sign-in.` });
+    res.json({ mode: body.mode, mustChange: body.mode === 'temporary', linkSent: sent, sessionsRevoked, grantsRevoked });
   });
 
   // ---------- sessions across the tenant ----------
@@ -182,6 +234,7 @@ export function userAdminRoutes(s: Services): Router {
     if (target.user_id !== p.userId && !canManage(p.roles, await s.users.roleIds(target.user_id))) throw forbidden('This session belongs to someone holding roles you cannot grant, so you cannot end it.', { step: 'role' });
     await s.sessions.revoke(p.tenantId, target.id);
     await audit(req, 'session.revoked', { session: target.id, user: target.user_id }, { note: 'Refresh tokens and sockets for this session end with it.' });
+    if (target.user_id !== p.userId) await securityAlert(s, { tenantId: p.tenantId, userId: target.user_id, event: 'session.revoked', detail: `${p.displayName} signed out your session (${target.method}).` });
     res.status(204).end();
   });
 

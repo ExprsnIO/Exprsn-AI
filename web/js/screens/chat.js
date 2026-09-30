@@ -62,8 +62,13 @@
     const score = typeof c.score === 'number' ? ', score ' + c.score.toFixed(2) : '';
     return { title: c.document || 'Document', sub: (c.kb || 'Knowledge base') + (c.section ? ', ' + c.section : '') + score };
   }
+  /** The quoted passage stored with a knowledge citation, or why it is not shown. */
+  function passageHtml(c) {
+    if (c.restricted) return '<span class="muted s ch-pass">The quoted passage is above your clearance.</span>';
+    return c.passage ? '<span class="s ch-pass">“' + esc(c.passage) + '”</span>' : '';
+  }
   function sourcesHtml(m, cls) {
-    return (m.citations || []).map((c) => { const t = citeText(c); return '<button type="button" class="' + cls + '" data-src="' + esc(c.n) + '" data-mid="' + esc(m.id) + '"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span></span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</button>'; }).join('');
+    return (m.citations || []).map((c) => { const t = citeText(c); return '<button type="button" class="' + cls + '" data-src="' + esc(c.n) + '" data-mid="' + esc(m.id) + '"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span>' + passageHtml(c) + '</span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</button>'; }).join('');
   }
 
   function pickProfile(st, preferred) {
@@ -108,7 +113,7 @@
     live.sock = App.socket;
     const guard = (fn) => (d) => { if (!visible()) { detach(); return; } fn(S(), d || {}); };
     live.handlers = {
-      'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone),
+      'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone), 'chat.released': guard(onReleased),
       'attachment.state': guard(onAttachment), connect: guard(onReconnect)
     };
     Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
@@ -121,6 +126,7 @@
     if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model }; }
     if (d.state === 'context' && d.citations) { st.citeFor = st.citeFor || {}; st.citeFor[d.messageId] = true; }
     const m = byId(st, d.messageId);
+    if (m && d.state === 'held') m.heldLive = true;
     if (m && d.state !== 'queued' && m.state === 'queued') m.state = 'streaming';
     if (m && d.profile) m.profile = d.profile;
     if (m && d.model) m.model = d.model;
@@ -161,6 +167,12 @@
     if (d.state === 'failed') App.toast('<b>The answer failed</b> ' + esc(d.error || ''), 'danger', 6000);
     refreshProfiles();
     schedule();
+  }
+  /** A reviewer approved or rejected a held answer: read the conversation again. */
+  function onReleased(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) return;
+    loadConv(false).then(schedule);
+    App.toast(d.state === 'complete' ? 'An answer held for review was approved and is shown now.' : 'An answer held for review was withdrawn by the reviewer.', d.state === 'complete' ? 'ok' : 'warn');
   }
   function onAttachment(st, d) {
     const a = (st.pending || []).find((x) => x.id === d.id);
@@ -302,16 +314,20 @@
         + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
     }
     h += toolsHtml(m);
-    if (m.content || streaming) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
+    const held = m.state === 'held' || (streaming && m.heldLive);
+    if (held) h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Held for review.</b> <span class="muted">A guardrail asked a reviewer to check this answer. It appears here once approved' + (streaming ? '; the model is still finishing it.' : '.') + '</span></div>';
+    if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
     if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
     if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
+    if (m.state === 'interrupted') h += '<div class="ch-final">' + UI.pill('interrupted', 'warn') + ' <span class="muted">The server generating this answer stopped. What was produced is kept; continue it to generate the rest.</span></div>';
+    if (m.state === 'withdrawn') h += '<div class="ch-final">' + UI.pill('withdrawn', 'danger') + ' <span class="muted">A reviewer rejected this answer.</span></div>';
     if (m.state === 'failed') h += UI.notice('<b>The answer failed.</b> ' + esc(m.error || 'No detail was recorded.'), 'danger');
     if (m.state === 'complete' && !m.content && !(m.tools || []).length) h += '<div class="ch-final muted">The model returned an empty answer.</div>';
     h += '<div class="ch-mactions">';
     if (streaming) h += UI.btn('Stop', { kind: 'ghost', size: 'xs', icon: 'stop', attrs: 'data-stop="' + esc(m.id) + '"' });
-    else h += UI.iconbtn('copy', 'Copy answer', { cls: 'sm', attrs: 'data-cp="' + esc(m.id) + '"' }) + (App.can('chat:write') && App.can('inference:invoke') ? UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + esc(m.id) + '"' }) : '');
+    else h += (m.state === 'held' ? '' : UI.iconbtn('copy', 'Copy answer', { cls: 'sm', attrs: 'data-cp="' + esc(m.id) + '"' })) + (App.can('chat:write') && App.can('inference:invoke') ? ((m.state === 'interrupted' || m.state === 'stopped') ? UI.btn('Continue', { kind: 'ghost', size: 'xs', icon: 'play', attrs: 'data-continue="' + esc(m.id) + '"' }) : '') + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + esc(m.id) + '"' }) : '');
     h += branchSwitch(conv, m) + '<span class="right muted">' + usageLine(m) + '</span></div>';
     return h + '</div>';
   }
@@ -609,11 +625,169 @@
     });
   }
 
+  // ---------- Sprint 13: prompt library, sharing, export ----------
+  // Shared conversations open read-only (/api/shared-conversations, or a link through /api/shared-links/open);
+  // the prompt picker fills a published template (/api/prompts/:id/render) into the composer; exports run as jobs.
+  function loadSharedList() {
+    const st = S(); if (st.sharedLoading) return;
+    st.sharedLoading = true;
+    App.get('/api/shared-conversations').then((list) => { st.sharedList = list; }).catch(() => { st.sharedList = []; })
+      .finally(() => { st.sharedLoading = false; const el = document.querySelector('#main [data-region="shared"]'); if (el && visible()) el.innerHTML = sharedListHtml(S()); });
+  }
+  function sharedListHtml(st) {
+    const list = st.sharedList || [];
+    if (!list.length) return '';
+    return '<div class="eyebrow" style="padding:10px 8px 4px">Shared with you</div>' + list.map((c) => UI.listItem(esc(c.title || 'Untitled conversation'), esc('from ' + (c.owner || 'someone') + ', ' + ago(c.sharedAt)), { active: st.sharedView && st.sharedView.id === c.conversationId, attrs: 'data-sharedconv="' + esc(c.conversationId) + '"', right: UI.label(c.label, { sm: true }) })).join('');
+  }
+  async function openShared(id) {
+    const st = S();
+    try { st.sharedView = await App.get('/api/shared-conversations/' + enc(id)); st.sharedError = null; } catch (err) { st.sharedView = null; st.sharedError = err; if (err.status === 404) { App.toast('That conversation is no longer shared with you.', 'warn'); loadSharedList(); } else App.fail(err, 'Could not open the shared conversation'); }
+    rerender();
+  }
+  async function openLink(token) {
+    const st = S();
+    try { st.sharedView = await App.post('/api/shared-links/open', { token }); st.sharedError = null; } catch (err) { st.sharedView = null; st.sharedError = err; }
+    rerender();
+  }
+  function sharedPageHtml(st) {
+    const v = st.sharedView;
+    const head = '<div class="ch-head"><span class="t grow">' + esc(v.title || 'Untitled conversation') + '</span>' + UI.pill('read only', 'outline') + UI.label(v.label, { sm: true })
+      + UI.btn('Export', { kind: 'ghost', size: 'sm', icon: 'download', attrs: 'data-export="' + esc(v.id) + '"' }) + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-closeshared' }) + '</div>';
+    const msgs = v.messages.map((m) => (m.role === 'user'
+      ? '<div class="ch-msg ch-user"><div class="ch-bubble">' + esc(m.content).replace(/\n/g, '<br>') + '</div></div>'
+      : '<div class="ch-msg ch-ai">' + (m.state === 'complete' || m.state === 'stopped' ? '<div class="ch-answer serif">' + richText(m.content, m) + '</div>' : '<div class="ch-final muted">This answer is ' + esc(m.state) + ' and is not shown.</div>')
+        + ((m.citations || []).length ? '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + (m.citations || []).map((c) => { const t = citeText(c); return '<div class="ch-src"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span></span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</div>'; }).join('') + '</div>' : '')
+        + '<div class="ch-mactions"><span class="right muted">' + esc([m.profile, m.model].filter(Boolean).join(', ')) + '</span></div></div>')).join('');
+    return '<div class="page tight ch-page">' + head + '<div class="ch-scroll"><div class="ch-thread">'
+      + UI.notice('Shared by ' + esc(v.owner && v.owner.name ? v.owner.name : 'its owner') + '. You can read this conversation but not add to it. Access ends when the owner revokes it or its label rises above your clearance.', 'info')
+      + (msgs || UI.empty('No messages', 'The conversation has no messages yet.')) + '</div></div></div>';
+  }
+
+  function shareModal(ctx) {
+    const st = S(); const conv = st.conv; if (!conv) return;
+    const local = { kind: 'user', q: '', targets: null, shares: null };
+    const shareRows = () => (local.shares || []).map((x) => '<tr><td>' + esc(x.kind === 'user' ? x.userName || 'a person' : x.kind === 'workspace' ? x.workspaceName || 'a workspace' : 'Link') + '</td><td>' + esc(x.kind) + '</td><td>' + UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline') + '</td><td>' + esc(x.expiresAt ? new Date(x.expiresAt).toLocaleString() : 'no expiry') + '</td><td>' + (x.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-srevoke="' + esc(x.id) + '"' }) : '') + '</td></tr>').join('');
+    const pickHtml = () => {
+      if (local.kind === 'link') return UI.field('Link expires after', UI.select([{ value: '24', label: '1 day' }, { value: '168', label: '7 days' }, { value: '720', label: '30 days' }], '168', 'data-sexp')) + '<div class="muted" style="font-size:12px">Anyone signed in to this tenant with the link and clearance for ' + esc(conv.label) + ' can read it. The link is shown once.</div>';
+      const t = local.targets; if (!t) return '<div class="muted" style="font-size:12px">Loading…</div>';
+      const list = local.kind === 'user' ? t.users : t.workspaces;
+      return UI.search(local.kind === 'user' ? 'Search people' : 'Search workspaces', 'data-sq', local.q) + '<div class="ch-pick">' + (list.length ? list.map((x) => '<label class="ch-pickrow"><input type="radio" name="ch-target" value="' + esc(x.id) + '"' + (x.cleared ? '' : ' disabled') + '><span class="grow">' + esc(x.name) + (x.username ? ' <span class="mono muted">' + esc(x.username) + '</span>' : '') + '</span>' + (x.cleared ? '' : '<span class="muted" style="font-size:11px">' + (local.kind === 'user' ? 'below ' : 'ceiling below ') + esc(conv.label) + '</span>') + '</label>').join('') : '<div class="muted" style="padding:8px;font-size:12px">Nobody matches.</div>') + '</div>';
+    };
+    ctx.modal({
+      title: 'Share this conversation', cls: 'wide',
+      body: '<div class="fg2">Readers see the active branch and its sources, read only. Sharing stays inside this tenant and within the conversation\'s label (' + esc(conv.label) + ').</div>'
+        + '<div data-sshares></div>' + UI.seg([{ id: 'user', label: 'A person' }, { id: 'workspace', label: 'A workspace' }, { id: 'link', label: 'A link' }], local.kind, 'data-skind') + '<div data-spick></div><div data-serr></div>',
+      actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Share', { kind: 'primary', attrs: 'data-sgo' }),
+      onMount(el) {
+        const paintShares = () => { el.querySelector('[data-sshares]').innerHTML = local.shares && local.shares.length ? '<div class="tablewrap"><table class="dt"><thead><tr><th>With</th><th>Kind</th><th>State</th><th>Expires</th><th></th></tr></thead><tbody>' + shareRows() + '</tbody></table></div>' : '<div class="muted" style="font-size:12px">Not shared yet.</div>'; };
+        const paintPick = () => { el.querySelector('[data-spick]').innerHTML = pickHtml(); const q = el.querySelector('[data-sq]'); if (q) { q.addEventListener('input', () => { local.q = q.value; loadTargets(); }); } };
+        const loadShares = () => App.get(cUrl(conv.id) + '/shares').then((l) => { local.shares = l; paintShares(); }).catch((err) => App.fail(err, 'Could not list shares'));
+        let timer = null;
+        const loadTargets = () => { clearTimeout(timer); timer = setTimeout(() => App.get(cUrl(conv.id) + '/share-targets?q=' + enc(local.q)).then((t) => { local.targets = t; const had = el.querySelector('[data-sq]'); const pos = had ? had.selectionStart : null; paintPick(); const q = el.querySelector('[data-sq]'); if (q && had) { q.focus(); try { q.setSelectionRange(pos, pos); } catch (e) { /* ignore */ } } }).catch((err) => App.fail(err, 'Could not search')), local.targets ? 250 : 0); };
+        paintShares(); paintPick(); loadShares(); loadTargets();
+        el.querySelector('[data-skind]').addEventListener('click', (e) => { const b = e.target.closest('[data-seg]'); if (!b) return; local.kind = b.dataset.seg; el.querySelectorAll('[data-skind] [data-seg]').forEach((x) => { x.classList.toggle('active', x === b); x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); }); paintPick(); });
+        el.addEventListener('click', async (e) => {
+          const r = e.target.closest('[data-srevoke]'); if (!r) return;
+          r.disabled = true;
+          try { await App.del(cUrl(conv.id) + '/shares/' + enc(r.dataset.srevoke)); App.toast('Share revoked. The reader lost access at once.', 'ok'); loadShares(); } catch (err) { r.disabled = false; App.fail(err, 'Could not revoke'); }
+        });
+        el.querySelector('[data-sgo]').addEventListener('click', async (e) => {
+          const box = el.querySelector('[data-serr]'); box.innerHTML = '';
+          let body;
+          if (local.kind === 'link') body = { kind: 'link', expiresInHours: Number(el.querySelector('[data-sexp]').value) };
+          else {
+            const picked = el.querySelector('input[name=ch-target]:checked');
+            if (!picked) { box.innerHTML = UI.notice('Pick ' + (local.kind === 'user' ? 'a person' : 'a workspace') + ' first.', 'warn'); return; }
+            body = local.kind === 'user' ? { kind: 'user', userId: picked.value } : { kind: 'workspace', workspaceId: picked.value };
+          }
+          e.target.disabled = true;
+          try {
+            const r = await App.post(cUrl(conv.id) + '/shares', body);
+            e.target.disabled = false;
+            if (r.url) box.innerHTML = UI.notice('<b>Copy the link now; it is not shown again.</b><div class="mono" style="overflow-wrap:anywhere;margin-top:6px">' + esc(r.url) + '</div>', 'ok', UI.btn('Copy', { size: 'sm', attrs: 'data-scopy' }));
+            else App.toast('Shared with ' + esc(r.userName || r.workspaceName || 'them') + '. They can read it now.', 'ok');
+            const cp = el.querySelector('[data-scopy]');
+            if (cp) cp.addEventListener('click', () => { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.url).then(() => App.toast('Link copied.'), () => App.toast('The browser refused clipboard access.', 'warn')); });
+            loadShares();
+          } catch (err) { e.target.disabled = false; const p = err.problem || {}; box.innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>', 'danger'); }
+        });
+      }
+    });
+  }
+
+  function exportModal(ctx, convId) {
+    ctx.modal({
+      title: 'Export conversation',
+      body: '<div class="fg2">The active branch with its sources, as a file prepared in the background. Exports are checked by the export guardrail, stored sealed and audited; only you can download yours.</div>'
+        + UI.field('Format', UI.select([{ value: 'markdown', label: 'Markdown (.md)' }, { value: 'json', label: 'JSON' }], 'markdown', 'data-xfmt')) + '<div data-xstate></div>',
+      actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Export', { kind: 'primary', icon: 'download', attrs: 'data-xgo' }),
+      onMount(el) {
+        const box = el.querySelector('[data-xstate]');
+        el.querySelector('[data-xgo]').addEventListener('click', async (e) => {
+          e.target.disabled = true; box.innerHTML = UI.notice('Preparing the export…', 'info');
+          try {
+            let x = await App.post(cUrl(convId) + '/exports', { format: el.querySelector('[data-xfmt]').value });
+            for (let i = 0; i < 60 && (x.state === 'queued' || x.state === 'running'); i++) {
+              await new Promise((r) => setTimeout(r, 1000));
+              x = await App.get('/api/conversation-exports/' + enc(x.id));
+            }
+            e.target.disabled = false;
+            if (x.state === 'ready') box.innerHTML = UI.notice('<b>Ready.</b> ' + esc(x.file) + ', ' + size(x.bytes || 0) + ', labelled ' + esc(x.label) + '.', 'ok', '<a class="btn primary sm" href="/api/conversation-exports/' + enc(x.id) + '/download" download="' + esc(x.file) + '">Download</a>');
+            else if (x.state === 'failed') box.innerHTML = UI.notice('<b>The export failed.</b> ' + esc(x.error || ''), 'danger');
+            else box.innerHTML = UI.notice('Still being prepared. It stays available; try again in a moment.', 'warn');
+          } catch (err) { e.target.disabled = false; const p = err.problem || {}; box.innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>', 'danger'); }
+        });
+      }
+    });
+  }
+
+  function promptPicker(ctx) {
+    const local = { list: null, sel: null, detail: null, q: '' };
+    ctx.modal({
+      title: 'Insert a prompt', cls: 'wide',
+      body: '<div class="fg2">Published templates of this tenant and your workspaces, up to your clearance. The filled text goes into the composer; you can still change it before sending.</div>' + UI.search('Search prompts', 'data-pq', '') + '<div class="ch-pick" data-plist></div><div data-pvars></div><div data-perr></div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Insert', { kind: 'primary', attrs: 'data-pgo disabled' }),
+      onMount(el) {
+        const listEl = el.querySelector('[data-plist]'); const vars = el.querySelector('[data-pvars]'); const go = el.querySelector('[data-pgo]');
+        const paintList = () => {
+          const q = local.q.toLowerCase();
+          const rows = (local.list || []).filter((t) => !q || (t.name + ' ' + (t.description || '')).toLowerCase().indexOf(q) >= 0);
+          listEl.innerHTML = !local.list ? '<div class="muted" style="padding:8px;font-size:12px">Loading…</div>' : rows.length ? rows.map((t) => '<label class="ch-pickrow"><input type="radio" name="ch-prompt" value="' + esc(t.id) + '"' + (local.sel === t.id ? ' checked' : '') + '><span class="grow"><b>' + esc(t.name) + '</b>' + (t.description ? '<span class="muted" style="display:block;font-size:12px">' + esc(t.description) + '</span>' : '') + '</span>' + (t.state === 'deprecated' ? UI.pill('deprecated', 'warn') : '') + '<span class="muted" style="font-size:11px">' + esc(t.workspace || 'tenant') + ', v' + esc(t.publishedVersion) + '</span>' + UI.label(t.label, { sm: true }) + '</label>').join('') : '<div class="muted" style="padding:8px;font-size:12px">' + (local.list.length ? 'No prompt matches.' : 'No prompt is published for you yet.') + '</div>';
+        };
+        const paintVars = () => {
+          const d = local.detail; if (!d) { vars.innerHTML = ''; go.disabled = true; return; }
+          const v = d.versions.find((x) => x.version === d.publishedVersion) || d.versions[0];
+          vars.innerHTML = '<div class="codebox mono" style="white-space:pre-wrap;font-size:12px;max-height:140px;overflow:auto">' + esc(v.body) + '</div>'
+            + (v.variables.length ? '<div class="formgrid">' + v.variables.map((x) => UI.field(x.name + (x.description ? ', ' + x.description : ''), UI.input(x.default || '', { attrs: 'data-pvar="' + esc(x.name) + '"', placeholder: x.default ? '' : 'required' }))).join('') + '</div>' : '<div class="muted" style="font-size:12px">This template has no variables.</div>');
+          go.disabled = false;
+        };
+        App.get('/api/prompts').then((r) => { local.list = r.templates; paintList(); }).catch((err) => { local.list = []; paintList(); App.fail(err, 'Could not list prompts'); });
+        paintList();
+        el.querySelector('[data-pq]').addEventListener('input', (e) => { local.q = e.target.value; paintList(); });
+        listEl.addEventListener('change', async (e) => {
+          const id = e.target.value; local.sel = id; local.detail = null; paintVars();
+          try { const d = await App.get('/api/prompts/' + enc(id)); if (local.sel === id) { local.detail = d; paintVars(); } } catch (err) { App.fail(err, 'Could not open the prompt'); }
+        });
+        go.addEventListener('click', async () => {
+          const d = local.detail; if (!d) return;
+          const values = {}; el.querySelectorAll('[data-pvar]').forEach((i) => { if (i.value !== '') values[i.dataset.pvar] = i.value; });
+          el.querySelector('[data-perr]').innerHTML = '';
+          try {
+            const r = await App.post('/api/prompts/' + enc(d.id) + '/render', { variables: values });
+            const st = S(); st.draft = (st.draft ? st.draft.replace(/\s+$/, '') + '\n\n' : '') + r.text;
+            App.closeOverlay(); rerender(true);
+            App.toast('Inserted ' + esc(r.template.name) + ', version ' + esc(r.template.version) + '.', 'ok');
+          } catch (err) { const p = err.problem || {}; el.querySelector('[data-perr]').innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>', 'danger'); }
+        });
+      }
+    });
+  }
+
   App.register({
     id: 'chat', title: 'Chat', live: true,
     summary: 'Conversations with branches, streamed answers, thinking, exact calculation and attachments',
-    crumb: (st) => ['Chat', st.conv ? (st.conv.title || 'Untitled conversation') : st.convId ? 'Conversation' : 'New conversation'],
-    label: (st) => (st.conv ? st.conv.label : st.convId ? null : 'internal'),
+    crumb: (st) => (st.sharedView ? ['Chat', 'Shared with you', st.sharedView.title || 'Untitled conversation'] : null) || ['Chat', st.conv ? (st.conv.title || 'Untitled conversation') : st.convId ? 'Conversation' : 'New conversation'],
+    label: (st) => (st.sharedView ? st.sharedView.label : st.conv ? st.conv.label : st.convId ? null : 'internal'),
     commands: [
       { label: 'New conversation', sub: 'Chat', run(app) { const st = app.stateFor('chat'); st.convId = null; st.conv = null; st.byId = {}; st.notice = null; st.pending = []; app.render(); setTimeout(() => { const c = document.getElementById('ch-composer'); if (c) c.focus(); }, 30); } }
     ],
@@ -646,6 +820,8 @@
       if (wantId && wantId !== st.paramId) { st.paramId = wantId; st.convId = wantId; setConv(st, null); st.loaded = false; }
       if (st.pending === undefined) st.pending = [];
       if (!st.loaded && !st.loadError) load();
+      if (ctx.params.shared && ctx.params.shared !== st.sharedToken) { st.sharedToken = ctx.params.shared; st.sharedView = null; st.sharedError = null; openLink(ctx.params.shared); }
+      if (st.sharedList === undefined && App.can('chat:read')) { st.sharedList = []; loadSharedList(); }
       const p = selProfile(st);
       const canSend = App.can('chat:write') && App.can('inference:invoke');
       const conv = st.conv;
@@ -653,7 +829,7 @@
       root.innerHTML = '<style>'
         + '.ch-list{display:flex;flex-direction:column;gap:2px}'
         + '.ch-page{display:flex;flex-direction:column;min-height:0}.ch-page>.ch-scroll{flex:1 1 auto;min-height:0;overflow:auto}'
-        + '.ch-head{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line);min-height:44px}.ch-head .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+        + '.ch-head{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line);min-height:44px}.ch-head .t{margin:0;font-size:inherit;line-height:inherit;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
         + '.ch-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto;box-sizing:border-box}'
         + '.ch-user{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.ch-bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px;overflow-wrap:anywhere}'
         + '.ch-uact{display:flex;align-items:center;gap:4px;opacity:.55}.ch-user:hover .ch-uact,.ch-uact:focus-within{opacity:1}'
@@ -675,26 +851,30 @@
         + '.ch-atts{display:flex;flex-direction:column;gap:6px}.ch-att{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px}.ch-att.bad{border-color:var(--danger-fg)}.ch-attwhy{color:var(--danger-fg)}'
         + '.ch-actions{display:flex;align-items:center;gap:12px}.ch-hint{font-size:12px}'
         + '.ch-answer .ch-cite{display:inline-block;margin-left:2px;font-size:11px;font-weight:700;vertical-align:super;text-decoration:none;font-family:var(--sans)}'
+        + '.ch-held{padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);font-size:13px}.ch-pass{display:block;margin-top:2px;color:var(--fg2);font-style:italic}.ch-quote{margin:0;padding:8px 12px;border-left:3px solid var(--accent);background:var(--panel);font-size:14px}'
         + '.ch-srcs{display:flex;flex-direction:column;gap:4px}.ch-src,.ch-isrc{display:flex;gap:8px;align-items:flex-start;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit;font-size:12px;text-align:left;cursor:pointer}.ch-isrc{border-color:transparent;background:none}'
         + '.ch-src:hover,.ch-isrc:hover,.ch-src.hi,.ch-isrc.hi{background:var(--accent-tint)}.ch-src .n,.ch-isrc .n{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}.ch-src .t,.ch-isrc .t{display:block;font-weight:600}.ch-src .s,.ch-isrc .s{display:block}'
         + '.ch-dd{max-height:320px;overflow:auto;min-width:260px}.ch-dd button{height:auto;min-height:28px;padding:4px 10px}.ch-dd .sub{display:block;font-size:11px;color:var(--muted);font-weight:400}'
         + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
+        + '.ch-pick{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin:8px 0}.ch-pickrow{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px;cursor:pointer}.ch-pickrow:last-child{border-bottom:0}.ch-pickrow input{accent-color:var(--accent)}'
         + '</style>'
         + '<div class="leftpane ch-left' + (st.showList ? ' ch-open' : '') + '">' + UI.btn('New conversation', { icon: 'plus', cls: 'block', attrs: 'data-new' + (canSend ? '' : ' disabled') })
         + UI.search('Search conversations', 'data-search', st.query || '').replace('class="search"', 'class="search" style="width:100%"')
         + '<div class="hstack gap6">' + UI.chip(st.archived ? 'Showing archived' : 'Show archived', !!st.archived, 'data-archived') + '<span class="muted" style="font-size:12px">' + esc(App.DATA.tenant.workspace || '') + '</span></div>'
-        + '<div class="ch-list" data-region="list">' + listHtml(st) + '</div></div>'
-        + '<div class="page tight ch-page">'
+        + '<div class="ch-list" data-region="list">' + listHtml(st) + '</div><div class="ch-list" data-region="shared">' + sharedListHtml(st) + '</div></div>'
+        + (st.sharedView ? sharedPageHtml(st) : st.sharedError && st.sharedToken ? '<div class="page">' + UI.problem('This shared conversation cannot be opened', (st.sharedError.problem && st.sharedError.problem.detail) || st.sharedError.message, st.sharedError.problem && st.sharedError.problem.trace_id) + '</div>' : '<div class="page tight ch-page">'
         + '<div class="ch-head">' + UI.iconbtn('menu', 'Conversations', { cls: 'sm ghost ch-listbtn', attrs: 'data-showlist' })
-          + (conv ? '<span class="t grow">' + esc(conv.title || 'Untitled conversation') + '</span>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
+          + (conv ? '<h1 class="t grow">' + esc(conv.title || 'Untitled conversation') + '</h1>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
+            + (App.can('chat:write') ? UI.btn('Share', { kind: 'ghost', size: 'sm', icon: 'link', attrs: 'data-share' }) : '') + UI.btn('Export', { kind: 'ghost', size: 'sm', icon: 'download', attrs: 'data-export="' + esc(conv.id) + '"' })
             + (App.can('chat:write') ? UI.iconbtn('edit', 'Rename', { cls: 'sm ghost', attrs: 'data-rename' }) + UI.btn(conv.archived ? 'Unarchive' : 'Archive', { kind: 'ghost', size: 'sm', attrs: 'data-archive' }) + UI.iconbtn('trash', 'Delete conversation', { cls: 'sm ghost', attrs: 'data-delete' }) : '')
-            : '<span class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</span>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
+            : '<h1 class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</h1>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
         + '<div class="ch-scroll"><div class="ch-thread" data-region="thread">' + threadHtml(st) + '</div></div>'
         + '<div class="ch-composer"><div class="ch-inner">'
         + '<div data-region="notice">' + noticeHtml(st) + '</div>'
         + '<div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + (p ? esc(p.name) + ' · ' + esc(p.model) : 'No profile'), true, 'data-pick="profile" aria-haspopup="true"' + ((st.profiles || []).length ? '' : ' disabled')) + '</span>'
         + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.think || 'off'), false, 'data-pick="level" aria-haspopup="true"' + (p && p.thinkCeiling !== 'off' ? '' : ' disabled title="This profile does not think"')) + '</span>'
         + (App.can('knowledge:read') ? '<span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' ' + (boundIds(st).length ? esc(boundIds(st).map((id) => (kbOf(st, id) || { name: 'knowledge base' }).name).join(', ')) : 'Knowledge'), boundIds(st).length > 0, 'data-pick="kb" aria-haspopup="true"' + (App.can('context:write') ? '' : ' disabled title="Your roles do not let you attach knowledge bases"')) + '</span>' : '')
+        + (canSend ? UI.chip(UI.icon('copy', 12) + ' Prompts', false, 'data-prompts aria-haspopup="dialog"') : '')
         + (p && p.tools && p.tools.indexOf('calculate') >= 0 ? '<span class="muted hstack gap4" style="font-size:12px">' + UI.icon('calc', 12) + ' Exact calculation on</span>' : '') + '</div>'
         + '<div data-region="cold">' + coldHtml(st) + '</div>'
         + '<div data-region="atts">' + attsHtml(st) + '</div>'
@@ -702,7 +882,7 @@
         + '<input type="file" multiple hidden data-file>'
         + '<div class="ch-actions" data-region="actions">' + actionsHtml(st) + '</div>'
         + '</div></div></div>'
-        + '<aside class="inspector w300 ch-side" data-region="side">' + sideHtml(st) + '</aside>';
+        + '<aside class="inspector w300 ch-side" data-region="side">' + sideHtml(st) + '</aside>');
 
       // Restore the draft, focus and caret across whole-screen renders.
       const ta = ctx.$('#ch-composer');
@@ -716,8 +896,8 @@
       ctx.on('input', '#ch-composer', (e, t) => { st.draft = t.value; });
       ctx.on('keydown', '#ch-composer', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
       ctx.on('click', '[data-send]', () => send());
-      ctx.on('click', '[data-new]', () => { st.showList = false; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; rerender(true); });
-      ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; openConv(t.dataset.convo); });
+      ctx.on('click', '[data-new]', () => { st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; rerender(true); });
+      ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; st.sharedView = null; st.sharedError = null; openConv(t.dataset.convo); });
       ctx.on('click', '[data-showlist]', () => { st.showList = !st.showList; const l = ctx.$('.ch-left'); if (l) l.classList.toggle('ch-open', st.showList); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
       ctx.on('click', '[data-archived]', async () => { st.archived = !st.archived; await loadList(); rerender(); });
@@ -733,6 +913,17 @@
         t.disabled = true;
         try { const r = await App.post(mUrl(st.conv.id, t.dataset.stop) + '/stop'); ctx.toast(r && r.state === 'stopped' ? 'Stopped. What was produced is kept and metered.' : 'The answer had already finished.'); } catch (err) { t.disabled = false; handleError(err, 'Could not stop'); }
       });
+      ctx.on('click', '[data-continue]', async (e, t) => {
+        const m = byId(st, t.dataset.continue); if (!m || !st.conv) return;
+        t.disabled = true;
+        try {
+          await App.post(mUrl(st.conv.id, m.id) + '/continue', {});
+          // The stored text (and its sequence number) is where the continuation starts: read it before new chunks.
+          await loadConv(false);
+          ctx.toast('Continuing the answer from where it stopped.');
+          paint();
+        } catch (err) { t.disabled = false; handleError(err, 'Could not continue the answer'); }
+      });
       ctx.on('click', '[data-regen]', (e, t) => regenerate(ctx, t.dataset.regen));
       ctx.on('click', '[data-edit]', (e, t) => editMessage(ctx, t.dataset.edit));
       ctx.on('click', '[data-branch]', async (e, t) => {
@@ -740,6 +931,11 @@
         try { await App.patch(cUrl(st.conv.id), { headId: t.dataset.branch }); await loadConv(false); rerender(); } catch (err) { handleError(err, 'Could not switch branch'); }
       });
       ctx.on('click', '[data-rename]', () => rename(ctx));
+      ctx.on('click', '[data-share]', () => shareModal(ctx));
+      ctx.on('click', '[data-export]', (e, t) => exportModal(ctx, t.dataset.export));
+      ctx.on('click', '[data-prompts]', () => promptPicker(ctx));
+      ctx.on('click', '[data-sharedconv]', (e, t) => { st.showList = false; openShared(t.dataset.sharedconv); });
+      ctx.on('click', '[data-closeshared]', () => { st.sharedView = null; st.sharedError = null; if (st.sharedToken) { st.sharedToken = null; syncUrl(st.convId); } rerender(); });
       ctx.on('click', '[data-archive]', async () => {
         const c = st.conv; if (!c) return;
         const to = !c.archived;
@@ -773,6 +969,7 @@
         const tx = citeText(c); const mem = c.kind === 'memory';
         ctx.drawer({ title: esc(tx.title), body: '<div class="fg2">' + esc(tx.sub) + '</div>'
           + UI.kv((mem ? [['Kind', 'memory'], ['Scope', esc(c.scope || '')], ['Type', esc(c.type || '')]] : [['Knowledge base', esc(c.kb || '')], ['Document', esc(c.document || '')], ['Section', esc(c.section || 'none')], ['Score', typeof c.score === 'number' ? esc(c.score.toFixed(3)) : 'not recorded']]).concat([['Label', c.label ? UI.label(c.label, { sm: true }) : ''], ['Cited as', '[' + esc(c.n) + '] in this answer']]), 1)
+          + (!mem && (c.passage || c.restricted) ? '<div class="eyebrow">Quoted passage</div>' + (c.restricted ? UI.notice('The passage is labelled ' + esc(c.label || '') + ', above your clearance, so it is not shown.', 'warn') : '<blockquote class="ch-quote serif">' + esc(c.passage) + '</blockquote><div class="muted" style="font-size:11px">Characters ' + esc((c.span || [])[0]) + ' to ' + esc((c.span || [])[1]) + ' of the cited chunk, stored with the answer.</div>') : '')
           + UI.notice(mem ? 'An accepted memory went into the prompt as a labelled block. You can change or forget it on the Memory screen.' : 'The passage went into the prompt as a labelled context block; the conversation\'s label rose to at least its label.', 'info'),
           actions: UI.btn(mem ? 'Open in Memory' : 'Open in Knowledge', { attrs: 'data-close data-gosrc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
           onMount(d) { d.querySelector('[data-gosrc]').addEventListener('click', () => (mem ? ctx.navigate('memory', { tab: c.scope === 'workspace' ? 'workspace' : 'mine' }) : ctx.navigate('knowledge', { kb: c.kbId }))); } });

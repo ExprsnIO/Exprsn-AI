@@ -18,7 +18,9 @@ export const NS = {
   excC14n: 'http://www.w3.org/2001/10/xml-exc-c14n#',
   saml: 'urn:oasis:names:tc:SAML:2.0:assertion',
   samlp: 'urn:oasis:names:tc:SAML:2.0:protocol',
-  md: 'urn:oasis:names:tc:SAML:2.0:metadata'
+  md: 'urn:oasis:names:tc:SAML:2.0:metadata',
+  xenc: 'http://www.w3.org/2001/04/xmlenc#',
+  xenc11: 'http://www.w3.org/2009/xmlenc11#'
 };
 
 export const ALG = {
@@ -289,23 +291,48 @@ const sha256b64 = (s: string) => createHash('sha256').update(s, 'utf8').digest('
  * element named by `afterLocal` (the Issuer), or first. Returns the signed document as a string.
  */
 export function signEnveloped(xml: string, key: KeyObject, certificateB64: string, opts: { afterLocal?: string } = {}): string {
+  const rsa = key.asymmetricKeyType === 'rsa';
+  const { signedInfo, place } = prepareEnveloped(xml, rsa, opts);
+  const sig = rsa ? cryptoSign('sha256', Buffer.from(exclusiveC14n(parseXml(signedInfo))), key) : cryptoSign('sha256', Buffer.from(exclusiveC14n(parseXml(signedInfo))), { key, dsaEncoding: 'ieee-p1363' });
+  return place(sig, certificateB64);
+}
+
+/** The same, RSA-SHA256 through a signer that may be a KMS (`sign` returns a PKCS#1 v1.5 signature). */
+export async function signEnvelopedWith(xml: string, sign: (data: Buffer) => Promise<Buffer>, certificateB64: string, opts: { afterLocal?: string } = {}): Promise<string> {
+  const { signedInfo, place } = prepareEnveloped(xml, true, opts);
+  return place(await sign(Buffer.from(exclusiveC14n(parseXml(signedInfo)))), certificateB64);
+}
+
+function prepareEnveloped(xml: string, rsa: boolean, opts: { afterLocal?: string }): { signedInfo: string; place: (sig: Buffer, cert: string) => string } {
   const root = parseXml(xml);
   const id = attr(root, 'ID');
   if (!id) throw new XmlError('The element to sign has no ID.');
   const digest = sha256b64(exclusiveC14n(root));
-  const rsa = key.asymmetricKeyType === 'rsa';
   const signedInfo = `<ds:SignedInfo xmlns:ds="${NS.ds}"><ds:CanonicalizationMethod Algorithm="${NS.excC14n}"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="${rsa ? ALG.rsaSha256 : ALG.ecdsaSha256}"></ds:SignatureMethod><ds:Reference URI="#${escAttr(id)}"><ds:Transforms><ds:Transform Algorithm="${ALG.enveloped}"></ds:Transform><ds:Transform Algorithm="${NS.excC14n}"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="${ALG.sha256}"></ds:DigestMethod><ds:DigestValue>${digest}</ds:DigestValue></ds:Reference></ds:SignedInfo>`;
-  const canonicalSignedInfo = exclusiveC14n(parseXml(signedInfo));
-  const sig = rsa ? cryptoSign('sha256', Buffer.from(canonicalSignedInfo), key) : cryptoSign('sha256', Buffer.from(canonicalSignedInfo), { key, dsaEncoding: 'ieee-p1363' });
-  const signature = `<ds:Signature xmlns:ds="${NS.ds}">${signedInfo}<ds:SignatureValue>${sig.toString('base64')}</ds:SignatureValue><ds:KeyInfo><ds:X509Data><ds:X509Certificate>${certificateB64}</ds:X509Certificate></ds:X509Data></ds:KeyInfo></ds:Signature>`;
-  // Insert right after the first child named afterLocal (the Issuer), found in the serialized text.
-  if (opts.afterLocal) {
-    const re = new RegExp(`</([A-Za-z_][\\w.-]*:)?${opts.afterLocal}>`);
-    const m = re.exec(xml);
-    if (m) return xml.slice(0, m.index + m[0].length) + signature + xml.slice(m.index + m[0].length);
-  }
-  const close = xml.indexOf('>', xml.indexOf('<' + root.name)) + 1;
-  return xml.slice(0, close) + signature + xml.slice(close);
+  const place = (sig: Buffer, certificateB64: string) => {
+    const signature = `<ds:Signature xmlns:ds="${NS.ds}">${signedInfo}<ds:SignatureValue>${sig.toString('base64')}</ds:SignatureValue><ds:KeyInfo><ds:X509Data><ds:X509Certificate>${certificateB64}</ds:X509Certificate></ds:X509Data></ds:KeyInfo></ds:Signature>`;
+    // Insert right after the first child named afterLocal (the Issuer), found in the serialized text.
+    if (opts.afterLocal) {
+      const re = new RegExp(`</([A-Za-z_][\\w.-]*:)?${opts.afterLocal}>`);
+      const m = re.exec(xml);
+      if (m) return xml.slice(0, m.index + m[0].length) + signature + xml.slice(m.index + m[0].length);
+    }
+    const close = xml.indexOf('>', xml.indexOf('<' + root.name)) + 1;
+    return xml.slice(0, close) + signature + xml.slice(close);
+  };
+  return { signedInfo, place };
+}
+
+/**
+ * Builds an HTTP-Redirect binding query (SAML bindings 3.4.4.1): `SAMLRequest` or `SAMLResponse` (DEFLATE, base64),
+ * RelayState, SigAlg (RSA-SHA256) and the signature over exactly those encoded parameters.
+ */
+export async function signedRedirectQuery(param: 'SAMLRequest' | 'SAMLResponse', deflatedB64: string, relayState: string | null, sign: (data: Buffer) => Promise<Buffer>): Promise<string> {
+  const parts = [`${param}=${encodeURIComponent(deflatedB64)}`];
+  if (relayState) parts.push(`RelayState=${encodeURIComponent(relayState)}`);
+  parts.push(`SigAlg=${encodeURIComponent(ALG.rsaSha256)}`);
+  const signed = parts.join('&');
+  return `${signed}&Signature=${encodeURIComponent((await sign(Buffer.from(signed))).toString('base64'))}`;
 }
 
 export interface VerifyResult {
@@ -367,7 +394,7 @@ export function verifyEnveloped(root: XmlElement, target: XmlElement, certs: str
   return { ok: false, reason: 'The signature does not verify with the registered certificate.' };
 }
 
-/** Verifies an HTTP-Redirect binding signature over the raw query parameters (SAMLRequest, RelayState, SigAlg). */
+/** Verifies an HTTP-Redirect binding signature over the raw query parameters (SAMLRequest or SAMLResponse, RelayState, SigAlg). */
 export function verifyRedirectSignature(rawQuery: string, certs: string[]): VerifyResult {
   const pairs = rawQuery.split('&').map((p) => {
     const i = p.indexOf('=');
@@ -379,7 +406,8 @@ export function verifyRedirectSignature(rawQuery: string, certs: string[]): Veri
   if (!sigAlg || !signature) return { ok: false, reason: 'The request is not signed.' };
   const alg = decodeURIComponent(sigAlg);
   if (alg !== ALG.rsaSha256 && alg !== ALG.ecdsaSha256) return { ok: false, reason: 'Only RSA-SHA256 and ECDSA-SHA256 signatures are accepted.' };
-  const signed = ['SAMLRequest', 'RelayState', 'SigAlg'].filter((k) => get(k) !== undefined).map((k) => `${k}=${get(k)}`).join('&');
+  const message = get('SAMLRequest') !== undefined ? 'SAMLRequest' : 'SAMLResponse';
+  const signed = [message, 'RelayState', 'SigAlg'].filter((k) => get(k) !== undefined).map((k) => `${k}=${get(k)}`).join('&');
   const value = Buffer.from(decodeURIComponent(signature), 'base64');
   for (const cert of certs) {
     try {

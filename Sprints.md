@@ -20,13 +20,20 @@ from prototype data to live only when every control on it is backed by the serve
 | 8 | Workflows, media, images | Workflows, Media, Images | **Done** |
 | 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | **Done** |
 | 10 | Hardening and release | all | **Release candidate** (1.0.0-rc.1) |
+| 11 | Account self-service and security notifications (1.1.0) | Sign in, Settings, User stores; accessibility in Chat, Workflows, Classifiers | **Done** |
+| 12 | Chat: streaming guardrails, held answers, resumable streams, agent memory (1.1.0) | Chat, Flags, Tenants, Registry, Memory | **Done** |
+| 13 | Integrations: OpenAI-compatible API, webhooks, prompts, sharing, export, billing (1.1.0) | Chat, Tenants, Usage and audit | **Done** |
+| 14 | Federation, second part: grants, revocation, logout, PAR, DPoP, SAML SLO, KMS signing (1.1.0) | Settings, Identity | **Done** |
+| 15 | Operations: shared rate limits, key re-wrap, dns-01, backups, streaming blobs, zones, connections (1.1.0) | Platform, Connections | **Done** |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
-servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform); twelve database migrations (`001_core`
-to `012_federation`); 281 unit and API tests (against a fake Ollama, a fake MCP server, fake script, media, image and
-training workers, a fake ACME directory and a fake upstream identity provider) plus the integration suite against
-PostgreSQL, MySQL, OpenLDAP and Redis; a Helm chart, supply-chain CI and a streaming load test.
+servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform); seventeen database migrations
+(`001_core` to `017_ops`); 411 unit and API tests (against a fake Ollama, a fake MCP server, fake script, media, image
+and training workers, a fake ACME directory, a fake upstream identity provider, a fake OpenBao, and fake mail, HIBP
+range, webhook, Stripe and DNS endpoints) plus the integration suite against PostgreSQL, MySQL, OpenLDAP and Redis; a
+Helm chart, supply-chain CI and a streaming load test. The version is `1.1.0`: Sprints 11 to 15 delivered the
+[1.1.0 backlog](Backlog-1.1.0.md).
 
 ---
 
@@ -553,3 +560,189 @@ roles.
 prototype in [CHANGELOG.md](CHANGELOG.md). Tagging `v1.0.0` and publishing the image and chart are left to the
 maintainers once the release candidate has been deployed and reviewed; the open items are the known gaps in
 [docs/security.md](docs/security.md), [docs/asvs.md](docs/asvs.md) and [docs/accessibility.md](docs/accessibility.md).
+
+## Sprint 11: Account self-service and security notifications (done)
+
+Delivered in `server/src/identity` (`account.ts`, `breached.ts`, `security-alerts.ts`), `server/src/platform/email-templates.ts`,
+`server/src/routes/auth.ts`, `server/src/routes/me.ts`, `server/src/routes/admin/users.ts` (migration `013_account`)
+and the console screens `signin.js`, `settings.js` and `directories.js`. The design of the password change, reset
+tokens and email templates is ported from exprsn-platform's auth service, as cited in [Backlog-1.1.0.md](Backlog-1.1.0.md).
+No new permissions or dependencies.
+
+- Password change for local accounts in Settings (B-101): the current password is required and a wrong one counts
+  toward the sign-in lockout, reuse is refused, and every other session and OAuth grant ends. Directory accounts are
+  told to change their password in their directory.
+- Admin password reset (B-102): an identity admin sets a temporary password or sends a single-use link by email; the
+  old password stops working, sessions and grants end, and the reset is audited. Admins can also invite a local account
+  by email instead of setting a password (`PASSWORD_INVITE_HOURS`).
+- Forced change (B-103): an admin-set or reset password (and new accounts by default, `mustChange`) puts the session in
+  a `password` stage, after the second factor, that reaches only `POST /api/me/password`.
+- Reset by email from the sign-in screen (B-104): the same answer whether or not the account exists; a 256-bit token
+  stored as its sha256, single use, valid for `PASSWORD_RESET_MINUTES` (60) and carried in the URL fragment; throttled
+  per address, identifier and account (`PASSWORD_RESET_PER_HOUR`); a reset ends sessions and grants and lifts a lockout.
+- Breached-password check (B-105, `BREACHED_PASSWORDS`, off by default): the HIBP range API (only the five-character
+  prefix leaves, with padding; `BREACHED_HIBP_URL`, `BREACHED_TIMEOUT_MS`), an offline sorted SHA-1 file searched in
+  place (`BREACHED_FILE`), or both. It fails open with an audit event.
+- Step-up re-authentication (B-106): creating an API key, removing a factor and regenerating recovery codes need a
+  password, TOTP or passkey check within `STEPUP_WINDOW_SECONDS` (300), otherwise 401 `Step-up required`; Settings
+  asks and retries. Removing an application's access does not need step-up, because it only reduces access.
+- Security notices in the console and by email, carrying no secrets (B-109), for changes to passwords, factors,
+  recovery codes, API keys, sessions and OAuth grants, and for admin resets. Plain-text and HTML templates for reset,
+  admin-set password, invitation and security alert, with every value escaped (B-110).
+- Accessibility (B-501 to B-504): the accessibility mode is stored per user (`PATCH /api/me/preferences`) and applied
+  at sign-in; `UI.tabs` implements the full ARIA tabs pattern (roles, `aria-selected`, roving tab stop, arrow keys,
+  Home and End, linked tab panel); Workflow steps have Move buttons in the inspector and Classifier levels have Up and
+  Down buttons (WCAG 2.5.7); the Chat title is an `h1`.
+
+**Done when:** changing the password ends every other session and grant, and a wrong current password counts toward
+the lockout; an admin reset is audited and the old password stops working; a reset link works once, expires and never
+appears in a response; a known-breached password is refused and only the hash prefix is sent; sensitive changes
+outside the step-up window answer 401; every listed change notifies the user; the accessibility mode follows the user
+to another browser (`server/test/account.test.ts`, 22 tests; `fake-account.ts` records email and answers as the range
+API).
+
+## Sprint 12: Chat (done)
+
+Delivered in `server/src/guardrails/stream.ts`, `server/src/chat` (`service.ts`, `streams.ts`, `context.ts`),
+`server/src/guardrails/flags.ts`, `server/src/agents/service.ts`, `server/src/memory/service.ts`,
+`server/src/routes/chat.ts`, `server/src/routes/admin/tenants.ts` (migration `014_chat_hold`) and the console screens
+`chat.js`, `flags.js`, `tenants.js`, `registry.js` and `memory.js`. The streaming screen is ported from exprsn-platform's
+cortex `streamGuard`, and held answers from its review jobs.
+
+- Output guardrails while an answer streams (B-201): text is buffered to a sentence or line end (or 240 characters),
+  the whole buffer is re-checked by the deterministic `model-output` rules, and only screened text is sent, thinking
+  included. A block stops the model, a hold stops release, and a redaction replaces the spans. The guard model and
+  classifiers still run on the finished answer. With the platform baseline's rules, answers now arrive a sentence at a
+  time.
+- Held answers (B-202): `require-approval` at `model-output` stores the answer sealed as `held` and files a `hold` flag
+  in the Flags queue. The owner sees "Held for review" until a reviewer approves it (released) or rejects it (withdrawn
+  with a notice); the owner is notified, decisions are audited, and reviewers cannot decide their own answers.
+- Resumable streams across instances (B-203): chunks carry sequence numbers into a shared catch-up buffer (Redis or
+  the database, sealed, trimmed at two-second snapshots), so a client catches up from any instance; heartbeats mark a
+  silent answer `interrupted` after `CHAT_STREAM_LEASE_SECONDS` (30), and it can be continued in place.
+- Agent memory write-back (B-204): agents declare a memory policy; with `propose`, runs get a `remember` tool that files
+  agent-scope memory proposals through the `memory` checkpoint, capped by type and count, for a curator to accept.
+- Citation passages (B-205): citations store the chunk id, span and passage (sealed); Sources quote the passage, and
+  withhold it above the reader's clearance.
+- Conversation retention (B-206, ASVS 8.3.4): a tenant retention period; the `chat.retention` job
+  (`CHAT_RETENTION_SWEEP_MINUTES`, 60) deletes idle conversations with their messages, buffers and unused attachments,
+  and audits each purge.
+
+**Done when:** a blocked phrase never reaches the socket and the full check still runs on the finished answer; a held
+answer is invisible until approved and withdrawn when rejected; catch-up works from a second instance and an
+interrupted answer continues there; a run proposes a memory a curator accepts; Sources show the passage only within
+clearance; conversations past the retention period are purged and audited (`server/test/sprint12.test.ts`).
+
+## Sprint 13: Integrations (done)
+
+Delivered in `server/src/openai`, `server/src/webhooks`, `server/src/integrations/hosts.ts`, `server/src/prompts`,
+`server/src/chat/sharing.ts`, `server/src/billing` (`service.ts`, `stripe.ts`), `server/src/routes/prompts.ts`,
+`server/src/routes/sharing.ts`, `server/src/routes/admin/integrations.ts`, `server/src/routes/admin/billing.ts`
+(migration `015_integrations`) and the console screens `chat.js`, `tenants.js` and `usage-audit.js`. Webhook signing and
+delivery are ported from exprsn-platform's plugins `webhookDispatcher`. New permissions `webhooks:manage`,
+`prompts:manage`, `billing:read` and `billing:manage`: tenant admins get the first three and knowledge curators get
+`prompts:manage` (system admins hold every permission).
+
+- OpenAI-compatible API at `/v1` (B-301): models, chat completions with streaming and tools, and embeddings, with an
+  API key or OAuth token, through the same profile resolution, clearance, quota, guardrail and metering paths as chat.
+  Streams send the answer after the output guardrail by default (`OPENAI_STREAM_MODE`). OAuth tokens scoped
+  `inference:invoke:<profile>` are bound to those profiles.
+- Webhooks (B-302): tenants subscribe endpoints to audit actions, job states, flags and approvals; each delivery is
+  signed (HMAC-SHA256 over `timestamp.body`), sent as a job, retried with backoff and paused by a per-endpoint breaker
+  (`WEBHOOK_TIMEOUT_MS`, `WEBHOOK_MAX_ATTEMPTS`, `WEBHOOK_RETRY_BASE_MS`, `WEBHOOK_BREAKER_THRESHOLD`,
+  `WEBHOOK_BREAKER_COOLDOWN_MS`); the Tenants screen's Webhooks tab has the delivery log, replay and secret rotation.
+- Per-tenant allowed outbound hosts for workflow HTTP steps and webhooks (B-303, with the operator's
+  `WEBHOOK_ALLOWED_HOSTS`).
+- Prompt library (B-304): versioned `{{variable}}` templates per workspace or tenant, with labels and a lifecycle, and a
+  picker in chat.
+- Conversation sharing (B-305): read-only with a person, a workspace or an expiring link, inside the tenant and within
+  the conversation's label; revoking ends access at once.
+- Conversation export (B-306): Markdown or JSON as a job, with the active branch and citations; clearance-gated,
+  audited and sealed.
+- Billing (B-307): price books and monthly statements from the usage meter (matching the usage report), CSV and JSON
+  export, and an optional Stripe invoice push (`BILLING_PROVIDER`, `STRIPE_SECRET_KEY`, `STRIPE_API_URL`,
+  `STRIPE_DAYS_UNTIL_DUE`, `BILLING_CLOSE_MINUTES`); a Statements tab on Usage and audit.
+
+**Done when:** the OpenAI wire format lists models, chats, streams and embeds with a bearer API key; a delivery is
+signed and verifiable, and a failing endpoint retries, then opens the breaker; a host outside the tenant's list is
+refused; a template is inserted into chat with its variables filled; a shared reader can read but not write, and
+revocation ends access; an export has the active branch and citations; a month's statement matches the usage report
+(`server/test/sprint13.test.ts`, with the webhook receiver and Stripe fakes in `sprint13-fakes.ts`).
+
+## Sprint 14: Federation, second part (done)
+
+Delivered in `server/src/federation` (`oidc.ts`, `service.ts`, `jose.ts`, `keys.ts`, `saml.ts`, `upstream.ts`,
+`xmlenc.ts`), `server/src/platform/kms.ts`, `server/src/http/middleware.ts`, `server/src/routes/federation-public.ts`,
+`server/src/routes/admin/federation.ts`, `server/src/routes/me.ts` (migration `016_federation2`) and the console screens
+`settings.js`, `identity.js` and `web/js/federation.js`. The revocation model and SAML encryption follow
+exprsn-platform's auth service, as cited in the backlog. New setting `DPOP_PROOF_MAX_AGE_SECONDS` (60); no new
+permissions.
+
+- Connected applications in Settings (B-107): users see and remove the applications they allowed; the tokens stop at
+  once, the consent is forgotten, and a security notice is sent.
+- Token revocation (RFC 7009) and introspection (RFC 7662) (B-108): access tokens are revocable one by one through a
+  shared deny-list; confidential clients introspect their own tokens.
+- Logout (B-401): RP-initiated logout at `/oauth/logout`, with front-channel frames and back-channel logout tokens to
+  every registered client whenever a session ends.
+- Re-authentication (B-402): `prompt=login` and `max_age` make an old session sign in again.
+- Pushed authorization requests (B-403, a single-use `request_uri` for 60 seconds) and request objects signed with the
+  client's registered keys.
+- DPoP sender-constrained tokens (B-404): a bound token without a valid proof is refused (no DPoP nonces).
+- SAML single logout in both directions, and encrypted assertions sent to service providers and accepted from
+  identity providers, with AES-GCM and RSA-OAEP only (B-405).
+- Signing in the KMS (B-408): with OpenBao, OIDC and SAML signing happens in transit, and no private signing key is in
+  the process.
+
+**Done when:** a revoked access token is refused before it expires, and other clients' tokens introspect as inactive;
+removing an application ends its tokens at once; sign-out reaches every back-channel client; an old session is asked to
+sign in again; a pushed `request_uri` works once; a DPoP-bound token without a proof is refused; an SP's LogoutRequest
+ends the session and an encrypted assertion is accepted; with OpenBao, ID tokens and SAML assertions are signed with no
+private key in the process (`server/test/sprint14.test.ts`, with the transit engine in `fake-openbao.ts`).
+
+## Sprint 15: Operations (done)
+
+Delivered in `server/src/platform` (`ratelimit.ts`, `rewrap.ts`, `ntp.ts`, `blob.ts`), `server/src/ops` (`dns.ts`,
+`acme.ts`, `certs.ts`, `backups.ts`, `restore.ts`, `bundles.ts`, `signers.ts`), `server/src/media/origin.ts`,
+`server/src/connections` (`dynamic.ts`, `drivers.ts`, `classify.ts`), `server/src/zones/service.ts`, `server/src/cli.ts`
+(migration `017_ops`) and the console screens `platform.js` and `connections.js`. The shared limiter, versioned data keys,
+dns-01 checks, backup scripts and dynamic credentials start from the exprsn-platform files cited in the backlog. No new
+permissions or dependencies. New CLI commands `kms:rewrap` and `backup:restore`.
+
+- Shared rate limits (B-111, B-406): rate limits, the failed-credential throttle (20 bad bearer or DPoP credentials a
+  minute per address, then 429) and the denial cap share one atomic Redis counter (a Lua script) across instances;
+  without Redis, or while it is down, they count in memory.
+- Key-encryption-key re-wrap (B-407): `kms:rewrap` moves every data key, checkpoint signature and backup to a new
+  `DATA_KEY` or KMS (`DATA_KEY_PREVIOUS`, `KMS_PREVIOUS_PROVIDER`); reads fall back to the previous key until the
+  re-wrap reports verified.
+- ACME dns-01 (B-409, `ACME_CHALLENGE`, `ACME_DNS_*`) through a signed webhook or RFC 2136 with TSIG, wildcards
+  included; renewals publish a bus event and every instance writes the PEMs to `ACME_CERT_DIR`.
+- Backups and streaming blobs (B-410, B-411): streamed backups that include the blob store (`PLATFORM_BACKUP_BLOBS`);
+  `backup:restore` into an empty database behind a guard; streaming blob stores with S3 multipart uploads, so a 3 GiB
+  bundle verifies with flat memory.
+- Required bundle checks and signer dual control (B-412): `PLATFORM_BUNDLE_REQUIRE_CHECKS` makes the scan and staging
+  steps mandatory; adding or revoking a signer key needs a second admin (the first key is exempt), so
+  `POST /platform/signers` answers 202 with a proposal once a key exists.
+- Sandboxed media (B-413): media and images are served with `Content-Security-Policy: sandbox` and `nosniff`,
+  optionally from a separate origin through signed URLs (`MEDIA_ORIGIN`, `MEDIA_URL_TTL_SECONDS`).
+- Clock skew against NTP (B-414, `NTP_SERVER`, `NTP_TIMEOUT_MS`): platform status shows the SNTP offset.
+- Zones on registration (B-415): MCP server and connection registration are refused in an undefined zone or above the
+  zone ceiling.
+- Data connections (B-416): MySQL with read-only enforcement, and OpenBao dynamic database credentials
+  (`OPENBAO_DATABASE_MOUNT`).
+
+**Done when:** the 21st bad bearer token a minute from one address gets 429, and two instances share one limit; after a
+re-wrap everything reads without the old key; a dns-01 order completes through the webhook and through RFC 2136; a
+backup restores into an empty database and blob store and the app starts on it; a large bundle verifies with flat
+memory (256 MiB by default, 3 GiB with `TEST_BIG_BUNDLE=1`); an unscanned bundle cannot be promoted when checks are required, and a signer key needs a second admin; media
+carry the sandbox header; platform status shows NTP skew; registration outside a zone fails; a MySQL connection queries
+read-only (`server/test/sprint15-access.test.ts`, `server/test/sprint15-ops.test.ts`, and
+`server/test/integration/operations.test.ts` against Redis, PostgreSQL and MySQL).
+
+## Release 1.1.0
+
+The workspace, the server and the chart are versioned `1.1.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
+the backlog in [Backlog-1.1.0.md](Backlog-1.1.0.md). The ASVS assessment ([docs/asvs.md](docs/asvs.md)) and the known
+gaps ([docs/security.md](docs/security.md)) are updated for what Sprints 11 to 15 closed. The test harness now serves
+each test app on 127.0.0.1 before SuperTest sees it (`server/test/loopback.ts`, `setup-loopback.ts`), which fixed a
+macOS port-shadowing flake. The suite: 411 tests passed and 1 skipped across 31 files. Tagging `v1.0.0` and publishing
+the image and chart (B-601) remain with the maintainers.

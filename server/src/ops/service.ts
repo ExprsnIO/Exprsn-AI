@@ -4,13 +4,15 @@ import { PLATFORM_SCOPE } from '../platform/datakeys.js';
 import { notFound } from '../http/problem.js';
 import { BundleService } from './bundles.js';
 import { MirrorService } from './mirrors.js';
-import { CertificateService } from './certs.js';
+import { CERT_ISSUED, CertificateService, type CertIssuedEvent } from './certs.js';
 import { BackupService } from './backups.js';
+import { SignerProposals } from './signers.js';
+import { sntpQuery } from '../platform/ntp.js';
 import { audit, platformTenant, systemActor, type OpsActor } from './common.js';
 
 type Tenants = () => Promise<{ tenantId: string; payload: Record<string, unknown> }[]>;
 
-const FILE_SECRETS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN'] as const;
+const FILE_SECRETS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET'] as const;
 
 /** Sprint 9: signed import bundles, mirrors, ACME certificates, backups and restore drills. Reads its collaborators through `s` so later replacements (tests, overrides) are used. */
 export class OpsService {
@@ -18,6 +20,8 @@ export class OpsService {
   readonly mirrors: MirrorService;
   readonly certs: CertificateService;
   readonly backups: BackupService;
+  /** Sprint 15: dual control for signer keys. */
+  readonly signers: SignerProposals;
 
   constructor(private readonly s: () => Services) {
     // `s` is not assigned until every service is built, so nothing here reads it yet.
@@ -25,6 +29,7 @@ export class OpsService {
     this.mirrors = new MirrorService(s);
     this.certs = new CertificateService(s);
     this.backups = new BackupService(s);
+    this.signers = new SignerProposals(s, this.bundles);
   }
 
   /** Who a job's changes are recorded against: the person who started it, in the job's tenant. */
@@ -35,6 +40,11 @@ export class OpsService {
   /** Registers this area's job handlers on `s.jobs`. */
   registerJobs(): void {
     const jobs = this.s().jobs;
+    // Sprint 15: every instance writes issued certificates into its ACME_CERT_DIR (a no-op without one).
+    this.s().bus.on<CertIssuedEvent>(CERT_ISSUED, async (e) => {
+      const dir = await this.certs.sink(e.certificate);
+      if (dir) this.s().log.info({ certificate: e.certificate, name: e.name, serial: e.serial, dir }, 'certificate written to the sink');
+    });
     jobs.register('ops.bundle.verify', async (p, ctx) => this.bundles.runVerify(String(p.bundleId), this.jobActor(ctx.job.tenant_id, ctx.job.created_by), ctx.progress, ctx.signal), { timeoutMs: 6 * 3_600_000 });
     jobs.register('ops.bundle.promote', async (p, ctx) => this.bundles.runPromote(String(p.bundleId), this.jobActor(ctx.job.tenant_id, ctx.job.created_by), ctx.progress), { timeoutMs: 6 * 3_600_000 });
     jobs.register('ops.mirror.check', async (p, ctx) => this.mirrors.check(Array.isArray(p.mirrorIds) ? p.mirrorIds.map(String) : null, ctx.progress, ctx.signal));
@@ -104,17 +114,21 @@ export class OpsService {
   /** The header strip and health checks. */
   async summary(): Promise<Record<string, unknown>> {
     const s = this.s();
-    const [kms, blobs, skew] = await Promise.all([s.kms.health(), s.blobs.health(), this.clockSkew()]);
+    const [kms, blobs, skew, ntp] = await Promise.all([s.kms.health(), s.blobs.health(), this.clockSkew(), this.ntpSkew()]);
     return {
       kms: { kind: s.kms.kind, ...kms },
       blobs: { kind: s.blobs.kind, ...blobs },
-      clock: skew,
+      clock: { ...skew, ntp },
       secretsFromFiles: FILE_SECRETS.filter((n) => process.env[n] || process.env[`${n}_FILE`]).map((n) => ({ name: n, file: !!process.env[`${n}_FILE`] })),
       scanner: this.bundles.scanner?.name ?? null,
       staging: this.bundles.staging?.name ?? null,
       licenceAllow: s.cfg.PLATFORM_LICENCE_ALLOW.split(',').map((x) => x.trim()).filter(Boolean),
       scanFailSeverity: s.cfg.PLATFORM_SCAN_FAIL_SEVERITY,
       bundleMaxBytes: s.cfg.PLATFORM_BUNDLE_MAX_BYTES,
+      bundleRequireChecks: s.cfg.PLATFORM_BUNDLE_REQUIRE_CHECKS,
+      signerProposals: (await s.db('platform_signer_proposals').where({ state: 'pending' }).count({ n: '*' }).first().then((r) => Number((r as { n?: number } | undefined)?.n ?? 0))),
+      mediaOrigin: s.cfg.MEDIA_ORIGIN ?? null,
+      rateLimits: s.counters.kind,
       acme: { ...(await this.certs.accountView()), renewDays: s.cfg.ACME_RENEW_DAYS, checkMinutes: s.cfg.ACME_CHECK_MINUTES },
       backup: {
         everyMinutes: s.cfg.PLATFORM_BACKUP_MINUTES,
@@ -127,6 +141,18 @@ export class OpsService {
       },
       keyRotationDays: s.cfg.PLATFORM_KEY_ROTATION_DAYS
     };
+  }
+
+  /** The offset from NTP_SERVER by one SNTP query, or null when no server is configured. */
+  async ntpSkew(): Promise<{ server: string; skewMs: number | null; offsetMs: number | null; delayMs: number | null; stratum: number | null; error: string | null } | null> {
+    const cfg = this.s().cfg;
+    if (!cfg.NTP_SERVER) return null;
+    try {
+      const r = await sntpQuery(cfg.NTP_SERVER, cfg.NTP_TIMEOUT_MS);
+      return { server: cfg.NTP_SERVER, skewMs: Math.abs(r.offsetMs), offsetMs: r.offsetMs, delayMs: r.delayMs, stratum: r.stratum, error: null };
+    } catch (err) {
+      return { server: cfg.NTP_SERVER, skewMs: null, offsetMs: null, delayMs: null, stratum: null, error: (err as Error).message.slice(0, 200) };
+    }
   }
 
   /** The difference between this server's clock and the database server's, as a cheap cross-host time check. */

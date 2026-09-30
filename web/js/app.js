@@ -86,7 +86,9 @@
       return '<div class="tablewrap ' + (opts.cls || '') + '" ' + (opts.attrs || '') + '><table class="dt" style="' + (opts.minWidth ? 'min-width:' + opts.minWidth : '') + '"><thead><tr>' + th + '</tr></thead><tbody>' + tr + empty + '</tbody></table></div>';
     },
     tabs(items, active, attrs) {
-      return '<nav class="tabs" aria-label="Sections" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; return '<button type="button" data-tab="' + esc(o.id) + '" class="' + (o.id === active ? 'active' : '') + '"' + (o.id === active ? ' aria-current="true"' : '') + '>' + esc(o.label) + (o.count != null ? ' <span class="count">' + o.count + '</span>' : '') + '</button>'; }).join('') + '</nav>';
+      // The ARIA tabs pattern: a tablist of tabs with one in the tab order (arrow keys, Home and End move between them,
+      // see the keydown handler); App.a11yPass gives each tab an id and ties the selected one to the panel after the list.
+      return '<div class="tabs" role="tablist" aria-label="Sections" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; const on = o.id === active; return '<button type="button" role="tab" data-tab="' + esc(o.id) + '" class="' + (on ? 'active' : '') + '" aria-selected="' + (on ? 'true' : 'false') + '" tabindex="' + (on ? '0' : '-1') + '">' + esc(o.label) + (o.count != null ? ' <span class="count">' + o.count + '</span>' : '') + '</button>'; }).join('') + '</div>';
     },
     seg(items, active, attrs) {
       return '<div class="seg" role="group" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; return '<button type="button" data-seg="' + esc(o.id) + '" class="' + (o.id === active ? 'active' : '') + '" aria-pressed="' + (o.id === active ? 'true' : 'false') + '">' + esc(o.label) + '</button>'; }).join('') + '</div>';
@@ -206,7 +208,7 @@
     const data = /json/.test(type) ? await res.json() : null;
     if (!res.ok) {
       const problem = data || { status: res.status, title: res.statusText };
-      if (res.status === 401 && !/^\/api\/auth\//.test(url) && state.signedIn) App.sessionEnded('Your session ended. Sign in again.');
+      if (res.status === 401 && !problem.step_up && !/^\/api\/auth\//.test(url) && state.signedIn) App.sessionEnded('Your session ended. Sign in again.');
       throw new ApiError(problem);
     }
     return data;
@@ -261,6 +263,8 @@
     },
     setMe(me) {
       App.me = me;
+      // The accessibility mode is stored with the account and follows the user to every browser (B-501).
+      if (me.preferences && me.preferences.a11y) App.setA11y(me.preferences.a11y === 'system' ? null : me.preferences.a11y);
       const name = me.user.displayName || me.user.username;
       DATA.user = { name, initials: name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase(), username: me.user.username, roles: me.roles.map((r) => r.name), clearance: me.user.clearance };
       const cur = me.workspaces.find((w) => w.id === me.workspace) || me.workspaces[0];
@@ -608,6 +612,18 @@
       });
       $$('thead th:not([scope])', root).forEach((th) => th.setAttribute('scope', 'col'));
       $$('table.dt tbody tr.row:not([tabindex])', root).forEach((tr) => tr.setAttribute('tabindex', '0'));
+      // Tabs: ids, one tab in the tab order, and the selected tab labels the panel that follows the list.
+      $$('[role="tablist"]', root).forEach((list) => {
+        const tabs = $$('[role="tab"]', list); if (!tabs.length) return;
+        tabs.forEach((t) => { if (!t.id) t.id = uid('tab'); });
+        const cur = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
+        if (!cur && !tabs.some((t) => t.getAttribute('tabindex') === '0')) tabs[0].setAttribute('tabindex', '0');
+        const panel = list.nextElementSibling;
+        if (!cur || !panel || !/^(DIV|SECTION)$/.test(panel.tagName) || (panel.getAttribute('role') && panel.getAttribute('role') !== 'tabpanel')) return;
+        if (!panel.id) panel.id = uid('tabpanel');
+        panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', cur.id);
+        tabs.forEach((t) => { if (t === cur) t.setAttribute('aria-controls', panel.id); else t.removeAttribute('aria-controls'); });
+      });
     }
   };
 
@@ -616,6 +632,7 @@
   App.register({ id: 'forbidden', title: 'Not permitted', crumb: ['Not permitted'], render(root, ctx) { const it = NAV_BY_ID[state.route]; root.innerHTML = '<div class="page">' + UI.problem('You do not have access to ' + (it ? it.label : 'this screen'), 'It needs the ' + (it ? it.perm : '') + ' permission, which none of your roles grant. An identity admin can map your directory group to a role that does.', false) + '<div>' + UI.btn('Back to your workspace', { kind: 'primary', attrs: 'data-home' }) + '</div></div>'; ctx.on('click', '[data-home]', () => App.navigate(App.firstRoute())); } });
 
   // global events
+  let tabTurn = 0;
   window.addEventListener('hashchange', App.render);
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if ($('#palette-input')) App.closeOverlay(); else App.palette(); }
@@ -626,6 +643,22 @@
     }
     else if (e.key === '?' && state.singleKeys && !e.ctrlKey && !e.metaKey && !e.altKey && !/input|textarea|select/i.test(document.activeElement.tagName) && !document.activeElement.isContentEditable && !$('#overlay')) { App.map(); }
     else if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('table.dt tbody tr.row')) { e.preventDefault(); e.target.click(); }
+    else if (/^(ArrowLeft|ArrowRight|Home|End)$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey && e.target.matches && e.target.matches('[role="tab"]')) {
+      // Tabs: arrows move to the previous or next tab (wrapping), Home and End to the first and last; selection follows focus.
+      const tabs = $$('[role="tab"]', e.target.closest('[role="tablist"]') || document); const i = tabs.indexOf(e.target);
+      const n = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      e.preventDefault(); if (!tabs[n] || tabs[n] === e.target) return;
+      const want = tabs[n].dataset.tab; tabs[n].focus(); tabs[n].click();
+      // A screen that loads the new tab's data re-renders more than once; keep focus on the tab while it settles.
+      let tries = 0; const turn = ++tabTurn;
+      const keep = () => {
+        if (turn !== tabTurn) return; // a later key press took over
+        const a = document.activeElement;
+        if (!a || a === document.body || a.id === 'main') { const t = $$('[role="tab"]').find((x) => x.dataset.tab === want); if (t) t.focus(); }
+        if (++tries < 10) setTimeout(keep, 100);
+      };
+      setTimeout(keep, 0);
+    }
   });
   // Screens that update part of their DOM without a full render (streaming, lazy panels) still get the a11y pass.
   let passTimer = null;

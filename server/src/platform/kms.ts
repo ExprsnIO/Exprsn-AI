@@ -20,7 +20,16 @@ export interface Kms {
   verifyHmac(name: string, data: string, mac: string): Promise<boolean>;
   destroyKey(name: string): Promise<void>;
   health(): Promise<{ ok: boolean; detail: string }>;
+  /**
+   * Asymmetric signing inside the KMS (Sprint 14), when the adapter supports it: creates a signing key and returns its
+   * public key (SPKI PEM), and signs with it. The private key never leaves the KMS. The local adapter has neither.
+   */
+  createSigningKey?(name: string, type: SigningKeyType): Promise<string>;
+  /** ES256 signatures come back as raw r||s (JWS form); RS256 as PKCS#1 v1.5. */
+  sign?(name: string, type: SigningKeyType, data: Buffer): Promise<Buffer>;
 }
+
+export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048';
 
 export class LocalKms implements Kms {
   readonly kind = 'local' as const;
@@ -136,6 +145,25 @@ export class OpenBaoKms implements Kms {
     } finally {
       this.known.delete(name);
     }
+  }
+
+  async createSigningKey(name: string, type: SigningKeyType): Promise<string> {
+    // Not exportable and never deletable: a signing key's public half stays published for its overlap window.
+    await this.call('POST', `keys/${encodeURIComponent(name)}`, { type, exportable: false });
+    const r = await this.call<{ data: { latest_version?: number; keys: Record<string, { public_key?: string }> } }>('GET', `keys/${encodeURIComponent(name)}`);
+    const version = String(r.data.latest_version ?? Math.max(...Object.keys(r.data.keys).map(Number)));
+    const pem = r.data.keys[version]?.public_key;
+    if (!pem) throw new Error(`OpenBao key ${name} has no public key`);
+    return pem;
+  }
+
+  async sign(name: string, type: SigningKeyType, data: Buffer): Promise<Buffer> {
+    const body = type === 'ecdsa-p256' ? { input: data.toString('base64'), marshaling_algorithm: 'jws' } : { input: data.toString('base64'), signature_algorithm: 'pkcs1v15' };
+    const r = await this.call<{ data: { signature: string } }>('POST', `sign/${encodeURIComponent(name)}/sha2-256`, body);
+    const m = /^vault:v\d+:(.+)$/.exec(r.data.signature);
+    if (!m) throw new Error('OpenBao returned an unexpected signature');
+    // The JWS marshaling is base64url; the default (and PKCS#1) marshaling is standard base64.
+    return type === 'ecdsa-p256' ? Buffer.from(m[1]!, 'base64url') : Buffer.from(m[1]!, 'base64');
   }
 
   async health(): Promise<{ ok: boolean; detail: string }> {

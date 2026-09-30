@@ -45,6 +45,7 @@ import {
   type WfNode
 } from './graph.js';
 import { internalRequest } from './http.js';
+import type { AllowList } from '../mcp/hosts.js';
 
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'rejected' | 'cancelled';
 export type StepState = 'running' | 'passed' | 'failed' | 'skipped' | 'waiting' | 'blocked';
@@ -140,6 +141,8 @@ export interface WorkflowDeps {
   /** The run owner as a principal (null when disabled): runs act with the owner's roles and clearance. */
   principalFor: (tenantId: string, userId: string) => Promise<Principal | null>;
   http: { hosts: string[]; allowLoopback: boolean };
+  /** The tenant's outbound host allow-list (Sprint 13), consulted by HTTP steps. */
+  tenantHosts?: (tenantId: string) => Promise<AllowList | null>;
 }
 
 const TERMINAL: RunState[] = ['succeeded', 'failed', 'rejected', 'cancelled'];
@@ -859,7 +862,7 @@ export class WorkflowService implements WorkflowToolRunner {
         if (dry) return { output: { status: 200, body: null }, detail: { mocked: true, url } };
         const headers = Object.fromEntries(Object.entries(cfg.headers).map(([k, v]) => [k, renderText(v, c.scope)]));
         const body = cfg.body != null ? renderText(cfg.body, c.scope) : undefined;
-        const res = await internalRequest({ method: cfg.method, url, headers, ...(body != null ? { body } : {}), timeoutMs: n.timeoutMs ?? 30_000, signal: c.signal, allowHosts: this.d.http.hosts, allowLoopback: this.d.http.allowLoopback });
+        const res = await internalRequest({ method: cfg.method, url, headers, ...(body != null ? { body } : {}), timeoutMs: n.timeoutMs ?? 30_000, signal: c.signal, allowHosts: this.d.http.hosts, allowLoopback: this.d.http.allowLoopback, tenantAllow: (await this.d.tenantHosts?.(run.tenant_id)) ?? null });
         if (res.status >= 400) throw new StepFailed(`${cfg.method} ${new URL(url).host} answered ${res.status}.`);
         return { output: { status: res.status, body: res.body }, detail: { url, status: res.status } };
       }
@@ -952,6 +955,7 @@ export class WorkflowService implements WorkflowToolRunner {
     await this.d.db('workflow_steps').where({ id: step.id }).update({ state: 'waiting', output: await this.seal(step.tenant_id, `wfstep:${step.id}`, pending) });
     this.emitStep(run, { ...step, state: 'waiting', detail: { approval: id, role, dueAt: due } });
     await this.d.jobs.enqueue({ tenantId: run.tenant_id, type: 'workflow.approval-timeout', payload: { approvalId: id }, runAt: due, maxAttempts: 3 });
+    this.d.bus.emitLocal(TOPICS.integrationEvent, { tenantId: run.tenant_id, type: 'approval.requested', label: run.label, id: `workflow-approval:${id}`, data: { kind: 'workflow', workflow: run.workflow_id, run: run.id, step: n.id, role, dueAt: due } });
     if (run.mode === 'run') {
       const w = await this.workflowById(run.workflow_id);
       const users = (await this.d.notifications.usersWithRoles(run.tenant_id, [role])).filter((u) => u !== run.created_by);

@@ -22,6 +22,8 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `DATA_KEY` (`_FILE`) | — | 32 bytes, base64; the local KMS master key that wraps each tenant's data key. Required with `KMS_PROVIDER=local` |
 | `KMS_PROVIDER` | `local` | `local` or `openbao` (OpenBao or Vault transit) |
 | `OPENBAO_ADDR`, `OPENBAO_TOKEN` (`_FILE`), `OPENBAO_TRANSIT_MOUNT`, `OPENBAO_KEY_PREFIX`, `OPENBAO_CA_FILE` | —, —, `transit`, `exprsn-`, — | Transit engine address and token; one key per tenant (`exprsn-tenant-<id>`), one for audit checkpoints. The token needs create, encrypt, decrypt, hmac, verify, update-config and delete on those keys |
+| (OpenBao signing, Sprint 14) | — | With `KMS_PROVIDER=openbao` the OIDC (ES256, `ecdsa-p256`) and SAML (RS256, `rsa-2048`) signing keys are created in transit as `<OPENBAO_KEY_PREFIX>fed-<kid>` and every token, assertion and logout message is signed there (`sign/<key>/sha2-256`), so no private signing key enters the process. The token also needs create, read and sign on those keys. The SAML SP decryption key stays sealed locally |
+| `DPOP_PROOF_MAX_AGE_SECONDS` | `60` | How old a DPoP proof (RFC 9449) may be; its `jti` is remembered that long (in the database, shared by all instances) so it cannot be replayed. The API checks the proof's `htu` against `PUBLIC_URL` |
 | `BLOB_STORE` | `fs` | `fs` or `s3` (MinIO, Ceph, SeaweedFS, AWS) |
 | `BLOB_DIR` | `./data/blobs` | For `fs` |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (`_FILE`), `S3_FORCE_PATH_STYLE` | —, `us-east-1`, —, —, —, `true` | For `s3` |
@@ -38,7 +40,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `CLAMD_HOST`, `CLAMD_PORT` | —, `3310` | ClamAV daemon for attachment scanning; without it attachments get the type check and classifier only |
 | `MCP_ALLOWED_HOSTS` | — | MCP servers must resolve to internal addresses; this comma-separated list of hostnames (`*.example.com`) and CIDR networks allows others |
 | `IDENTITY_ALLOWED_HOSTS` | — | The same for LDAP directories and SQL user-store databases, checked before every connection |
-| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, OpenSearch); PostgreSQL dials the checked address, OpenSearch never follows redirects |
+| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, MySQL, OpenSearch); PostgreSQL and MySQL dial the checked address, OpenSearch never follows redirects |
 | `SECRET_REF_ENV` | — | Environment variables user stores and upstream IdPs may reference as `env:NAME`: names or `PREFIX*` patterns, comma-separated. Empty means none. The server's own settings (and their `_FILE` forms) are refused whatever this says |
 | `SECRET_REF_DIRS` | `/run/secrets,/run/credentials,/etc/exprsn-ai/credentials` | Directories `file:` references must resolve inside (symlinks followed); the server's own secret files are refused |
 | `MCP_TIMEOUT_MS`, `MCP_POLL_MINUTES` | `15000`, `15` | MCP request timeout; how often every server's tools are re-listed and re-hashed (0 turns off) |
@@ -50,12 +52,36 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `MEDIA_WHISPER_BIN`, `MEDIA_WHISPER_MODEL`, `MEDIA_WORK_DIR` | — | whisper.cpp for transcripts (without it the transcribe preset is unavailable); scratch directory for media jobs |
 | `IMAGE_BACKENDS` | `[]` | Image workers as JSON: `[{id, kind: comfyui\|diffusers, url, label?, model?, workflow?, concurrency?}]` |
 | `IMAGE_SAFETY_URL`, `IMAGE_SAFETY_THRESHOLD` | —, `0.5` | Image-safety classifier for generated images and video frames; without it images are marked "not classified" |
+| `OPENAI_STREAM_MODE` | `checked` | The OpenAI-compatible API at `/v1`: `checked` streams an answer after the output guardrail has passed it; `live` streams tokens as they are generated (a later block can only end the stream with `finish_reason: content_filter`) |
+| `WEBHOOK_ALLOWED_HOSTS` | — | Webhook endpoints must resolve to internal addresses; this comma list (hosts, `*.domain`, CIDRs) allows others. Tenants can narrow further on the Tenants screen |
+| `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_MAX_ATTEMPTS`, `WEBHOOK_RETRY_BASE_MS` | `10000`, `6`, `30000` | Per-attempt timeout; attempts per delivery; first retry delay, doubling each attempt (capped at six hours) |
+| `WEBHOOK_BREAKER_THRESHOLD`, `WEBHOOK_BREAKER_COOLDOWN_MS` | `5`, `300000` | Consecutive failed attempts that open an endpoint's circuit breaker, and how long it stays open before a trial delivery |
+| `BILLING_PROVIDER` | `none` | `stripe` lets a system admin push a finished month's statement as a Stripe invoice |
+| `STRIPE_SECRET_KEY` (`_FILE`), `STRIPE_API_URL`, `STRIPE_DAYS_UNTIL_DUE` | —, `https://api.stripe.com`, `30` | Stripe restricted key (invoice items and invoices, write), API base (a mirror or proxy in air-gapped installs), invoice terms |
+| `BILLING_CLOSE_MINUTES` | `360` | How often the scheduler closes last month's statements (0 turns off) |
 | `SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_HOURS` | `30`, `12` | Session lifetime |
 | `LOCKOUT_MAX_ATTEMPTS`, `LOCKOUT_WINDOW_MINUTES`, `LOCKOUT_DURATION_MINUTES` | `5`, `15`, `15` | Sign-in lockout |
+| `STEPUP_WINDOW_SECONDS` | `300` | Creating API keys, removing a second factor and regenerating recovery codes need a password or factor check this recent (signing in counts) |
+| `BREACHED_PASSWORDS` | `off` | Breached-password check for new local passwords: `hibp` (the k-anonymity range API: only the first five hex characters of the SHA-1 leave the server), `file` (a local list), `both`, or `off`. If a source cannot be reached the password is accepted and `password.breach_check.unavailable` is audited |
+| `BREACHED_HIBP_URL`, `BREACHED_TIMEOUT_MS` | `https://api.pwnedpasswords.com`, `3000` | Range API base (`GET <url>/range/<prefix>`); point it at an internal mirror in air-gapped sites |
+| `BREACHED_FILE` | — | Required for `file` and `both`: uppercase SHA-1 hashes, one per line, sorted, optionally followed by `:count` (the format of HIBP's "ordered by hash" download). Searched in place by binary search, never loaded into memory |
+| `PASSWORD_RESET_MINUTES`, `PASSWORD_RESET_PER_HOUR` | `60`, `5` | Lifetime of emailed reset links; reset requests per hour per identifier and per account (four times that per client address). Needs `SMTP_URL` |
+| `PASSWORD_INVITE_HOURS` | `72` | Lifetime of invitation links for local accounts created without a password |
 | `DEFAULT_TENANT` | `default` | Tenant used when sign-in names none |
 | `IDENTITY_CONFIG` | — | Path to the identity YAML ([identity.md](identity.md)) |
 | `METRICS_TOKEN` (`_FILE`) | — | Bearer token for `/metrics`; without it `/metrics` is off in production |
 | `LOG_LEVEL` | `info` | pino level |
+| `CHAT_STREAM_LEASE_SECONDS`, `CHAT_RETENTION_SWEEP_MINUTES` | `30`, `60` | Sprint 12: a streaming answer whose instance has been silent this long is marked interrupted (the user can continue it); how often each tenant's conversation retention policy runs (0 turns it off). The stream catch-up buffer uses Redis when `REDIS_URL` is set, otherwise the database |
+| `DATA_KEY_PREVIOUS` (`_FILE`), `KMS_PREVIOUS_PROVIDER` | — | Sprint 15: the previous key-encryption key while `kms:rewrap` runs (below). Reads fall back to it; nothing new is wrapped with it |
+| `NTP_SERVER`, `NTP_TIMEOUT_MS` | —, `2000` | Sprint 15: SNTP server (`host` or `host:port`) for the clock-skew check on the Platform screen |
+| `MEDIA_ORIGIN`, `MEDIA_URL_TTL_SECONDS` | —, `300` | Sprint 15: a second host name for this deployment that serves media and images through signed short-lived URLs (point it at the same instances; it answers `/media-content/*` only) |
+| `OPENBAO_DATABASE_MOUNT` | `database` | Sprint 15: OpenBao database secrets engine for dynamic data-connection credentials (uses `OPENBAO_ADDR` and `OPENBAO_TOKEN`; the token needs read on `<mount>/creds/<role>` and update on `sys/leases/renew` and `sys/leases/revoke`) |
+| `PLATFORM_BUNDLE_REQUIRE_CHECKS` | `false` | Sprint 15: refuse to promote a bundle whose vulnerability scan or staging deploy did not run |
+| `PLATFORM_BACKUP_BLOBS` | `true` | Sprint 15: backups also archive the blob store |
+| `ACME_CHALLENGE`, `ACME_DNS_PROVIDER`, `ACME_DNS_WAIT_SECONDS` | `http-01`, `none`, `5` | Sprint 15: `dns-01` publishes TXT records through `webhook` or `rfc2136` |
+| `ACME_DNS_WEBHOOK_URL`, `ACME_DNS_WEBHOOK_SECRET` (`_FILE`) | — | The signed DNS hook (below) |
+| `ACME_DNS_RFC2136_SERVER`, `ACME_DNS_RFC2136_ZONE`, `ACME_DNS_TSIG_NAME`, `ACME_DNS_TSIG_SECRET` (`_FILE`), `ACME_DNS_TSIG_ALGORITHM` | —, —, —, —, `hmac-sha256` | RFC 2136 dynamic update: the zone's primary, the zone, and the TSIG key (secret in base64, as in a BIND key file) |
+| `ACME_CERT_DIR` | — | Sprint 15: every instance writes issued and renewed certificates here as `<name>/fullchain.pem`, `cert.pem`, `chain.pem`, `privkey.pem` |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -150,6 +176,17 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   either is broken. Checkpoints are also written to the blob store under `audit-checkpoints/`.
 - **Keys:** `exprsn-ai kms:rotate --tenant <slug>` starts a new data-key version; older values stay readable.
   Offboarding a tenant destroys its keys (crypto-shredding) and cannot be undone.
+- **Changing the key-encryption key (Sprint 15):** to replace `DATA_KEY`, set the new value as `DATA_KEY` and the
+  old one as `DATA_KEY_PREVIOUS` on every instance and restart them (reads fall back to the old key, new keys use the
+  new one); then run `exprsn-ai kms:rewrap`. It re-wraps every data key, re-signs audit checkpoints and rewrites each
+  backup's archive key and manifest, verifies that everything opens with the new key alone, and exits 2 if not; it is
+  safe to run again. When it reports verified, remove `DATA_KEY_PREVIOUS`. To move from the local KMS to OpenBao, set
+  `KMS_PROVIDER=openbao` with `KMS_PREVIOUS_PROVIDER=local` (the old `DATA_KEY` stays set, or goes in
+  `DATA_KEY_PREVIOUS`); from OpenBao to local, `KMS_PROVIDER=local`, the new `DATA_KEY` and
+  `KMS_PREVIOUS_PROVIDER=openbao` with `OPENBAO_ADDR` and `OPENBAO_TOKEN` still set.
+- **Rate limits (Sprint 15):** with `REDIS_URL` set, the API limits, the failed-credential throttle and the denial
+  cap are shared by all instances (one atomic Lua script per hit); if Redis stops answering they fall back to
+  per-instance memory counters rather than letting requests through.
 - **Backups:** back up the application database and the blob store together, and the KMS (OpenBao) or `DATA_KEY`
   separately from both: without the key, sealed conversations, attachments and exports cannot be read. Sessions,
   lockout counters and Redis can be lost safely; the audit chain and users cannot.
@@ -165,9 +202,16 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   (default a week) into a scratch SQLite file under `PLATFORM_DRILL_DIR` (default the OS temp dir; give it room for a
   copy of the database). Targets: `PLATFORM_BACKUP_RPO_MINUTES` (1 day) and `PLATFORM_BACKUP_RTO_MINUTES` (4 h).
 - Each backup is encrypted with a key wrapped by the KMS key `<OPENBAO_KEY_PREFIX>platform-backups` and signed by
-  it: keep `DATA_KEY` (local KMS) or the OpenBao transit keys backed up separately, and back up the blob store
-  (`BLOB_DIR` or the S3 bucket) with the host's or the bucket's own replication. The Platform screen lists both as
-  "not covered" and "external" so this stays visible.
+  it: keep `DATA_KEY` (local KMS) or the OpenBao transit keys backed up separately. Since Sprint 15 the dump is
+  streamed and each backup also archives the blob store (`PLATFORM_BACKUP_BLOBS`); the archives live in the blob
+  store under `platform/backups/`, so copy that prefix somewhere else (another bucket, offline media) to survive the
+  loss of the store itself.
+- Restore (Sprint 15): stop every instance, point the configuration at an empty database (and blob store), then run
+  `exprsn-ai backup:restore --backup <id>`, adding `--from <dir>` when the backup files are in a copy of the blob store
+  rather than the configured one (a directory holding `platform/backups/<id>.*`). It migrates the schema, checks the
+  manifest signature, authenticates both archives in a first pass, restores every row in one transaction (foreign
+  keys checked at commit), then writes the blob objects. A database that already has tenants, users or audit events is
+  refused; `--force --confirm "replace all data"` empties it first. Start the instances afterwards.
 - By hand: `exprsn-ai backup:create`, then `exprsn-ai backup:restore-drill [--backup <id>]` (exit code 2 on failure),
   for example from a systemd timer or before an upgrade.
 
@@ -180,10 +224,16 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   requiring authentication).
 - Renewal runs every `ACME_CHECK_MINUTES` (6 h) and renews `ACME_RENEW_DAYS` (30) before expiry. Install renewed
   certificates with the deploy tooling: `GET /api/admin/platform/certificates/:id/chain` and the audited
-  `POST …/key`.
+  `POST …/key`, or set `ACME_CERT_DIR` and let the reverse proxy read and reload the files each instance writes there.
+- dns-01 (Sprint 15), for wildcards or names the CA cannot reach on port 80: `ACME_CHALLENGE=dns-01` and either
+  `ACME_DNS_PROVIDER=rfc2136` (a TSIG key allowed to update `_acme-challenge` TXT records in the zone, for example BIND
+  `update-policy { grant acme-update. wildcard *.corp.internal. TXT; };`) or `ACME_DNS_PROVIDER=webhook` (an internal
+  hook that verifies `X-Exprsn-Signature` and updates your DNS; see `docs/api.md`).
 
 ### Import bundles
 
+- `PLATFORM_BUNDLE_REQUIRE_CHECKS=true` makes the scan and the staging deploy mandatory. Signer keys are under dual
+  control: after the first, a second platform admin approves every added or revoked key on the Platform screen.
 - `PLATFORM_TRIVY_BIN` (and `PLATFORM_TRIVY_CACHE_DIR` holding the offline vulnerability database) enables the scan;
   `PLATFORM_STAGING_URL` is an internal service that receives `{bundle, digest, contents, files}` and answers
   `{ok, detail}`. Mirror URLs, the staging hook and probes must resolve to internal addresses; `PLATFORM_ALLOWED_HOSTS`

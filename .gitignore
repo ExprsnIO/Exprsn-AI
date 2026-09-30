@@ -152,3 +152,4 @@ data/
 *.sqlite-shm
 *.sqlite-wal
 server/dist/
+.DS_Store

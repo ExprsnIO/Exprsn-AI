@@ -1,7 +1,8 @@
 import type { Db } from '../db/knex.js';
 import { hmac, randomToken } from '../crypto/index.js';
 
-export type SessionStage = 'mfa' | 'enroll' | 'active';
+/** `password`: the account must change its password (admin-set or reset) before anything else. */
+export type SessionStage = 'mfa' | 'enroll' | 'password' | 'active';
 
 export interface SessionRow {
   id: string;
@@ -15,6 +16,8 @@ export interface SessionRow {
   challenge: string | null;
   challenge_expires_at: number | null;
   mfa_verified_at: number | null;
+  /** When the owner last proved who they are (password or factor); null on rows from before 1.1 (use created_at). */
+  auth_at?: number | null;
   created_at: number;
   last_seen_at: number;
   expires_at: number;
@@ -33,6 +36,7 @@ const toRow = (r: Record<string, unknown>): SessionRow => ({
   ...(r as unknown as SessionRow),
   challenge_expires_at: r.challenge_expires_at == null ? null : Number(r.challenge_expires_at),
   mfa_verified_at: r.mfa_verified_at == null ? null : Number(r.mfa_verified_at),
+  auth_at: r.auth_at == null ? null : Number(r.auth_at),
   created_at: Number(r.created_at),
   last_seen_at: Number(r.last_seen_at),
   expires_at: Number(r.expires_at),
@@ -81,6 +85,7 @@ export class SessionService {
       challenge: null,
       challenge_expires_at: null,
       mfa_verified_at: input.mfaVerified ? t : null,
+      auth_at: t,
       created_at: t,
       last_seen_at: t,
       expires_at: this.expiry(input.stage, t),
@@ -122,6 +127,7 @@ export class SessionService {
       stage: patch.stage,
       method: patch.method ?? s.method,
       mfa_verified_at: patch.mfaVerified ? t : s.mfa_verified_at,
+      auth_at: patch.mfaVerified ? t : (s.auth_at ?? s.created_at),
       challenge: null,
       challenge_expires_at: null,
       last_seen_at: t,
@@ -131,6 +137,13 @@ export class SessionService {
     if (!n) throw new Error('Session no longer exists');
     this.onRevoke([s.id]);
     return { token, session: { ...s, ...upd } };
+  }
+
+  /** Records a fresh password or factor check on the session (step-up re-authentication). */
+  async markAuthenticated(sessionId: string): Promise<number> {
+    const t = Date.now();
+    await this.db('sessions').where({ id: sessionId }).update({ auth_at: t });
+    return t;
   }
 
   async setChallenge(sessionId: string, challenge: string, ttlMs = 5 * 60_000): Promise<void> {

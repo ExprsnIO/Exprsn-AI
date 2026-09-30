@@ -25,7 +25,7 @@ export function connectionAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     return s.audit.append({ tenantId: p.tenantId, action, kind: 'admin', actor: actorFrom(p, ip(req)), target, label, ...(detail ? { detail } : {}), traceId: req.traceId });
   };
-  const view = async (tenantId: string, id: string) => connectionView(await c.get(tenantId, id), (await c.usage(tenantId)).get(id) ?? []);
+  const view = async (tenantId: string, id: string) => ({ ...connectionView(await c.get(tenantId, id), (await c.usage(tenantId)).get(id) ?? []), lease: c.lease(id) });
   const ctx = (req: Request) => ({ principal: principalOf(req), ip: ip(req), traceId: req.traceId });
 
   r.get('/connections', manage, async (req, res) => {
@@ -53,15 +53,21 @@ export function connectionAdminRoutes(s: Services): Router {
           timeoutS: z.number().int().min(1).max(300).default(10),
           tls: z.boolean().default(false),
           username: z.string().trim().min(1).max(200).nullable().default(null),
-          password: z.string().max(1000).nullable().default(null)
+          password: z.string().max(1000).nullable().default(null),
+          /** OpenBao database role: the connection takes short-lived accounts from `<mount>/creds/<role>`. */
+          baoRole: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,128}$/).nullable().default(null)
         })
         .strict(),
       req.body
     );
-    if (!(ENGINES as readonly string[]).includes(body.engine)) throw conflict('That engine is not installed on this platform. Register offers PostgreSQL and OpenSearch only.');
+    if (!(ENGINES as readonly string[]).includes(body.engine)) throw conflict('That engine is not installed on this platform. Register offers PostgreSQL, MySQL and OpenSearch.');
     try {
-      const row = await c.create(p, { ...body, engine: body.engine as 'postgres' | 'opensearch' });
-      await audit(req, 'connection.registered', { connection: row.id, name: row.name }, row.label, { engine: row.engine, endpoint: row.endpoint, zone: row.zone, account: row.account });
+      await s.zones.assertMemberFits('connection', body.zone, body.label).catch(async (err: unknown) => {
+        await s.audit.append({ tenantId: p.tenantId, action: 'connection.register.refused', kind: 'admin', actor: actorFrom(p, ip(req)), target: { name: body.name }, label: body.label, detail: { zone: body.zone, reason: (err as Error).message }, traceId: req.traceId });
+        throw err;
+      });
+      const row = await c.create(p, { ...body, engine: body.engine as 'postgres' | 'opensearch' | 'mysql' });
+      await audit(req, 'connection.registered', { connection: row.id, name: row.name }, row.label, { engine: row.engine, endpoint: row.endpoint, zone: row.zone, account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role });
       res.status(201).json(await view(p.tenantId, row.id));
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A connection with that name exists.');
@@ -76,6 +82,10 @@ export function connectionAdminRoutes(s: Services): Router {
       req.body
     );
     if (body.ops === 'write') throw conflict('Writes are not available on registered connections in this release: every query runs on a read-only account in a read-only transaction.');
+    if (body.zone !== undefined || body.label !== undefined) {
+      const cur = await c.get(p.tenantId, String(req.params.id));
+      await s.zones.assertMemberFits('connection', body.zone ?? cur.zone, body.label ?? cur.label);
+    }
     const row = await c.update(p, String(req.params.id), body);
     await audit(req, 'connection.updated', { connection: row.id, name: row.name }, row.label, { changed: Object.keys(body), version: row.version });
     res.json(await view(p.tenantId, row.id));
@@ -83,9 +93,9 @@ export function connectionAdminRoutes(s: Services): Router {
 
   r.put('/connections/:id/credential', manage, async (req, res) => {
     const p = principalOf(req);
-    const body = parseBody(z.object({ username: z.string().trim().min(1).max(200), password: z.string().max(1000) }).strict(), req.body);
-    const row = await c.setCredential(p, String(req.params.id), body.username, body.password);
-    await audit(req, 'connection.credential.rotated', { connection: row.id, name: row.name }, row.label, { account: row.account, version: row.version });
+    const body = parseBody(z.union([z.object({ username: z.string().trim().min(1).max(200), password: z.string().max(1000) }).strict(), z.object({ baoRole: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,128}$/) }).strict()]), req.body);
+    const row = 'baoRole' in body ? await c.setDynamicRole(p, String(req.params.id), body.baoRole) : await c.setCredential(p, String(req.params.id), body.username, body.password);
+    await audit(req, 'connection.credential.rotated', { connection: row.id, name: row.name }, row.label, { account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role, version: row.version });
     res.json(await view(p.tenantId, row.id));
   });
 

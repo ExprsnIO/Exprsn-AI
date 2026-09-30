@@ -4,7 +4,6 @@ import express, { type ErrorRequestHandler, type Express } from 'express';
 import compression from 'compression';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { ZodError } from 'zod';
 import { redactRequest, traceIdFrom } from '../observability/index.js';
 import { authRoutes } from '../routes/auth.js';
@@ -33,7 +32,15 @@ import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
+import { openAiRoutes } from '../openai/routes.js';
+import { sharingRoutes } from '../routes/sharing.js';
+import { promptRoutes } from '../routes/prompts.js';
+import { integrationAdminRoutes } from '../routes/admin/integrations.js';
+import { billingAdminRoutes } from '../routes/admin/billing.js';
 import type { Services } from '../services.js';
+import { Limiter } from '../platform/ratelimit.js';
+import { mediaHostGuard, mediaOriginRoutes } from '../media/origin.js';
+import { sendBytes } from '../routes/media.js';
 import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
@@ -75,8 +82,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
           scriptSrc: ["'self'"],
           // The console sets element style attributes for layout; no inline <style> or script is needed.
           styleSrc: ["'self'", "'unsafe-inline'"],
-          imgSrc: ["'self'", 'data:'],
-          mediaSrc: ["'self'"],
+          imgSrc: ["'self'", 'data:', ...(s.cfg.MEDIA_ORIGIN ? [new URL(s.cfg.MEDIA_ORIGIN).origin] : [])],
+          mediaSrc: ["'self'", ...(s.cfg.MEDIA_ORIGIN ? [new URL(s.cfg.MEDIA_ORIGIN).origin] : [])],
           fontSrc: ["'self'"],
           connectSrc: ["'self'"],
           objectSrc: ["'none'"],
@@ -92,12 +99,17 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
     })
   );
   app.use(compression());
+  // Sprint 15: the separate media origin (MEDIA_ORIGIN) serves signed media reads and nothing else.
+  app.use(mediaHostGuard(s));
 
   app.use(healthRoutes(s, state));
+  app.use(mediaOriginRoutes(s, sendBytes));
   // OIDC, SAML and device-flow protocol endpoints: public paths with their own parsing and checks.
   app.use(federationPublicRoutes(s));
   // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
   app.use(acmeChallengeRoutes(s));
+  // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
+  app.use('/v1', openAiRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
@@ -109,16 +121,13 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
-  const general = new RateLimiterMemory({ points: 600, duration: 60 });
-  const authLimiter = new RateLimiterMemory({ points: 30, duration: 60 });
-  const limit = (limiter: RateLimiterMemory): express.RequestHandler => async (req, _res, next) => {
-    try {
-      await limiter.consume(req.principal?.userId ?? req.ip ?? 'unknown');
-      next();
-    } catch (r) {
-      const ms = (r as { msBeforeNext?: number }).msBeforeNext ?? 1000;
-      throw tooManyRequests('Slow down: too many requests.', ms / 1000);
-    }
+  // Counted in the shared counter store: one limit across every instance when REDIS_URL is set.
+  const general = new Limiter(s.counters, 'api', 600, 60_000);
+  const authLimiter = new Limiter(s.counters, 'auth', 30, 60_000);
+  const limit = (limiter: Limiter): express.RequestHandler => async (req, _res, next) => {
+    const r = await limiter.consume(req.principal?.userId ?? req.ip ?? 'unknown');
+    if (!r.allowed) throw tooManyRequests('Slow down: too many requests.', r.resetMs / 1000);
+    next();
   };
 
   // Credential attempts share the strict limiter; reads (the session check every page load makes) the general one.
@@ -149,6 +158,11 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', zoneAdminRoutes(s));
   api.use('/admin', platformAdminRoutes(s));
   api.use('/admin', federationAdminRoutes(s));
+  // Sprint 13: integrations.
+  api.use(sharingRoutes(s));
+  api.use(promptRoutes(s));
+  api.use('/admin', integrationAdminRoutes(s));
+  api.use('/admin', billingAdminRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

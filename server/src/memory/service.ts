@@ -19,6 +19,8 @@ export type MemoryScope = 'user' | 'workspace' | 'agent';
 export type MemoryState = 'proposed' | 'active' | 'superseded';
 export const USER_TYPES = ['user', 'episodic'] as const;
 export const WORKSPACE_TYPES = ['convention', 'glossary', 'contact'] as const;
+/** What an agent may propose about its own work (Sprint 12): progress on a task, a quirk of a tool or source. */
+export const AGENT_TYPES = ['progress', 'quirk'] as const;
 const COLLECTION = 'memory';
 
 export interface MemoryRow {
@@ -31,8 +33,9 @@ export interface MemoryRow {
   label: Label;
   source_label: Label;
   state: MemoryState;
-  source: { conversationId: string; messageId: string } | null;
-  origin: 'manual' | 'chat' | 'extraction';
+  /** A chat turn, or (for an agent's proposal) the run that proposed it. */
+  source: { conversationId: string; messageId: string } | { runId: string } | null;
+  origin: 'manual' | 'chat' | 'extraction' | 'agent';
   author_id: string | null;
   accepted_by: string | null;
   embed_model: string | null;
@@ -175,7 +178,8 @@ export class MemoryService {
     const versions = (await this.db('memory_versions').where({ memory_id: m.id }).orderBy('created_at', 'desc')) as { version: number; note: string; actor: string | null; created_at: number }[];
     const names = await this.names([m.author_id, m.accepted_by, ...versions.map((v) => v.actor)]);
     let source: { conversationId: string; title: string | null } | null = null;
-    if (m.source) {
+    const run = m.source && 'runId' in m.source ? m.source.runId : null;
+    if (m.source && 'conversationId' in m.source) {
       const c = (await this.db('conversations').where({ tenant_id: m.tenant_id, id: m.source.conversationId }).first()) as { id: string; user_id: string; title: string | null } | undefined;
       source = { conversationId: m.source.conversationId, title: c && c.user_id === p.userId && c.title ? await this.d.keys.open(m.tenant_id, c.title, `title:${c.id}`).catch(() => null) : null };
     }
@@ -190,6 +194,7 @@ export class MemoryService {
       state: m.state,
       origin: m.origin,
       source,
+      run,
       author: m.author_id ? (names.get(m.author_id) ?? null) : m.scope === 'agent' ? m.owner_id : null,
       authorId: m.author_id,
       acceptedBy: m.accepted_by ? (names.get(m.accepted_by) ?? null) : null,
@@ -381,6 +386,26 @@ export class MemoryService {
       }
     }
     return { proposals, refused: refused.length };
+  }
+
+  /**
+   * A memory an agent run proposes about its own work (Sprint 12), under the agent's memory policy (checked by the
+   * caller). It passes the same write checks as any memory (tenant policy, the credential ban, the `memory` checkpoint
+   * with the agent's rule sets), is never a text a curator rejected before or one the agent already holds, and waits
+   * for a knowledge curator to accept it.
+   */
+  async proposeForAgent(p: Principal, input: { agent: string; runId: string; text: string; type: string; label: Label }): Promise<MemoryRow> {
+    const text = input.text.replace(/\s+/g, ' ').trim();
+    if (text.length < 4 || text.length > 1000) throw new HttpProblem(422, 'Invalid memory', 'A memory is 4 to 1000 characters.');
+    const hash = await this.d.terms.text(p.tenantId, 'memory-reject', text.toLowerCase());
+    if (await this.db('memory_rejections').where({ tenant_id: p.tenantId, owner_key: `agent:${input.agent}`, hash }).first()) throw conflict('A curator rejected this memory before, so it is not proposed again.');
+    for (const e of ((await this.db('memories').where({ tenant_id: p.tenantId, scope: 'agent', owner_id: input.agent }).whereNot({ state: 'superseded' })) as Record<string, unknown>[]).map(fromRow)) {
+      if ((await this.open(e, e.content)).toLowerCase() === text.toLowerCase()) throw conflict('The agent already has this memory or a proposal for it.');
+    }
+    const clean = await this.checkWrite(p, p.tenantId, p.workspaceId ?? null, text, input.label, { scope: 'agent', agent: input.agent, proposal: true, run: input.runId });
+    const m = await this.insert({ tenantId: p.tenantId, scope: 'agent', ownerId: input.agent, type: input.type, text: clean, label: input.label, sourceLabel: input.label, state: 'proposed', origin: 'agent', source: { runId: input.runId }, authorId: null, acceptedBy: null, expiresAt: null, note: `proposed by run ${input.runId}; passed the memory checkpoint` });
+    await this.d.audit.append({ tenantId: p.tenantId, action: 'memory.proposed', kind: 'system', actor: { service: 'agents', user: p.userId }, target: { memory: m.id, agent: input.agent, run: input.runId }, label: m.label, detail: { type: m.type, scope: 'agent' } });
+    return m;
   }
 
   /** The chat context provider: active, unexpired memories of the user and the workspace, up to the ceiling. */

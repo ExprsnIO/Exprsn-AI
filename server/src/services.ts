@@ -23,7 +23,8 @@ import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
 import { Bus, TOPICS } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
-import { Notifications } from './platform/notifications.js';
+import { Notifications, type MailTransport } from './platform/notifications.js';
+import { AccountService } from './identity/account.js';
 import { QuotaService } from './tenancy/quotas.js';
 import { Offboarding } from './tenancy/offboarding.js';
 import { Gateway } from './gateway/gateway.js';
@@ -31,6 +32,7 @@ import { GatewayRepo } from './gateway/repo.js';
 import { AttachmentService } from './chat/attachments.js';
 import { CalcWorker } from './chat/calc.js';
 import { ChatService } from './chat/service.js';
+import { DbStreamStore, RedisStreamStore } from './chat/streams.js';
 import type { Guardrails } from './guardrails/types.js';
 import { createGuardrails, type GuardrailModule } from './guardrails/index.js';
 import { RegistryService } from './registry/service.js';
@@ -49,6 +51,7 @@ import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
 import { ConnectionService } from './connections/service.js';
 import { createDrivers, type DriverFactory } from './connections/drivers.js';
+import { createDynamicCredentials, type DynamicCredentials } from './connections/dynamic.js';
 import { KnowledgeService } from './knowledge/service.js';
 import { CliGit, type GitFetcher } from './knowledge/sources.js';
 import { MemoryService } from './memory/service.js';
@@ -60,6 +63,15 @@ import { OpsService } from './ops/service.js';
 import { createAcme, type AcmeClient } from './ops/acme.js';
 import { FederationService } from './federation/service.js';
 import { createKerberos, type KerberosVerifier } from './federation/kerberos.js';
+import { TenantIntegrations } from './integrations/hosts.js';
+import { WebhookService } from './webhooks/service.js';
+import { PromptService } from './prompts/service.js';
+import { ConversationSharing } from './chat/sharing.js';
+import { BillingService } from './billing/service.js';
+import { StripeProvider, type BillingProvider } from './billing/stripe.js';
+import { OpenAiService } from './openai/service.js';
+import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
+import { createPreviousKms, withPrevious } from './platform/rewrap.js';
 
 export interface Services {
   cfg: Config;
@@ -128,6 +140,21 @@ export interface Services {
   /** Sprint 9: OIDC provider, SAML IdP, upstream federation, Kerberos SPNEGO and device flow. */
   federation: FederationService;
   kerberos: KerberosVerifier;
+  account: AccountService;
+  /** Sprint 13: per-tenant integration settings (outbound host allow-list, price book, billing customer). */
+  integrations: TenantIntegrations;
+  /** Sprint 13: outbound webhooks, signed deliveries as jobs with retries and a circuit breaker. */
+  webhooks: WebhookService;
+  /** Sprint 13: the prompt library. */
+  prompts: PromptService;
+  /** Sprint 13: conversation shares and exports. */
+  sharing: ConversationSharing;
+  /** Sprint 13: price books and monthly statements from the usage meter. */
+  billing: BillingService;
+  /** Sprint 13: the OpenAI-compatible API behind /v1. */
+  openai: OpenAiService;
+  /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
+  counters: CounterStore;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -140,27 +167,35 @@ export interface ServiceOverrides {
   imageSafety?: ImageSafety;
   vectors?: VectorStore;
   /** Data connection drivers by engine (tests use in-process fakes). */
-  drivers?: Partial<Record<'postgres' | 'opensearch', DriverFactory>>;
+  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql', DriverFactory>>;
+  /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
+  dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
+  /** Email transport (tests record messages instead of sending them). */
+  mail?: MailTransport;
+  /** Sprint 13: the billing provider (tests use a fake Stripe). */
+  billingProvider?: BillingProvider | null;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
   const bus = new Bus(log, cfg.REDIS_URL);
-  const kms = overrides.kms ?? createKms(cfg);
+  // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
+  const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
   const keys = new DataKeys(db, kms, cfg.OPENBAO_KEY_PREFIX, cfg.DATA_KEY, bus);
   const blobs = overrides.blobs ?? createBlobStore(cfg);
   const mode = cfg.JOB_QUEUE === 'auto' ? (cfg.REDIS_URL ? 'bullmq' : 'db') : cfg.JOB_QUEUE;
   const jobs = new JobQueue(db, log, bus, { mode, redisUrl: cfg.REDIS_URL, pollMs: cfg.JOB_POLL_MS, concurrency: cfg.JOB_CONCURRENCY });
   const scheduler = new Scheduler(jobs, log);
   const audit = new AuditLog(db);
-  const denials = new DenialAudit(audit);
+  const counters = createCounterStore(cfg.REDIS_URL, log);
+  const denials = new DenialAudit(audit, 20, 60_000, counters);
   const providers = new ProviderRepo(db);
   const users = new UserRepo(db);
   const tenants = new TenantRepo(db);
-  const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL });
+  const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL, ...(overrides.mail ? { transport: overrides.mail } : {}) });
   configureSecretPolicy(
     secretPolicy({ envAllow: cfg.SECRET_REF_ENV, dirs: cfg.SECRET_REF_DIRS, serverEnvNames: SERVER_ENV_NAMES, serverSecretFiles: FILE_VARS.map((n) => process.env[`${n}_FILE`]) })
   );
@@ -180,7 +215,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
-  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine);
+  const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine, {
+    store: cfg.REDIS_URL ? new RedisStreamStore(cfg.REDIS_URL, keys, log) : new DbStreamStore(db, keys),
+    flags: guard.flags,
+    notifications,
+    leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000
+  });
+  guard.flags.heldAnswer = (tenantId, messageId) => chat.heldText(tenantId, messageId);
   const registry = new RegistryService(db);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
@@ -192,7 +233,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK } });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t) });
   tools.useWorkflows(workflows);
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
@@ -209,7 +250,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
-  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers });
+  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers }, overrides.dynamicCredentials !== undefined ? overrides.dynamicCredentials : createDynamicCredentials(cfg));
   const knowledge = new KnowledgeService(
     { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id) },
     {
@@ -222,6 +263,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
+  agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
   chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
@@ -278,10 +320,25 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     acme: overrides.acme ?? createAcme(cfg),
     federation: new FederationService(() => s),
     kerberos: overrides.kerberos ?? createKerberos(cfg),
+    // Sprint 11: account self-service.
+    account: new AccountService(() => s),
+    // Sprint 13 services read their collaborators through `s`.
+    integrations: new TenantIntegrations(db),
+    webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS }),
+    prompts: new PromptService(() => s),
+    sharing: new ConversationSharing(() => s),
+    billing: new BillingService(
+      () => s,
+      overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
+    ),
+    openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
+    counters,
     close: async () => {
       scheduler.stop();
+      s.webhooks.close();
       await denials.flushAll().catch(() => undefined);
       chat.close();
+      await chat.store.close();
       await gateway.stop();
       await calc.close();
       siem.close();
@@ -289,6 +346,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await chain.close();
       await mcp.close();
       await bus.close();
+      await counters.close();
+      await connections.close().catch(() => undefined);
     }
   };
   registerPlatformJobs(s);
@@ -298,6 +357,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.zones.registerJobs();
   s.ops.registerJobs();
   s.federation.registerJobs();
+  s.webhooks.registerJobs();
+  s.webhooks.listen();
+  s.sharing.registerJobs();
+  jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
 }
@@ -311,6 +374,14 @@ function registerPlatformJobs(s: Services): void {
       return row ? [await s.sync.syncProvider(row)] : [];
     }
     return s.sync.syncTenant(tenantId, ctx.progress);
+  });
+
+  // Sprint 12: conversation retention, and answers whose generating instance stopped.
+  s.jobs.register('chat.retention', async (p, ctx) => s.chat.purgeExpired(String(p.tenantId ?? ctx.job.tenant_id)));
+  s.jobs.register('chat.sweep', async (p, ctx) => {
+    const interrupted = await s.chat.sweepInterrupted(String(p.tenantId ?? ctx.job.tenant_id));
+    await s.chat.store.expire(24 * 3_600_000);
+    return { interrupted };
   });
 
   s.jobs.register('audit.checkpoint', async (p, ctx) => {
@@ -328,8 +399,11 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
+  s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
+  s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);
   s.training.schedule(s.scheduler, activeTenants);
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
   s.federation.schedule(s.scheduler, activeTenants);
+  if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
 }

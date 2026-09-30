@@ -1,7 +1,9 @@
 /* Protocol pages served by the federation routes (no inline scripts: CSP script-src 'self').
    data-mode="continue": re-check the session from our own origin and resume, or sign in first.
    data-mode="device":   the RFC 8628 verification page (approve a device code as the signed-in user).
-   data-mode="autopost": submit the SAML response form to the service provider. */
+   data-mode="autopost": submit the SAML response form to the service provider.
+   data-mode="reauth":   prompt=login or max_age: sign out of this session, then sign in again and resume.
+   data-mode="logout":   the signed-out page: let the front-channel logout frames load, then continue. */
 (function () {
   'use strict';
   var body = document.body;
@@ -30,6 +32,33 @@
       store(LOOP, null);
       signIn(url);
     }, function () { signIn(url); });
+    return;
+  }
+
+  if (mode === 'reauth') {
+    var again = body.getAttribute('data-continue');
+    session().then(function (s) {
+      if (!s || !s.authenticated) { signIn(again); return; }
+      return fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json', 'x-csrf-token': s.csrf || '' } })
+        .then(function () { store(LOOP, null); signIn(again); });
+    }, function () { signIn(again); });
+    return;
+  }
+
+  if (mode === 'logout') {
+    var next = body.getAttribute('data-continue');
+    var post = document.querySelector('form[data-logoutpost]');
+    var frames = Array.prototype.slice.call(document.querySelectorAll('iframe'));
+    var left = frames.length;
+    var gone = false;
+    var go = function () {
+      if (gone) return;
+      gone = true;
+      if (post) post.submit(); else if (next) location.assign(next);
+    };
+    frames.forEach(function (f) { f.addEventListener('load', function () { left -= 1; if (left <= 0) go(); }); });
+    // Frames that never load (an application that is down) do not hold the sign-out up for long.
+    if (!frames.length) go(); else setTimeout(go, 3000);
     return;
   }
 

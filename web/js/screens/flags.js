@@ -87,7 +87,7 @@
       if (!item || st.forceEmpty) {
         main = UI.pagehead(st.forceEmpty && st.items.length ? 'Queue empty (preview)' : 'Queue empty', st.forceEmpty && st.items.length ? 'This is what reviewers see when nothing is waiting. ' + st.items.length + ' flag' + (st.items.length === 1 ? ' is' : 's are') + ' still in your queue.' : 'Nothing is waiting for review in ' + esc((App.me && App.me.workspaces || []).filter((w) => w.id === App.me.workspace).map((w) => w.name)[0] || 'this workspace') + '.')
           + UI.notice('<b>Nothing is waiting.</b> New flags arrive over /ws and by email for high severity. Timers start when a flag is created.', 'ok', UI.btn(st.forceEmpty ? 'Back to the queue' : 'Reload queue', { size: 'sm', attrs: 'data-reload' }))
-          + UI.panel('Last 24 hours of decisions', UI.table(['Flag', 'Rule', 'Decision', 'By', 'When'], (st.decided || []).map((d) => ['<span class="mono">' + esc(d.ref) + '</span>', esc(d.rule), UI.pill(d.action, d.action === 'confirmed' ? 'ok' : d.action === 'dismissed' ? '' : 'info'), esc(d.by || ''), esc(when(d.at))]), { clickable: false, minWidth: '0', emptyTitle: 'No decisions yet' }) + '<div class="muted" style="font-size:12px">Confirmed flags are eval cases and classifier training data. Dismissals count as false positives against their rule. <a href="#" data-goaudit>Full history in Usage and audit</a></div>');
+          + UI.panel('Last 24 hours of decisions', UI.table(['Flag', 'Rule', 'Decision', 'By', 'When'], (st.decided || []).map((d) => ['<span class="mono">' + esc(d.ref) + '</span>', esc(d.rule), UI.pill(d.action, d.action === 'confirmed' || d.action === 'approved' ? 'ok' : d.action === 'dismissed' ? '' : d.action === 'rejected' ? 'danger' : 'info'), esc(d.by || ''), esc(when(d.at))]), { clickable: false, minWidth: '0', emptyTitle: 'No decisions yet' }) + '<div class="muted" style="font-size:12px">Confirmed flags are eval cases and classifier training data. Dismissals count as false positives against their rule. <a href="#" data-goaudit>Full history in Usage and audit</a></div>');
       } else if (!f) {
         main = UI.pagehead(titleOf(item), 'Loading the flag…') + UI.notice('Loading…', 'info');
       } else if (f.restricted) {
@@ -112,11 +112,14 @@
             ['Time remaining', l < 0 ? '<span style="color:var(--danger-fg)">overdue by ' + -l + ' min</span>' : l + ' min of ' + f.slaMinutes],
             ['Prior decisions on this rule', f.prior ? f.prior.confirmed + ' confirmed, ' + f.prior.dismissed + ' dismissed' : 'none']
           ], 5))
+          + (f.kind === 'hold' ? UI.panel('Held answer', f.held ? '<div class="flags-answer serif">' + esc(f.held.content) + '</div><span class="muted" style="font-size:12px">The owner sees "Held for review" until you decide. Approving shows them this answer as it is; rejecting withdraws it.</span>' : UI.notice('The answer is no longer stored (its conversation was deleted). Rejecting closes the flag.', 'warn')) : '')
           + '<div class="panel flags-bar"><div class="hstack wrap">'
-          + UI.btn('Confirm', { kind: 'primary', attrs: 'data-act="confirmed"' }) + '<span class="mono muted">C</span>'
-          + UI.btn('Dismiss as false positive', { attrs: 'data-act="dismissed"' }) + '<span class="mono muted">D</span>'
+          + (f.kind === 'hold'
+            ? UI.btn('Approve answer', { kind: 'primary', attrs: 'data-act="approved"', disabled: !f.held || f.held.state !== 'held' }) + '<span class="mono muted">A</span>' + UI.btn('Reject answer', { attrs: 'data-act="rejected"' }) + '<span class="mono muted">X</span>'
+            : UI.btn('Confirm', { kind: 'primary', attrs: 'data-act="confirmed"' }) + '<span class="mono muted">C</span>')
+          + (f.kind === 'hold' ? '' : UI.btn('Dismiss as false positive', { attrs: 'data-act="dismissed"' }) + '<span class="mono muted">D</span>')
           + UI.btn('Escalate', { attrs: 'data-act="escalated"' }) + '<span class="mono muted">E</span>'
-          + UI.btn('Send to eval set', { attrs: 'data-eval', disabled: inEval }) + '<span class="mono muted">S</span>'
+          + (f.kind === 'hold' ? '' : UI.btn('Send to eval set', { attrs: 'data-eval', disabled: inEval }) + '<span class="mono muted">S</span>')
           + '<span class="muted" style="font-size:12px">J and K move through the queue</span></div></div>';
       }
 
@@ -147,6 +150,7 @@
         if (k === 'j' || k === 'k') { const ids = list.map((x) => x.ref); const i = ids.indexOf(st.sel); const n = k === 'j' ? Math.min(ids.length - 1, i + 1) : Math.max(0, i - 1); if (ids[n] && ids[n] !== st.sel) select(ids[n]); e.preventDefault(); return; }
         if (!f || st.forceEmpty) return;
         if (f.restricted) { if (k === 'r') { const b = ctx.$('[data-reassign]'); if (b) b.click(); e.preventDefault(); } return; }
+        if (f.kind === 'hold') { if (k === 'a') decide(ctx, f, 'approved'); else if (k === 'x') decide(ctx, f, 'rejected'); else if (k === 'e') decide(ctx, f, 'escalated'); else return; e.preventDefault(); return; }
         if (k === 'c') decide(ctx, f, 'confirmed'); else if (k === 'd') decide(ctx, f, 'dismissed'); else if (k === 'e') decide(ctx, f, 'escalated'); else if (k === 's') sendToEval(ctx, f); else return;
         e.preventDefault();
       };
@@ -203,6 +207,8 @@
     const st = ctx.state;
     if (!f || f.restricted) return;
     const copy = {
+      approved: { title: 'Approve the held answer', tag: 'approve', tone: 'info', body: '<p style="margin:0" class="fg2">The answer is shown to its owner as it was generated, and they are notified. Counts as a false positive against <b>' + esc(f.rule) + '</b>.</p>', ok: 'Approve' },
+      rejected: { title: 'Reject the held answer', tag: 'reject', tone: 'danger', body: '<p style="margin:0" class="fg2">The answer is withdrawn: its text is replaced with a notice and never reaches the owner, who is notified. Counts as a true positive for <b>' + esc(f.rule) + '</b>.</p>', ok: 'Reject' },
       confirmed: { title: 'Confirm flag', tag: 'confirm', tone: 'info', body: '<p style="margin:0" class="fg2">The flag is recorded as a true positive. The span becomes an eval case for <b>' + esc(f.rule) + '</b> and training data for its classifier.</p>', ok: 'Confirm' },
       dismissed: { title: 'Dismiss as false positive', tag: 'false positive', tone: 'warn', body: '<p style="margin:0" class="fg2">Counts as a false positive against <b>' + esc(f.rule) + '</b>. Enough dismissals lower its promotion score and show on the Guardrails page.</p>' + UI.field('Reason', UI.select(['Figure is grounded in the cited source', 'Rule matched benign text', 'Content is within policy', 'Other'], 'Rule matched benign text', 'data-reason')), ok: 'Dismiss' },
       escalated: { title: 'Escalate', tag: 'escalate', tone: 'danger', body: '<p style="margin:0" class="fg2">Moves the flag to the guardrail admins with a fresh 60 min timer. Use it when the decision needs someone with more context or clearance.</p>' + UI.field('Escalate to', UI.select(ESCALATE, 'workspace', 'data-to')) + UI.field('Note', UI.textarea('', { placeholder: 'What should they look at?', rows: 2, attrs: 'data-note' })), ok: 'Escalate' }
@@ -219,6 +225,12 @@
         const to = (ESCALATE.find((x) => x.value === (picked.to || 'workspace')) || ESCALATE[0]).label;
         advance(ctx, f, '<b>' + esc(f.ref) + ' escalated</b> to the ' + esc(to) + ' with a fresh 60 min timer.');
         ctx.toast(esc(f.ref) + ' escalated. The guardrail admins are notified.', 'warn');
+        return;
+      }
+      if (action === 'approved' || action === 'rejected') {
+        await App.post('/api/flags/' + encodeURIComponent(f.ref) + '/decide', { decision: action });
+        advance(ctx, f, '<b>' + esc(f.ref) + (action === 'approved' ? ' approved.</b> The answer is now shown to its owner.' : ' rejected.</b> The answer was withdrawn.'));
+        ctx.toast(action === 'approved' ? esc(f.ref) + ' approved. The owner is notified.' : esc(f.ref) + ' rejected. The answer is withdrawn and the owner is notified.', action === 'approved' ? 'ok' : 'warn');
         return;
       }
       const r = await App.post('/api/flags/' + encodeURIComponent(f.ref) + '/decide', { decision: action, reason: action === 'dismissed' ? picked.reason || null : null });

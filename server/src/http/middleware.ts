@@ -10,7 +10,11 @@ import { actorFrom } from '../audit/chain.js';
 import type { SessionRow, SessionStage } from '../identity/sessions.js';
 import type { ApiKeyRow } from '../identity/apikeys.js';
 import type { Services } from '../services.js';
-import { badRequest, forbidden, HttpProblem, unauthorized } from './problem.js';
+import { badRequest, forbidden, HttpProblem, tooManyRequests, unauthorized } from './problem.js';
+import { Limiter } from '../platform/ratelimit.js';
+
+/** Failed bearer tokens and API keys allowed per address per minute before the address gets 429 (B-111). */
+export const BAD_BEARER_PER_MINUTE = 20;
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -80,21 +84,35 @@ export async function resolveWorkspace(s: Services, p: Principal, requested: str
 
 /** Resolves the caller from a bearer API key or the session cookie. Never rejects: see requireAuth. */
 export function authenticate(s: Services): RequestHandler {
+  // Failed bearer attempts per address, in the shared counter store: guessing API keys or tokens gets 429 after 20.
+  const badBearer = new Limiter(s.counters, 'bearer-fail', BAD_BEARER_PER_MINUTE, 60_000);
+  const refuse = async (req: Request, problem: HttpProblem): Promise<never> => {
+    const r = await badBearer.consume(req.ip ?? 'unknown');
+    if (!r.allowed) throw tooManyRequests('Too many failed credentials from this address. Wait before trying again.', r.resetMs / 1000);
+    throw problem;
+  };
   return async (req, _res, next) => {
     const auth = req.headers.authorization;
     if (auth) {
-      const m = /^Bearer\s+(\S+)$/i.exec(auth);
-      if (!m?.[1]) throw unauthorized('Malformed Authorization header.');
+      // An address over its limit is refused before the credential is even checked, so guessing stops paying off.
+      const held = await badBearer.blocked(req.ip ?? 'unknown');
+      if (held.blocked) throw tooManyRequests('Too many failed credentials from this address. Wait before trying again.', held.resetMs / 1000);
+      // Sprint 14: `DPoP <token>` with a DPoP proof header, for sender-constrained OAuth access tokens (RFC 9449).
+      const m = /^(Bearer|DPoP)\s+(\S+)$/i.exec(auth);
+      if (!m?.[2]) return refuse(req, unauthorized('Malformed Authorization header.'));
+      const scheme = m[1]!.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
+      m[1] = m[2];
+      if (scheme === 'dpop' && !m[1].startsWith('eyJ')) return refuse(req, unauthorized('The DPoP scheme is only for OAuth access tokens.'));
       // OAuth access tokens from the OIDC provider (JWTs), narrowed to their scopes like API keys.
       if (m[1].startsWith('eyJ')) {
-        const p = await s.federation.principalFromAccessToken(m[1]);
-        if (!p) throw new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } });
+        const p = await s.federation.principalFromAccessToken(m[1], { scheme, dpop: { proof: req.header('dpop'), method: req.method, url: `${new URL(s.cfg.PUBLIC_URL).origin}${req.originalUrl}` } });
+        if (!p) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
         req.principal = p;
         p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
         return next();
       }
       const key = await s.apiKeys.verify(m[1]);
-      if (!key) throw new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } });
+      if (!key) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
       const p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
       if (!p) throw unauthorized('The key owner is disabled.');
       req.apiKey = key;
@@ -145,7 +163,25 @@ export function requireAuth(opts: { stages?: SessionStage[]; sessionOnly?: boole
     if (!req.principal) throw unauthorized();
     if (opts.sessionOnly && !req.authSession) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
     if (req.authSession && !stages.includes(req.authSession.stage)) {
-      throw new HttpProblem(401, 'Unauthorized', req.authSession.stage === 'mfa' ? 'Complete the second factor to continue.' : 'Set up a second factor to continue.', { extensions: { stage: req.authSession.stage } });
+      const detail = req.authSession.stage === 'mfa' ? 'Complete the second factor to continue.' : req.authSession.stage === 'password' ? 'Change your password to continue.' : 'Set up a second factor to continue.';
+      throw new HttpProblem(401, 'Unauthorized', detail, { extensions: { stage: req.authSession.stage } });
+    }
+    next();
+  };
+}
+
+/**
+ * Sprint 11 (B-106): sensitive account changes need a password or factor check within STEPUP_WINDOW_SECONDS
+ * (ASVS 3.7.1). Signing in counts; so does POST /api/me/step-up. Use after requireAuth({ sessionOnly: true }).
+ */
+export function requireRecentAuth(s: Services): RequestHandler {
+  return (req, _res, next) => {
+    const session = req.authSession;
+    if (!session) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
+    if (!s.account.isRecent(session)) {
+      throw new HttpProblem(401, 'Step-up required', 'Confirm your password or a second factor to continue.', {
+        extensions: { step_up: true, window_seconds: s.cfg.STEPUP_WINDOW_SECONDS }
+      });
     }
     next();
   };
