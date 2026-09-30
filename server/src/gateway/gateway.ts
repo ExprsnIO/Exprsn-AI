@@ -3,7 +3,7 @@ import { labelRank, type Label } from '../authz/labels.js';
 import { HttpProblem, tooManyRequests } from '../http/problem.js';
 import { TOPICS, type Bus } from '../platform/bus.js';
 import type { JobContext, JobQueue } from '../platform/jobs.js';
-import { OllamaClient, OllamaError, type PsModel, type TagModel } from './ollama.js';
+import { OllamaClient, OllamaError, type ChatMessage, type PsModel, type TagModel } from './ollama.js';
 import type { Evaluation, GatewayRepo, InstanceRow, ModelRow, PoolRow, ProfileRow } from './repo.js';
 
 export interface GatewayOptions {
@@ -476,6 +476,63 @@ export class Gateway {
     const next = r.waiting.shift();
     if (next) next.resolve();
     r.waiting.forEach((w, i) => w.onPosition?.(i + 1));
+  }
+
+  // ---------- direct model use (embeddings, reranking) ----------
+
+  /**
+   * Leases a slot for a catalogue model used without a profile (embedding and reranking models): the model must be
+   * approved for the data's label and placed on a pool cleared for it.
+   */
+  async leaseModel(modelName: string, label: Label, signal: AbortSignal, capability?: string): Promise<Lease> {
+    const model = await this.repo.modelByName(modelName);
+    if (!model) throw new HttpProblem(409, 'Conflict', `${modelName} is not in the model catalogue.`);
+    if (capability && !model.capabilities.includes(capability)) throw new HttpProblem(409, 'Conflict', `${model.name} does not have the ${capability} capability.`);
+    if (labelRank(model.label) < labelRank(label)) throw new HttpProblem(403, 'Forbidden', `${model.name} is approved for data up to ${model.label}, not ${label}.`, { extensions: { step: 'zone' } });
+    return this.acquire({ pool_id: null } as ProfileRow, model, label, { signal });
+  }
+
+  /** Embeds texts with an embedding model, in batches; returns one vector per input and what it cost. */
+  async embed(modelName: string, input: string[], label: Label, signal: AbortSignal = new AbortController().signal): Promise<{ embeddings: number[][]; promptTokens: number; gpuMs: number; poolId: string | null }> {
+    if (!input.length) return { embeddings: [], promptTokens: 0, gpuMs: 0, poolId: null };
+    const lease = await this.leaseModel(modelName, label, signal, 'embedding');
+    const out: number[][] = [];
+    let promptTokens = 0;
+    let gpuMs = 0;
+    try {
+      for (let i = 0; i < input.length; i += 32) {
+        const batch = input.slice(i, i + 32);
+        const r = await lease.client.embed(lease.model.name, batch, signal);
+        if (!Array.isArray(r.embeddings) || r.embeddings.length !== batch.length) throw new OllamaError(`${lease.model.name} returned ${r.embeddings?.length ?? 0} embeddings for ${batch.length} inputs`, 500);
+        out.push(...r.embeddings);
+        promptTokens += r.prompt_eval_count ?? batch.reduce((a, x) => a + Math.ceil(x.length / 4), 0);
+        gpuMs += ((r.total_duration ?? 0) + (r.load_duration ?? 0)) / 1e6;
+      }
+      if (lease.cold) this.noteResident(lease.instance.id, lease.model.name);
+    } finally {
+      lease.release();
+    }
+    return { embeddings: out, promptTokens, gpuMs, poolId: lease.pool.id };
+  }
+
+  /** A short non-streamed completion from a catalogue model (the reranker), without thinking or tools. */
+  async complete(modelName: string, messages: ChatMessage[], label: Label, signal: AbortSignal = new AbortController().signal): Promise<{ content: string; promptTokens: number; outputTokens: number }> {
+    const lease = await this.leaseModel(modelName, label, signal);
+    let content = '';
+    let promptTokens = 0;
+    let outputTokens = 0;
+    try {
+      for await (const chunk of lease.client.chat({ model: lease.model.name, messages, options: { temperature: 0 } }, signal)) {
+        if (chunk.message?.content) content += chunk.message.content;
+        if (chunk.done) {
+          promptTokens = chunk.prompt_eval_count ?? 0;
+          outputTokens = chunk.eval_count ?? 0;
+        }
+      }
+    } finally {
+      lease.release();
+    }
+    return { content, promptTokens, outputTokens };
   }
 
   /** Marks a model as seen resident after a request loaded it (so the next pick prefers this instance). */

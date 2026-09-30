@@ -2,76 +2,133 @@
   const { UI, esc } = App;
 
   const LEVELS = ['public', 'internal', 'confidential', 'restricted'];
-  const CLASSIFIERS = [
-    { id: 'pii', name: 'PII detector', engine: 'deterministic', sub: 'deterministic, negligible cost', status: 'published', cost: 'Negligible', desc: 'Regex, checksums and entropy for personal data. Used by 9 guardrail rules, column masking on 4 connections and auto-labelling in every knowledge base.', version: 7, owner: 'Platform', dataset: 'pii-eval-2026-06 (4,410 samples)',
-      labels: [{ label: 'email', p: 0.99, r: 0.98, thr: 0.5, n: 1802 }, { label: 'phone', p: 0.96, r: 0.91, thr: 0.5, n: 1210 }, { label: 'iban', p: 1.0, r: 0.99, thr: 0.5, n: 902, note: 'checksum verified' }, { label: 'national-id', p: 0.94, r: 0.88, thr: 0.5, n: 496 }],
-      usage: [['Guardrails', 'PII-IBAN, PII in prompts, PII in proposed memory and 6 more', 'guardrails'], ['Connections', 'Column masking on ledger-ro, hr-warehouse, app-logs, contracts-index', 'connections'], ['Knowledge', 'Auto-labelling in Finance KB, Contracts KB, Policy KB, Engineering wiki', 'knowledge']] },
-    { id: 'secrets', name: 'Secrets and keys', engine: 'deterministic', sub: 'deterministic', status: 'published', cost: 'Negligible', desc: 'Private key headers, cloud access keys, bearer tokens and high-entropy strings. Used by 4 guardrail rules at input, output, memory and script checkpoints.', version: 5, owner: 'Platform', dataset: 'secrets-eval-2026-05 (2,120 samples)',
-      labels: [{ label: 'private-key', p: 1.0, r: 1.0, thr: 0.5, n: 640 }, { label: 'cloud-access-key', p: 0.99, r: 0.97, thr: 0.5, n: 720 }, { label: 'bearer-token', p: 0.93, r: 0.90, thr: 0.5, n: 560 }, { label: 'high-entropy', p: 0.81, r: 0.95, thr: 0.6, n: 200, note: 'entropy 4.2 bits' }],
-      usage: [['Guardrails', 'Secrets and private keys (input and output), Secrets in memory, Hard-coded credentials', 'guardrails']] },
-    { id: 'finance', name: 'Finance sensitivity', engine: 'embedding + linear head', sub: 'embedding plus linear head', status: 'published', cost: 'Very low', desc: 'Embedding plus trained linear head on nomic-embed-text. Used for auto-labelling in 3 knowledge bases and 2 guardrail rules.', version: 3, owner: 'Mara Okafor', dataset: 'finance-labels-2026-08 (4,980 samples)',
-      labels: [{ label: 'public', p: 0.97, r: 0.93, thr: 0.50, n: 1210 }, { label: 'internal', p: 0.91, r: 0.94, thr: 0.55, n: 2044 }, { label: 'confidential', p: 0.94, r: 0.89, thr: 0.60, n: 1630 }, { label: 'restricted', p: 0.98, r: 0.71, thr: 0.80, n: 96, note: 'small sample' }],
-      usage: [['Knowledge', 'Auto-labelling in Finance KB, Contracts KB, Policy KB', 'knowledge'], ['Guardrails', 'Label ceiling across workspaces, Restricted leaves the tenant', 'guardrails'], ['Training', 'Retrained from confirmed flags every Sunday 02:00', 'training']] },
-    { id: 'safety', name: 'Safety categories', engine: 'guard model', sub: 'guard model llama-guard3', status: 'published', cost: 'Medium', desc: 'llama-guard3:8b through the gateway on gpu-small-1. Categories S1 to S13; used by 3 guardrail rules at model output, image and media checkpoints.', version: 2, owner: 'Platform', dataset: 'safety-eval-2026-07 (3,300 samples)',
-      labels: [{ label: 'S1 violent crimes', p: 0.95, r: 0.92, thr: 0.5, n: 420 }, { label: 'S4 child exploitation', p: 0.99, r: 0.97, thr: 0.3, n: 310 }, { label: 'S6 specialised advice', p: 0.82, r: 0.88, thr: 0.6, n: 880 }, { label: 'S11 self-harm', p: 0.96, r: 0.94, thr: 0.4, n: 390 }],
-      usage: [['Guardrails', 'Safety categories, Image prompt safety, Frame safety', 'guardrails'], ['Pools', 'gpu-small-1, pinned, 2 replicas', 'pools']] },
-    { id: 'contract', name: 'Contract type', engine: 'LLM with JSON schema', sub: 'LLM with JSON schema, high cost', status: 'draft', cost: 'High', desc: 'qwen2.5:32b-q4_K_M with a JSON-schema output over the first two pages. Few examples so far; intended for Contracts KB metadata.', version: 1, owner: 'Tomasz Weber', dataset: 'contract-types-2026-09 (188 samples)',
-      labels: [{ label: 'MSA', p: 0.90, r: 0.86, thr: 0.5, n: 62, note: 'small sample' }, { label: 'SOW', p: 0.84, r: 0.80, thr: 0.5, n: 58, note: 'small sample' }, { label: 'NDA', p: 0.97, r: 0.95, thr: 0.5, n: 44, note: 'small sample' }, { label: 'Lease', p: 0.71, r: 0.60, thr: 0.5, n: 24, note: 'small sample' }],
-      usage: [['Knowledge', 'Proposed for Contracts KB metadata (not yet bound)', 'knowledge']] }
-  ];
-  const curve = (l, t) => { const d = t - l.thr; return { p: Math.max(0.5, Math.min(0.995, l.p + d * 0.55)), r: Math.max(0.2, Math.min(0.995, l.r - d * 1.0)) }; };
+  const MIN = 200;
+  const COST = { deterministic: 'Negligible', linear: 'Very low', guard: 'Medium', llm: 'High' };
+  const SUB = { deterministic: 'deterministic, negligible cost', linear: 'word features plus trained linear head', guard: 'guard model through the gateway', llm: 'LLM with JSON output, high cost' };
+  const ENGINE = { deterministic: 'deterministic', linear: 'trained linear head', guard: 'guard model', llm: 'LLM with JSON output' };
+  const SAMPLE = { pii: 'Pay supplier Fabrikam at DE89 3704 0044 0532 0130 00, contact anna.ruiz@fabrikam.example, +351 21 555 0199.', secrets: 'export OPENAI_KEY=sk-9f3ab21c7d4e5f6a8b9c0d1e2f3a4b5c6d7e and rotate weekly', safety: 'If the supplier misses the date again, the safest route is to talk to them before invoking clause 9.' };
+  const enc = encodeURIComponent;
+  const fmt = (v) => (v == null ? 'n/a' : Number(v).toFixed(2));
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+  const overlayOpen = () => !!document.getElementById('overlay');
+  /** Precision and recall at a threshold, from the scores the last evaluation kept. */
+  const at = (points, t) => {
+    if (!points || !points.length) return null;
+    let tp = 0, fp = 0, fn = 0;
+    points.forEach((p) => { const hit = p[0] > 0 && p[0] >= t; if (hit && p[1]) tp++; else if (hit) fp++; else if (p[1]) fn++; });
+    return { p: tp + fp ? tp / (tp + fp) : null, r: tp + fn ? tp / (tp + fn) : null };
+  };
+
+  const live = { sock: null, onJob: null, handler: null };
+  const detach = () => { if (live.sock && live.onJob) live.sock.off('job.progress', live.onJob); live.sock = null; live.onJob = null; };
+  const attach = () => {
+    if (!App.socket || live.sock === App.socket) return;
+    detach();
+    live.sock = App.socket;
+    live.onJob = (e) => { if (App.state.route !== 'classifiers') { detach(); return; } if (live.handler) live.handler(e); };
+    live.sock.on('job.progress', live.onJob);
+  };
+  window.addEventListener('hashchange', () => { if (App.parse().route !== 'classifiers') detach(); });
 
   App.register({
-    id: 'classifiers', title: 'Classifiers', summary: 'Classifier registry, thresholds, evaluation, label names, batch runs', section: 'admin',
-    crumb: (st) => ['Admin', 'Classifiers', (CLASSIFIERS.find((c) => c.id === st.sel) || CLASSIFIERS[2]).name],
+    id: 'classifiers', title: 'Classifiers', live: true, section: 'admin',
+    summary: 'Classifier registry, thresholds, evaluation, label names, batch runs',
+    crumb: (st) => { const c = (st.list || []).find((x) => x.id === st.sel); return ['Admin', 'Classifiers'].concat(c ? [c.name] : []); },
     commands: [
       { label: 'Test text against a classifier', sub: 'Classifiers', run(app) { app.stateFor('classifiers').openTest = true; app.render(); } },
       { label: 'Run batch classification', sub: 'Classifiers', run(app) { app.stateFor('classifiers').startBatch = true; app.render(); } }
     ],
     states: [
-      { title: 'Reorder refused', tone: 'danger', text: 'Dragging a level shows why order is fixed: ceilings and high-water marks depend on it.', apply(ctx) { ctx.state.reorder = true; ctx.rerender(); } },
-      { title: 'Eval set too small', tone: 'warn', text: 'Below 200 samples per label the page warns that precision and recall are not reliable.', apply(ctx) { const st = ctx.state; st.sel = 'finance'; st.tab = 'evaluation'; st.label = 'restricted'; st.smallWarn = true; ctx.rerender(); } },
+      { title: 'Reorder refused', tone: 'danger', text: 'Dragging a level shows why order is fixed: ceilings and high-water marks depend on it.', apply(ctx) { tryReorder(ctx, ['internal', 'public', 'confidential', 'restricted']); } },
+      { title: 'Eval set too small', tone: 'warn', text: 'Below 200 samples per label the page warns that precision and recall are not reliable.', apply(ctx) { const st = ctx.state; const c = (st.list || []).find((x) => x.labels.some((l) => ((x.samples || {})[l.label] || 0) < MIN)); if (c) { st.sel = c.id; st.label = c.labels.find((l) => ((c.samples || {})[l.label] || 0) < MIN).label; } st.tab = 'evaluation'; st.smallWarn = true; ctx.rerender(); } },
       { title: 'Batch run', tone: 'info', text: 'classify.batch shows progress, the label distribution so far and a cancel action.', apply(ctx) { ctx.state.startBatch = true; ctx.rerender(); } },
-      { title: 'Highest wins', tone: 'neutral', text: 'Where manual, auto and inherited labels differ, the page shows all three and marks the highest as effective.', apply(ctx) { const st = ctx.state; st.sel = 'finance'; st.tab = 'usage'; st.highest = true; ctx.rerender(); } }
+      { title: 'Highest wins', tone: 'neutral', text: 'Where manual, auto and inherited labels differ, the page shows all three and marks the highest as effective.', apply(ctx) { const st = ctx.state; const c = (st.list || []).find((x) => x.labels.every((l) => LEVELS.indexOf(l.label) >= 0)); if (c) st.sel = c.id; st.tab = 'usage'; st.highest = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.classifier) { st.sel = ctx.params.classifier; delete ctx.params.classifier; }
-      st.sel = st.sel || 'finance'; st.tab = st.tab || 'evaluation'; st.names = st.names || { public: 'Public', internal: 'Internal', confidential: 'Confidential', restricted: 'Strictly confidential' }; st.thr = st.thr || {};
-      const c = CLASSIFIERS.find((x) => x.id === st.sel) || CLASSIFIERS[2];
+      st.thr = st.thr || {}; st.tab = st.tab || 'evaluation';
+      const later = () => { if (App.state.route !== 'classifiers') return; if (overlayOpen()) { setTimeout(later, 250); return; } ctx.rerender(); };
+      const load = (quiet) => {
+        if (st.loading) return;
+        st.loading = true;
+        Promise.all([App.get('/api/admin/classifiers'), App.get('/api/admin/label-names').catch(() => null)])
+          .then(([list, names]) => { st.list = list; if (names) st.names = names; st.loaded = true; st.loadError = null; })
+          .catch((err) => { if (!quiet) st.loadError = err; })
+          .finally(() => { st.loading = false; later(); });
+      };
+      if (!st.loaded && !st.loadError) load();
+      if (st.loadError || !st.loaded) {
+        root.innerHTML = '<div class="page">' + UI.pagehead('Classifiers', 'One registry for auto-labelling and guardrails', '') + (st.loadError ? UI.problem('Classifiers could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        ctx.on('click', '[data-reload]', () => { st.loadError = null; ctx.rerender(); });
+        return;
+      }
+      if (ctx.params.classifier) { const hit = st.list.find((x) => x.id === ctx.params.classifier || x.slug === ctx.params.classifier); if (hit) st.sel = hit.id; delete ctx.params.classifier; }
+      const c = st.list.find((x) => x.id === st.sel) || st.list[0];
+      st.sel = c.id;
       if (!c.labels.some((l) => l.label === st.label)) st.label = c.labels[c.labels.length - 1].label;
       const lab = c.labels.find((l) => l.label === st.label);
-      const key = c.id + '/' + lab.label; const thr = st.thr[key] != null ? st.thr[key] : lab.thr;
-      const at = curve(lab, thr); const alt = curve(lab, Math.max(0.05, Math.round((thr - 0.15) * 100) / 100));
-      const small = lab.n < 200;
-      const anySmall = c.labels.some((l) => l.n < 200);
+      const key = c.id + '/' + lab.label;
+      const thr = st.thr[key] != null ? st.thr[key] : lab.threshold;
+      const samples = c.samples || {};
+      const n = (l) => samples[l] || 0;
+      const metrics = c.metrics;
+      const perLabel = (l) => (metrics && metrics.perLabel[l]) || null;
+      const pts = (l) => (metrics && metrics.points[l]) || null;
+      const cur = at(pts(lab.label), thr);
+      const alt = at(pts(lab.label), Math.max(0.05, Math.round((thr - 0.15) * 100) / 100));
+      const small = n(lab.label) < MIN;
+      const shortLabels = c.labels.filter((l) => n(l.label) < MIN);
+      const canWrite = !c.platform || App.can('platform:manage');
+      const names = st.names || { public: 'Public', internal: 'Internal', confidential: 'Confidential', restricted: 'Restricted' };
+      const batch = st.batch && st.batch.classifierId === c.id ? st.batch : null;
+      const running = !!(batch && (batch.state === 'queued' || batch.state === 'running'));
 
-      const evalTab = (st.smallWarn || (c.status === 'draft' && anySmall) ? UI.notice('<b>Eval set too small.</b> ' + c.labels.filter((l) => l.n < 200).map((l) => esc(l.label) + ' has ' + l.n).join(', ') + ' samples. Below 200 per label, precision and recall are not reliable and thresholds should not be tuned from them.', 'warn', '<a href="#" data-gotraining>Add samples in Training</a>') : '')
-        + UI.table(['Label', { label: 'Precision', right: true }, { label: 'Recall', right: true }, { label: 'Threshold', right: true }, { label: 'Eval samples', right: true }, 'Note'], c.labels.map((l) => { const t = st.thr[c.id + '/' + l.label]; const cv = t != null ? curve(l, t) : null; return { cells: [esc(l.label), cv ? cv.p.toFixed(2) : l.p.toFixed(2), cv ? cv.r.toFixed(2) : l.r.toFixed(2), '<span class="mono">' + (t != null ? t : l.thr).toFixed(2) + '</span>' + (t != null && t !== l.thr ? ' ' + UI.pill('unsaved', 'warn') : ''), l.n.toLocaleString('en-GB'), l.note ? UI.pill(l.note, l.note === 'small sample' ? 'warn' : 'ok') : ''], attrs: 'data-label="' + esc(l.label) + '"', selected: l.label === lab.label }; }), { minWidth: '0' })
+      const evalTab = (st.smallWarn || (shortLabels.length && c.status === 'draft') ? UI.notice('<b>Eval set too small.</b> ' + (shortLabels.length ? shortLabels.map((l) => esc(l.label) + ' has ' + n(l.label)).join(', ') + ' samples.' : 'Every label has at least ' + MIN + ' samples.') + ' Below ' + MIN + ' per label, precision and recall are not reliable and thresholds should not be tuned from them.', 'warn', '<a href="#" data-addsamples>Add labelled cases</a>') : '')
+        + (!metrics ? UI.notice('No evaluation yet. Run batch classification over the dataset <span class="mono">' + esc(c.dataset || '') + '</span> to measure precision and recall.', 'info') : metrics.errors ? UI.notice(metrics.errors + ' of ' + metrics.samples + ' cases could not be classified in the last run.', 'warn') : '')
+        + UI.table(['Label', { label: 'Precision', right: true }, { label: 'Recall', right: true }, { label: 'Threshold', right: true }, { label: 'Eval samples', right: true }, 'Note'], c.labels.map((l) => {
+          const t = st.thr[c.id + '/' + l.label]; const m = perLabel(l.label); const cv = t != null ? at(pts(l.label), t) : null;
+          return { cells: [esc(l.label), cv ? fmt(cv.p) : fmt(m && m.precision), cv ? fmt(cv.r) : fmt(m && m.recall), '<span class="mono">' + (t != null ? t : l.threshold).toFixed(2) + '</span>' + (t != null && t !== l.threshold ? ' ' + UI.pill('unsaved', 'warn') : ''), n(l.label).toLocaleString('en-GB'), n(l.label) < MIN ? UI.pill('small sample', 'warn') : c.engine === 'deterministic' && (l.label === 'iban' || l.label === 'payment_card') ? UI.pill('checksum verified', 'ok') : ''], attrs: 'data-label="' + esc(l.label) + '"', selected: l.label === lab.label };
+        }), { minWidth: '0' })
         + '<div class="cols"><div class="grow">' + UI.panel('Threshold preview: ' + lab.label,
-          '<div class="hstack gap12"><label class="fl" style="font-size:12px;font-weight:600;white-space:nowrap" for="thr-range">Threshold ' + thr.toFixed(2) + '</label><input type="range" id="thr-range" min="5" max="95" step="' + (small ? 5 : 1) + '" value="' + Math.round(thr * 100) + '" data-thr style="flex-grow:1;accent-color:var(--accent)"></div>'
-          + UI.kv([['Precision at ' + thr.toFixed(2), at.p.toFixed(2)], ['Recall at ' + thr.toFixed(2), at.r.toFixed(2)], ['At ' + Math.max(0.05, thr - 0.15).toFixed(2), 'precision ' + alt.p.toFixed(2) + ', recall ' + alt.r.toFixed(2)], ['Eval set', lab.n.toLocaleString('en-GB') + ' samples' + (small ? ': too few to trust below 0.05 steps' : '')]], 4)
-          + '<div class="hstack">' + UI.btn('Save threshold', { kind: 'primary', size: 'sm', attrs: 'data-savethr', disabled: thr === lab.thr }) + UI.btn('Reset', { kind: 'ghost', size: 'sm', attrs: 'data-resetthr', disabled: thr === lab.thr }) + '<span class="muted" style="font-size:12px">Saving creates version ' + (c.version + 1) + ' and re-labels nothing until a batch run.</span></div>') + '</div>'
+          '<div class="hstack gap12"><label class="fl" style="font-size:12px;font-weight:600;white-space:nowrap" for="thr-range">Threshold ' + thr.toFixed(2) + '</label><input type="range" id="thr-range" min="5" max="95" step="' + (small ? 5 : 1) + '" value="' + Math.round(thr * 100) + '" data-thr style="flex-grow:1;accent-color:var(--accent)"' + (canWrite ? '' : ' disabled') + '></div>'
+          + UI.kv([['Precision at ' + thr.toFixed(2), cur ? fmt(cur.p) : 'no evaluation'], ['Recall at ' + thr.toFixed(2), cur ? fmt(cur.r) : 'no evaluation'], ['At ' + Math.max(0.05, thr - 0.15).toFixed(2), alt ? 'precision ' + fmt(alt.p) + ', recall ' + fmt(alt.r) : 'no evaluation'], ['Eval set', n(lab.label).toLocaleString('en-GB') + ' samples' + (small ? ': too few to trust below 0.05 steps' : '')]], 4)
+          + '<div class="hstack">' + UI.btn('Save threshold', { kind: 'primary', size: 'sm', attrs: 'data-savethr', disabled: thr === lab.threshold || !canWrite }) + UI.btn('Reset', { kind: 'ghost', size: 'sm', attrs: 'data-resetthr', disabled: thr === lab.threshold }) + '<span class="muted" style="font-size:12px">' + (canWrite ? 'Saving creates version ' + (c.version + 1) + ' and re-labels nothing until a batch run.' : 'Platform classifiers are changed by platform admins.') + '</span></div>') + '</div>'
         + '<div style="width:360px;flex-shrink:0">' + UI.panel('Tenant names for the four levels',
-          (st.reorder ? UI.notice('<b>Reorder refused.</b> The order public, internal, confidential, restricted is fixed. Model and zone ceilings, tool egress and the high-water mark all compare levels by position.', 'danger', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-reorderok' })) : '')
-          + LEVELS.map((lv) => '<div class="hstack" draggable="true" data-drag="' + lv + '">' + UI.icon('sort', 12) + UI.label(lv, { sm: true }) + '<span style="color:var(--faint);white-space:nowrap">is shown as</span><div class="field grow"><label class="sr" for="name-' + lv + '">Name for ' + lv + '</label>' + UI.input(st.names[lv], { attrs: 'data-name="' + lv + '"' }).replace('<input', '<input id="name-' + lv + '"') + '</div></div>').join('')
+          (st.reorder ? UI.notice('<b>Reorder refused.</b> ' + esc(st.reorder), 'danger', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-reorderok' })) : '')
+          + LEVELS.map((lv) => '<div class="hstack" draggable="true" data-drag="' + lv + '">' + UI.icon('sort', 12) + UI.label(lv, { sm: true }) + '<span style="color:var(--faint);white-space:nowrap">is shown as</span><div class="field grow"><label class="sr" for="name-' + lv + '">Name for ' + lv + '</label>' + UI.input(names[lv], { attrs: 'data-name="' + lv + '"' }).replace('<input', '<input id="name-' + lv + '"') + '</div></div>').join('')
           + '<span class="muted" style="font-size:12px">Levels can be renamed. Their order is fixed.</span>') + '</div></div>';
 
+      const detail = c.engine === 'deterministic' ? (c.family === 'secrets' ? 'Private key headers, cloud key shapes, bearer token formats, Shannon entropy over 20+ character tokens' : 'Patterns with Luhn and IBAN checksums and national identifier check digits')
+        : c.engine === 'guard' ? 'Profile <span class="mono">' + esc(c.profile || '') + '</span> through the gateway, categories S1 to S14'
+        : c.engine === 'linear' ? 'Hashed words and word pairs, one logistic head per label' + (c.trained ? ', trained ' + esc(when(c.trained.at)) + ' on ' + c.trained.samples + ' cases' : ', not trained yet')
+        : 'Profile <span class="mono">' + esc(c.profile || '') + '</span>, JSON answer with label and confidence';
       const definition = UI.panel('Definition', UI.kv([
-        ['Engine', esc(c.engine)], ['Relative cost', esc(c.cost)], ['Version', 'v' + c.version + ' · ' + UI.pill(c.status)], ['Owner', esc(c.owner)],
-        ['Label set', c.labels.map((l) => '<span class="mono">' + esc(l.label) + '</span>').join(', ')], ['Eval dataset', '<a href="#" data-gotraining>' + esc(c.dataset) + '</a>'],
-        [c.engine === 'deterministic' ? 'Detectors' : c.engine === 'guard model' ? 'Model' : c.engine.indexOf('embedding') === 0 ? 'Embedding model and head' : 'Model and schema', c.engine === 'deterministic' ? 'RE2 patterns, Luhn and IBAN checksums, Shannon entropy over 20+ char tokens' : c.engine === 'guard model' ? '<span class="mono">llama-guard3:8b</span> on gpu-small-1, categories S1 to S13' : c.engine.indexOf('embedding') === 0 ? '<span class="mono">nomic-embed-text</span> 768 d, logistic head trained 8 Sep, weights 12 KB' : '<span class="mono">qwen2.5:32b-q4_K_M</span>, <span class="mono">format: json_schema</span>, 4 examples in the prompt'],
-        ['API', '<span class="mono">POST /api/classify</span> synchronous for short text; <span class="mono">classify.batch</span> jobs for bulk']
-      ], 2) + (c.engine !== 'deterministic' ? UI.code(c.engine === 'guard model' ? '{ "classifier": "safety", "text": "…", "categories": ["S1", "S4", "S6", "S11"] }' : c.engine.indexOf('LLM') === 0 ? '{\n  "classifier": "contract",\n  "schema": { "type": "object", "properties": { "type": { "enum": ["MSA", "SOW", "NDA", "Lease"] }, "confidence": { "type": "number" } } }\n}' : '{ "classifier": "finance", "labels": ["public", "internal", "confidential", "restricted"], "embedding": "nomic-embed-text" }', 'json') : ''));
+        ['Engine', esc(ENGINE[c.engine])], ['Relative cost', COST[c.engine]], ['Version', 'v' + c.version + ' · ' + UI.pill(c.status, c.status === 'published' ? 'ok' : '')], ['Owner', esc(c.owner || '')],
+        ['Label set', c.labels.map((l) => '<span class="mono">' + esc(l.label) + '</span>').join(', ')], ['Eval dataset', '<span class="mono">' + esc(c.dataset || '') + '</span> (' + Object.keys(samples).reduce((a, k) => a + samples[k], 0).toLocaleString('en-GB') + ' cases)'],
+        [c.engine === 'deterministic' ? 'Detectors' : c.engine === 'linear' ? 'Features and head' : 'Model', detail],
+        ['API', '<span class="mono">POST /api/classify</span> synchronous for short text; evaluation and training run as jobs']
+      ], 2) + (c.engine !== 'deterministic' ? UI.code(JSON.stringify({ classifier: c.slug, text: '…', label: 'internal' }, null, 1).replace(/\n\s*/g, ' '), 'json') : '')
+        + '<div class="hstack wrap">' + UI.btn('Add labelled cases', { size: 'sm', attrs: 'data-addsamples' }) + (c.engine === 'linear' ? UI.btn('Train on the dataset', { size: 'sm', attrs: 'data-train', disabled: running || !canWrite }) : '') + (c.status === 'draft' ? UI.btn('Publish', { kind: 'primary', size: 'sm', attrs: 'data-publish', disabled: !canWrite }) : '') + '</div>');
+      const versions = st.versions && st.versions.id === c.id ? st.versions.list : null;
 
-      const thresholds = UI.panel('Thresholds', UI.table(['Label', { label: 'Threshold', right: true }, 'Below threshold', 'Guardrail use'], c.labels.map((l) => { const t = st.thr[c.id + '/' + l.label]; return { cells: [esc(l.label), '<span class="mono">' + (t != null ? t : l.thr).toFixed(2) + '</span>', esc(l.label === 'restricted' ? 'falls back to confidential' : c.engine === 'deterministic' ? 'not reported' : 'next lower label'), esc(l.label === 'restricted' ? 'Restricted leaves the tenant blocks at 0.80' : l.label === 'confidential' ? 'Label ceiling across workspaces' : '')], attrs: 'data-label="' + esc(l.label) + '"', selected: l.label === lab.label }; }), { minWidth: '0' }) + '<div class="muted" style="font-size:12px">Pick a label and tune it on the Evaluation tab. Deterministic detectors have fixed thresholds; entropy detectors expose the bit threshold instead.</div>');
+      const users = (c.usage || []).map((u) => u.rule);
+      const thresholds = UI.panel('Thresholds', UI.table(['Label', { label: 'Threshold', right: true }, 'Below threshold', 'Guardrail use'], c.labels.map((l) => { const t = st.thr[c.id + '/' + l.label]; return { cells: [esc(l.label), '<span class="mono">' + (t != null ? t : l.threshold).toFixed(2) + '</span>', c.engine === 'deterministic' ? 'not reported' : 'next lower label', esc(users.slice(0, 3).join(', ') + (users.length > 3 ? ' and ' + (users.length - 3) + ' more' : ''))], attrs: 'data-label="' + esc(l.label) + '"', selected: l.label === lab.label }; }), { minWidth: '0' }) + '<div class="muted" style="font-size:12px">Pick a label and tune it on the Evaluation tab. Deterministic detectors report 1.00 on a checksum match; the entropy detector scores bits per character over 7.</div>'
+        + (versions ? UI.table(['Version', 'Change', 'When'], versions.map((v) => ['v' + v.version, esc(v.note || ''), esc(when(v.createdAt))]), { clickable: false, minWidth: '0' }) : ''));
 
-      const usage = (st.highest ? UI.panel('Label sources: Q3 cost centre review.pdf', UI.notice('Three sources disagree. The highest wins, so the document is <b>confidential</b>.', 'info') + UI.table(['Source', 'Label', 'Set by', 'Effective'], [['Manual label on the document', UI.label('internal', { sm: true }), 'Tomasz Weber, 2 Sep', ''], ['Auto-classifier Finance sensitivity v3', UI.label('confidential', { sm: true }), 'score 0.87 at threshold 0.60', UI.pill('effective', 'ok')], ['Inherited from Finance KB', UI.label('internal', { sm: true }), 'Knowledge base default', '']], { clickable: false, minWidth: '0' }) + '<div class="hstack">' + UI.btn('Open in Knowledge', { size: 'sm', attrs: 'data-goknowledge' }) + UI.btn('Hide', { kind: 'ghost', size: 'sm', attrs: 'data-hidehighest' }) + '</div>') : '')
-        + UI.panel('Used by', UI.table(['Area', 'Consumers', ''], c.usage.map((u) => ['<b>' + esc(u[0]) + '</b>', esc(u[1]), UI.btn('Open', { kind: 'ghost', size: 'xs', attrs: 'data-go="' + u[2] + '"' })]), { clickable: false, minWidth: '0' }) + '<div class="muted" style="font-size:12px">Label sources are manual, auto-classifier or inherited. The highest wins. <a href="#" data-showhighest>Show an example</a></div>');
+      const highest = st.highest ? UI.panel('Label sources: effective label', c.labels.every((l) => LEVELS.indexOf(l.label) >= 0)
+        ? '<div class="formgrid" style="--cols:2">' + UI.field('Manual label on the document', UI.select(LEVELS, st.hManual || 'internal', 'data-hmanual')) + UI.field('Inherited from the knowledge base', UI.select(LEVELS, st.hInherit || 'internal', 'data-hinherit')) + '</div>'
+          + UI.field('Text for the auto-classifier', UI.textarea(st.hText || 'Q3 travel came to 412,880 EUR against a budget of 361,500 EUR. The rest is unexplained pending the CFO review.', { rows: 2, attrs: 'data-htext' })) + '<div>' + UI.btn('Classify', { size: 'sm', attrs: 'data-hrun' }) + '</div>'
+          + (st.hResult ? (() => { const auto = st.hResult.hits.length ? st.hResult.hits.sort((a, b) => LEVELS.indexOf(b) - LEVELS.indexOf(a))[0] : 'public'; const all = [['Manual label on the document', st.hManual || 'internal', 'set by an editor'], ['Auto-classifier ' + c.name + ' v' + c.version, auto, 'score ' + fmt(st.hResult.scores[auto] || 0) + ' at threshold ' + fmt((c.labels.find((l) => l.label === auto) || { threshold: 0 }).threshold)], ['Inherited from the knowledge base', st.hInherit || 'internal', 'knowledge base default']]; const top = all.reduce((a, x) => (LEVELS.indexOf(x[1]) > LEVELS.indexOf(a) ? x[1] : a), 'public'); return UI.notice((new Set(all.map((x) => x[1]))).size > 1 ? 'The sources disagree. The highest wins, so the document is <b>' + esc(top) + '</b>.' : 'All three agree on <b>' + esc(top) + '</b>.', 'info') + UI.table(['Source', 'Label', 'Set by', 'Effective'], all.map((x) => [esc(x[0]), UI.label(x[1], { sm: true }), esc(x[2]), x[1] === top ? UI.pill('effective', 'ok') : '']), { clickable: false, minWidth: '0' }); })() : '')
+          + '<div class="hstack">' + UI.btn('Hide', { kind: 'ghost', size: 'sm', attrs: 'data-hidehighest' }) + '</div>'
+        : UI.notice('This classifier\'s labels are not the four levels, so it does not set a document\'s label. Pick a classifier labelled public, internal, confidential and restricted.', 'info', UI.btn('Hide', { kind: 'ghost', size: 'sm', attrs: 'data-hidehighest' }))) : '';
+      const usage = highest + UI.panel('Used by', UI.table(['Rule set', 'Rule', 'Checkpoint', ''], (c.usage || []).map((u) => ['<b>' + esc(u.set) + '</b>', esc(u.rule), esc(u.checkpoint), UI.btn('Open', { kind: 'ghost', size: 'xs', attrs: 'data-gorule="' + esc(u.ruleId) + '"' })]), { clickable: false, minWidth: '0', emptyTitle: 'Not used yet', emptyText: 'Guardrail rules with the classifier mechanism name it by ' + c.slug + '.' }) + '<div class="muted" style="font-size:12px">Label sources are manual, auto-classifier or inherited. The highest wins. <a href="#" data-showhighest>Show an example</a></div>');
 
-      const batch = st.batch ? UI.panel('Batch run: classify.batch ' + esc(st.batch.id), UI.meter('Documents classified', st.batch.done.toLocaleString('en-GB') + ' of ' + st.batch.total.toLocaleString('en-GB'), st.batch.done / st.batch.total * 100, 'accent')
-        + '<div class="hstack wrap gap12">' + c.labels.map((l, i) => '<span class="hstack gap6">' + UI.label(LEVELS.indexOf(l.label) >= 0 ? l.label : 'internal', { sm: true }).replace(LEVELS.indexOf(l.label) >= 0 ? '' : 'internal</span>', esc(l.label) + '</span>') + '<span class="num">' + Math.round(st.batch.done * [0.31, 0.44, 0.22, 0.03][i]).toLocaleString('en-GB') + '</span></span>').join('') + '</div>'
-        + '<div class="hstack">' + (st.batch.done >= st.batch.total ? UI.pill('complete', 'ok') + '<span class="muted" style="font-size:12px">Labels applied. Chunks above a user\'s clearance drop out of retrieval at the next query.</span>' + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-closebatch' }) : UI.pill('running', 'info') + '<span class="muted" style="font-size:12px">Lower priority than chat on the same pool. Started ' + esc(st.batch.started) + '.</span>' + UI.btn('Cancel', { size: 'sm', attrs: 'data-cancelbatch' })) + '</div>', { cls: 'tint' }) : '';
+      const dist = batch && batch.message ? batch.message.replace(/^[^:]*:\s*/, '') : '';
+      const batchPanel = batch ? UI.panel('Batch run: classify.batch ' + batch.jobId.slice(-6).toLowerCase(), UI.meter('Cases classified', batch.message ? batch.message.split(':')[0] : batch.state, batch.progress || 0, 'accent')
+        + (dist ? '<div class="hstack wrap gap12">' + dist.split(', ').map((x) => { const i = x.lastIndexOf(' '); const l = x.slice(0, i); return '<span class="hstack gap6">' + (LEVELS.indexOf(l) >= 0 ? UI.label(l, { sm: true }) : '<span class="mono">' + esc(l) + '</span>') + '<span class="num">' + esc(x.slice(i + 1)) + '</span></span>'; }).join('') + '</div>' : '')
+        + '<div class="hstack">' + (batch.state === 'succeeded' ? UI.pill('complete', 'ok') + '<span class="muted" style="font-size:12px">Precision and recall are updated on the Evaluation tab. Report only: no labels were written.</span>' + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-closebatch' })
+          : batch.state === 'failed' || batch.state === 'cancelled' ? UI.pill(batch.state, 'danger') + '<span class="muted" style="font-size:12px">' + esc(batch.error || '') + '</span>' + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-closebatch' })
+          : UI.pill('running', 'info') + '<span class="muted" style="font-size:12px">Lower priority than chat on the same pools. Started ' + esc(batch.started) + '.</span>' + UI.btn('Cancel', { size: 'sm', attrs: 'data-cancelbatch' })) + '</div>', { cls: 'tint' }) : '';
 
       root.innerHTML = '<style>'
         + '#main > .page > *{flex-shrink:0}'
@@ -80,71 +137,137 @@
         + '#main [data-drag]{cursor:grab}#main [data-drag].over{outline:1px dashed var(--danger-fg);border-radius:4px}'
         + '</style>'
         + '<div class="leftpane cls-left"><div class="hstack"><div class="eyebrow grow">Classifiers</div>' + UI.btn('New', { size: 'sm', attrs: 'data-new' }) + '</div>'
-        + '<div class="cls-list">' + CLASSIFIERS.map((x) => UI.listItem(esc(x.name), esc(x.sub), { active: x.id === c.id, attrs: 'data-cls="' + x.id + '"', right: UI.pill(x.status, x.status === 'published' ? 'ok' : '') })).join('') + '</div>'
+        + '<div class="cls-list">' + st.list.map((x) => UI.listItem(esc(x.name), esc(SUB[x.engine] + (x.platform ? ', platform' : '')), { active: x.id === c.id, attrs: 'data-cls="' + x.id + '"', right: UI.pill(x.status, x.status === 'published' ? 'ok' : '') })).join('') + '</div>'
         + '<div class="divider"></div><div class="muted" style="font-size:12px">Four engines behind one registry. The same classifiers drive auto-labelling and guardrails.</div></div>'
         + '<div class="page">'
-        + UI.pagehead(c.name, esc(c.desc), UI.btn('Run batch classification', { attrs: 'data-batch', disabled: !!(st.batch && st.batch.done < st.batch.total) }) + UI.btn('Test text', { kind: 'primary', attrs: 'data-test' }))
-        + batch
-        + UI.tabs([{ id: 'definition', label: 'Definition' }, { id: 'thresholds', label: 'Thresholds' }, { id: 'evaluation', label: 'Evaluation' }, { id: 'usage', label: 'Usage', count: c.usage.length }], st.tab)
+        + UI.pagehead(c.name, esc(c.description || ''), UI.btn('Run batch classification', { attrs: 'data-batch', disabled: running }) + UI.btn('Test text', { kind: 'primary', attrs: 'data-test' }))
+        + batchPanel
+        + UI.tabs([{ id: 'definition', label: 'Definition' }, { id: 'thresholds', label: 'Thresholds' }, { id: 'evaluation', label: 'Evaluation' }, { id: 'usage', label: 'Usage', count: (c.usage || []).length }], st.tab)
         + (st.tab === 'definition' ? definition : st.tab === 'thresholds' ? thresholds : st.tab === 'usage' ? usage : evalTab)
         + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
 
+      const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
+      live.handler = (e) => {
+        if (!st.batch || st.batch.jobId !== e.id) return;
+        Object.assign(st.batch, { state: e.state, progress: e.progress, message: e.message || st.batch.message, error: e.error });
+        if (e.state === 'succeeded') { toast('classify.batch finished: ' + esc(st.batch.message || ''), 'ok', 6000); load(true); }
+        else if (e.state === 'failed') toast('<b>classify.batch failed.</b> ' + esc(e.error || ''), 'danger', 8000);
+        later();
+      };
+      attach();
+      if (st.tab === 'thresholds' && !(st.versions && st.versions.id === c.id) && st.versionsFor !== c.id) { st.versionsFor = c.id; App.get('/api/admin/classifiers/' + enc(c.id)).then((dt) => { st.versions = { id: c.id, list: dt.versions }; later(); }).catch(() => undefined); }
       if (st.openTest) { st.openTest = false; openTest(ctx, c); }
-      if (st.startBatch) { st.startBatch = false; startBatch(ctx, c); }
-      if (st.batch && st.batch.done < st.batch.total && !st.batchTimer) tickBatch(ctx);
+      if (st.startBatch) { st.startBatch = false; startBatch(ctx, c, load); }
 
       // ---- events ----
-      ctx.on('click', '[data-cls]', (e, t) => { st.sel = t.dataset.cls; st.smallWarn = false; st.highest = false; ctx.rerender(); });
+      ctx.on('click', '[data-cls]', (e, t) => { st.sel = t.dataset.cls; st.smallWarn = false; st.highest = false; st.hResult = null; ctx.rerender(); });
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
       ctx.on('click', 'tr.row[data-label]', (e, t) => { st.label = t.dataset.label; st.tab = 'evaluation'; ctx.rerender(); });
       ctx.on('input', '[data-thr]', (e, t) => { st.thr[key] = +t.value / 100; ctx.rerender(); const r = ctx.$('[data-thr]'); if (r) r.focus(); });
-      ctx.on('click', '[data-savethr]', () => { lab.thr = thr; lab.p = at.p; lab.r = at.r; delete st.thr[key]; c.version += 1; ctx.rerender(); ctx.toast('Threshold for ' + esc(lab.label) + ' saved as v' + c.version + '. Guardrail rules using it pick up the change on their next evaluation.', 'ok'); });
+      ctx.on('click', '[data-savethr]', () => {
+        const body = {}; body[lab.label] = thr;
+        App.patch('/api/admin/classifiers/' + enc(c.id), { thresholds: body }).then((x) => { delete st.thr[key]; toast('Threshold for ' + esc(lab.label) + ' saved as v' + x.version + '. Guardrail rules using it pick up the change on their next evaluation.', 'ok'); load(true); }).catch((err) => App.fail(err, 'Threshold not saved'));
+      });
       ctx.on('click', '[data-resetthr]', () => { delete st.thr[key]; ctx.rerender(); });
-      ctx.on('change', '[data-name]', (e, t) => { st.names[t.dataset.name] = t.value; ctx.toast('Level name saved. Badges show "' + esc(t.value) + '" for ' + esc(t.dataset.name) + ' from the next page load.', 'ok'); });
+      ctx.on('change', '[data-name]', (e, t) => {
+        const body = { names: {} }; body.names[t.dataset.name] = t.value;
+        App.api('PUT', '/api/admin/label-names', body).then(() => { st.names = Object.assign({}, names); st.names[t.dataset.name] = t.value; toast('Level name saved: ' + esc(t.dataset.name) + ' is shown as "' + esc(t.value) + '".', 'ok'); }).catch((err) => App.fail(err, 'Name not saved'));
+      });
       ctx.on('dragstart', '[data-drag]', (e, t) => { e.dataTransfer.effectAllowed = 'move'; st.dragging = t.dataset.drag; });
       ctx.on('dragover', '[data-drag]', (e, t) => { e.preventDefault(); t.classList.add('over'); });
       ctx.on('dragleave', '[data-drag]', (e, t) => { t.classList.remove('over'); });
-      ctx.on('drop', '[data-drag]', (e, t) => { e.preventDefault(); if (st.dragging && st.dragging !== t.dataset.drag) { st.reorder = true; ctx.rerender(); ctx.toast('Reorder refused. Level order is fixed.', 'danger'); } });
-      ctx.on('click', '[data-reorderok]', () => { st.reorder = false; ctx.rerender(); });
+      ctx.on('drop', '[data-drag]', (e, t) => {
+        e.preventDefault();
+        if (!st.dragging || st.dragging === t.dataset.drag) return;
+        const order = LEVELS.filter((x) => x !== st.dragging); order.splice(order.indexOf(t.dataset.drag), 0, st.dragging);
+        tryReorder(ctx, order);
+      });
+      ctx.on('click', '[data-reorderok]', () => { st.reorder = null; ctx.rerender(); });
       ctx.on('click', '[data-test]', () => openTest(ctx, c));
-      ctx.on('click', '[data-batch]', () => startBatch(ctx, c));
-      ctx.on('click', '[data-cancelbatch]', () => { clearTimeout(st.batchTimer); st.batchTimer = null; const b = st.batch; st.batch = null; ctx.rerender(); ctx.toast('classify.batch ' + esc(b.id) + ' cancelled after ' + b.done.toLocaleString('en-GB') + ' documents. Labels already written stay.', 'warn'); });
+      ctx.on('click', '[data-batch]', () => startBatch(ctx, c, load));
+      ctx.on('click', '[data-cancelbatch]', () => App.post('/api/me/jobs/' + enc(st.batch.jobId) + '/cancel').then(() => { st.batch.state = 'cancelled'; toast('classify.batch cancelled. Metrics from the last complete run stay.', 'warn'); later(); }).catch((err) => App.fail(err)));
       ctx.on('click', '[data-closebatch]', () => { st.batch = null; ctx.rerender(); });
       ctx.on('click', '[data-showhighest]', (e) => { e.preventDefault(); st.highest = true; ctx.rerender(); });
-      ctx.on('click', '[data-hidehighest]', () => { st.highest = false; ctx.rerender(); });
-      ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
-      ctx.on('click', '[data-goknowledge]', () => ctx.navigate('knowledge'));
-      ctx.on('click', '[data-gotraining]', (e) => { e.preventDefault(); ctx.navigate('training'); });
-      ctx.on('click', '[data-new]', () => ctx.modal({ title: 'New classifier', body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example Supplier risk' })) + UI.field('Engine', UI.select([{ value: 'deterministic', label: 'Deterministic detectors (regex, checksums, entropy), negligible cost' }, { value: 'embedding', label: 'Embedding plus trained linear head, very low cost' }, { value: 'guard', label: 'Guard model (llama-guard3, shieldgemma, granite3-guardian), medium cost' }, { value: 'llm', label: 'General LLM with JSON-schema output, high cost' }], 'embedding')) + UI.field('Labels', UI.input('', { placeholder: 'comma separated' })) + UI.field('Eval dataset', UI.select(['Create from confirmed flags', 'Pick in Training'], 'Create from confirmed flags')) + '</div>' + UI.notice('New classifiers start as drafts. They publish only after an eval run with at least 200 samples per label.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }), onMount(m) { m.querySelector('[data-create]').addEventListener('click', () => { const name = m.querySelector('input').value || 'New classifier'; App.closeOverlay(); CLASSIFIERS.push({ id: 'new-' + Date.now(), name, engine: 'embedding + linear head', sub: 'embedding plus linear head', status: 'draft', cost: 'Very low', desc: 'Draft. Add an eval dataset and labels, then train the head.', version: 1, owner: 'Mara Okafor', dataset: 'none yet', labels: [{ label: 'positive', p: 0, r: 0, thr: 0.5, n: 0, note: 'small sample' }, { label: 'negative', p: 0, r: 0, thr: 0.5, n: 0, note: 'small sample' }], usage: [] }); st.sel = CLASSIFIERS[CLASSIFIERS.length - 1].id; st.tab = 'definition'; ctx.rerender(); ctx.toast('Draft classifier created.', 'ok'); }); } }));
+      ctx.on('click', '[data-hidehighest]', () => { st.highest = false; st.hResult = null; ctx.rerender(); });
+      ctx.on('change', '[data-hmanual]', (e, t) => { st.hManual = t.value; ctx.rerender(); });
+      ctx.on('change', '[data-hinherit]', (e, t) => { st.hInherit = t.value; ctx.rerender(); });
+      ctx.on('input', '[data-htext]', (e, t) => { st.hText = t.value; });
+      ctx.on('click', '[data-hrun]', () => App.post('/api/classify', { classifier: c.slug, text: st.hText || ctx.$('[data-htext]').value }).then((r) => { st.hResult = r; ctx.rerender(); }).catch((err) => App.fail(err, 'Not classified')));
+      ctx.on('click', '[data-gorule]', (e, t) => ctx.navigate('guardrails', { rule: t.dataset.gorule }));
+      ctx.on('click', '[data-train]', () => App.post('/api/admin/classifiers/' + enc(c.id) + '/train').then((r) => { st.batch = { jobId: r.jobId, classifierId: c.id, state: 'queued', progress: 0, started: new Date().toTimeString().slice(0, 5) }; toast('Training queued on ' + esc(c.dataset || '') + '. It evaluates on the held-out fifth when done.', 'ok'); later(); }).catch((err) => App.fail(err, 'Training not started')));
+      ctx.on('click', '[data-publish]', async () => {
+        const ok = await ctx.confirm({ title: 'Publish classifier', tag: 'publish', tone: 'info', body: '<p style="margin:0" class="fg2">Guardrail rules and auto-labelling may use a published classifier. It needs an evaluation of this version with at least ' + MIN + ' samples per label.</p>', kv: [['Classifier', esc(c.name)], ['Version', 'v' + c.version], ['Smallest label', shortLabels.length ? esc(shortLabels[0].label) + ', ' + n(shortLabels[0].label) + ' samples' : 'every label has ' + MIN + ' or more']], ok: 'Publish' });
+        if (!ok) return;
+        App.post('/api/admin/classifiers/' + enc(c.id) + '/publish').then(() => { toast(esc(c.name) + ' v' + c.version + ' is published.', 'ok'); load(true); }).catch((err) => { if (err.problem && err.problem.title === 'Eval set too small') { st.smallWarn = true; st.tab = 'evaluation'; ctx.rerender(); } App.fail(err, 'Not published'); });
+      });
+      ctx.on('click', '[data-addsamples]', (e) => { e.preventDefault(); addSamples(ctx, c, load); });
+      ctx.on('click', '[data-new]', () => ctx.modal({ title: 'New classifier', body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example Supplier risk', attrs: 'data-n' })) + UI.field('Engine', UI.select([{ value: 'linear', label: 'Word features plus trained linear head, very low cost' }, { value: 'guard', label: 'Guard model (llama-guard3, shieldgemma, granite3-guardian), medium cost' }, { value: 'llm', label: 'General LLM with JSON output, high cost' }], 'linear', 'data-e')) + UI.field('Labels', UI.input('', { placeholder: 'comma separated', attrs: 'data-l' })) + UI.field('Profile (guard and LLM engines)', UI.input('', { placeholder: 'the profile that routes to the model', attrs: 'data-p' })) + '</div>' + UI.notice('New classifiers start as drafts. They publish only after an eval run with at least ' + MIN + ' samples per label.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }),
+        onMount(m) {
+          m.querySelector('[data-create]').addEventListener('click', () => {
+            const body = { name: m.querySelector('[data-n]').value.trim(), engine: m.querySelector('[data-e]').value, labels: m.querySelector('[data-l]').value.split(',').map((x) => x.trim()).filter(Boolean) };
+            const p = m.querySelector('[data-p]').value.trim(); if (p) body.profile = p;
+            if (!body.name || !body.labels.length) { toast('Give the classifier a name and at least one label.', 'warn'); return; }
+            App.post('/api/admin/classifiers', body).then((x) => { App.closeOverlay(); st.sel = x.id; st.tab = 'definition'; toast('Draft classifier created. Add labelled cases to ' + esc(x.dataset) + ', then ' + (x.engine === 'linear' ? 'train it.' : 'evaluate it.'), 'ok'); load(true); }).catch((err) => App.fail(err, 'Not created'));
+          });
+        } }));
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 
+  function tryReorder(ctx, order) {
+    const st = ctx.state;
+    App.api('PUT', '/api/admin/label-names', { order: order, names: {} }).then(() => { st.reorder = null; ctx.rerender(); })
+      .catch((err) => { st.reorder = err.message; st.tab = 'evaluation'; ctx.rerender(); ctx.toast('Reorder refused. Level order is fixed.', 'danger'); });
+  }
+
   function openTest(ctx, c) {
-    const sample = c.id === 'finance' ? 'Q3 travel came to 412,880 EUR against a budget of 361,500 EUR. The Lisbon exception covers 38,000 EUR; the rest is unexplained pending the CFO review.' : c.id === 'pii' ? 'Pay supplier Fabrikam at DE89 3704 0044 0532 0130 00, contact anna.ruiz@fabrikam.example, +351 21 555 0199.' : c.id === 'secrets' ? 'export OPENAI_KEY=sk-9f3ab21c7d4e5f6a8b9c0d1e2f3a4b5c6d7e and rotate weekly' : c.id === 'safety' ? 'If the supplier misses the date again, the safest route is to talk to them before invoking clause 9.' : 'MASTER SERVICES AGREEMENT between Northwind B.V. and Fabrikam Ltd, effective 1 April 2025, initial term 24 months.';
-    const resultFor = (text) => {
-      if (c.id === 'finance') { const conf = /CFO|budget|EUR|salary|ledger/i.test(text); return [['public', 0.03], ['internal', conf ? 0.21 : 0.62], ['confidential', conf ? 0.87 : 0.30], ['restricted', /salary|payroll|merger/i.test(text) ? 0.83 : 0.05]]; }
-      if (c.id === 'pii') return [['email', /@/.test(text) ? 1 : 0], ['phone', /\+?\d[\d ]{8,}/.test(text) ? 0.96 : 0], ['iban', /[A-Z]{2}\d{2}[ \d]{12,}/.test(text) ? 1 : 0], ['national-id', 0]];
-      if (c.id === 'secrets') return [['private-key', /BEGIN/.test(text) ? 1 : 0], ['cloud-access-key', /AKIA/.test(text) ? 1 : 0], ['bearer-token', /sk-|Bearer/.test(text) ? 0.98 : 0], ['high-entropy', /[A-Za-z0-9]{28,}/.test(text) ? 0.91 : 0.1]];
-      if (c.id === 'safety') return [['S1 violent crimes', 0.01], ['S4 child exploitation', 0.0], ['S6 specialised advice', /clause|legal|terminate/i.test(text) ? 0.44 : 0.05], ['S11 self-harm', 0.0]];
-      return [['MSA', /master services/i.test(text) ? 0.92 : 0.2], ['SOW', 0.05], ['NDA', /non-disclosure|confidentiality/i.test(text) ? 0.9 : 0.02], ['Lease', 0.01]];
+    const sample = SAMPLE[c.slug] || 'Q3 travel came to 412,880 EUR against a budget of 361,500 EUR. The Lisbon exception covers 38,000 EUR; the rest is unexplained pending the CFO review.';
+    const render = (r) => {
+      const top = r.top;
+      return '<div class="vstack" style="gap:8px">' + c.labels.map((l) => { const s = r.scores[l.label] || 0; const hit = r.hits.indexOf(l.label) >= 0; return UI.meter(l.label + (hit ? ' · above threshold' : ''), s.toFixed(2), s * 100, hit ? 'accent' : ''); }).join('') + '</div>'
+        + UI.notice(top ? 'Top label <b>' + esc(top.label) + '</b> at ' + top.score.toFixed(2) + '. ' + (c.engine === 'deterministic' ? 'Deterministic detectors report 1.00 on a checksum match.' : 'Scores come from the ' + esc(ENGINE[c.engine]) + '.') : 'No label scored.', 'info')
+        + '<div class="muted mono" style="font-size:11px">POST /api/classify  classifier=' + esc(c.slug) + '  ' + r.ms + ' ms  v' + r.version + '</div>';
     };
-    const render = (text) => { const rs = resultFor(text); const top = rs.slice().sort((a, b) => b[1] - a[1])[0]; return '<div class="vstack" style="gap:8px">' + rs.map((r) => { const l = c.labels.find((x) => x.label === r[0]); const hit = r[1] >= (l ? (ctx.state.thr[c.id + '/' + l.label] != null ? ctx.state.thr[c.id + '/' + l.label] : l.thr) : 0.5); return UI.meter(r[0] + (hit ? ' · above threshold' : ''), r[1].toFixed(2), r[1] * 100, hit ? 'accent' : ''); }).join('') + '</div>' + UI.notice(c.id === 'finance' ? 'Effective label <b>' + esc(top[0]) + '</b>. Where a manual or inherited label is higher, the highest wins.' : 'Top label <b>' + esc(top[0]) + '</b> at ' + top[1].toFixed(2) + '. ' + (c.engine === 'deterministic' ? 'Deterministic detectors report 1.00 on a checksum match.' : 'Scores come from ' + esc(c.engine) + '.'), 'info') + '<div class="muted mono" style="font-size:11px">POST /api/classify  classifier=' + esc(c.id) + '  ' + (c.engine === 'deterministic' ? '0.4 ms' : c.engine === 'guard model' ? '212 ms' : c.engine.indexOf('LLM') === 0 ? '3.1 s' : '18 ms') + '  label ' + (c.id === 'finance' ? esc(top[0]) : 'internal') + '</div>'; };
-    ctx.modal({ cls: 'wide', title: 'Test text: ' + esc(c.name), body: UI.field('Text', UI.textarea(sample, { rows: 4, attrs: 'data-testtext' })) + '<div data-testresult>' + render(sample) + '</div>' + '<div class="muted" style="font-size:12px">Synchronous for short text. Nothing here is stored or labelled.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Classify', { kind: 'primary', attrs: 'data-classify' }), onMount(m) { m.querySelector('[data-classify]').addEventListener('click', () => { m.querySelector('[data-testresult]').innerHTML = render(m.querySelector('[data-testtext]').value); }); } });
+    ctx.modal({ cls: 'wide', title: 'Test text: ' + esc(c.name), body: UI.field('Text', UI.textarea(sample, { rows: 4, attrs: 'data-testtext' })) + '<div data-testresult></div><div class="muted" style="font-size:12px">Synchronous for short text. Nothing here is stored or labelled.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Classify', { kind: 'primary', attrs: 'data-classify' }),
+      onMount(m) {
+        const out = m.querySelector('[data-testresult]');
+        const run = () => { out.innerHTML = '<div class="muted">Classifying…</div>'; App.post('/api/classify', { classifier: c.slug, text: m.querySelector('[data-testtext]').value }).then((r) => { out.innerHTML = render(r); }).catch((err) => { out.innerHTML = UI.problem(err.problem && err.problem.title || 'Not classified', err.message, err.problem && err.problem.trace_id); }); };
+        m.querySelector('[data-classify]').addEventListener('click', run);
+        run();
+      } });
   }
 
-  function startBatch(ctx, c) {
+  function startBatch(ctx, c, load) {
     const st = ctx.state;
-    ctx.modal({ title: 'Run batch classification', body: UI.field('Scope', UI.select(c.id === 'finance' ? ['Finance KB, 12,480 documents', 'Contracts KB, 4,812 chunks', 'Policy KB, 1,020 documents'] : c.id === 'contract' ? ['Contracts KB, 4,812 chunks'] : ['Finance KB, 12,480 documents', 'All knowledge bases, 31,204 documents'], c.id === 'contract' ? 'Contracts KB, 4,812 chunks' : 'Finance KB, 12,480 documents')) + UI.field('Apply', UI.select(['Write labels (highest wins)', 'Report only, write nothing'], 'Write labels (highest wins)')) + UI.notice('Runs as a <span class="mono">classify.batch</span> job at lower priority on the same pools. Progress is pushed over /ws. ' + (c.engine.indexOf('LLM') === 0 ? 'At high cost per document this uses about 4 GPU-hours.' : 'Cost is ' + esc(c.cost.toLowerCase()) + '.'), 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Start job', { kind: 'primary', attrs: 'data-start' }), onMount(m) { m.querySelector('[data-start]').addEventListener('click', () => { App.closeOverlay(); const total = /Contracts/.test(m.querySelector('select').value) ? 4812 : /All/.test(m.querySelector('select').value) ? 31204 : 12480; st.batch = { id: 'cb-' + String(Date.now()).slice(-5), total, done: 0, started: new Date().toTimeString().slice(0, 5) }; ctx.rerender(); ctx.toast('classify.batch queued. Progress shows on this page and under Runs.', 'ok'); }); } });
+    App.get('/api/eval-sets').then((sets) => {
+      const mine = sets.find((x) => x.name === c.dataset);
+      ctx.modal({ title: 'Run batch classification', body: UI.field('Scope', UI.select([{ value: c.dataset || '', label: (c.dataset || 'no dataset') + ', ' + (mine ? mine.cases.toLocaleString('en-GB') : 0) + ' labelled cases' }], c.dataset || '')) + UI.field('Apply', UI.select(['Report only: precision and recall, write nothing'], 'Report only: precision and recall, write nothing')) + UI.notice('Runs as a <span class="mono">classify.batch</span> job. Progress is pushed over /ws. Cost is ' + esc(COST[c.engine].toLowerCase()) + (c.engine === 'guard' || c.engine === 'llm' ? ', one model call per case through the gateway' : '') + '. Writing labels to knowledge bases comes with them in sprint 6.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Start job', { kind: 'primary', attrs: 'data-start', disabled: !mine }),
+        onMount(m) {
+          m.querySelector('[data-start]').addEventListener('click', () => {
+            App.post('/api/admin/classifiers/' + encodeURIComponent(c.id) + '/evaluate').then((r) => { App.closeOverlay(); st.batch = { jobId: r.jobId, classifierId: c.id, state: 'queued', progress: 0, started: new Date().toTimeString().slice(0, 5) }; ctx.rerender(); ctx.toast('classify.batch queued. Progress shows on this page.', 'ok'); poll(ctx, load); }).catch((err) => App.fail(err, 'Not started'));
+          });
+        } });
+    }).catch((err) => App.fail(err));
   }
 
-  function tickBatch(ctx) {
-    const st = ctx.state;
-    st.batchTimer = setTimeout(() => {
-      st.batchTimer = null; if (!st.batch) return;
-      st.batch.done = Math.min(st.batch.total, st.batch.done + Math.round(st.batch.total / 9));
-      if (ctx.app.state.route === 'classifiers') ctx.rerender(); else if (st.batch.done < st.batch.total) tickBatch(ctx);
-      if (st.batch.done >= st.batch.total) ctx.toast('classify.batch ' + esc(st.batch.id) + ' finished: ' + st.batch.total.toLocaleString('en-GB') + ' documents labelled.', 'ok');
-    }, 900);
+  /** The socket reports progress; this polls as a fallback until the job ends. */
+  function poll(ctx, load) {
+    const st = ctx.state; const b = st.batch;
+    if (!b || (b.state !== 'queued' && b.state !== 'running')) return;
+    setTimeout(() => {
+      App.get('/api/me/jobs').then((jobs) => { const j = jobs.find((x) => x.id === b.jobId); if (j && st.batch === b) { const was = b.state; Object.assign(b, { state: j.state, progress: j.progress, message: j.message || b.message, error: j.error }); if (was !== 'succeeded' && j.state === 'succeeded') load(true); } })
+        .catch(() => undefined).finally(() => { if (App.state.route === 'classifiers' && !document.getElementById('overlay')) ctx.rerender(); poll(ctx, load); });
+    }, 2500);
+  }
+
+  function addSamples(ctx, c, load) {
+    ctx.modal({ cls: 'wide', title: 'Add labelled cases to ' + esc(c.dataset || ''), body: UI.field('Cases, one per line: label, a tab or " | ", then the text', UI.textarea('', { rows: 8, placeholder: c.labels[0].label + ' | an example that carries this label\nnone | an example that carries no label', attrs: 'data-lines' })) + UI.notice('Labels: ' + c.labels.map((l) => '<span class="mono">' + esc(l.label) + '</span>').join(', ') + ', or <span class="mono">none</span>. Cases are sealed with the tenant key. Confirmed flags add cases to their rule\'s set.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Add cases', { kind: 'primary', attrs: 'data-add' }),
+      onMount(m) {
+        m.querySelector('[data-add]').addEventListener('click', () => {
+          const items = m.querySelector('[data-lines]').value.split('\n').map((l) => { const i = l.indexOf('\t') >= 0 ? l.indexOf('\t') : l.indexOf(' | '); if (i < 0) return null; const sep = l[i] === '\t' ? 1 : 3; return { expected: l.slice(0, i).trim(), text: l.slice(i + sep).trim() }; }).filter((x) => x && x.expected && x.text);
+          if (!items.length) { ctx.toast('No cases found. Put the label, a tab or " | ", then the text on each line.', 'warn'); return; }
+          App.post('/api/admin/classifiers/' + encodeURIComponent(c.id) + '/samples', { items: items }).then((r) => { App.closeOverlay(); ctx.toast(r.added + ' case' + (r.added === 1 ? '' : 's') + ' added to ' + esc(c.dataset || '') + '.', 'ok'); load(true); }).catch((err) => App.fail(err, 'Cases not added'));
+        });
+      } });
   }
 })();

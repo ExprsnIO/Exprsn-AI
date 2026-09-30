@@ -14,17 +14,18 @@ from prototype data to live only when every control on it is backed by the serve
 | 2 | Tenancy, audit, platform services | Tenants, Usage and audit | **Done** |
 | 3 | Ollama gateway, models, pools, profiles | Models, Pools, Profiles | **Done** |
 | 4 | Chat, compare, metering | Chat, Compare | **Done** |
-| 5 | Guardrails, classifiers, flags | Guardrails, Classifiers, Flags | **Next** |
-| 6 | Knowledge, memory, connections | Knowledge, Memory, Connections | Planned |
-| 7 | Registry, MCP servers, agent runs, scripts | Registry, MCP servers, Runs, Scripts | Planned |
-| 8 | Workflows, media, images | Workflows, Media, Images | Planned |
-| 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | Planned |
+| 5 | Guardrails, classifiers, flags | Guardrails, Classifiers, Flags | **Done** |
+| 6 | Knowledge, memory, connections | Knowledge, Memory, Connections | **Done** |
+| 7 | Registry, MCP servers, agent runs, scripts | Registry, MCP servers, Runs, Scripts | **Done** |
+| 8 | Workflows, media, images | Workflows, Media, Images | **Done** |
+| 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | **Next** |
 | 10 | Hardening and release | all | Planned |
 
-Current codebase: Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools, Profiles, Chat and Compare
-are live, and the other 17 sidebar screens show prototype data; four database migrations (`001_core` to `004_chat`);
-120 unit and API tests (against a fake Ollama for the gateway and chat) plus the integration suite against
-PostgreSQL, MySQL, OpenLDAP and Redis.
+Current codebase: every sidebar screen except Training, Zones, Platform and Identity is live (Sign in, Settings, User
+stores, Tenants, Usage and audit, Models, Pools, Profiles, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge,
+Memory, Connections, Registry, MCP servers, Runs, Scripts, Workflows, Media and Images); eight database migrations
+(`001_core` to `008_workflows`); 219 unit and API tests (against a fake Ollama, a fake MCP server and fake script,
+media and image runners) plus the integration suite against PostgreSQL, MySQL, OpenLDAP and Redis.
 
 ---
 
@@ -171,38 +172,150 @@ Delivered in `server/src/chat`, `server/src/routes/chat.ts` and the live console
 - The exact-calculation worker: a rational-arithmetic evaluator in a worker thread with memory and time limits,
   offered to models as the `calculate` tool and at `POST /api/calculate`.
 
-Left for later sprints (see `docs/security.md`, known gaps): guardrails on prompts and answers (Sprint 5); knowledge,
-memory and tool bindings in chat (Sprints 6 and 7); continuing a stream on another instance after the serving
+Guardrails on prompts and answers arrived in Sprint 5, and knowledge, memory and tool bindings in chat in Sprints 6
+and 7. Still open (see `docs/security.md`, known gaps): continuing a stream on another instance after the serving
 instance stops.
 
-## Sprint 5: Guardrails, classifiers, flags (next)
+## Sprint 5: Guardrails, classifiers, flags (done)
 
-The eleven checkpoints; RE2 patterns, PII detectors and the guard model through Ollama; shadow and enforce; precedence
-platform > tenant > workspace > agent; fail closed; versioned rule sets with diff, shadow replay and dual control;
-classifiers with thresholds, test and batch jobs; the flag queue with SLA timers, clearance redaction and keyboard
-actions.
+Delivered in `server/src/guardrails`, `server/src/routes/guardrails.ts` and the live console screens `guardrails.js`,
+`flags.js` and `classifiers.js`.
 
-## Sprint 6: Knowledge, memory, connections
+- The checkpoint seam `s.guardrails.check` behind every feature, over the eleven checkpoints. Published rule sets apply
+  in the order platform baseline, tenant, workspace, agent; the most restrictive enforced finding wins, and a tenant
+  cannot relax a baseline rule.
+- Mechanisms: RE2 patterns (an invalid pattern is reported with its position, the message and an equivalent), PII and
+  secrets detectors with checksums and entropy, label checks, budgets, allow-lists, checkpoint facts, classifiers with
+  thresholds, and the guard model through the gateway. Actions allow, log, warn, flag, redact, require-approval, block.
+- Shadow and enforce (shadow never changes the outcome and a sample of its findings is flagged); fail closed per
+  rule's onError, with confidential and tool-calling turns held and every fail-open decision flagged.
+- Versioned rule sets: drafts edited in a form or as YAML, diff, withdraw, publish; the platform baseline publishes
+  only when a second platform guardrail admin approves; live test of a rule on sample text (spans and score); shadow
+  replay of a draft over recorded, sealed inputs as a job; promotion to enforce refused above a 10% false-positive rate.
+- Classifiers: deterministic, trained linear, guard-model and LLM engines in one registry, thresholds, a synchronous
+  classify endpoint, evaluation and training jobs with precision and recall per tenant, labelled cases (sealed),
+  publishing gated on 200 samples per label, tenant names for the four levels.
+- The flag queue: SLA timers by severity with a breach notice, clearance redaction (reassign only above clearance),
+  confirm into an eval case, dismiss as a false positive, escalate, reassign, send to eval set, user reports, live
+  updates over the socket.
+- Chat checks user input before sending (block refuses, redact stores and sends the redacted text) and model output
+  on the finished answer (block replaces the answer with a notice, redact replaces the spans, flags are raised).
 
-Knowledge bases and sources (upload, S3, Git, database view); extraction and structure-aware chunking; embeddings
-through Ollama; `VectorStore`; hybrid search with reciprocal rank fusion and reranking; clearance filter inside the
-query; blue/green reindex. Memory scopes, proposals, forget across every backend, export. Data connections
-(PostgreSQL, OpenSearch) with schema allow-lists, query classification, read-only accounts, row caps and PII masking.
+**Done when:** a secret in a prompt is refused with the rule named, a PII rule redacts the prompt before the model sees
+it, an unsafe answer judged by the guard model is withheld, a confidential turn is held while the guard model is down,
+and a reviewer confirms a flag into an eval case from the queue (`guardrails.test.ts`).
 
-## Sprint 7: Registry, MCP servers, runs, scripts
+## Sprint 6: Knowledge, memory, connections (done)
 
-Registry entries (tools, skills, agents) with automated checks, review and publish scope; MCP servers over streamable
-HTTP on internal hosts only, schema hashing and change detection, per-user vault tokens; agent runs with think/do/calc
-lanes, approvals, budgets and replay from checkpoints; script sandbox (container, no network, limits) and the
-promotion path.
+Delivered in `server/src/knowledge`, `server/src/memory`, `server/src/connections`, `server/src/platform/vectors.ts`,
+`server/src/chat/context.ts`, `server/src/routes/{knowledge,memory}.ts`, `server/src/routes/admin/connections.ts`,
+migration `006_knowledge` and the live console screens `knowledge.js`, `memory.js` and `connections.js`.
 
-## Sprint 8: Workflows, media, images
+- Knowledge bases with a label floor, workspace scope and sharing (members or curators only; grants to workspaces,
+  users and profiles); draft and published, and only published bases are used in chat.
+- Sources: upload (sealed quarantine, type from the bytes, ClamAV when configured, classification), S3 prefixes with
+  the platform's credentials, Git repositories over https (shallow clone by job), and PostgreSQL views through a data
+  connection's allow-list, synced by watermark; unchanged documents skipped by version or content hash; schedules.
+- Extraction (text, Markdown, CSV, JSON, HTML, DOCX, PDF text layer) and structure-aware chunking with headings as
+  metadata; embeddings through the gateway, cached by content hash for 30 days.
+- `VectorStore`: a table scan in the database, or pgvector on PostgreSQL when the extension is available.
+- Hybrid search (vector plus BM25 over keyed-hash terms) fused with reciprocal rank fusion and optional model
+  reranking, with the clearance filter inside every query; blue/green reindex by job with an atomic switch and
+  cancel; relabelling never below the classifier's finding.
+- Chat: published bases attached to a conversation or profile add labelled, delimited context through the `context`
+  checkpoint, raise the conversation label and record sealed citations; accepted memories are included.
+- Memory: user and workspace scopes (members propose, curators accept), agent memories, proposals extracted after
+  each answer, the `memory` checkpoint on write and read (restricted and credentials refused), versions, expiry and an
+  hourly purge, forget across every backend with audit, export by job.
+- Data connections for PostgreSQL and OpenSearch: sealed credentials, test (a read-only account is checked), schema
+  introspection and allow-lists, query classification (writes, DDL, several statements, objects and functions
+  outside the allow-list refused; unparsed syntax only after confirmation), the `db-query` checkpoint, read-only
+  transaction, row caps, statement timeouts, PII masking, CSV export through the `export` checkpoint; every query
+  audited.
 
-Workflow graphs with publish validation (acyclic, schemas, labels, limits), durable checkpointed execution, approvals,
-dry run and replay; media presets as validated argument arrays with caps and NVENC/CPU encoders; image generation
-through a ComfyUI/diffusers worker with the safety classifier, provenance sidecar and GPU-second quota.
+**Done when:** a curator builds a knowledge base from an upload, S3, Git or a Postgres view, reindexes it with another
+embedding model while it keeps serving, and a chat answer cites its chunks only up to the reader's clearance; a user
+accepts, edits, exports and forgets memories; a connection admin browses an allow-listed view read-only and every
+refused write is audited (`knowledge.test.ts`, `memory.test.ts`, `connections.test.ts`).
 
-## Sprint 9: Training, zones, platform, federation
+## Sprint 7: Registry, MCP servers, runs, scripts (done)
+
+Delivered in `server/src/registry`, `server/src/mcp`, `server/src/agents`, `server/src/scripts`, the routes
+`routes/admin/registry.ts`, `routes/admin/mcp.ts`, `routes/agents.ts`, `routes/scripts.ts`, migration `007_registry`
+and the live console screens `registry.js`, `mcp-servers.js`, `runs.js` and `scripts.js`.
+
+- Registry entries (tools, skills, agents): draft → in review → published → deprecated → retired (and restore), versions,
+  JSON Schema input and output, side-effect class, label ceiling, automated checks (required fields, schema validity,
+  description quality, side effect declared, secrets scan, referenced tools published, limits), review by a tool admin
+  other than the author, publish scope (tenant or named workspaces under their ceiling), and a test harness. The
+  built-in `calculate` is a published platform tool.
+- MCP servers over streamable HTTP (JSON and SSE responses, sessions, pagination) on internal hosts only: DNS resolved
+  and every address checked at registration and on each connection, with `MCP_ALLOWED_HOSTS` for exceptions. Tools are
+  hashed and wait for review; a polling job disables approved tools whose schema changes until they are re-approved.
+  Service credentials and per-user vault tokens are sealed and never returned or shown to models.
+- One tool dispatcher for chat, agents and the harness: argument validation, label ceiling, rate limit, the
+  `tool-call` guardrail checkpoint, approval for write and destructive calls, output schema check.
+- Agent runs as jobs with think/do/calc lanes, approvals that pause and resume the run, budgets (steps, tokens, wall
+  time, tool calls) with raise-and-resume, a checkpoint after every step, replay from any checkpoint, cancel, live
+  steps over Socket.io, and metering.
+- Scripts: versions sealed at rest, the `script` guardrail checkpoint, blocked-module and secrets checks, runs as jobs
+  through a `ScriptRunner` (docker or podman with no network, read-only root, non-root user, dropped capabilities,
+  memory/CPU/pids/time/output limits; a fake runner for tests), promotion draft → tested → registry tool.
+- Chat: profiles may bind published registry and MCP tools; read-only tools that need no confirmation are offered in
+  chat through the dispatcher.
+
+**Done when:** a script can be promoted to a tool, reviewed by a second tool admin and published; an MCP tool whose
+schema changes is disabled until re-approved; and an agent run pauses for approval of a write call, resumes, and can
+be replayed from a checkpoint (`registry.test.ts`, `mcp.test.ts`, `agents.test.ts`, `scripts.test.ts`).
+
+## Sprint 8: Workflows, media, images (done)
+
+Delivered in `server/src/workflows`, `server/src/media`, `server/src/images`, `server/src/routes/{workflows,media,images}.ts`
+(migration `008_workflows`) and the live console screens `workflows.js`, `media.js` and `images.js`.
+
+- Workflow graphs with typed ports, a draft (revisioned, 409 on a stale save) and published versions; publish
+  validation that points at the step and edge: one trigger, acyclic, port schemas along every edge, label ceilings
+  along every path (profiles' labels included), 40 steps, fan-out 10, 30 min per step, 2 h and 200k tokens per run,
+  template references to upstream steps only.
+- Step kinds: trigger, model (a published profile through the gateway, metered, quota-admitted), transform, branch,
+  guardrail check (block fails, redact passes on, require-approval pauses), approval (role, timeout, data shown),
+  HTTP to internal addresses only (never link-local or public, host not templated), calculate, wait, and tool.
+- Durable execution as jobs: each step's output checkpointed sealed with the tenant key; after a restart a run resumes
+  after its last checkpoint without re-running completed steps; approvals and waits pause without holding a worker;
+  expired approvals fail the run; cancel.
+- Dry runs of the draft (models and HTTP mocked, nothing metered, the owner decides approvals); replay from any step
+  reusing upstream checkpoints; run history and live `workflow.run` / `workflow.step` socket events.
+- Media: uploads streamed into sealed quarantine, containers recognised from their bytes, ffprobe caps (duration,
+  resolution, streams, size) enforced before any processing, metadata stripped, previews drawn; presets
+  (`clip-720p`, `transcribe-srt`, `frames-1fps`, `normalise-audio`) as typed parameter schemas that build argument
+  arrays (no shell, no free-form options); NVENC with a CPU fallback; jobs with progress; sealed outputs; frames through
+  the image-safety classifier and transcripts through the `media` checkpoint. `MediaRunner` has the ffmpeg-process
+  adapter and a test fake.
+- Images: `ImageBackend` with ComfyUI and diffusers-style HTTP adapters and a test fake; the `image` checkpoint on the
+  prompt; GPU-second quota admission and metering; a safety classifier on the output (unsafe images discarded, still
+  metered, audited, raised to reviewers); a KMS-signed provenance manifest in the PNG and beside it; images sealed at
+  rest; send to chat as an attachment.
+
+**Done when:** a workflow with a model step, a branch and an approval publishes, runs, pauses for the approver, resumes
+after an instance restart without repeating steps, and replays from a step; a clip is probed, refused above a cap or
+processed by a preset with progress; an image is generated, classified, signed, sealed and metered in GPU-seconds
+(`workflows.test.ts`, `media.test.ts`, `images.test.ts`).
+
+### Links between Sprints 5 to 8
+
+Sprints 5 to 8 were built side by side against one guardrail seam (`server/src/guardrails/types.ts`,
+`s.guardrails.check`), then connected:
+
+- Workflow tool steps call published registry and MCP tools through the dispatcher (argument schema, `tool-call`
+  checkpoint, rate limit); a write tool runs only after an approval step on every path, or pauses the run for one.
+- A published workflow can be published as a registry tool (`impl: 'workflow'`, pinned to its version, reviewed like
+  any tool); calling it runs the workflow within five minutes and returns its output. Workflows cannot call workflow
+  tools.
+- A media transcript can be sent to a knowledge base the user curates, keeping its label.
+- Chat has a knowledge picker per conversation, `[n]` citation markers and a Sources list under each answer.
+- Agent runs read the agent's accepted memories through the `memory` checkpoint.
+
+## Sprint 9: Training, zones, platform, federation (next)
 
 Training jobs (datasets with PII scrub, approval for confidential data, windows, checkpoints, evals, GGUF conversion to
 a registry draft); zones (definitions, ceilings, draft and approve, rendered Compose and firewall configuration);

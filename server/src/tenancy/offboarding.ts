@@ -4,8 +4,9 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { JobQueue } from '../platform/jobs.js';
 
 /** Tables holding data derived from a tenant's content, purged after its key is destroyed. Order respects FKs. */
-const DERIVED_TABLES = ['messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
-const BLOB_PREFIXES = ['exports', 'attachments', 'quarantine'] as const;
+const KNOWLEDGE_TABLES = ['knowledge_bindings', 'knowledge_terms', 'knowledge_chunks', 'knowledge_access', 'knowledge_documents', 'knowledge_sources', 'knowledge_indexes', 'knowledge_bases', 'embedding_cache', 'knowledge_keys', 'vectors', 'vectors_pg', 'memory_versions', 'memories', 'memory_rejections', 'memory_exports', 'data_connections'] as const;
+const DERIVED_TABLES = [...KNOWLEDGE_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
+const BLOB_PREFIXES = ['exports', 'attachments', 'quarantine', 'knowledge', 'knowledge-quarantine', 'memory-exports'] as const;
 
 /**
  * Offboarding, in the three steps the Tenants board shows:

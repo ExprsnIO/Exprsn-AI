@@ -13,6 +13,9 @@ import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
+import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
+import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
+import { formatContext, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
 
 export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed';
 
@@ -60,13 +63,16 @@ interface MessageRow {
   canary: boolean;
   created_at: number;
   completed_at: number | null;
+  /** JSON: the guardrail outcome of an answer (Sprint 5). */
+  guard?: string | null;
+  citations?: string | null;
 }
 
 export interface Chunk {
   seq: number;
   delta?: string;
   thinking?: string;
-  tool?: { name: string; expression: string; result?: { fraction: string; decimal: string; exact: boolean }; error?: string };
+  tool?: { name: string; expression: string; result?: { fraction: string; decimal: string; exact: boolean }; error?: string; output?: unknown };
 }
 
 interface Stream {
@@ -107,6 +113,11 @@ const ATTACHMENT_TEXT_LIMIT = 100_000;
 export class ChatService {
   private readonly streams = new Map<string, Stream>();
   private readonly offStop: () => void;
+  private toolDispatch: ToolDispatcher | null = null;
+  /** Knowledge and memory add retrieved context to each answer (`context.ts`). */
+  readonly contextProviders: ContextProvider[] = [];
+  /** Called when an answer finishes (memory proposals). */
+  readonly answerListeners: ((e: AnswerEvent) => void)[] = [];
 
   constructor(
     private readonly db: Db,
@@ -117,9 +128,15 @@ export class ChatService {
     private readonly bus: Bus,
     private readonly attachments: AttachmentService,
     private readonly calc: CalcWorker,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly guardrails: Guardrails = allowAll
   ) {
     this.offStop = bus.on<{ messageId: string }>(TOPICS.chatStop, ({ messageId }) => this.abortLocal(messageId));
+  }
+
+  /** Registry and MCP tools on a profile's tool list are offered and called through the dispatcher (Sprint 7). */
+  useTools(d: ToolDispatcher): void {
+    this.toolDispatch = d;
   }
 
   close(): void {
@@ -243,9 +260,11 @@ export class ChatService {
       error: m.error,
       label: m.label,
       attachments: json<string[]>(m.attachments, []),
+      citations: json<Record<string, unknown>[]>(await this.open(m.tenant_id, m.id, 'citations', m.citations ?? null), []),
       usage: m.role === 'assistant' && m.completed_at ? { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0), thinkingTokens: Number(m.thinking_tokens ?? 0), calcCalls: Number(m.calc_calls ?? 0), gpuMs: Number(m.gpu_ms ?? 0), firstTokenMs: m.first_token_ms == null ? null : Number(m.first_token_ms) } : null,
       createdAt: Number(m.created_at),
-      completedAt: m.completed_at == null ? null : Number(m.completed_at)
+      completedAt: m.completed_at == null ? null : Number(m.completed_at),
+      guard: json<Record<string, unknown> | null>(m.guard ?? null, null)
     };
   }
 
@@ -340,11 +359,12 @@ export class ChatService {
       const parent = await this.message(c, parentId);
       if (parent.role !== 'assistant') throw conflict('A new message follows an answer.');
     }
+    const content = await this.guardInput(p, c.workspace_id, input.content, label, c.id);
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: parentId ?? null, role: 'user', content: input.content, label, attachments: atts.map((a) => a.id), created_at: t });
+    const user = await this.insertMessage(c, { parent_id: parentId ?? null, role: 'user', content, label, attachments: atts.map((a) => a.id), created_at: t });
     const think = this.thinkLevel(r.profile, input.think);
     const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label, profile: r, think, created_at: t + 1 });
-    const title = c.title ? undefined : await this.seal(c.tenant_id, c.id, 'title', input.content.replace(/\s+/g, ' ').trim().slice(0, 80));
+    const title = c.title ? undefined : await this.seal(c.tenant_id, c.id, 'title', content.replace(/\s+/g, ' ').trim().slice(0, 80));
     await this.db('conversations').where({ id: c.id }).update({ head_id: assistant.id, label, profile_id: r.profile.id, updated_at: Date.now(), ...(title ? { title } : {}) });
     this.start(p, { ...c, label }, assistant, r, think, 'chat');
     return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label };
@@ -373,8 +393,9 @@ export class ChatService {
     const prevAnswer = (await this.db('messages').where({ conversation_id: c.id, parent_id: old.id }).orderBy('created_at', 'desc').first()) as MessageRow | undefined;
     const r = await this.resolveFor(p, input.profile ?? prevAnswer?.profile_id ?? c.profile_id ?? '', c.label);
     await this.admit(p, c.workspace_id);
+    const content = await this.guardInput(p, c.workspace_id, input.content, c.label, c.id);
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: old.parent_id, role: 'user', content: input.content, label: c.label, attachments: json<string[]>(old.attachments, []), created_at: t });
+    const user = await this.insertMessage(c, { parent_id: old.parent_id, role: 'user', content, label: c.label, attachments: json<string[]>(old.attachments, []), created_at: t });
     const think = this.thinkLevel(r.profile, input.think);
     const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label: c.label, profile: r, think, created_at: t + 1 });
     await this.db('conversations').where({ id: c.id }).update({ head_id: assistant.id, updated_at: Date.now() });
@@ -388,9 +409,10 @@ export class ChatService {
     const resolved: ResolvedProfile[] = [];
     for (const name of input.profiles) resolved.push(await this.resolveFor(p, name, label));
     await this.admit(p, p.workspaceId ?? null);
-    const c = await this.createConversation(p, { title: input.prompt.replace(/\s+/g, ' ').trim().slice(0, 80), label, kind: 'compare' });
+    const prompt = await this.guardInput(p, p.workspaceId ?? null, input.prompt, label, null);
+    const c = await this.createConversation(p, { title: prompt.replace(/\s+/g, ' ').trim().slice(0, 80), label, kind: 'compare' });
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: input.prompt, label, created_at: t });
+    const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: prompt, label, created_at: t });
     const columns = [];
     for (const [i, r] of resolved.entries()) {
       const think = this.thinkLevel(r.profile, input.think);
@@ -532,6 +554,36 @@ export class ChatService {
     return out;
   }
 
+  /**
+   * Asks the context providers for material up to the turn's ceiling, adds it as one delimited system message after
+   * the profile's prompt, raises the conversation's label to the highest item used and records the citations.
+   */
+  private async addContext(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], st: Stream): Promise<void> {
+    if (!this.contextProviders.length) return;
+    const query = [...messages].reverse().find((x) => x.role === 'user')?.content ?? '';
+    const ws = c.workspace_id ? ((await this.db('workspaces').where({ id: c.workspace_id }).first('label_ceiling')) as { label_ceiling: Label } | undefined) : undefined;
+    const caps: Label[] = [p.clearance, r.profile.label, lease.pool.label_ceiling, ...(ws ? [ws.label_ceiling] : [])];
+    const ceiling = caps.reduce((a, b) => (labelRank(b) < labelRank(a) ? b : a));
+    const items: ContextItem[] = [];
+    for (const provider of this.contextProviders) {
+      try {
+        items.push(...(await provider({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, messageId: m.id, profile: r.profile, query, label: c.label, ceiling })).filter((x) => labelRank(x.label) <= labelRank(ceiling)));
+      } catch (err) {
+        this.log.warn({ err, message: m.id }, 'context provider failed');
+      }
+    }
+    if (!items.length) return;
+    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items) });
+    const label = highest(c.label, ...items.map((x) => x.label));
+    const citations = items.map((x, i) => ({ n: i + 1, kind: x.tag === 'context' ? 'knowledge' : 'memory', label: x.label, ...x.cite }));
+    await this.db('messages').where({ id: m.id }).update({ citations: await this.seal(c.tenant_id, m.id, 'citations', JSON.stringify(citations)), ...(label !== c.label ? { label } : {}) });
+    if (label !== c.label) {
+      await this.db('conversations').where({ id: c.id }).update({ label });
+      c.label = label;
+    }
+    this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'context', label, citations: citations.length });
+  }
+
   private async generate(p: Principal, c: ConversationRow, m: MessageRow, resolved: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', st: Stream): Promise<void> {
     const usage: Usage = { promptTokens: 0, outputTokens: 0, thinkingTokens: 0, calcCalls: 0, gpuMs: 0, firstTokenMs: null };
     let lease: Lease | null = null;
@@ -566,8 +618,14 @@ export class ChatService {
       const messages: ChatMessage[] = [];
       if (r.profile.system_prompt) messages.push({ role: 'system', content: r.profile.system_prompt });
       messages.push(...(await this.history(c, m.parent_id!, r.model.capabilities.includes('vision'))));
+      await this.addContext(p, c, m, r, lease, messages, st);
       promptChars = messages.reduce((a, x) => a + x.content.length, 0);
-      const toolsOn = r.profile.tools.includes('calculate') && r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
+      const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
+      // Beyond calculate: published registry and MCP tools, read-only in chat (write and destructive calls need an
+      // approval, which agent runs provide).
+      const extra: ResolvedTool[] = modelTools && this.toolDispatch ? (await this.toolDispatch.resolve(p, r.profile.tools.filter((t) => t !== 'calculate'), c.label)).tools.filter((t) => t.sideEffect === 'read' && t.confirm === 'never') : [];
+      const toolsOn = (r.profile.tools.includes('calculate') || extra.length > 0) && modelTools;
+      const toolDefs = [...(r.profile.tools.includes('calculate') ? [CALCULATE_TOOL] : []), ...extra.map((t) => t.def)];
       const thinkParam = think === 'off' ? false : r.model.name.startsWith('gpt-oss') ? think : true;
       const options: Record<string, unknown> = {};
       if (r.profile.num_ctx) options.num_ctx = r.profile.num_ctx;
@@ -576,7 +634,7 @@ export class ChatService {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const calls: NonNullable<ChatMessage['tool_calls']> = [];
         let roundContent = '';
-        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(r.model.capabilities.includes('thinking') ? { think: thinkParam } : {}), ...(toolsOn ? { tools: [CALCULATE_TOOL] } : {}), options }, st.ac.signal)) {
+        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(r.model.capabilities.includes('thinking') ? { think: thinkParam } : {}), ...(toolsOn ? { tools: toolDefs } : {}), options }, st.ac.signal)) {
           const msg = chunk.message;
           if (msg && (msg.content || msg.thinking) && usage.firstTokenMs == null) {
             usage.firstTokenMs = Date.now() - started;
@@ -606,7 +664,11 @@ export class ChatService {
         for (const call of calls) {
           const expression = String((call.function.arguments as { expression?: unknown }).expression ?? '');
           let tool: NonNullable<Chunk['tool']>;
-          if (call.function.name !== 'calculate') tool = { name: call.function.name, expression, error: 'Unknown tool' };
+          const ext = extra.find((t) => t.fn === call.function.name);
+          if (ext) {
+            const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
+            tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
+          } else if (call.function.name !== 'calculate' || !r.profile.tools.includes('calculate')) tool = { name: call.function.name, expression, error: 'Unknown tool' };
           else {
             usage.calcCalls++;
             try {
@@ -617,7 +679,7 @@ export class ChatService {
           }
           st.tools.push(tool);
           this.push(st, { tool });
-          messages.push({ role: 'tool', tool_name: tool.name, content: JSON.stringify(tool.result ?? { error: tool.error }) });
+          messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(tool.result ?? tool.output ?? { error: tool.error }) });
         }
       }
       st.state = 'complete';
@@ -633,6 +695,7 @@ export class ChatService {
     } finally {
       lease?.release(usage.firstTokenMs);
     }
+    const guard = (st.state === 'complete' || st.state === 'stopped') && st.content ? await this.guardOutput(p, c, m, r, st) : null;
 
     // Metering happens once, on the final chunk; a stopped stream is estimated from what was produced.
     if (!evalCounted && (st.content || st.thinking)) {
@@ -648,15 +711,71 @@ export class ChatService {
       thinking_tokens: usage.thinkingTokens,
       calc_calls: usage.calcCalls,
       gpu_ms: Math.round(usage.gpuMs),
-      first_token_ms: usage.firstTokenMs
+      first_token_ms: usage.firstTokenMs,
+      ...(guard ? { guard: JSON.stringify(guard.summary) } : {})
     });
+    // A replaced answer is read back from the store, not from the streamed chunks.
+    if (guard?.replaced && this.streams.get(m.id) === st) this.streams.delete(m.id);
     if (metered) {
       await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind, profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, conversationId: c.id, messageId: m.id, promptTokens: usage.promptTokens, outputTokens: usage.outputTokens, thinkingTokens: usage.thinkingTokens, calcCalls: usage.calcCalls, gpuMs: usage.gpuMs });
     }
     const error = st.state === 'failed' ? ((await this.db('messages').where({ id: m.id }).first('error')) as { error: string | null } | undefined)?.error : null;
-    this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name });
+    this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name, ...(guard ? { guard: guard.summary } : {}) });
+    for (const fn of this.answerListeners) {
+      try {
+        fn({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, userMessageId: m.parent_id, messageId: m.id, state: st.state, label: c.label });
+      } catch (err) {
+        this.log.warn({ err, message: m.id }, 'answer listener failed');
+      }
+    }
     if (st.state === 'failed') {
       await this.audit.append({ tenantId: c.tenant_id, action: 'chat.failed', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, profile: r.profile.name, model: r.model.name }, label: c.label, detail: { state: st.state, error: error ?? null } });
     }
+  }
+
+  // ---------- guardrails ----------
+
+  /** The user-input checkpoint. A block or hold refuses the send with the reason; a redaction is what is stored and sent. */
+  private async guardInput(p: Principal, workspaceId: string | null, text: string, label: Label, conversationId: string | null): Promise<string> {
+    const d = await this.guardrails.check({ tenantId: p.tenantId, workspaceId, checkpoint: 'user-input', text, label, principal: p, ...(conversationId ? { source: { kind: 'conversation', id: conversationId } } : {}), meta: { tokens: Math.ceil(text.length / 4), via: 'chat', ...(conversationId ? { conversationId } : {}) } });
+    if (d.action === 'block' || d.action === 'require-approval') {
+      const rules = [...new Set(d.findings.filter((f) => f.stage === 'enforce' && f.action === d.action).map((f) => f.ruleName))];
+      throw new HttpProblem(422, d.action === 'block' ? 'Blocked by guardrail' : 'Held by guardrail', d.reason ?? 'A guardrail refused this message.', { extensions: { step: 'guardrail', action: d.action, rules } });
+    }
+    return d.text;
+  }
+
+  /**
+   * The model-output checkpoint, on the finished (or stopped) answer. A block or hold replaces the answer with a
+   * notice; a redaction replaces the flagged spans. Either way the stored answer is what the user sees from then on.
+   */
+  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream): Promise<{ summary: Record<string, unknown>; replaced: boolean } | null> {
+    let d: GuardDecision;
+    try {
+      const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
+      const prompt = q?.content ? await this.open(c.tenant_id, m.parent_id!, 'content', q.content) : null;
+      const tools = r.profile.tools.includes('calculate') && r.model.capabilities.includes('tools');
+      d = await this.guardrails.check({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', text: st.content, label: c.label, principal: p, source: { kind: 'message', id: m.id }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, tools, via: 'chat', ...(prompt ? { prompt } : {}) } });
+    } catch (err) {
+      this.log.error({ err, message: m.id }, 'model-output guardrail failed');
+      d = { action: 'block', text: st.content, findings: [], reason: 'The guardrail check could not run, so the answer is withheld.' };
+    }
+    const enforced = d.findings.filter((f) => f.stage === 'enforce');
+    if (!enforced.length && d.action === 'allow') return null;
+    const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))] };
+    let replaced = false;
+    if (d.action === 'block' || d.action === 'require-approval') {
+      st.content = `This answer was withheld. ${d.reason ?? ''}`.trim();
+      replaced = true;
+    } else if (d.action === 'redact' && d.text !== st.content) {
+      st.content = d.text;
+      replaced = true;
+    }
+    if (replaced) {
+      // Clients holding the streamed text see a higher sequence number on chat.done and read the answer again.
+      st.seq++;
+      st.chunks = [];
+    }
+    return { summary, replaced };
   }
 }

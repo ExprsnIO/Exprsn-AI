@@ -70,5 +70,7 @@ export const TOPICS = {
   chatStop: 'chat.stop',
   chatEvent: 'chat.event',
   poolState: 'pool.state',
-  auditAppended: 'audit.appended'
+  auditAppended: 'audit.appended',
+  /** Agent-run steps and script runs: `{ userId?, tenantId?, perm?, event, data }`. */
+  runEvent: 'run.event'
 } as const;

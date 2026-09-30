@@ -16,11 +16,11 @@ has three parts:
 | `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
 
-Sprints 0 to 4 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
-models, pools and profiles; chat, compare and metering). Live in the console: **Sign in**, **Settings**, **User
-stores**, **Tenants**, **Usage and audit**, **Models**, **Pools**, **Profiles**, **Chat** and **Compare**; every other
-screen shows a "Prototype data" banner naming the sprint that connects it. Check `Sprints.md` before starting work so
-you build the next sprint's scope, not a later one.
+Sprints 0 to 8 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
+models, pools and profiles; chat, compare and metering; guardrails, classifiers and flags; knowledge, memory and
+connections; registry, MCP servers, agent runs and scripts; workflows, media and images). Every console screen is live
+except **Training**, **Zones**, **Platform** and **Identity**, which show a "Prototype data" banner naming Sprint 9. Check
+`Sprints.md` before starting work so you build the next sprint's scope, not a later one.
 
 ## Commands
 
@@ -69,7 +69,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   shutdown; **`cli.ts`** is the `exprsn-ai` CLI; **`bootstrap.ts`** seeds the default tenant and identity YAML;
   **`services.ts`** builds the `Services` object (config, db, logger, metrics, bus, KMS and data keys, blob store,
   jobs, notifications, audit with checkpoints, exports and SIEM, repos, identity chain, sessions, API keys, MFA,
-  directory sync, quotas, offboarding, gateway, attachments, calculator, chat) passed to every route factory.
+  directory sync, quotas, offboarding, gateway, attachments, calculator, chat, guardrails, vectors, connections,
+  knowledge, memory, registry, MCP, tools, scripts, agents, workflows, media, images) passed to every route factory.
 - **`config/`**: zod-validated environment. Secrets (`SESSION_SECRET`, `DATA_KEY`, `DATABASE_URL`, `METRICS_TOKEN`,
   `OPENBAO_TOKEN`, `REDIS_URL`, `SMTP_URL`, `S3_SECRET_ACCESS_KEY`, `SIEM_TOKEN`) may be given as `<NAME>_FILE`; empty
   variables count as unset. Production refuses non-HTTPS cookies.
@@ -82,7 +83,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `chat.ts` (conversations, messages, stream catch-up, compare, attachments, calculate), `admin/identity.ts`,
   `admin/users.ts`, `admin/audit.ts` (events, verify, checkpoints, corrections, exports, SIEM status),
   `admin/tenants.ts` (tenants, workspaces, members, quotas, offboarding, policy explainer), `admin/usage.ts`,
-  `admin/gateway.ts` (pools, instances, placements, models, profiles), `health.ts`. The full list is `docs/api.md`.
+  `admin/gateway.ts` (pools, instances, placements, models, profiles), `guardrails.ts` (rule sets, classifiers, flags),
+  `knowledge.ts`, `memory.ts`, `admin/connections.ts`, `admin/registry.ts`, `admin/mcp.ts`, `agents.ts`, `scripts.ts`,
+  `workflows.ts`, `media.ts`, `images.ts`, `health.ts`. The full list is `docs/api.md`.
 - **`identity/`**: the per-tenant store chain, adapters in `providers/`, JIT provisioning (roles, clearance and
   workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys.
 - **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
@@ -98,7 +101,21 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   resolution, pull, evaluate and rolling-upgrade jobs).
 - **`chat/`**: `service.ts` (conversation trees, sealed content, generation with streaming, tools, fallback and
   metering), `attachments.ts` (quarantine, type sniffing, ClamAV, classifier), `calc.ts` (the exact-calculation
-  worker thread).
+  worker thread), `context.ts` (context providers for knowledge and memory, citations).
+- **`guardrails/`**: `types.ts` (the checkpoint seam `s.guardrails.check`, which every feature calls with its
+  checkpoint), `engine.ts` (checks, precedence platform > tenant > workspace > agent, fail closed, decisions, replay and
+  statistics), `sets.ts` (versioned rule sets, dual control for the baseline), `rules.ts` (rule schema, YAML, diff),
+  `regex.ts` (RE2), `detectors.ts` (PII and secrets), `model.ts` (guard-model verdicts), `classifiers.ts` and
+  `linear.ts`, `flags.ts` (the review queue).
+- **`knowledge/`** (sources, extraction, chunking, keyword terms, hybrid search with RRF, blue/green reindex),
+  **`memory/`** (scopes, proposals, forget, export), **`connections/`** (PostgreSQL and OpenSearch drivers, query
+  classification, masking) and **`platform/vectors.ts`** (`VectorStore`: table scan or pgvector).
+- **`registry/`** (entries, checks, schemas, `dispatch.ts`: the one tool dispatcher for chat, agents, workflows and
+  the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs
+  with lanes, approvals, budgets, checkpoints and replay), **`scripts/`** (`ScriptRunner`: docker or podman sandbox).
+- **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
+  step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg), **`images/`** (`ImageBackend` for ComfyUI
+  and diffusers, safety classifier, signed provenance in the PNG).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -107,8 +124,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   The server joins each socket to its user, tenant and session rooms and to permission rooms for live admin updates;
   bus topics (job progress, notifications, chat events, pool state, revocations) are relayed to those rooms.
 - Tests live in `server/test/` (`helpers.ts` builds an app on in-memory SQLite with a temporary blob directory and
-  signs users in, including TOTP; `fake-ollama.ts`); `server/test/integration/` runs the stores and platform paths
-  against real servers.
+  signs users in, including TOTP; `fake-ollama.ts` also answers embeddings and guard-model verdicts; `fake-mcp.ts`,
+  `fake-runner.ts` (scripts) and `sprint8-fakes.ts` (media runner, image backend, safety classifier) stand in for the
+  other external workers; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents);
+  `server/test/integration/` runs the stores and platform paths against real servers.
 
 ### Rules for server code (from `docs/PLAN.md`)
 

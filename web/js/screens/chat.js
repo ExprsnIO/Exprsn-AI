@@ -3,6 +3,8 @@
 
   // Chat, backed by /api/chat, /api/conversations and /api/attachments. Answers stream over the socket
   // (chat.status, chat.chunk, chat.done); a gap in the sequence numbers is filled from the stream endpoint.
+  // Knowledge bases attach to a conversation (/api/conversations/:id/knowledge); answers that used retrieved
+  // passages or memories carry numbered citations, shown as sources under the answer and in the inspector.
   const LEVELS = ['off', 'low', 'medium', 'high'];
   const LABELS = ['public', 'internal', 'confidential', 'restricted'];
   const enc = encodeURIComponent;
@@ -33,6 +35,36 @@
   const selProfile = (st) => profileOf(st, st.profile);
   const levelsFor = (p) => (p ? LEVELS.slice(0, LEVELS.indexOf(p.thinkCeiling) + 1) : ['off']);
   const clampThink = (p, want) => { const ok = levelsFor(p); return ok.indexOf(want) >= 0 ? want : ok[ok.length - 1]; };
+
+  /** The knowledge bases attached to the open conversation, or picked for the one the next message starts. */
+  const boundIds = (st) => (st.convId ? st.bound || [] : st.newKbs || []);
+  const kbOf = (st, id) => (st.kbs || []).find((k) => k.id === id) || null;
+  function loadBindings(id) {
+    const st = S(); if (!id || !App.can('context:read')) return;
+    App.get(cUrl(id) + '/knowledge').then((list) => { if (S().convId !== id) return; st.bound = list.map((k) => k.id); rerender(); }).catch(() => { /* the chip shows none */ });
+  }
+  async function toggleKb(id) {
+    const st = S(); const cur = boundIds(st); const kb = kbOf(st, id);
+    const on = cur.indexOf(id) < 0;
+    const next = on ? cur.concat([id]) : cur.filter((x) => x !== id);
+    const name = kb ? kb.name : 'The knowledge base';
+    if (!st.convId) { st.newKbs = next; App.toast(esc(name) + (on ? ' will be searched for this conversation from its first message.' : ' removed.')); rerender(); return; }
+    try {
+      const r = await App.api('PUT', cUrl(st.convId) + '/knowledge', { kbIds: next });
+      st.bound = r.kbIds;
+      App.toast(esc(name) + (on ? ' attached. Later answers search it and cite what they use.' : ' detached from this conversation.'), 'ok');
+    } catch (err) { handleError(err, 'Could not change the knowledge bases'); }
+    rerender();
+  }
+  /** A citation's title and the line under it. */
+  function citeText(c) {
+    if (c.kind === 'memory') return { title: 'Memory, ' + (c.type || 'note'), sub: c.scope === 'workspace' ? 'Workspace memory' : 'Your memory' };
+    const score = typeof c.score === 'number' ? ', score ' + c.score.toFixed(2) : '';
+    return { title: c.document || 'Document', sub: (c.kb || 'Knowledge base') + (c.section ? ', ' + c.section : '') + score };
+  }
+  function sourcesHtml(m, cls) {
+    return (m.citations || []).map((c) => { const t = citeText(c); return '<button type="button" class="' + cls + '" data-src="' + esc(c.n) + '" data-mid="' + esc(m.id) + '"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span></span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</button>'; }).join('');
+  }
 
   function pickProfile(st, preferred) {
     const list = st.profiles || [];
@@ -87,6 +119,7 @@
     st.status = st.status || {};
     st.status[d.messageId] = Object.assign({}, st.status[d.messageId] || {}, d);
     if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model }; }
+    if (d.state === 'context' && d.citations) { st.citeFor = st.citeFor || {}; st.citeFor[d.messageId] = true; }
     const m = byId(st, d.messageId);
     if (m && d.state !== 'queued' && m.state === 'queued') m.state = 'streaming';
     if (m && d.profile) m.profile = d.profile;
@@ -123,6 +156,8 @@
     const m = byId(st, d.messageId);
     if (!m) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; return; }
     applyDone(st, m, d);
+    // Citations (and a label raised by retrieval) are stored with the answer: reload the conversation to show them.
+    if (st.citeFor && st.citeFor[d.messageId]) { delete st.citeFor[d.messageId]; loadConv(false).then(schedule); }
     if (d.state === 'failed') App.toast('<b>The answer failed</b> ' + esc(d.error || ''), 'danger', 6000);
     refreshProfiles();
     schedule();
@@ -197,10 +232,13 @@
   }
 
   // ---------- rendering ----------
-  function richText(s) {
+  /** Paragraphs and code blocks; `[n]` markers that match a citation of the message become links to its source. */
+  function richText(s, m) {
+    const nums = {}; ((m && m.citations) || []).forEach((c) => { nums[c.n] = true; });
+    const cite = (html) => html.replace(/\[(\d{1,2})\]/g, (m0, n) => (nums[n] ? '<a href="#" class="ch-cite" data-cite="' + n + '" data-mid="' + esc(m.id) + '">' + n + '</a>' : m0));
     return String(s || '').split('```').map((part, i) => {
       if (i % 2) return '<pre class="ch-code">' + esc(part.replace(/^[\w+.-]*\n/, '')) + '</pre>';
-      return part.split(/\n{2,}/).filter((p) => p.trim()).map((p) => '<p>' + esc(p.replace(/^\n+|\n+$/g, '')).replace(/\n/g, '<br>') + '</p>').join('');
+      return part.split(/\n{2,}/).filter((p) => p.trim()).map((p) => '<p>' + cite(esc(p.replace(/^\n+|\n+$/g, '')).replace(/\n/g, '<br>')) + '</p>').join('');
     }).join('');
   }
   function branchSwitch(conv, m) {
@@ -264,7 +302,8 @@
         + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
     }
     h += toolsHtml(m);
-    if (m.content || streaming) h += '<div class="ch-answer serif">' + richText(m.content) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
+    if (m.content || streaming) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
+    if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
     if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
@@ -342,9 +381,11 @@
     if (conv) {
       const clearance = App.me && App.me.user ? App.me.user.clearance : 'public';
       const up = LABELS.filter((l) => rank(l) > rank(conv.label) && rank(l) <= rank(clearance));
-      h += '<div class="eyebrow">This conversation</div>' + UI.kv([['Label', UI.label(conv.label, { sm: true })], ['Messages', num(conv.messages.length)], ['Branches', num(conv.messages.filter((m) => !conv.messages.some((x) => x.parentId === m.id)).length)], ['Started', esc(ago(Number(conv.createdAt)))]], 2)
+      const kbNames = boundIds(st).map((id) => (kbOf(st, id) || { name: 'a knowledge base' }).name);
+      h += '<div class="eyebrow">This conversation</div>' + UI.kv([['Label', UI.label(conv.label, { sm: true })], ['Knowledge', kbNames.length ? esc(kbNames.join(', ')) : 'none attached'], ['Messages', num(conv.messages.length)], ['Branches', num(conv.messages.filter((m) => !conv.messages.some((x) => x.parentId === m.id)).length)], ['Started', esc(ago(Number(conv.createdAt)))]], 2)
         + (up.length && App.can('chat:write') ? '<div class="hstack gap6">' + UI.select(up.map((l) => ({ value: l, label: l })), up[0], 'data-raiseto aria-label="New label"') + UI.btn('Raise label', { size: 'sm', attrs: 'data-raise' }) + '</div><div class="muted" style="font-size:12px">A label only goes up. Profiles below it can no longer answer here.</div>' : '');
       const last = headAnswer(st);
+      if (last && (last.citations || []).length) h += '<div class="eyebrow">Sources</div><div class="vstack gap4">' + sourcesHtml(last, 'ch-isrc') + '</div>';
       if (last) {
         const u = last.usage;
         h += '<div class="eyebrow">Last answer</div>' + UI.kv([['Profile', App.can('profiles:manage') ? '<a href="#" data-goprofile="' + esc(last.profile || '') + '">' + esc(last.profile || '') + '</a>' : esc(last.profile || '')], ['Model', '<span class="mono">' + esc(last.model || '') + '</span>'], ['State', UI.pill(last.state, last.state === 'complete' ? 'ok' : last.state === 'failed' ? 'danger' : last.state === 'stopped' ? 'warn' : 'info')], ['Thinking', esc(last.think || 'off')]]
@@ -380,9 +421,10 @@
     const st = S(); if (st.loading) return;
     st.loading = true;
     const wanted = st.convId;
-    Promise.all([App.get('/api/chat/profiles'), listReq(st), wanted ? App.get(cUrl(wanted)).catch((err) => { if (err.status === 404) { st.convId = null; return null; } throw err; }) : null])
-      .then(([profiles, convos, conv]) => {
-        st.profiles = profiles; st.convos = convos; setConv(st, conv); st.convError = null;
+    Promise.all([App.get('/api/chat/profiles'), listReq(st), wanted ? App.get(cUrl(wanted)).catch((err) => { if (err.status === 404) { st.convId = null; return null; } throw err; }) : null, App.can('knowledge:read') ? App.get('/api/knowledge/bases').catch(() => []) : []])
+      .then(([profiles, convos, conv, kbs]) => {
+        st.profiles = profiles; st.convos = convos; setConv(st, conv); st.convError = null; st.kbs = kbs;
+        if (conv) loadBindings(conv.id);
         pickProfile(st, conv ? conv.profileId : null);
         st.loaded = true; st.loadError = null;
       })
@@ -419,8 +461,9 @@
   async function openConv(id) {
     const st = S();
     if (st.convId === id && st.conv) return;
-    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false;
+    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false; st.bound = null;
     syncUrl(id);
+    loadBindings(id);
     rerender();
     await loadConv(true);
     if (st.conv) pickProfile(st, st.conv.profileId);
@@ -444,9 +487,18 @@
     st.sending = true; paint();
     const body = { content: text, profile: p.name, think: st.think, attachments: (st.pending || []).map((a) => a.id) };
     try {
-      if (!st.convId) {
+      const kbIds = st.newKbs || [];
+      if (!st.convId && kbIds.length && App.can('context:write')) {
+        // Attach the picked bases before the first message, so its answer already searches them.
+        const c = await App.post('/api/conversations', {});
+        try {
+          await App.api('PUT', cUrl(c.id) + '/knowledge', { kbIds });
+          await App.post(cUrl(c.id) + '/messages', body);
+        } catch (err) { await App.del(cUrl(c.id)).catch(() => undefined); throw err; }
+        st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(st.convId);
+      } else if (!st.convId) {
         const r = await App.post('/api/chat', body);
-        st.convId = r.conversationId; syncUrl(st.convId);
+        st.convId = r.conversationId; st.bound = []; syncUrl(st.convId);
       } else {
         await App.post(cUrl(st.convId) + '/messages', body);
       }
@@ -622,6 +674,9 @@
         + '.ch-cold{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--info-bg);color:var(--info-fg);font-size:12px;border-radius:6px}'
         + '.ch-atts{display:flex;flex-direction:column;gap:6px}.ch-att{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px}.ch-att.bad{border-color:var(--danger-fg)}.ch-attwhy{color:var(--danger-fg)}'
         + '.ch-actions{display:flex;align-items:center;gap:12px}.ch-hint{font-size:12px}'
+        + '.ch-answer .ch-cite{display:inline-block;margin-left:2px;font-size:11px;font-weight:700;vertical-align:super;text-decoration:none;font-family:var(--sans)}'
+        + '.ch-srcs{display:flex;flex-direction:column;gap:4px}.ch-src,.ch-isrc{display:flex;gap:8px;align-items:flex-start;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit;font-size:12px;text-align:left;cursor:pointer}.ch-isrc{border-color:transparent;background:none}'
+        + '.ch-src:hover,.ch-isrc:hover,.ch-src.hi,.ch-isrc.hi{background:var(--accent-tint)}.ch-src .n,.ch-isrc .n{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}.ch-src .t,.ch-isrc .t{display:block;font-weight:600}.ch-src .s,.ch-isrc .s{display:block}'
         + '.ch-dd{max-height:320px;overflow:auto;min-width:260px}.ch-dd button{height:auto;min-height:28px;padding:4px 10px}.ch-dd .sub{display:block;font-size:11px;color:var(--muted);font-weight:400}'
         + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
         + '</style>'
@@ -639,6 +694,7 @@
         + '<div data-region="notice">' + noticeHtml(st) + '</div>'
         + '<div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + (p ? esc(p.name) + ' · ' + esc(p.model) : 'No profile'), true, 'data-pick="profile" aria-haspopup="true"' + ((st.profiles || []).length ? '' : ' disabled')) + '</span>'
         + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.think || 'off'), false, 'data-pick="level" aria-haspopup="true"' + (p && p.thinkCeiling !== 'off' ? '' : ' disabled title="This profile does not think"')) + '</span>'
+        + (App.can('knowledge:read') ? '<span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' ' + (boundIds(st).length ? esc(boundIds(st).map((id) => (kbOf(st, id) || { name: 'knowledge base' }).name).join(', ')) : 'Knowledge'), boundIds(st).length > 0, 'data-pick="kb" aria-haspopup="true"' + (App.can('context:write') ? '' : ' disabled title="Your roles do not let you attach knowledge bases"')) + '</span>' : '')
         + (p && p.tools && p.tools.indexOf('calculate') >= 0 ? '<span class="muted hstack gap4" style="font-size:12px">' + UI.icon('calc', 12) + ' Exact calculation on</span>' : '') + '</div>'
         + '<div data-region="cold">' + coldHtml(st) + '</div>'
         + '<div data-region="atts">' + attsHtml(st) + '</div>'
@@ -660,7 +716,7 @@
       ctx.on('input', '#ch-composer', (e, t) => { st.draft = t.value; });
       ctx.on('keydown', '#ch-composer', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
       ctx.on('click', '[data-send]', () => send());
-      ctx.on('click', '[data-new]', () => { st.showList = false; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; rerender(true); });
+      ctx.on('click', '[data-new]', () => { st.showList = false; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; rerender(true); });
       ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; openConv(t.dataset.convo); });
       ctx.on('click', '[data-showlist]', () => { st.showList = !st.showList; const l = ctx.$('.ch-left'); if (l) l.classList.toggle('ch-open', st.showList); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
@@ -705,6 +761,22 @@
         try { await App.patch(cUrl(c.id), { label: to }); ctx.toast('Label raised to ' + esc(to) + '.', 'ok'); await Promise.all([loadConv(false), loadList()]); rerender(); } catch (err) { handleError(err, 'Could not raise the label'); }
       });
       ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
+      ctx.on('click', '.ch-cite', (e, t) => {
+        e.preventDefault();
+        ctx.$$('.ch-src, .ch-isrc').forEach((x) => x.classList.remove('hi'));
+        const hits = ctx.$$('[data-src="' + t.dataset.cite + '"][data-mid="' + t.dataset.mid + '"]');
+        hits.forEach((x) => x.classList.add('hi'));
+        if (hits[0]) hits[0].scrollIntoView({ block: 'nearest' });
+      });
+      ctx.on('click', '.ch-src, .ch-isrc', (e, t) => {
+        const m = byId(st, t.dataset.mid); const c = m && (m.citations || []).find((x) => String(x.n) === t.dataset.src); if (!c) return;
+        const tx = citeText(c); const mem = c.kind === 'memory';
+        ctx.drawer({ title: esc(tx.title), body: '<div class="fg2">' + esc(tx.sub) + '</div>'
+          + UI.kv((mem ? [['Kind', 'memory'], ['Scope', esc(c.scope || '')], ['Type', esc(c.type || '')]] : [['Knowledge base', esc(c.kb || '')], ['Document', esc(c.document || '')], ['Section', esc(c.section || 'none')], ['Score', typeof c.score === 'number' ? esc(c.score.toFixed(3)) : 'not recorded']]).concat([['Label', c.label ? UI.label(c.label, { sm: true }) : ''], ['Cited as', '[' + esc(c.n) + '] in this answer']]), 1)
+          + UI.notice(mem ? 'An accepted memory went into the prompt as a labelled block. You can change or forget it on the Memory screen.' : 'The passage went into the prompt as a labelled context block; the conversation\'s label rose to at least its label.', 'info'),
+          actions: UI.btn(mem ? 'Open in Memory' : 'Open in Knowledge', { attrs: 'data-close data-gosrc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+          onMount(d) { d.querySelector('[data-gosrc]').addEventListener('click', () => (mem ? ctx.navigate('memory', { tab: c.scope === 'workspace' ? 'workspace' : 'mine' }) : ctx.navigate('knowledge', { kb: c.kbId }))); } });
+      });
       ctx.on('click', '[data-attachbtn]', () => { const f = ctx.$('[data-file]'); if (f) f.click(); });
       ctx.on('change', '[data-file]', (e, t) => { const files = Array.prototype.slice.call(t.files || []); t.value = ''; if (files.length) upload(files); });
       ctx.on('click', '[data-rmatt]', (e, t) => { st.pending = (st.pending || []).filter((a) => a.key !== t.dataset.rmatt); paint(); });
@@ -713,7 +785,10 @@
         ctx.$$('.dropdown').forEach((d) => d.remove()); if (ex) return;
         const d = document.createElement('div'); d.className = 'dropdown ch-dd'; d.style.top = 'auto'; d.style.bottom = 'calc(100% + 4px)';
         const cur = selProfile(st);
-        if (t.dataset.pick === 'profile') {
+        if (t.dataset.pick === 'kb') {
+          const on = boundIds(st);
+          d.innerHTML = '<div class="dh">Knowledge bases you can read</div>' + ((st.kbs || []).length ? st.kbs.map((k) => '<button type="button" data-kb="' + esc(k.id) + '" class="' + (on.indexOf(k.id) >= 0 ? 'on' : '') + '"' + (k.status !== 'published' && on.indexOf(k.id) < 0 ? ' disabled title="Drafts are not searched in chat"' : '') + '><span class="grow">' + esc(k.name) + '<span class="sub">' + (k.status === 'published' ? num(k.documents) + ' documents' : 'draft, not searched in chat') + '</span></span>' + (on.indexOf(k.id) >= 0 ? UI.icon('check', 12) : '') + UI.label(k.label, { sm: true }) + '</button>').join('') : '<div class="muted" style="padding:6px 10px;font-size:12px">No knowledge base is shared with you.</div>');
+        } else if (t.dataset.pick === 'profile') {
           d.innerHTML = '<div class="dh">Profiles cleared for you</div>' + (st.profiles || []).map((x) => '<button type="button" data-prof="' + esc(x.name) + '" class="' + (cur && x.name === cur.name ? 'on' : '') + '"><span class="grow">' + esc(x.name) + '<span class="sub mono">' + esc(x.model) + '</span></span>' + UI.pill(x.residency, x.residency === 'loaded' ? 'ok' : 'outline') + (x.deprecated ? UI.pill('deprecated', 'warn') : '') + UI.label(x.label, { sm: true }) + '</button>').join('');
         } else {
           d.innerHTML = '<div class="dh">Thinking level, ceiling ' + esc(cur ? cur.thinkCeiling : 'off') + '</div>' + levelsFor(cur).map((l) => '<button type="button" data-level="' + l + '" class="' + (l === st.think ? 'on' : '') + '">' + l + (cur && l === cur.thinkDefault ? ' <span class="muted">default</span>' : '') + '</button>').join('');
@@ -726,7 +801,9 @@
           if (b.dataset.prof) { const np = profileOf(st, b.dataset.prof); st.profile = np.name; st.think = np.thinkDefault; st.forceCold = false; }
           if (b.dataset.level) st.think = b.dataset.level;
           document.removeEventListener('click', outside, true);
-          d.remove(); rerender();
+          d.remove();
+          if (b.dataset.kb) { toggleKb(b.dataset.kb); return; }
+          rerender();
         });
       });
     }

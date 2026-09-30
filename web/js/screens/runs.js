@@ -2,154 +2,279 @@
   const { UI, esc } = App;
 
   const LANES = { think: 'Thinking', do: 'Doing', calc: 'Calculating' };
-  const RUNS = [
-    { id: '7f3a', agent: 'Data analyst agent', started: '14:02:11', by: 'Mara Okafor', dur: 'finished in 14.6 s', status: 'failed step', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2, 3, 4, 5, 6, 7], sum: { think: '3 steps, 2,914 tokens', do: '2 calls, 1.9 s', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [7, 20], tokens: [2914, 10000] } },
-    { id: '7e91', agent: 'Data analyst agent', started: '13:41:05', by: 'Mara Okafor', dur: 'finished in 9.8 s', status: 'succeeded', label: 'confidential', convo: 'c4', convoTitle: 'Reconcile card feed', steps: [1, 2, 3, 4, 5], sum: { think: '2 steps, 2,306 tokens', do: '1 call, 0.8 s', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [5, 20], tokens: [2306, 10000] } },
-    { id: '7d40', agent: 'quarterly-variance v1', started: '13:12:48', by: 'Mara Okafor', dur: 'waiting 12 min', status: 'waiting on approval', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2, 3, 4, 5, 6], waiting: true, sum: { think: '2 steps, 2,306 tokens', do: '1 call, 1 waiting', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [6, 20], tokens: [2306, 10000] } },
-    { id: '7c22', agent: 'Data analyst agent', started: '11:58:30', by: 'Sam Reyes', dur: 'stopped after 41.2 s', status: 'budget stop', label: 'internal', convo: 'c4', convoTitle: 'Reconcile card feed', steps: [1, 2, 3, 4, 5, 6, 7], budgetStop: true, sum: { think: '12 steps, 9,860 tokens', do: '6 calls, 7.4 s', calc: '2 results, 0.05 CPU-s' }, budget: { steps: [20, 20], tokens: [9860, 10000] } }
-  ];
-  const STEPS = {
-    1: { n: 1, lane: 'think', title: 'Plan', meta: 'high, 1,102 tok', body: 'proposal: query ledger, then compute overrun',
-      kv: [['Proposal', '<span class="mono">query ledger, then compute overrun</span>'], ['Thinking level', 'high, 1,102 tokens'], ['Profile', '<a href="#" data-goprofile="analyst">analyst</a> on <span class="mono">qwen2.5:32b-q4_K_M</span>'], ['Output', 'a tool call: ledger.query with cost_centre filter'], ['Checkpoints', 'Cedar allowed; proposed-tool-call rule passed'], ['Label', UI.label('confidential', { sm: true })]] },
-    2: { n: 2, lane: 'do', title: 'ledger.query', meta: 'read-only, 0.8 s', body: 'SELECT cost_centre, q3_actual, q3_budget ... 14 rows',
-      kv: [['Tool', '<span class="mono">ledger.query</span> via connection ledger-ro'], ['Side effect class', UI.pill('read-only', 'ok')], ['Duration', '0.8 s'], ['Acted as', 'Mara Okafor, delegated token, scope <span class="mono">ledger:read</span>'], ['Result', '14 rows, 1.2 KB, stored as a Context-tier segment'], ['Idempotent', 'yes, retried freely'], ['Label', UI.label('confidential', { sm: true })]] },
-    3: { n: 3, lane: 'calc', title: 'calc.evaluate', meta: '28 digits, cache miss', body: '(412880 - 361500) / 361500 = 0.142130...',
-      kv: [['Expression', '<span class="mono">(412880 - 361500) / 361500</span>'], ['Result', '<span class="mono">0.1421300138312586445366528354</span>'], ['Shown as', '14.2%'], ['Input hashes', '<span class="mono">a41c..9e02, 77b0..13fd</span>'], ['Library', '<span class="mono">calc 1.4.0, decimal128</span>'], ['Label', UI.label('confidential', { sm: true })], ['Cache', 'miss, stored for this tenant']] },
-    4: { n: 4, lane: 'calc', title: 'calc.table', meta: '14 rows in, 6 out', body: 'group by cost_centre, sum(actual - budget)',
-      kv: [['Expression', '<span class="mono">group by cost_centre, sum(actual - budget)</span>'], ['Result', '6 rows; largest FIELD-SALES 38,420.00, LIS-ONBOARD 36,310.00'], ['Shown as', 'table of 6 cost centres'], ['Input hashes', '<span class="mono">77b0..13fd</span>'], ['Library', '<span class="mono">calc 1.4.0, duckdb 1.1 embedded, no file or network</span>'], ['Label', UI.label('confidential', { sm: true })], ['Cache', 'miss, stored for this tenant']] },
-    5: { n: 5, lane: 'think', title: 'Draft answer', meta: 'medium, 1,204 tok', body: 'proposal: final text with 2 citations',
-      kv: [['Proposal', 'final text with 2 citations'], ['Thinking level', 'medium, 1,204 tokens'], ['Profile', '<a href="#" data-goprofile="analyst">analyst</a>'], ['Grounding', '3 figures checked against calc results, 0 ungrounded'], ['Citations', 'ledger.query result; Q3 cost centre review.pdf p. 4'], ['Label', UI.label('confidential', { sm: true })]] },
-    6: { n: 6, lane: 'do', title: 'jira-internal.create_issue', meta: 'write, 1.1 s', body: 'not retried: tool is not idempotent. HTTP 502 from upstream', failed: true,
-      kv: [['Tool', '<span class="mono">jira-internal.create_issue</span> (MCP server jira-internal)'], ['Side effect class', UI.pill('write', 'warn')], ['Confirmed by', 'Mara Okafor at 14:02:19, in chat'], ['Outcome', '<span style="color:var(--danger-fg)">HTTP 502 from upstream after 1.1 s</span>'], ['Retry', 'not retried: tool is not idempotent and carries no idempotency key'], ['Acted as', 'Mara Okafor, delegated token, scope <span class="mono">jira:write</span>'], ['Label', UI.label('confidential', { sm: true })]] },
-    7: { n: 7, lane: 'think', title: 'Report failure', meta: 'low, 608 tok', body: 'proposal: tell the user the issue was not created',
-      kv: [['Proposal', 'tell the user the issue was not created'], ['Thinking level', 'low, 608 tokens'], ['Profile', '<a href="#" data-goprofile="chat-default">chat-default</a> (cheaper profile for reporting)'], ['Input', 'the step 6 failure as a Context-tier segment'], ['Label', UI.label('confidential', { sm: true })]] }
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const SIDE = { read: 'read-only', write: 'write', destructive: 'destructive' };
+  const STATE_TEXT = { queued: 'queued', running: 'running', waiting: 'waiting on approval', succeeded: 'succeeded', failed: 'failed', cancelled: 'cancelled', budget: 'budget stop' };
+  const statusPill = (s) => UI.pill(STATE_TEXT[s] || s, s === 'succeeded' ? 'ok' : s === 'failed' ? 'danger' : s === 'waiting' || s === 'running' || s === 'queued' ? 'info' : s === 'budget' ? 'warn' : '');
+  const sidePill = (s) => UI.pill(SIDE[s] || s || 'read-only', s === 'write' ? 'warn' : s === 'destructive' ? 'danger' : 'ok');
+  const fmt = (n) => String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const shortId = (id) => String(id || '').slice(-6).toLowerCase();
+  const clock = (ms) => (ms ? new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  const secs = (ms) => (ms == null ? '' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + ' s');
+  const clip = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; };
+  const active = (s) => s === 'queued' || s === 'running' || s === 'waiting';
+  const duration = (r) => r.finishedAt && r.startedAt ? 'finished in ' + secs(r.finishedAt - r.startedAt) : r.state === 'waiting' ? 'waiting' : r.state === 'budget' ? 'stopped at its budget' : r.startedAt ? 'running for ' + secs(Date.now() - r.startedAt) : 'queued';
+
+  // ---------- live updates: run.step and run.state for the signed-in user ----------
+  const live = { sock: null, onEvent: null, timer: null, refresh: null };
+  const detach = () => { if (live.sock) { live.sock.off('run.step', live.onEvent); live.sock.off('run.state', live.onEvent); } live.sock = null; live.onEvent = null; if (live.timer) { clearTimeout(live.timer); live.timer = null; } };
+  const attach = () => {
+    if (!App.socket || live.sock === App.socket) return;
+    detach();
+    live.sock = App.socket;
+    live.onEvent = () => {
+      if (App.state.route !== 'runs') { detach(); return; }
+      if (live.timer) return;
+      // At most one refresh every 500 ms while a run streams steps.
+      live.timer = setTimeout(() => { live.timer = null; if (live.refresh) live.refresh(); }, 500);
+    };
+    live.sock.on('run.step', live.onEvent);
+    live.sock.on('run.state', live.onEvent);
   };
-  const DIVIDERS = { 1: 'Policy allowed, tool ceiling confidential, confirmed by M. Okafor' };
-  const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
-  const fmt = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const statusPill = (s) => UI.pill(s, s === 'succeeded' ? 'ok' : s === 'failed step' ? 'danger' : s === 'waiting on approval' ? 'info' : s === 'budget stop' ? 'warn' : s === 'running' ? 'info' : '');
+  window.addEventListener('hashchange', () => { if (App.parse().route !== 'runs') detach(); });
+
+  /** Numbers in the answer that equal a calculating step's result (as rounded there), for the traceable figure. */
+  function traceFigures(text, steps) {
+    const calcs = steps.filter((s) => s.lane === 'calc' && s.state === 'ok' && s.detail && s.detail.result && s.detail.result.decimal != null).map((s) => ({ n: s.n, v: Number(String(s.detail.result.decimal).replace(/\.{3}$/, '')) }));
+    if (!calcs.length) return esc(text);
+    return esc(text).replace(/-?\d[\d,]*(?:\.\d+)?%?/g, (tok) => {
+      const raw = tok.replace(/[,%]/g, '');
+      const dec = (raw.split('.')[1] || '').length;
+      const val = Number(raw);
+      const hit = calcs.find((c) => isFinite(c.v) && Math.abs(c.v - val) <= 0.5 * Math.pow(10, -dec) + 1e-12);
+      return hit ? '<button type="button" class="runs-fig" data-fig="' + hit.n + '">' + tok + '</button>' : tok;
+    });
+  }
 
   App.register({
-    id: 'runs', title: 'Runs', summary: 'Agent run timeline by worker class, step inspector, budget, replay',
-    crumb: (st, params) => ['Runs', (params && params.run) || st.run || '7f3a'],
-    label: (st, params) => (RUNS.find((r) => r.id === ((params && params.run) || st.run || '7f3a')) || RUNS[0]).label,
-    commands: [{ label: 'Replay a run from a step', sub: 'Runs', run(app) { app.stateFor('runs').openReplay = true; app.render(); } }],
+    id: 'runs', title: 'Runs', live: true,
+    summary: 'Agent run timeline by lane, step inspector, approvals, budget, replay',
+    crumb: (st) => ['Runs'].concat(st.run ? [shortId(st.run)] : []),
+    label: (st) => (st.view && st.view.id === st.run ? st.view.label : null),
+    commands: [
+      { label: 'Start an agent run', sub: 'Runs', run(app) { app.stateFor('runs').openStart = true; app.render(); } },
+      { label: 'Replay a run from a step', sub: 'Runs', run(app) { app.stateFor('runs').openReplay = true; app.render(); } }
+    ],
     states: [
-      { title: 'Proposal denied', tone: 'danger', text: 'Cedar denied the tool call: the tool\'s egress ceiling is internal and the run is confidential. The thinking step receives the denial as data.', apply(ctx) { ctx.state.run = '7f3a'; ctx.state.denied = true; ctx.state.sel = 2; ctx.rerender(); } },
-      { title: 'Budget stop', tone: 'warn', text: 'The run stopped at 20 of 20 steps. The last checkpoint is kept and the owner can raise the limit and resume.', apply(ctx) { ctx.state.run = '7c22'; ctx.state.sel = 7; ctx.state.resumed = false; ctx.rerender(); } },
-      { title: 'Traceable figure', tone: 'ok', text: 'Selecting a number in the final answer highlights the calculating step that produced it.', apply(ctx) { ctx.state.run = '7f3a'; ctx.state.showAnswer = true; ctx.state.sel = 3; ctx.rerender(); setTimeout(() => { const a = ctx.$('#runs-answer'); if (a) a.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 30); } },
-      { title: 'Waiting on approval', tone: 'info', text: 'A doing step shows who must approve and how long it has waited.', apply(ctx) { ctx.state.run = '7d40'; ctx.state.sel = 6; ctx.state.decided = null; ctx.rerender(); } }
+      { title: 'Proposal denied', tone: 'danger', text: 'The tool-call checkpoint or a label ceiling refused a call. The thinking step receives the denial as data.', apply(ctx) { ctx.state.demo = 'denied'; ctx.rerender(); } },
+      { title: 'Budget stop', tone: 'warn', text: 'The run stopped at its step, token, time or tool-call limit. The last checkpoint is kept and the owner can raise the limit and resume.', apply(ctx) { ctx.state.demo = 'budget'; ctx.rerender(); } },
+      { title: 'Traceable figure', tone: 'ok', text: 'Selecting a number in the final answer highlights the calculating step that produced it.', apply(ctx) { ctx.state.demo = 'figure'; ctx.rerender(); } },
+      { title: 'Waiting on approval', tone: 'info', text: 'A doing step shows who must approve and how long it has waited.', apply(ctx) { ctx.state.demo = 'waiting'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.run) { st.run = ctx.params.run; delete ctx.params.run; }
-      st.run = st.run || '7f3a'; st.query = st.query || ''; st.extra = st.extra || [];
-      const allRuns = st.extra.concat(RUNS);
-      const run = allRuns.find((r) => r.id === st.run) || RUNS[0];
-      if (st.sel == null || !run.steps.includes(st.sel)) st.sel = run.id === '7f3a' ? 3 : run.steps[run.steps.length - 1];
-      const denied = st.denied && run.id === '7f3a';
-      const waiting = run.waiting && !st.decided;
-      const budgetStop = run.budgetStop && !st.resumed;
-      const status = denied ? 'failed step' : run.waiting ? (st.decided === 'approve' ? 'succeeded' : st.decided === 'deny' ? 'failed step' : run.status) : run.budgetStop ? (st.resumed ? 'running' : run.status) : run.status;
-
-      // Steps for this run, with state overrides.
-      const step = (n) => {
-        const s = Object.assign({}, STEPS[n]);
-        if (denied && n === 2) { s.meta = 'denied by Cedar'; s.body = 'not run: tool egress ceiling internal, run label confidential'; s.failed = true; s.kv = [['Tool', '<span class="mono">ledger.query</span>'], ['Decision', UI.pill('denied', 'danger')], ['Policy', '<span class="mono">tenant-egress v4</span>, evaluated in 3 ms'], ['Reason', 'the tool\'s egress ceiling is internal and the run is confidential'], ['Returned to', 'step 5 as a Context-tier segment labelled <span class="mono">policy.denial</span>'], ['Label', UI.label('confidential', { sm: true })]]; }
-        if (run.waiting && n === 6) {
-          if (waiting) { s.meta = 'write, waiting 12 min'; s.body = 'waiting on approval: Mara Okafor (tool admin), requested 13:12:56'; s.failed = false; s.waiting = true; s.kv = [['Tool', '<span class="mono">jira-internal.create_issue</span>'], ['Side effect class', UI.pill('write', 'warn')], ['Must approve', 'Mara Okafor, tool admin for jira-internal'], ['Requested', '13:12:56, from the run, not from chat'], ['Waited', '12 min of a 60 min window'], ['If nobody approves', 'the step fails and step 7 reports it'], ['Label', UI.label('confidential', { sm: true })]]; }
-          else if (st.decided === 'approve') { s.meta = 'write, 1.0 s'; s.body = 'created FIN-1188 in jira-internal as Mara Okafor'; s.failed = false; s.kv = [['Tool', '<span class="mono">jira-internal.create_issue</span>'], ['Side effect class', UI.pill('write', 'warn')], ['Approved by', 'Mara Okafor, 13:25:10'], ['Result', 'FIN-1188 created'], ['Label', UI.label('confidential', { sm: true })]]; }
-          else { s.meta = 'write, denied'; s.body = 'denied by Mara Okafor; nothing was written'; s.failed = true; s.kv = [['Tool', '<span class="mono">jira-internal.create_issue</span>'], ['Decision', UI.pill('denied', 'danger')], ['Denied by', 'Mara Okafor, 13:25:10'], ['Returned to', 'the next thinking step as data']]; }
-        }
-        return s;
+      const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
+      st.query = st.query || ''; st.scope = st.scope || 'mine';
+      const admin = App.can('agents:manage') || App.can('tools:manage');
+      const later = () => { if (App.state.route !== 'runs') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
+      const fetchRun = (id) => App.get('/api/runs/' + id).then((v) => { st.view = v; }).catch((err) => { st.view = { id, error: err }; });
+      const load = () => {
+        if (st.loading) { st.again = true; return; }
+        st.loading = true;
+        App.get('/api/runs' + (st.scope === 'all' || !App.can('agents:run') ? '?all=true' : ''))
+          .then((runs) => { st.runs = runs; st.loaded = true; st.loadError = null; if (ctx.params.run) { st.run = ctx.params.run; delete ctx.params.run; } if (!st.run || (!runs.find((r) => r.id === st.run) && !(st.view && st.view.id === st.run))) st.run = runs[0] ? runs[0].id : null; return st.run ? fetchRun(st.run) : null; })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } later(); });
       };
-      const steps = run.steps.map(step);
-      const laneSum = Object.assign({}, run.sum);
-      if (denied) laneSum.do = '1 call denied, 1 call 1.1 s';
+      live.refresh = load;
+      attach();
+      if (!st.loaded && !st.loadError) load();
+      const act = async (fn, okMsg, kind) => {
+        try { const r = await fn(); if (okMsg) toast(okMsg, kind || 'ok', 5000); load(); return r || true; }
+        catch (err) { App.fail(err); return null; }
+      };
+      if (st.loadError || !st.loaded) {
+        root.innerHTML = '<div class="page">' + UI.pagehead('Runs', 'Agent runs, step by step', '') + (st.loadError ? UI.problem('Runs could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        ctx.on('click', '[data-reload]', () => { st.loadError = null; ctx.rerender(); });
+        return;
+      }
+      if (ctx.params.agent) { st.openStart = ctx.params.agent; delete ctx.params.agent; }
 
-      const card = (s) => '<div class="runs-card' + (s.failed ? ' failed' : '') + (s.waiting ? ' waiting' : '') + (st.sel === s.n ? ' selected' : '') + '" data-step="' + s.n + '" role="button" tabindex="0"><div class="runs-ch"><span style="font-size:13px;font-weight:600">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.meta) + '</span></div><div class="mono fg2" style="overflow-wrap:anywhere">' + esc(s.body) + '</div></div>';
-      const rows = steps.map((s) => {
-        let h = '<div class="runs-row"><div class="runs-n num">' + s.n + '</div>' + ['think', 'do', 'calc'].map((l) => '<div>' + (s.lane === l ? card(s) : '') + '</div>').join('') + '</div>';
-        if (DIVIDERS[s.n]) h += '<div class="runs-div"><div></div><div class="runs-divline' + (denied ? ' danger' : '') + '"><span class="rule"></span><span>' + (denied ? 'Policy denied: tool egress ceiling internal, run is confidential. The denial goes back to the thinking step as data.' : esc(DIVIDERS[s.n])) + '</span><span class="rule"></span></div></div>';
-        if (s.waiting) h += '<div class="runs-div"><div></div><div class="runs-divline info"><span class="rule"></span><span>Approval requested from Mara Okafor, 12 min ago. The run holds its checkpoint until a decision.</span><span class="rule"></span></div></div>';
-        return h;
-      }).join('');
+      const runs = st.runs;
 
-      const selStep = steps.find((s) => s.n === st.sel) || steps[0];
-      const inspectorActions = selStep.lane === 'calc' ? UI.btn('Copy with provenance', { attrs: 'data-copyprov' })
-        : selStep.waiting ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>'
-        : selStep.failed ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + selStep.n + '"' })
-        : selStep.n === 5 ? UI.btn(st.showAnswer ? 'Hide final answer' : 'Show final answer', { attrs: 'data-toggleanswer' })
-        : selStep.lane === 'think' ? UI.btn('Show thinking trace', { icon: 'brain', attrs: 'data-trace="' + selStep.n + '"' })
-        : UI.btn('Show result segment', { attrs: 'data-segment="' + selStep.n + '"' });
+      // ---- demo states staged from live data ----
+      if (st.demo) {
+        const d = st.demo; st.demo = null; st.demoNote = null;
+        const find = (f, note) => { const r = runs.find(f); if (r) { st.run = r.id; st.sel = null; st.view = null; st.demoFor = d; } else st.demoNote = note; return r; };
+        if (d === 'denied') find((r) => r.state === 'succeeded' || r.state === 'failed', 'No finished run yet. A denied call shows as a red doing step with the reason given back to the model.');
+        else if (d === 'budget') find((r) => r.state === 'budget', 'No run has hit its budget. A run that does stops with its checkpoint kept, and the owner can raise the limit here.');
+        else if (d === 'waiting') find((r) => r.state === 'waiting', 'No run is waiting on approval. A write or destructive call pauses the run and shows who must approve.');
+        else if (d === 'figure') { if (find((r) => r.state === 'succeeded', 'No finished run yet. Figures in a final answer link to the calculating step that produced them.')) st.showAnswer = true; }
+      }
+      const v = st.view && st.view.id === st.run ? st.view : null;
+      if (st.run && !v && !st.fetching) { st.fetching = true; fetchRun(st.run).finally(() => { st.fetching = false; later(); }); }
+      if (v && st.demoFor && !v.error) {
+        const d = st.demoFor; st.demoFor = null;
+        const pick = d === 'denied' ? v.steps.find((s) => s.state === 'denied' || s.state === 'rejected') : d === 'waiting' ? v.steps.find((s) => s.state === 'waiting') : d === 'figure' ? v.steps.find((s) => s.lane === 'calc') : v.steps[v.steps.length - 1];
+        if (pick) st.sel = pick.n;
+        else if (d === 'denied') st.demoNote = 'This run had no denied call. When the checkpoint refuses one, its doing step turns red and the next thinking step receives the reason.';
+        else if (d === 'figure') st.demoNote = 'This run has no calculating step, so no figure in its answer is traceable.';
+      }
 
-      const answer = st.showAnswer && run.id === '7f3a' ? '<section class="panel" id="runs-answer"><div class="phead"><div class="eyebrow">Final answer, step 5</div><span class="muted" style="font-size:12px">Select a figure to see the calculating step that produced it</span></div><div class="serif" style="font-size:15px;line-height:1.6">Travel spend for Q3 came to <button type="button" class="runs-fig" data-fig="4">412,880 EUR</button> against a budget of 361,500 EUR, an overrun of <button type="button" class="runs-fig' + (st.sel === 3 ? ' on' : '') + '" data-fig="3">14.2%</button>. Two cost centres account for most of it: Field Sales at <button type="button" class="runs-fig' + (st.sel === 4 ? ' on' : '') + '" data-fig="4">38,420 EUR</button> over and the Lisbon onboarding programme at <button type="button" class="runs-fig' + (st.sel === 4 ? ' on' : '') + '" data-fig="4">36,310 EUR</button> over. The Jira issue was not created; the upstream returned an error.</div></section>' : '';
+      const q = st.query.toLowerCase();
+      const shown = runs.filter((r) => !q || (r.id + ' ' + r.agent + ' ' + (STATE_TEXT[r.state] || r.state) + ' ' + (r.by || '')).toLowerCase().indexOf(q) >= 0);
+      const left = '<div class="leftpane"><div class="hstack"><div class="eyebrow grow">Recent runs</div>' + UI.iconbtn('refresh', 'Refresh', { cls: 'sm ghost', attrs: 'data-refresh' }) + (App.can('agents:run') ? UI.btn('Start', { size: 'sm', attrs: 'data-start' }) : '') + '</div>'
+        + (admin && App.can('agents:run') ? UI.seg([{ id: 'mine', label: 'Mine' }, { id: 'all', label: 'Tenant' }], st.scope, 'data-scope') : '')
+        + UI.search('Filter runs', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
+        + '<div class="runs-list">' + shown.map((r) => UI.listItem('<span class="mono">' + esc(shortId(r.id)) + '</span>', esc(r.agent) + ' · ' + esc(clock(r.createdAt)) + ', ' + esc(r.by || ''), { active: r.id === st.run, attrs: 'data-run="' + esc(r.id) + '"', right: statusPill(r.state) })).join('') + (shown.length ? '' : UI.empty(runs.length ? 'No runs match' : 'No runs yet', runs.length ? 'Try another word.' : 'Start a run of a published agent.')) + '</div>'
+        + '<div class="muted" style="font-size:12px;margin-top:auto">Thinking steps call the model through the gateway, doing steps call tools through the tool-call checkpoint, calculating steps use the exact calculator.</div></div>';
 
-      const budgetNotice = budgetStop ? UI.notice('<b>Budget stop.</b> The run stopped at 20 of 20 steps. The last checkpoint is kept; raise the limit to resume from step 21.', 'warn', UI.btn('Raise limit and resume', { size: 'sm', attrs: 'data-raise' })) : st.resumed && run.budgetStop ? UI.notice('Step limit raised to 40 by Mara Okafor. The run resumed from the kept checkpoint at step 21.', 'ok') : '';
-      const stepsUsed = run.budget.steps[0], stepsMax = st.resumed && run.budgetStop ? 40 : run.budget.steps[1];
-
-      root.innerHTML = '<style>'
+      const style = '<style>'
         + '.runs-list{display:flex;flex-direction:column;gap:2px}.runs-page > *{flex-shrink:0}'
         + '.runs-lanes,.runs-row{display:grid;grid-template-columns:28px repeat(3,minmax(0,1fr));gap:10px;align-items:start}'
         + '.runs-lane{display:flex;justify-content:space-between;align-items:center;gap:4px 8px;flex-wrap:wrap;padding-bottom:6px;border-bottom:1px solid var(--line)}'
         + '.runs-lane .ln{display:inline-flex;align-items:center;gap:4px;padding:1px 8px 1px 5px;border:1px solid var(--line);border-radius:4px;font-size:12px;font-weight:600;color:var(--fg2);background:var(--panel);white-space:nowrap}.runs-lane .ls{font-size:12px;color:var(--fg2)}'
         + '.runs-n{font-size:12px;color:var(--muted);padding-top:9px}.runs-ch{display:flex;justify-content:space-between;align-items:baseline;gap:2px 8px;flex-wrap:wrap}.runs-ch > span:first-child{overflow-wrap:anywhere;min-width:0}'
-        + '.runs-card{display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;min-width:0;cursor:pointer}.runs-card:hover{border-color:var(--muted)}.runs-card.selected{background:var(--accent-tint);border-color:var(--accent)}.runs-card.failed{border-color:var(--danger-fg)}.runs-card.waiting{border-color:var(--info-fg);border-style:dashed}'
+        + '.runs-card{display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;min-width:0;cursor:pointer}.runs-card:hover{border-color:var(--muted)}.runs-card.selected{background:var(--accent-tint);border-color:var(--accent)}.runs-card.failed{border-color:var(--danger-fg)}.runs-card.waiting{border-color:var(--info-fg);border-style:dashed}.runs-card.reused{opacity:.75}'
         + '.runs-div{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px}.runs-divline{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}.runs-divline .rule{flex-grow:1;height:1px;background:var(--line)}.runs-divline.danger{color:var(--danger-fg)}.runs-divline.info{color:var(--info-fg)}'
         + '.runs-fig{font:inherit;font-family:var(--sans);font-size:13px;font-weight:600;padding:0 5px;border:1px solid var(--line);border-radius:4px;background:var(--panel);cursor:pointer;color:var(--fg)}.runs-fig:hover,.runs-fig.on{border-color:var(--ok-fg);background:var(--ok-bg);color:var(--ok-fg)}'
         + '@media (max-width:900px){.runs-lanes{display:none}.runs-row{grid-template-columns:28px 1fr}.runs-row > div:empty{display:none}}'
-        + '</style>'
-        + '<div class="leftpane"><div class="hstack"><div class="eyebrow grow">Recent runs</div>' + UI.iconbtn('refresh', 'Refresh', { cls: 'sm ghost', attrs: 'data-refresh' }) + '</div>' + UI.search('Filter runs', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
-        + '<div class="runs-list">' + allRuns.filter((r) => !st.query || (r.id + ' ' + r.agent + ' ' + r.status + ' ' + r.by).toLowerCase().includes(st.query.toLowerCase())).map((r) => UI.listItem('<span class="mono">' + esc(r.id) + '</span>', esc(r.agent) + ' · ' + esc(r.started) + ', ' + esc(r.by), { active: r.id === run.id, attrs: 'data-run="' + esc(r.id) + '"', right: statusPill(r.id === run.id ? status : r.status) })).join('') + '</div>'
-        + '<div class="muted" style="font-size:12px;margin-top:auto">Runs from agents, workflows and background jobs in Finance Ops. Cost and latency break down by worker class.</div></div>'
-        + '<div class="page runs-page">'
-        + UI.pagehead('Run ' + run.id + ', ' + run.agent, 'Started ' + esc(run.started) + ' by ' + esc(run.by) + ', ' + esc(run.dur) + ' · ' + statusPill(status) + ' · from <a href="#" data-goconvo="' + esc(run.convo) + '">' + esc(run.convoTitle) + '</a>', UI.btn('Open trace', { attrs: 'data-opentrace' }) + UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find((s) => s.failed) || { n: 1 }).n + '"' }))
-        + budgetNotice
-        + '<div class="runs-lanes"><div></div>' + ['think', 'do', 'calc'].map((l) => '<div class="runs-lane"><span class="ln">' + UI.icon(l === 'think' ? 'brain' : l === 'do' ? 'play' : 'calc', 12) + esc(LANES[l]) + '</span><span class="ls">' + esc(laneSum[l]) + '</span></div>').join('') + '</div>'
-        + rows
-        + (budgetStop ? '<div class="runs-row"><div class="runs-n">…</div><div class="muted" style="grid-column:2/-1;font-size:12px">Steps 8 to 20 collapsed. The run reached its step limit while looping on ledger.query pagination.</div></div>' : '')
-        + answer
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
-        + '</div>'
-        + '<aside class="inspector"><div class="hstack"><div class="eyebrow grow">Step ' + selStep.n + ', ' + esc(LANES[selStep.lane].toLowerCase()) + '</div>' + (selStep.failed ? UI.pill('failed', 'danger') : selStep.waiting ? UI.pill('waiting', 'info') : '') + '</div>'
-        + UI.kv(selStep.kv, 1)
-        + inspectorActions
-        + '<div class="eyebrow">Budget</div>'
-        + UI.meter('Steps', stepsUsed + ' of ' + stepsMax, (stepsUsed / stepsMax) * 100, stepsUsed >= stepsMax ? 'danger' : stepsUsed / stepsMax > 0.8 ? 'warn' : '')
-        + UI.meter('Tokens', fmt(run.budget.tokens[0]) + ' of ' + fmt(run.budget.tokens[1]), (run.budget.tokens[0] / run.budget.tokens[1]) * 100, run.budget.tokens[0] / run.budget.tokens[1] > 0.9 ? 'warn' : '')
-        + '<div class="muted" style="font-size:12px">Metered per class: tokens for thinking, calls and seconds for doing, CPU-seconds for calculating. Trace <span class="mono">' + TRACE.slice(0, 8) + '…</span></div>'
-        + '</aside>';
+        + '</style>';
 
-      ctx.on('click', '[data-run]', (e, t) => { st.run = t.dataset.run; st.sel = null; st.showAnswer = false; ctx.rerender(); });
-      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
-      ctx.on('click', '[data-refresh]', () => ctx.toast('Run list refreshed over /ws.'));
+      let page;
+      let inspector = '';
+      if (!st.run) page = '<div class="page runs-page">' + UI.pagehead('Runs', 'Agent runs, step by step', '') + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '') + UI.empty('No runs yet', 'Start a run of a published agent; its thinking, doing and calculating steps appear here as they happen.', App.can('agents:run') ? UI.btn('Start a run', { kind: 'primary', attrs: 'data-start' }) : '') + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+      else if (!v) page = '<div class="page">' + UI.notice('Loading…', 'info') + '</div>';
+      else if (v.error) page = '<div class="page">' + UI.problem('The run could not be loaded', v.error.message, v.error.problem && v.error.problem.trace_id) + '</div>';
+      else {
+        const me = App.me && App.me.user ? App.me.user : {};
+        const owner = v.userId === me.id;
+        const steps = v.steps;
+        if (st.sel == null || !steps.find((s) => s.n === st.sel)) { const w = steps.find((s) => s.state === 'waiting' || s.state === 'failed' || s.state === 'denied'); st.sel = w ? w.n : steps.length ? steps[steps.length - 1].n : null; }
+        const sel = steps.find((s) => s.n === st.sel);
+        const lanes = v.lanes;
+        const laneSum = { think: lanes.think.steps + ' step' + (lanes.think.steps === 1 ? '' : 's') + ', ' + fmt(lanes.think.tokens) + ' tokens', do: lanes.do.calls + ' call' + (lanes.do.calls === 1 ? '' : 's') + ', ' + secs(lanes.do.ms) + (lanes.do.waiting ? ', ' + lanes.do.waiting + ' waiting' : '') + (lanes.do.denied ? ', ' + lanes.do.denied + ' denied' : ''), calc: lanes.calc.results + ' result' + (lanes.calc.results === 1 ? '' : 's') + ', ' + secs(lanes.calc.ms) };
+        const bodyOf = (s) => {
+          const d = s.detail || {};
+          if (s.lane === 'think') return (s.meta.proposal && s.meta.proposal.length ? 'proposal: call ' + s.meta.proposal.join(', ') : 'answer: ' + clip(d.content, 120));
+          if (s.state === 'waiting') return 'waiting on approval: ' + (s.meta.approvers || '') + ', requested ' + clock(s.createdAt);
+          if (s.lane === 'calc') return (d.arguments && d.arguments.expression ? d.arguments.expression : '') + (d.result && d.result.decimal ? ' = ' + clip(d.result.decimal, 24) : d.error ? ': ' + clip(d.error, 80) : '');
+          return d.error ? clip(d.error, 120) : clip(JSON.stringify(d.result), 120);
+        };
+        const metaOf = (s) => s.lane === 'think' ? fmt(s.meta.tokens) + ' tok' : (s.lane === 'do' ? (SIDE[s.meta.sideEffect] || '') + ', ' : '') + (s.state === 'waiting' ? 'waiting ' + Math.round((Date.now() - s.createdAt) / 60000) + ' min' : s.state === 'denied' ? 'denied' : s.state === 'rejected' ? 'rejected' : secs(s.meta.durationMs));
+        const bad = (s) => s.state === 'failed' || s.state === 'denied' || s.state === 'rejected';
+        const card = (s) => '<div class="runs-card' + (bad(s) ? ' failed' : '') + (s.state === 'waiting' ? ' waiting' : '') + (s.meta.reused ? ' reused' : '') + (st.sel === s.n ? ' selected' : '') + '" data-step="' + s.n + '" role="button" tabindex="0"><div class="runs-ch"><span style="font-size:13px;font-weight:600">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(metaOf(s)) + '</span></div><div class="mono fg2" style="overflow-wrap:anywhere">' + esc(bodyOf(s)) + '</div></div>';
+        const rows = steps.map((s) => {
+          let h = '<div class="runs-row"><div class="runs-n num">' + s.n + '</div>' + ['think', 'do', 'calc'].map((l) => '<div>' + (s.lane === l ? card(s) : '') + '</div>').join('') + '</div>';
+          const divider = (tone, text) => '<div class="runs-div"><div></div><div class="runs-divline' + (tone ? ' ' + tone : '') + '"><span class="rule"></span><span>' + text + '</span><span class="rule"></span></div></div>';
+          if (s.state === 'denied') h += divider('danger', 'Refused: ' + esc(clip((s.detail || {}).error, 160)) + ' The reason goes back to the thinking step as data.');
+          else if (s.state === 'rejected') h += divider('danger', 'Rejected by ' + esc((s.meta.approval && s.meta.approval.by) || 'the approver') + '. Nothing was run; the next thinking step hears why.');
+          else if (s.state === 'waiting') h += divider('info', 'Approval requested from ' + esc(s.meta.approvers || 'an approver') + ', ' + Math.round((Date.now() - s.createdAt) / 60000) + ' min ago. The run holds its checkpoint until a decision.');
+          else if (s.lane !== 'think' && s.meta.approval) h += divider('', 'Approved by ' + esc(s.meta.approval.by || '') + '.');
+          if (s.meta.warning) h += divider('', esc(s.meta.warning));
+          return h;
+        }).join('');
+
+        // Inspector for the selected step.
+        let kv = [];
+        let actions = '';
+        if (sel) {
+          const d = sel.detail || {};
+          if (sel.lane === 'think') {
+            kv = [['Proposal', sel.meta.proposal && sel.meta.proposal.length ? '<span class="mono">call ' + esc(sel.meta.proposal.join(', ')) + '</span>' : 'final answer'], ['Tokens', fmt(sel.meta.tokens)], ['Profile', '<a href="#" data-goprofile="' + esc(sel.meta.profile) + '">' + esc(sel.meta.profile) + '</a> on <span class="mono">' + esc(sel.meta.model) + '</span>'], ['Duration', secs(sel.meta.durationMs)], ['Output', esc(clip(d.content, 300)) || '<span class="muted">none, only tool calls</span>'], ['Label', UI.label(v.label, { sm: true })]];
+            actions = (!sel.meta.proposal || !sel.meta.proposal.length) && v.output ? UI.btn(st.showAnswer ? 'Hide final answer' : 'Show final answer', { attrs: 'data-toggleanswer' }) : UI.btn('Show thinking trace', { icon: 'brain', attrs: 'data-trace' });
+          } else if (sel.lane === 'calc') {
+            kv = [['Expression', '<span class="mono">' + esc((d.arguments || {}).expression || '') + '</span>'], ['Result', d.result ? '<span class="mono">' + esc(d.result.decimal) + '</span>' : '<span style="color:var(--danger-fg)">' + esc(d.error || '') + '</span>'], ['Exact fraction', d.result ? '<span class="mono">' + esc(clip(d.result.fraction, 80)) + '</span>' + (d.result.exact ? '' : ' <span class="muted">decimal is rounded</span>') : ''], ['Tool', '<span class="mono">' + esc(sel.meta.tool) + ' ' + esc(sel.meta.version || '') + '</span>'], ['Duration', secs(sel.meta.durationMs)], ['Guardrail', esc(sel.meta.decision || 'not reached')], ['Label', UI.label(v.label, { sm: true })]];
+            actions = d.result ? UI.btn('Copy with provenance', { attrs: 'data-copyprov' }) : bad(sel) ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + sel.n + '"' }) : '';
+          } else {
+            const ap = sel.meta.approval;
+            kv = [['Tool', '<span class="mono">' + esc(sel.meta.tool || sel.title) + '</span> ' + esc(sel.meta.version || '') + (sel.meta.impl === 'mcp' ? ' <span class="muted">(MCP server ' + esc(String(sel.meta.tool).split('.')[0]) + ')</span>' : '')], ['Side effect class', sidePill(sel.meta.sideEffect)], ['Tool ceiling', sel.meta.ceiling ? UI.label(sel.meta.ceiling, { sm: true }) : ''], ['Arguments', '<span class="mono">' + esc(clip(JSON.stringify(d.arguments || {}), 300)) + '</span>']];
+            if (sel.state === 'waiting') kv.push(['Must approve', esc(sel.meta.approvers || '')], ['Requested', esc(clock(sel.createdAt)) + ', from the run'], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['If nobody approves', 'the run keeps its checkpoint; cancel it to stop']);
+            else kv.push(['Outcome', sel.state === 'ok' ? UI.pill('ok', 'ok') : '<span style="color:var(--danger-fg)">' + esc(d.error || sel.state) + '</span>'], ['Duration', secs(sel.meta.durationMs)], ['Guardrail', esc(sel.meta.decision || 'not reached')], ['Typed result', sel.meta.valid == null ? '<span class="muted">no output schema</span>' : UI.pill(sel.meta.valid ? 'matches output schema' : 'schema mismatch', sel.meta.valid ? 'ok' : 'danger')]);
+            if (ap) kv.push([ap.decision === 'approved' ? 'Approved by' : 'Rejected by', esc(ap.by || '') + (ap.note ? ': ' + esc(ap.note) : '')]);
+            kv.push(['Label', UI.label(v.label, { sm: true })]);
+            const canDecide = sel.state === 'waiting' && (sel.meta.sideEffect === 'destructive' ? App.can('tools:manage') && !owner : owner || App.can('tools:manage'));
+            actions = sel.state === 'waiting' ? (canDecide ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>' : UI.notice('Waiting for ' + esc(sel.meta.approvers || 'an approver') + '.', 'info'))
+              : bad(sel) ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + sel.n + '"' }) : UI.btn('Show result segment', { attrs: 'data-segment' });
+          }
+        }
+        const b = v.budgets; const u = v.usage;
+        const meter = (label, used, max, text) => UI.meter(label, text || fmt(used) + ' of ' + fmt(max), max ? (used / max) * 100 : 0, used >= max ? 'danger' : used / max > 0.8 ? 'warn' : '');
+        inspector = '<aside class="inspector">' + (sel ? '<div class="hstack"><div class="eyebrow grow">Step ' + sel.n + ', ' + esc(LANES[sel.lane].toLowerCase()) + '</div>' + (bad(sel) ? UI.pill(sel.state, 'danger') : sel.state === 'waiting' ? UI.pill('waiting', 'info') : sel.meta.reused ? UI.pill('reused', 'outline') : '') + '</div>' + UI.kv(kv, 1) + actions : UI.empty('No steps yet', v.state === 'queued' ? 'The run is queued for a worker.' : ''))
+          + '<div class="eyebrow">Budget</div>'
+          + meter('Steps', u.steps, b.steps) + meter('Tokens', u.tokens, b.tokens) + meter('Wall time', u.wallMs / 1000, b.wallSeconds, secs(u.wallMs) + ' of ' + b.wallSeconds + ' s') + meter('Tool calls', u.toolCalls, b.toolCalls)
+          + '<div class="muted" style="font-size:12px">Metered per lane: tokens for thinking, calls and seconds for doing, results for calculating. Checkpoints after steps ' + esc(v.checkpoints.join(', ')) + '.</div></aside>';
+
+        const answer = st.showAnswer && v.output ? '<section class="panel" id="runs-answer"><div class="phead"><div class="eyebrow">Final answer, step ' + (steps.length ? steps[steps.length - 1].n : '') + '</div><span class="muted" style="font-size:12px">Select a figure to see the calculating step that produced it</span></div><div class="serif" style="font-size:15px;line-height:1.6;white-space:pre-wrap">' + traceFigures(v.output, steps) + '</div></section>' : '';
+        const notice = v.state === 'budget' ? UI.notice('<b>Budget stop.</b> ' + esc(v.error || '') + ' The last checkpoint is kept; raise the limit to resume from it.', 'warn', owner || App.can('agents:manage') ? UI.btn('Raise limit and resume', { size: 'sm', attrs: 'data-raise' }) : '')
+          : v.state === 'failed' ? UI.notice('<b>Failed.</b> ' + esc(v.error || ''), 'danger', owner || App.can('agents:manage') ? UI.btn('Replay from step', { size: 'sm', attrs: 'data-replay="' + (steps.find(bad) || steps[steps.length - 1] || { n: 1 }).n + '"' }) : '')
+            : v.state === 'waiting' ? UI.notice('<b>Waiting on approval.</b> ' + esc(v.error || ''), 'info')
+              : v.state === 'cancelled' ? UI.notice(esc(v.error || 'Cancelled.'), 'warn') : '';
+        const canControl = owner || App.can('agents:manage');
+        page = '<div class="page runs-page">'
+          + UI.pagehead('Run ' + shortId(v.id) + ', ' + esc(v.agent) + ' ' + esc(v.agentVersion), 'Started ' + esc(clock(v.startedAt || v.createdAt)) + ' by ' + esc(v.by || '') + ', ' + esc(duration(v)) + ' · ' + statusPill(v.state) + (v.replayOf ? ' · replay of <a href="#" data-run="' + esc(v.replayOf) + '">' + esc(shortId(v.replayOf)) + '</a> from step ' + v.replayFrom : '') + ' · profile <a href="#" data-goprofile="' + esc(v.profile || '') + '">' + esc(v.profile || '') + '</a>',
+            (canControl && active(v.state) ? UI.btn('Cancel run', { attrs: 'data-cancel' }) : '') + (canControl && steps.length ? UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find(bad) || { n: 1 }).n + '"' }) : ''))
+          + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+          + notice
+          + UI.panel('Request', '<div class="fg2" style="white-space:pre-wrap">' + esc(clip(v.input, 2000)) + '</div>')
+          + '<div class="runs-lanes"><div></div>' + ['think', 'do', 'calc'].map((l) => '<div class="runs-lane"><span class="ln">' + UI.icon(l === 'think' ? 'brain' : l === 'do' ? 'play' : 'calc', 12) + esc(LANES[l]) + '</span><span class="ls">' + esc(laneSum[l]) + '</span></div>').join('') + '</div>'
+          + (rows || '<div class="muted">No steps yet.</div>')
+          + answer
+          + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+      }
+      root.innerHTML = style + left + page + inspector;
+
+      // ---- events ----
+      const run = v && !v.error ? v : null;
+      const sel = run ? run.steps.find((s) => s.n === st.sel) : null;
+      ctx.on('click', '[data-run]', (e, t) => { e.preventDefault(); st.run = t.dataset.run; st.sel = null; st.showAnswer = false; st.view = null; st.demoNote = null; ctx.rerender(); });
+      ctx.on('click', '[data-scope] [data-seg]', (e, t) => { st.scope = t.dataset.seg; load(); });
+      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const val = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(val.length, val.length); });
+      ctx.on('click', '[data-refresh]', () => { load(); toast('Runs refreshed.'); });
       ctx.on('click', '.runs-card', (e, t) => { st.sel = +t.dataset.step; ctx.rerender(); });
       ctx.on('keydown', '.runs-card', (e, t) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); st.sel = +t.dataset.step; ctx.rerender(); } });
       ctx.on('click', '[data-fig]', (e, t) => { st.sel = +t.dataset.fig; ctx.rerender(); setTimeout(() => { const c = ctx.$('.runs-card.selected'); if (c) c.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 20); });
       ctx.on('click', '[data-toggleanswer]', () => { st.showAnswer = !st.showAnswer; ctx.rerender(); });
-      ctx.on('click', '[data-goconvo]', (e, t) => { e.preventDefault(); ctx.navigate('chat', { convo: t.dataset.goconvo }); });
       ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
-      ctx.on('click', '[data-copyprov]', () => ctx.toast('Copied <b>' + (selStep.n === 3 ? '14.2%' : '6 rows') + '</b> with expression, input hashes, library version and label.', 'ok'));
-      ctx.on('click', '[data-trace]', (e, t) => { const s = STEPS[+t.dataset.trace]; ctx.drawer({ title: 'Thinking trace, step ' + s.n, body: UI.kv([['Level', esc(s.meta)], ['Profile', 'analyst, <span class="mono">qwen2.5:32b-q4_K_M</span>']], 2) + '<div style="padding:10px 12px;border-left:2px solid var(--line);font-size:13px;color:var(--fg2);font-style:italic">' + (s.n === 1 ? 'The user wants a variance and a cause. The ledger holds Q3 actuals by cost centre; query it with a cost_centre filter, then hand the arithmetic to calc so the percentage is exact. Cite the Finance KB for the Lisbon exception before attributing the overrun.' : 'The issue was not created and the tool must not be retried. Tell the user plainly, keep the figures from step 5, and offer to create the issue manually.') + '</div>' + UI.notice('Thinking output is a proposal only. Nothing ran until the checkpoint below allowed it.', 'info'), actions: UI.btn('Close', { attrs: 'data-close' }) }); });
-      ctx.on('click', '[data-segment]', () => ctx.modal({ title: 'Result segment, step ' + selStep.n, body: UI.ctx('ledger.query, 14 rows', 'cost_centre, q3_actual, q3_budget\nFIELD-SALES, 188420.00, 150000.00\nLIS-ONBOARD, 96310.00, 60000.00\nTREASURY, 41200.00, 44000.00\n… 11 more rows', 'confidential') + '<div class="fg2">Returned to the orchestrator as a labelled Context-tier segment and fed to the next thinking step.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) }));
-      ctx.on('click', '[data-opentrace]', () => ctx.modal({ cls: 'wide', title: 'Trace ' + '<span class="mono">' + TRACE + '</span>', body: UI.table(['Span', 'worker.class', 'Started', 'Duration', 'Status'], [
-        ['orchestrator.run', '—', '14:02:11.020', '14.6 s', UI.pill(status)],
-        ['think.plan', 'think', '14:02:11.041', '4.8 s', UI.pill('ok')], ['policy.cedar', '—', '14:02:15.902', '3 ms', UI.pill(denied ? 'denied' : 'allowed')],
-        ['do.ledger.query', 'do', '14:02:16.110', denied ? '—' : '0.8 s', UI.pill(denied ? 'skipped' : 'ok', denied ? 'outline' : 'ok')], ['calc.evaluate', 'calc', '14:02:16.930', '2 ms', UI.pill('ok')], ['calc.table', 'calc', '14:02:16.940', '38 ms', UI.pill('ok')],
-        ['think.draft', 'think', '14:02:17.001', '6.9 s', UI.pill('ok')], ['do.jira-internal.create_issue', 'do', '14:02:24.310', '1.1 s', UI.pill('HTTP 502', 'danger')], ['think.report', 'think', '14:02:25.480', '1.9 s', UI.pill('ok')]
-      ], { clickable: false, minWidth: '0' }) + '<div class="hstack"><span class="muted grow" style="font-size:12px">Every span carries worker.class, so cost and latency break down by class. Spans go to the tenant\'s OpenTelemetry collector.</span>' + UI.btn('Copy trace ID', { size: 'sm', attrs: 'data-copy="' + TRACE + '"' }) + '</div>', actions: UI.btn('Close', { attrs: 'data-close' }), onMount(m) { m.querySelector('[data-copy]').addEventListener('click', () => ctx.toast('Copied ' + TRACE)); } }));
-      ctx.on('click', '[data-replay]', (e, t) => openReplay(+t.dataset.replay));
-      ctx.on('click', '[data-raise]', async () => { const ok = await ctx.confirm({ title: 'Raise the step limit and resume', tone: 'primary', ok: 'Raise to 40 and resume', body: '<div class="fg2">The run keeps its checkpoint after step 20. Raising the limit applies to this run only; the agent\'s default stays at 20.</div>', kv: [['Run', '<span class="mono">' + esc(run.id) + '</span>'], ['Owner', esc(run.by)], ['Steps', '20 of 20 used'], ['Tokens', '9,860 of 10,000 used']] }); if (!ok) return; st.resumed = true; ctx.rerender(); ctx.toast('Limit raised to 40. Run ' + esc(run.id) + ' resumed from step 21.', 'ok'); });
-      ctx.on('click', '[data-approve]', async () => { const ok = await ctx.confirm({ title: 'Approve jira-internal.create_issue', tag: 'write', tone: 'primary', ok: 'Approve', body: '<div class="fg2">The doing worker runs the call with your delegated token. The action is logged to audit with you as approver.</div>', kv: [['Project', 'FIN'], ['Summary', 'Q3 variance review'], ['Tool ceiling', 'confidential'], ['Waited', '12 min']] }); if (!ok) return; st.decided = 'approve'; ctx.rerender(); ctx.toast('Approved. FIN-1188 created in jira-internal as Mara Okafor.', 'ok'); });
-      ctx.on('click', '[data-deny]', async () => { const ok = await ctx.confirm({ title: 'Deny this action', tone: 'danger', ok: 'Deny', body: '<div class="fg2">Nothing is written. The agent receives the denial as data and its next thinking step decides how to report it.</div>' }); if (!ok) return; st.decided = 'deny'; ctx.rerender(); ctx.toast('Denied. The run continues with the denial as data.'); });
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
+      ctx.on('click', '[data-start]', () => startModal(''));
+      ctx.on('click', '[data-copyprov]', () => {
+        const d = sel.detail;
+        const text = d.arguments.expression + ' = ' + d.result.decimal + ' (exactly ' + d.result.fraction + '); run ' + run.id + ' step ' + sel.n + ', ' + sel.meta.tool + ' ' + (sel.meta.version || '') + ', label ' + run.label;
+        if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => undefined);
+        toast('Copied <b>' + esc(clip(d.result.decimal, 24)) + '</b> with its expression, exact fraction, run, step and label.', 'ok');
+      });
+      ctx.on('click', '[data-trace]', () => { const d = sel.detail || {}; ctx.drawer({ title: 'Thinking trace, step ' + sel.n, body: UI.kv([['Tokens', fmt(sel.meta.tokens)], ['Profile', esc(sel.meta.profile) + ', <span class="mono">' + esc(sel.meta.model) + '</span>']], 2) + '<div style="padding:10px 12px;border-left:2px solid var(--line);font-size:13px;color:var(--fg2);font-style:italic;white-space:pre-wrap">' + esc(d.thinking || d.content || 'The model gave no thinking text for this step.') + '</div>' + (d.toolCalls && d.toolCalls.length ? UI.code(JSON.stringify(d.toolCalls, null, 2), 'json') : '') + UI.notice('Thinking output is a proposal only. Nothing ran until the tool-call checkpoint allowed it.', 'info'), actions: UI.btn('Close', { attrs: 'data-close' }) }); });
+      ctx.on('click', '[data-segment]', () => ctx.modal({ title: 'Result segment, step ' + sel.n, body: UI.ctx(sel.title + ' result', JSON.stringify((sel.detail || {}).result, null, 2), run.label) + '<div class="fg2">Returned to the model as the tool\'s message and fed to the next thinking step.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) }));
+      ctx.on('click', '[data-replay]', (e, t) => openReplay(+t.dataset.replay));
+      ctx.on('click', '[data-cancel]', async () => { const ok = await ctx.confirm({ title: 'Cancel run ' + esc(shortId(run.id)), tone: 'danger', ok: 'Cancel run', cancel: 'Keep running', body: '<div class="fg2">The run stops at once. Steps so far and their checkpoints are kept; you can replay from any of them.</div>' }); if (ok) act(() => App.post('/api/runs/' + run.id + '/cancel'), 'Run ' + esc(shortId(run.id)) + ' cancelled.', 'warn'); });
+      ctx.on('click', '[data-raise]', () => {
+        const b = run.budgets; const u = run.usage;
+        const next = { steps: Math.min(100, Math.max(b.steps, u.steps) * 2), tokens: Math.min(200000, Math.max(b.tokens, u.tokens) * 2), wallSeconds: Math.min(3600, Math.max(b.wallSeconds, Math.ceil(u.wallMs / 1000)) * 2), toolCalls: Math.min(100, Math.max(b.toolCalls, u.toolCalls) * 2) };
+        ctx.modal({ title: 'Raise the limit and resume', body: '<div class="fg2">The run keeps its checkpoint. Raising the limit applies to this run only; the agent\'s default stays as it is.</div><div class="formgrid">' + UI.field('Steps (used ' + u.steps + ')', UI.input(String(next.steps), { type: 'number', attrs: 'data-b="steps"' })) + UI.field('Tokens (used ' + fmt(u.tokens) + ')', UI.input(String(next.tokens), { type: 'number', attrs: 'data-b="tokens"' })) + UI.field('Wall time, seconds (used ' + Math.ceil(u.wallMs / 1000) + ')', UI.input(String(next.wallSeconds), { type: 'number', attrs: 'data-b="wallSeconds"' })) + UI.field('Tool calls (used ' + u.toolCalls + ')', UI.input(String(next.toolCalls), { type: 'number', attrs: 'data-b="toolCalls"' })) + '</div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Raise and resume', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const budgets = {}; m.querySelectorAll('[data-b]').forEach((x) => { budgets[x.dataset.b] = Number(x.value); }); App.closeOverlay(); act(() => App.post('/api/runs/' + run.id + '/resume', { budgets }), 'Limits raised. Run ' + esc(shortId(run.id)) + ' resumed from its checkpoint.'); }); } });
+      });
+      const decide = async (decision) => {
+        const d = sel.detail || {};
+        if (decision === 'approve') {
+          const ok = await ctx.confirm({ title: 'Approve ' + esc(sel.title), tag: SIDE[sel.meta.sideEffect], tone: 'primary', ok: 'Approve', body: '<div class="fg2">The doing step runs the call with ' + (sel.meta.impl === 'mcp' ? 'the server\'s credentials for the run\'s owner' : 'the tool\'s sandbox') + '. The decision is written to the audit chain with you as approver.</div>', kv: [['Arguments', '<span class="mono">' + esc(clip(JSON.stringify(d.arguments || {}), 200)) + '</span>'], ['Tool ceiling', esc(sel.meta.ceiling || '')], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min']] });
+          if (ok) act(() => App.post('/api/runs/' + run.id + '/steps/' + sel.n + '/decision', { decision: 'approve' }), 'Approved. The run continues from its checkpoint.');
+          return;
+        }
+        ctx.modal({ title: 'Deny this action', body: '<div class="fg2">Nothing is run. The agent receives the denial as data and its next thinking step decides how to report it.</div>' + UI.field('Reason (given to the model and the owner)', UI.textarea('', { rows: 2, attrs: 'data-note' })), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Deny', { kind: 'danger', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const note = m.querySelector('[data-note]').value.trim() || null; App.closeOverlay(); act(() => App.post('/api/runs/' + run.id + '/steps/' + sel.n + '/decision', { decision: 'reject', note }), 'Denied. The run continues with the denial as data.', 'warn'); }); } });
+      };
+      ctx.on('click', '[data-approve]', () => decide('approve'));
+      ctx.on('click', '[data-deny]', () => decide('reject'));
 
       function openReplay(from) {
-        ctx.modal({ title: 'Replay from step', body: UI.field('Start from', UI.select(steps.map((s) => ({ value: String(s.n), label: 'Step ' + s.n + ', ' + s.title + ' (' + LANES[s.lane].toLowerCase() + ')' })), String(from), 'data-from')) + UI.notice('Replay starts from the checkpoint before the chosen step. Earlier results are reused from the run record; later steps run again as a new run with the same label and budget.', 'info') + UI.kv([['Source run', '<span class="mono">' + esc(run.id) + '</span>'], ['New run', '<span class="mono">' + esc(run.id.slice(0, 3)) + 'b</span>'], ['Budget', stepsMax + ' steps, 10,000 tokens'], ['Label', UI.label(run.label, { sm: true })]], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Replay', { kind: 'primary', attrs: 'data-go' }), onMount(m) {
-          m.querySelector('[data-go]').addEventListener('click', () => { const n = +m.querySelector('[data-from]').value; App.closeOverlay(); const nid = run.id.slice(0, 3) + 'b'; if (!st.extra.find((r) => r.id === nid)) st.extra.unshift(Object.assign({}, run, { id: nid, started: '14:31:02', by: 'Mara Okafor', dur: 'running, from step ' + n, status: 'running', waiting: false, budgetStop: false })); ctx.toast('Replay queued as run <span class="mono">' + nid + '</span> from step ' + n + '.', 'ok'); st.run = nid; st.sel = n; ctx.rerender(); });
+        if (!run || !run.steps.length) return;
+        ctx.modal({ title: 'Replay from step', body: UI.field('Start from', UI.select(run.steps.map((s) => ({ value: String(s.n), label: 'Step ' + s.n + ', ' + s.title + ' (' + LANES[s.lane].toLowerCase() + ')' })), String(from), 'data-from')) + UI.notice('Replay starts from the checkpoint before the chosen step. Earlier steps are reused from the run record; later steps run again as a new run with the same label and budget. Approvals are asked for again.', 'info') + UI.kv([['Source run', '<span class="mono">' + esc(shortId(run.id)) + '</span>'], ['Budget', run.budgets.steps + ' steps, ' + fmt(run.budgets.tokens) + ' tokens'], ['Label', UI.label(run.label, { sm: true })]], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Replay', { kind: 'primary', attrs: 'data-go' }), onMount(m) {
+          m.querySelector('[data-go]').addEventListener('click', async () => { const n = +m.querySelector('[data-from]').value; App.closeOverlay(); const r = await act(() => App.post('/api/runs/' + run.id + '/replay', { fromStep: n }), 'Replay queued from step ' + n + '.'); if (r && r.id) { st.run = r.id; st.sel = null; st.view = null; } });
         } });
       }
-      if (st.openReplay) { st.openReplay = false; setTimeout(() => openReplay((steps.find((s) => s.failed) || { n: 1 }).n), 30); }
+      function startModal(agentName) {
+        App.get('/api/agents').then((agents) => {
+          if (!agents.length) { toast('No agent is published to this workspace yet. Publish one in the Registry.', 'warn'); return; }
+          const me = App.me && App.me.user ? App.me.user : {};
+          const pick = agents.find((a) => a.name === agentName) || agents[0];
+          ctx.modal({ title: 'Start an agent run', body: UI.field('Agent', UI.select(agents.map((a) => ({ value: a.id, label: a.name + ' ' + a.version + (a.deprecated ? ' (deprecated)' : '') })), pick.id, 'data-agent')) + '<div data-agentinfo></div>' + UI.field('Request', UI.textarea('', { rows: 4, attrs: 'data-input', placeholder: 'What should the agent do?' })) + UI.field('Data label', UI.select(LABELS.filter((l) => !me.clearance || LABELS.indexOf(l) <= LABELS.indexOf(me.clearance)), 'internal', 'data-label'), 'The run may not exceed the agent\'s ceiling or the workspace\'s'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Start run', { kind: 'primary', attrs: 'data-ok' }), onMount(m) {
+            const info = () => { const a = agents.find((x) => x.id === m.querySelector('[data-agent]').value); m.querySelector('[data-agentinfo]').innerHTML = UI.kv([['Profile', esc(a.profile)], ['Tools', esc(a.tools.join(', ') || 'none')], ['Limits', esc(a.budgets.steps + ' steps, ' + fmt(a.budgets.tokens) + ' tokens, ' + a.budgets.wallSeconds + ' s')], ['Ceiling', UI.label(a.label, { sm: true })]], 2) + (a.deprecated ? UI.notice('Deprecated' + (a.replacement ? '; use ' + esc(a.replacement) : '') + '.', 'warn') : ''); };
+            m.querySelector('[data-agent]').addEventListener('change', info); info();
+            m.querySelector('[data-ok]').addEventListener('click', async () => { const body = { agent: m.querySelector('[data-agent]').value, input: m.querySelector('[data-input]').value.trim(), label: m.querySelector('[data-label]').value }; if (!body.input) { toast('Write a request for the agent first.', 'warn'); return; } App.closeOverlay(); const r = await act(() => App.post('/api/runs', body), 'Run started. Steps appear as they happen.'); if (r && r.id) { st.run = r.id; st.sel = null; st.view = null; st.scope = 'mine'; } });
+          } });
+        }).catch((err) => App.fail(err, 'Agents could not be loaded'));
+      }
+      if (st.openStart) { const a = typeof st.openStart === 'string' ? st.openStart : ''; st.openStart = false; setTimeout(() => startModal(a), 30); }
+      if (st.openReplay) { st.openReplay = false; if (run) setTimeout(() => openReplay((run.steps.find((s) => s.state === 'failed' || s.state === 'denied') || { n: 1 }).n), 30); }
     }
   });
 })();

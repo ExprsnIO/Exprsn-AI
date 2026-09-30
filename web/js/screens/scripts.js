@@ -1,198 +1,267 @@
 (function () {
   const { UI, esc } = App;
 
-  // ---------- data ----------
-  const CODE_PY = 'import csv, sys\nfrom decimal import Decimal\n\ndef clean(rows):\n    seen = set()\n    for r in rows:\n        key = (r["txn_id"], r["posted"])\n        if key in seen:\n            continue\n        seen.add(key)\n        r["amount"] = Decimal(r["amount"].replace(",", ""))\n        yield r\n\nimport requests  # blocked: no network in the sandbox\n\nif __name__ == "__main__":\n    w = csv.DictWriter(sys.stdout, fieldnames=FIELDS)\n    w.writeheader()\n    for row in clean(csv.DictReader(sys.stdin)):\n        w.writerow(row)';
-  const SCRIPTS = [
-    { id: 'clean_card_feed.py', runtime: 'Python 3.13', version: 'saved v4', status: 'saved', stage: 1, label: 'confidential', packages: 'curated wheels: pandas, openpyxl, python-dateutil', lang: 'python', code: CODE_PY, blockedLine: 14,
-      checks: [['ruff', 'clean', 'ok'], ['Bandit', '1 finding', 'warn'], ['Script-generation guardrail', 'blocked module', 'danger'], ['Secrets scan', 'clean', 'ok']], note: 'Line 14 imports requests. Scripts have no network. A promoted tool may declare internal destinations reached through the egress proxy.',
-      dry: 'rows in   1,204\nrows out  1,187\ndropped   17 duplicates\nruntime   0.41 s, 38 MB', sample: 'card-feed-2026-09.csv (1,204 rows, confidential)', output: 'txn_id,posted,merchant,amount\n8841,2026-09-02,Lisbon Air,412.50\n8842,2026-09-02,Hotel Baixa,188.00\n8843,2026-09-03,TAP Cargo,96.10\n… 1,184 more rows\n\nfiles produced: cleaned.csv (84 KB)' },
-    { id: 'monthly_variance.py', runtime: 'Python 3.13', version: 'published tool', status: 'published tool', stage: 2, label: 'confidential', packages: 'curated wheels: pandas, duckdb', lang: 'python', code: 'import sys, json\nimport duckdb\n\nSQL = """\nSELECT cost_centre,\n       sum(actual) AS actual,\n       sum(budget) AS budget,\n       sum(actual) - sum(budget) AS variance\nFROM read_csv_auto(?)\nGROUP BY 1 ORDER BY variance DESC\n"""\n\ndef main(path):\n    rows = duckdb.sql(SQL, params=[path]).fetchall()\n    json.dump([dict(zip(["cost_centre", "actual", "budget", "variance"], r)) for r in rows], sys.stdout)\n\nif __name__ == "__main__":\n    main(sys.argv[1])',
-      checks: [['ruff', 'clean', 'ok'], ['Bandit', 'clean', 'ok'], ['Script-generation guardrail', 'passed', 'ok'], ['Secrets scan', 'clean', 'ok']], note: 'Published as report.generate (script) 0.3.1 with JSON Schema inputs and outputs, side-effect class write, signed with cosign.',
-      dry: 'rows in   214\ngroups    9\nruntime   0.18 s, 41 MB', sample: 'q3-ledger.csv (214 rows, confidential)', output: '[{"cost_centre":"FIELD-SALES","actual":188420.0,"budget":150000.0,"variance":38420.0},\n {"cost_centre":"LIS-ONBOARD","actual":96310.0,"budget":60000.0,"variance":36310.0},\n …]' },
-    { id: 'parse_gateway_logs.mjs', runtime: 'Node.js 24', version: '', status: 'ad-hoc', stage: 0, label: 'internal', packages: 'curated npm: none (built-ins only)', lang: 'javascript', code: "import { createInterface } from 'node:readline';\n\nconst counts = new Map();\nconst rl = createInterface({ input: process.stdin });\nfor await (const line of rl) {\n  const m = /model=(\\S+) .* latency_ms=(\\d+)/.exec(line);\n  if (!m) continue;\n  const c = counts.get(m[1]) ?? { n: 0, ms: 0 };\n  c.n++; c.ms += Number(m[2]);\n  counts.set(m[1], c);\n}\nfor (const [model, c] of counts) {\n  console.log(model, c.n, (c.ms / c.n).toFixed(1));\n}",
-      checks: [['node --check', 'clean', 'ok'], ['ESLint', '2 warnings', 'warn'], ['Script-generation guardrail', 'passed', 'ok'], ['Secrets scan', 'clean', 'ok']], note: 'ESLint: prefer const for counts; unused variable rl after loop. Warnings do not block a run.',
-      dry: 'lines in  48,210\nmodels    4\nruntime   0.62 s, 52 MB', sample: 'gateway-2026-09-19.log (48,210 lines, internal)', output: 'qwen2.5:32b-q4_K_M 1204 2140.5\nllama3.1:8b-q5_K_M 8891 412.3\nqwen2.5-coder:32b-q4_K_M 312 1880.2\nvision-default 96 3120.0' },
-    { id: 'ledger_client.mjs', runtime: 'Node.js 24', version: 'saved v2', status: 'saved', stage: 1, label: 'confidential', packages: 'curated npm: zod', lang: 'javascript', code: "import { z } from 'zod';\n\nconst Row = z.object({ cost_centre: z.string(), amount: z.string() });\n\nexport async function fetchRows(period) {\n  // Promoted tools reach ledger-api through the egress proxy only.\n  const res = await fetch(`http://ledger-api.northwind.internal/v4/rows?period=${period}`);\n  return z.array(Row).parse(await res.json());\n}",
-      checks: [['node --check', 'clean', 'ok'], ['ESLint', 'clean', 'ok'], ['Script-generation guardrail', 'egress declared', 'ok'], ['Secrets scan', 'clean', 'ok']], note: 'fetch to ledger-api.northwind.internal is allowed only after promotion, with the destination declared on the tool entry. Ad-hoc and saved runs have no network.',
-      dry: 'network   refused (no egress for saved scripts)\nruntime   0.05 s, 30 MB', sample: 'period=2026-Q3', output: 'TypeError: fetch failed\n  cause: connect ECONNREFUSED (egress proxy: not a promoted tool)\n\nexit 1' }
-  ];
-  const TEMPLATES = [
-    { kind: 'Script', name: 'CSV clean-up', produces: 'Draft script with parameters filled in', runtimes: 'Node.js, Python, Tcl, Perl' }, { kind: 'Script', name: 'Log parser', produces: 'Draft script', runtimes: 'Node.js, Python, Perl' }, { kind: 'Script', name: 'Report generator', produces: 'Draft script', runtimes: 'Python' }, { kind: 'Script', name: 'Internal API client', produces: 'Draft script', runtimes: 'Node.js, Python, Tcl' },
-    { kind: 'Tool', name: 'OpenAPI tool', produces: 'Draft registry entry plus code', runtimes: 'TypeScript' }, { kind: 'Tool', name: 'SQL or MongoDB query tool', produces: 'Draft registry entry plus code', runtimes: 'TypeScript' }, { kind: 'Tool', name: 'MCP server scaffold', produces: 'Draft registry entry plus code', runtimes: 'TypeScript, Python' },
-    { kind: 'Agent', name: 'Data analyst', produces: 'Draft agent: profile, prompt, tools, skills, limits', runtimes: '' }, { kind: 'Agent', name: 'Meeting notes', produces: 'Draft agent', runtimes: '' },
-    { kind: 'Workflow', name: 'Video to notes', produces: 'Draft workflow graph', runtimes: '' }, { kind: 'Workflow', name: 'Nightly report', produces: 'Draft workflow graph', runtimes: '' }
-  ];
-  const RUNTIMES = [['Node.js 24 LTS', 'Curated npm packages from the internal Verdaccio mirror', 'node --check, ESLint, tsc --noEmit for TypeScript'], ['Python 3.13', 'Curated wheels (data, parsing, plotting)', 'ruff, Bandit'], ['Tcl 9.0', 'tcllib, tdom', 'Nagelfar syntax check'], ['Perl 5.40', 'Curated CPAN modules', 'perlcritic; perl -c only inside the sandbox']];
-  const statusPill = (s) => UI.pill(s, s === 'saved' ? 'ok' : s === 'published tool' ? 'info' : s === 'in review' ? 'info' : '');
-  const find = (id) => SCRIPTS.find((s) => s.id === id);
-  const codeHtml = (s, st) => {
-    const code = st.removedLine[s.id] && s.blockedLine ? s.code.split('\n').filter((l, i) => i !== s.blockedLine - 1).join('\n') : s.code;
-    let html = UI.code(code, s.lang);
-    if (s.blockedLine && !st.removedLine[s.id]) html = html.replace(/(<span class="ln">14<\/span>)([^\n]*)/, '<span style="display:inline-block;width:100%;background:var(--warn-bg)" data-line="14">$1$2</span>');
-    if (st.hiLine) html = html.replace(new RegExp('(<span class="ln">' + st.hiLine + '</span>)([^\\n]*)'), '<span style="display:inline-block;width:100%;outline:1px solid var(--accent)">$1$2</span>');
-    return html;
-  };
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const LANG = { python: 'Python', javascript: 'JavaScript (Node.js)' };
+  const STATUS_TEXT = { draft: 'draft', tested: 'tested', in_review: 'in review', promoted: 'promoted tool' };
+  const statusPill = (s) => UI.pill(STATUS_TEXT[s] || s, s === 'tested' ? 'ok' : s === 'promoted' || s === 'in_review' ? 'info' : '');
+  const runPill = (s, exit) => UI.pill(s === 'succeeded' ? 'exit 0' : s === 'failed' && exit != null ? 'exit ' + exit : s === 'timeout' ? 'timed out' : s, s === 'succeeded' ? 'ok' : s === 'timeout' ? 'warn' : s === 'failed' ? 'danger' : 'info');
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+  const secs = (ms) => (ms == null ? '' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(2) + ' s');
+  const shortId = (id) => String(id || '').slice(-6).toLowerCase();
 
-  let bound = false; const cur = {};
+  /** Templates for new scripts: each fills the source of a draft that then goes through the normal checks. */
+  const TEMPLATES = [
+    { name: 'CSV clean-up', language: 'python', file: 'clean_feed.py', produces: 'Draft script', params: [['Dedupe columns', 'txn_id, posted'], ['Amount column', 'amount']], source: (p) => 'import csv, sys\nfrom decimal import Decimal\n\nKEY = (' + p[0].split(',').map((c) => JSON.stringify(c.trim())).join(', ') + ',)\nAMOUNT = ' + JSON.stringify(p[1].trim()) + '\n\nrows = list(csv.DictReader(sys.stdin))\nseen = set()\nw = csv.DictWriter(sys.stdout, fieldnames=rows[0].keys() if rows else [])\nw.writeheader()\nfor r in rows:\n    k = tuple(r[c] for c in KEY)\n    if k in seen:\n        continue\n    seen.add(k)\n    r[AMOUNT] = str(Decimal(r[AMOUNT].replace(",", "")))\n    w.writerow(r)\n' },
+    { name: 'Log parser', language: 'javascript', file: 'parse_logs.mjs', produces: 'Draft script', params: [['Pattern (key=value pairs)', 'model=(\\S+) .* latency_ms=(\\d+)']], source: (p) => "import { createInterface } from 'node:readline';\n\nconst re = new RegExp(" + JSON.stringify(p[0]) + ");\nconst counts = new Map();\nfor await (const line of createInterface({ input: process.stdin })) {\n  const m = re.exec(line);\n  if (!m) continue;\n  const c = counts.get(m[1]) ?? { n: 0, ms: 0 };\n  c.n++;\n  c.ms += Number(m[2]);\n  counts.set(m[1], c);\n}\nfor (const [key, c] of counts) console.log(key, c.n, (c.ms / c.n).toFixed(1));\n" },
+    { name: 'JSON tool', language: 'python', file: 'sum_values.py', produces: 'Draft script, ready to promote as a tool', params: [['Array field', 'values']], source: (p) => 'import json, sys\nfrom decimal import Decimal\n\nargs = json.load(sys.stdin)\ntotal = sum(Decimal(str(v)) for v in args[' + JSON.stringify(p[0].trim()) + '])\njson.dump({"total": float(total)}, sys.stdout)\n' },
+    { name: 'Report table', language: 'javascript', file: 'report_table.mjs', produces: 'Draft script', params: [['Group by field', 'cost_centre']], source: (p) => "let raw = '';\nfor await (const chunk of process.stdin) raw += chunk;\nconst rows = JSON.parse(raw || '[]');\nconst by = new Map();\nfor (const r of rows) by.set(r[" + JSON.stringify(p[0].trim()) + "], (by.get(r[" + JSON.stringify(p[0].trim()) + "]) ?? 0) + Number(r.amount));\nconsole.log(JSON.stringify([...by].map(([key, total]) => ({ key, total }))));\n" }
+  ];
+
+  /** A line diff of two texts (longest common subsequence). */
+  function diffLines(a, b) {
+    const x = a.split('\n'), y = b.split('\n');
+    const n = x.length, m = y.length;
+    const t = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) t[i][j] = x[i] === y[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    const out = [];
+    let i = 0, j = 0;
+    while (i < n && j < m) { if (x[i] === y[j]) { out.push('  ' + x[i]); i++; j++; } else if (t[i + 1][j] >= t[i][j + 1]) out.push('- ' + x[i++]); else out.push('+ ' + y[j++]); }
+    while (i < n) out.push('- ' + x[i++]);
+    while (j < m) out.push('+ ' + y[j++]);
+    return out;
+  }
+
+  // ---------- live updates: script.run for the signed-in user ----------
+  const live = { sock: null, onRun: null, refresh: null };
+  const detach = () => { if (live.sock && live.onRun) live.sock.off('script.run', live.onRun); live.sock = null; live.onRun = null; };
+  const attach = () => {
+    if (!App.socket || live.sock === App.socket) return;
+    detach();
+    live.sock = App.socket;
+    live.onRun = (e) => { if (App.state.route !== 'scripts') { detach(); return; } if (live.refresh) live.refresh(e); };
+    live.sock.on('script.run', live.onRun);
+  };
+  window.addEventListener('hashchange', () => { if (App.parse().route !== 'scripts') detach(); });
 
   App.register({
-    id: 'scripts', title: 'Scripts', summary: 'Script runtimes, checks, dry runs, promotion path, template catalog, code interpreter sessions',
-    crumb(st) { return ['Scripts', st.sel || 'clean_card_feed.py']; }, label(st) { const s = find(st.sel || 'clean_card_feed.py'); return s ? s.label : 'confidential'; },
+    id: 'scripts', title: 'Scripts', live: true,
+    summary: 'Script versions, checks, sandboxed runs, the promotion path to a registry tool, templates',
+    crumb(st) { const s = st.script; return ['Scripts'].concat(s ? [s.name] : []); },
+    label(st) { return st.script ? st.script.label : null; },
     commands: [{ label: 'New script from template', sub: 'Scripts', run(app) { app.stateFor('scripts').openTemplates = true; app.render(); } }],
     states: [
-      { title: 'Template form', tone: 'neutral', text: 'Choosing a template opens a parameter form generated from its JSON Schema and always creates a draft.', apply(ctx) { templateForm(ctx, TEMPLATES[0]); } },
-      { title: 'Sandbox timeout', tone: 'warn', text: 'The run stopped at the 60 s cap. Output so far is kept and the limits are shown.', apply(ctx) { const st = ctx.state; st.sel = 'parse_gateway_logs.mjs'; st.tab = 'output'; st.runs = st.runs || {}; st.runs[st.sel] = { phase: 'timeout', lines: ['qwen2.5:32b-q4_K_M 1204 2140.5', 'llama3.1:8b-q5_K_M 8891 412.3'] }; ctx.rerender(); } },
-      { title: 'Interpreter expired', tone: 'neutral', text: 'The chat code-interpreter session expired after 30 idle minutes. Files remain in the conversation.', apply(ctx) { ctx.state.interpExpired = true; ctx.rerender(); } },
-      { title: 'Two runtimes', tone: 'info', text: 'Only Node.js 24 and Python 3.13 are offered when creating a script.', apply(ctx) { ctx.state.twoRuntimes = true; ctx.rerender(); templateForm(ctx, TEMPLATES[0]); } }
+      { title: 'Template form', tone: 'neutral', text: 'Choosing a template opens a parameter form and always creates a draft that goes through the checks.', apply(ctx) { ctx.state.openTemplate = 0; ctx.rerender(); } },
+      { title: 'Sandbox timeout', tone: 'warn', text: 'The run stopped at its time limit. Output so far is kept and the limits are shown.', apply(ctx) { ctx.state.demo = 'timeout'; ctx.rerender(); } },
+      { title: 'Refused before start', tone: 'danger', text: 'A blocked module, a secret in the source or the script guardrail stops a run before any sandbox starts.', apply(ctx) { ctx.state.demo = 'blocked'; ctx.rerender(); } },
+      { title: 'Two runtimes', tone: 'info', text: 'Only Python and JavaScript (Node.js) are offered when creating a script.', apply(ctx) { ctx.state.openTemplate = 0; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.script) { st.sel = ctx.params.script; delete ctx.params.script; }
-      st.sel = st.sel || 'clean_card_feed.py'; st.tab = st.tab || 'checks'; st.query = st.query || ''; st.filter = st.filter || 'all'; st.runs = st.runs || {}; st.removedLine = st.removedLine || {}; st.over = st.over || {}; st.added = st.added || [];
-      cur.ctx = ctx; cur.st = st;
-      const scripts = SCRIPTS.concat(st.added);
-      const s = scripts.find((x) => x.id === st.sel) || SCRIPTS[0];
-      const status = st.over[s.id] || s.status;
-      const list = scripts.filter((x) => (!st.query || x.id.toLowerCase().includes(st.query.toLowerCase())) && (st.filter === 'all' || x.runtime.startsWith(st.filter)));
-      const checks = s.checks.map((c) => s.id === 'clean_card_feed.py' && st.removedLine[s.id] && c[0] === 'Script-generation guardrail' ? ['Script-generation guardrail', 'passed', 'ok'] : c);
-      const blocked = checks.some((c) => c[2] === 'danger');
-      const run = st.runs[s.id];
-      const stage = st.over[s.id] === 'in review' ? 1 : s.stage;
+      const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
+      st.tab = st.tab || 'checks'; st.query = st.query || ''; st.filter = st.filter || 'all';
+      const later = () => { if (App.state.route !== 'scripts') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
+      const loadScript = (id) => Promise.all([App.get('/api/scripts/' + id), App.get('/api/scripts/' + id + '/runs')]).then(([s, runs]) => { st.script = s; st.runs = runs; const r = st.runView && st.runView.scriptId === id ? st.runView.id : s.lastRunId; return r ? App.get('/api/script-runs/' + r).then((x) => { st.runView = x; }) : (st.runView = null); }).catch((err) => { st.script = { id, error: err }; });
+      const load = () => {
+        if (st.loading) { st.again = true; return; }
+        st.loading = true;
+        Promise.all([App.get('/api/scripts'), st.runtime ? Promise.resolve(st.runtime) : App.get('/api/scripts/runtime').catch(() => null)])
+          .then(([list, runtime]) => { st.list = list; st.runtime = runtime; st.loaded = true; st.loadError = null; if (ctx.params.script) { const hit = list.find((x) => x.id === ctx.params.script || x.name === ctx.params.script); if (hit) st.sel = hit.id; delete ctx.params.script; } if (!list.find((x) => x.id === st.sel)) st.sel = list[0] ? list[0].id : null; return st.sel ? loadScript(st.sel) : (st.script = null); })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } later(); });
+      };
+      live.refresh = (e) => { if (e && st.sel && e.scriptId === st.sel) { if (e.runId) st.runView = { id: e.runId, scriptId: e.scriptId, state: e.state }; loadScript(st.sel).then(later); if (e.state === 'succeeded' || e.state === 'failed' || e.state === 'timeout') load(); } };
+      attach();
+      if (!st.loaded && !st.loadError) load();
+      const act = async (fn, okMsg, kind) => {
+        try { const r = await fn(); st.problem = null; if (okMsg) toast(okMsg, kind || 'ok', 5000); load(); return r || true; }
+        catch (err) { const pr = err.problem || {}; if (err.status >= 400 && err.status < 500) st.problem = { title: pr.title || 'Refused', detail: err.message, trace: pr.trace_id }; App.fail(err); ctx.rerender(); return null; }
+      };
+      if (st.loadError || !st.loaded) {
+        root.innerHTML = '<div class="page">' + UI.pagehead('Scripts', 'Sandboxed scripts and the promotion path to a registry tool', '') + (st.loadError ? UI.problem('Scripts could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        ctx.on('click', '[data-reload]', () => { st.loadError = null; ctx.rerender(); });
+        return;
+      }
 
-      const stepper = '<div class="scripts-steps">' + ['Ad-hoc script', 'Saved script', 'Published tool'].map((t, i) => '<div class="' + (i < stage ? 'done' : i === stage ? 'cur' : '') + '"><i></i><span>' + t + (i === 1 && stage === 1 && st.over[s.id] === 'in review' ? ' <span class="pill info" style="height:18px;font-size:11px">in review</span>' : '') + '</span></div>').join('') + '</div>';
+      if (st.demo) {
+        const d = st.demo; st.demo = null; st.demoNote = null;
+        if (d === 'blocked') { const hit = st.list.find((x) => x.id === st.sel && st.script && st.script.blocked) ; if (hit) st.tab = 'checks'; else if (st.script && !st.script.blocked) st.demoNote = 'This script passes its checks. Add a line such as import requests and save to see the run refused before start.'; }
+        else if (d === 'timeout') { if (st.runView && st.runView.state === 'timeout') st.tab = 'output'; else { const t = (st.runs || []).find((r) => r.state === 'timeout'); if (t) { st.tab = 'output'; App.get('/api/script-runs/' + t.id).then((x) => { st.runView = x; later(); }); } else st.demoNote = 'No run of this script has hit its time limit. A run that does is stopped, its output so far is kept, and the limits are shown under Output.'; } }
+      }
 
-      let side;
-      if (st.tab === 'checks') {
-        side = UI.table(['Check', 'Result'], checks.map((c) => ({ cells: [esc(c[0]), UI.pill(c[1], c[2])], attrs: 'data-check="' + esc(c[0]) + '"' })), { minWidth: '0', cls: 'scripts-checks' })
-          + '<div class="fg2" style="font-size:12px">' + esc(st.removedLine[s.id] && s.id === 'clean_card_feed.py' ? 'Line 14 removed. All checks pass; the script can be submitted for promotion.' : s.note) + '</div>'
-          + (blocked ? '<div>' + UI.btn('Remove line 14', { size: 'sm', attrs: 'data-removeline' }) + '</div>' : '')
-          + '<div class="eyebrow">Dry run on sample input</div><pre class="codebox">' + esc(s.dry) + '</pre>';
-      } else if (st.tab === 'dry') {
-        side = UI.field('Sample input', UI.select([s.sample, 'blank input', 'previous run output'], s.sample)) + UI.kv([['Sandbox', 'gVisor, read-only root, tmpfs work dir'], ['Limits', '60 s, 512 MB, 64 KB output'], ['Network', 'none'], ['Files', 'in and out through MinIO']], 2)
-          + '<div>' + UI.btn(run && run.phase === 'running' ? 'Running' : 'Run in sandbox', { kind: 'primary', size: 'sm', icon: 'play', attrs: 'data-runsandbox', disabled: run && run.phase === 'running' }) + '</div>'
-          + (run ? outputPane(s, run) : '<div class="eyebrow">Last dry run</div><pre class="codebox">' + esc(s.dry) + '</pre>');
-      } else {
-        side = run ? outputPane(s, run) : UI.empty('No output yet', 'Run once or run in the sandbox to see stdout, files produced and the limits used.', UI.btn('Run in sandbox', { size: 'sm', icon: 'play', attrs: 'data-runsandbox' }));
+      const list = st.list.filter((x) => (!st.query || x.name.toLowerCase().indexOf(st.query.toLowerCase()) >= 0) && (st.filter === 'all' || x.language === st.filter));
+      const s = st.script && !st.script.error && st.script.id === st.sel ? st.script : null;
+      const rt = st.runtime || { runner: 'unknown', available: false, defaults: {}, languages: ['python', 'javascript'] };
+      const canPromote = App.can('workflows:manage') || App.can('tools:manage');
+
+      const left = '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Scripts</div>' + UI.btn('New', { size: 'sm', attrs: 'data-new' }) + UI.btn('From template', { size: 'sm', attrs: 'data-templates' }) + '</div>'
+        + UI.search('Filter scripts', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
+        + UI.seg([{ id: 'all', label: 'All' }, { id: 'python', label: 'Python' }, { id: 'javascript', label: 'Node.js' }], st.filter, 'data-langseg')
+        + '<div class="scripts-list">' + list.map((x) => UI.listItem(esc(x.name), esc(LANG[x.language] + ', v' + x.version), { active: x.id === st.sel, attrs: 'data-script="' + esc(x.id) + '"', right: statusPill(x.status) })).join('') + (list.length ? '' : UI.empty(st.list.length ? 'No scripts match' : 'No scripts yet', st.list.length ? 'Try another word.' : 'Create one, or start from a template.')) + '</div>'
+        + '<div class="muted" style="font-size:12px;margin-top:auto">Promotion path: draft (this workspace, versioned), tested (a clean run of the current version), promoted tool (tool-admin review in the Registry).</div></div>';
+
+      let page;
+      if (!st.sel) page = '<div class="page scripts-page">' + UI.pagehead('Scripts', 'Sandboxed scripts and the promotion path to a registry tool', '') + UI.empty('No scripts in this workspace', 'Scripts run in a disposable container with no network. Start from a template or write one.', UI.btn('From template', { kind: 'primary', attrs: 'data-templates' })) + runtimesPanel() + statesStrip(this.states) + '</div>';
+      else if (!s) page = '<div class="page">' + (st.script && st.script.error ? UI.problem('The script could not be loaded', st.script.error.message, st.script.error.problem && st.script.error.problem.trace_id) : UI.notice('Loading…', 'info')) + '</div>';
+      else {
+        const stage = s.status === 'draft' ? 0 : s.status === 'tested' || s.status === 'in_review' ? 1 : 2;
+        const stepper = '<div class="scripts-steps">' + ['Draft', 'Tested', 'Promoted tool'].map((t, i) => '<div class="' + (i < stage ? 'done' : i === stage ? 'cur' : '') + '"><i></i><span>' + t + (i === 1 && s.status === 'in_review' ? ' <span class="pill info" style="height:18px;font-size:11px">in review</span>' : '') + '</span></div>').join('') + '</div>';
+        const blockers = s.checks.filter((c) => c.tone === 'danger');
+        const hiLine = st.hiLine || (blockers[0] && blockers[0].line);
+        let code;
+        if (st.editing === s.id) code = '<textarea class="textarea mono scripts-edit" data-source spellcheck="false">' + esc(st.draft != null ? st.draft : s.source) + '</textarea><div class="hstack">' + UI.field('Note', UI.input(st.note || '', { attrs: 'data-note', placeholder: 'What changed' })) + '<span class="grow"></span>' + UI.btn('Cancel', { attrs: 'data-canceledit' }) + UI.btn('Save as v' + (s.version + 1), { kind: 'primary', attrs: 'data-saveversion' }) + '</div>';
+        else {
+          code = UI.code(s.source, s.language);
+          if (hiLine) code = code.replace(new RegExp('(<span class="ln">' + hiLine + '</span>)([^\\n]*)'), '<span style="display:inline-block;width:100%;background:var(--warn-bg)">$1$2</span>');
+        }
+        const run = st.runView && st.runView.scriptId === s.id ? st.runView : null;
+        let side;
+        if (st.tab === 'checks') {
+          side = UI.table(['Check', 'Result'], s.checks.map((c) => ({ cells: [esc(c.name), UI.pill(c.result, c.tone)], attrs: 'data-check="' + esc(c.name) + '"' })), { minWidth: '0', cls: 'scripts-checks' })
+            + '<div class="fg2" style="font-size:12px">' + (blockers.length ? esc(blockers.map((c) => c.detail).join(' ')) : 'All checks pass; the script can run in the sandbox.') + '</div>'
+            + '<div class="hstack">' + UI.btn('Re-run checks', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-recheck' }) + (blockers.length && hiLine ? UI.btn('Edit line ' + hiLine, { size: 'sm', attrs: 'data-edit' }) : '') + '</div>';
+        } else if (st.tab === 'dry') {
+          side = UI.field('Input (stdin)', UI.textarea(st.stdin || '', { rows: 5, attrs: 'data-stdin', placeholder: s.language === 'python' ? '{"values": [1, 2, 3]}' : 'a line of input' }), 'Promoted tools receive their arguments here as JSON')
+            + UI.kv([['Sandbox', esc(rt.runner === 'none' ? 'not configured' : rt.runner + ' container' + (rt.available ? '' : ', not answering'))], ['Limits', esc(s.limits.timeoutSeconds + ' s, ' + s.limits.memoryMb + ' MB, ' + s.limits.cpus + ' CPU, ' + s.limits.pids + ' processes, ' + s.limits.outputKb + ' KB output')], ['Network', 'none'], ['Filesystem', 'read-only root, small noexec tmpfs']], 2)
+            + '<div>' + UI.btn(run && (run.state === 'queued' || run.state === 'running') ? 'Running' : 'Run in sandbox', { kind: 'primary', size: 'sm', icon: 'play', attrs: 'data-runsandbox', disabled: !!(run && (run.state === 'queued' || run.state === 'running')) }) + '</div>'
+            + (run ? outputPane(s, run) : '');
+        } else side = run ? outputPane(s, run) : UI.empty('No output yet', 'Run once or run in the sandbox to see stdout, stderr, the exit code and the limits used.', UI.btn('Run in sandbox', { size: 'sm', icon: 'play', attrs: 'data-runsandbox' }));
+
+        const primary = s.status === 'promoted' ? UI.btn('Open in Registry', { kind: 'primary', attrs: 'data-goreg' })
+          : s.status === 'in_review' ? UI.btn('In review', { kind: 'primary', disabled: true })
+            : UI.btn('Submit for promotion', { kind: 'primary', attrs: 'data-promote', disabled: s.status !== 'tested' || !canPromote, title: !canPromote ? 'Promotion needs workflows:manage or tools:manage' : s.status !== 'tested' ? 'Run the current version once without errors first' : '' });
+        page = '<div class="page scripts-page">' + UI.pagehead(s.name, esc(LANG[s.language]) + ', version ' + s.version + ' · ' + statusPill(s.status) + ' · ' + UI.label(s.label, { sm: true }), UI.btn('Diff v' + (s.version - 1), { attrs: 'data-diff', disabled: s.version < 2 }) + UI.btn('Edit', { attrs: 'data-edit', disabled: st.editing === s.id }) + UI.btn('Run once', { icon: 'play', attrs: 'data-runonce' }) + primary)
+          + stepper
+          + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+          + (st.problem ? UI.problem(st.problem.title, st.problem.detail, st.problem.trace) : '')
+          + (s.status === 'in_review' && s.registry ? UI.notice('Submitted for promotion as <b>' + esc(s.registry.name + ' ' + s.registry.version) + '</b>. A tool admin reviews its schemas, side-effect class and checks in the <a href="#" data-goreg>Registry</a>.', 'info') : '')
+          + (s.registry && s.registry.status === 'draft' && s.registry.reviewNote ? UI.notice('<b>Returned by the reviewer.</b> ' + esc(s.registry.reviewNote), 'warn') : '')
+          + (blockers.length ? UI.notice('<b>Runs are refused before start.</b> ' + esc(blockers[0].name + ': ' + blockers[0].detail), 'danger') : '')
+          + '<div class="cols"><div class="grow scripts-code" style="min-width:0">' + code + '</div>'
+          + '<div class="scripts-side">' + UI.tabs([{ id: 'checks', label: 'Checks' }, { id: 'dry', label: 'Dry run' }, { id: 'output', label: 'Output' }], st.tab) + side + '</div></div>'
+          + UI.panel('Runs', UI.table(['Run', 'Version', 'Result', 'Duration', 'Started'], (st.runs || []).map((r) => ({ cells: ['<span class="mono">' + esc(shortId(r.id)) + '</span>', 'v' + r.version, runPill(r.state, r.exitCode), esc(secs(r.durationMs)), esc(when(r.createdAt))], attrs: 'data-runrow="' + esc(r.id) + '"', selected: run && run.id === r.id })), { cls: 'bare', minWidth: '0', emptyTitle: 'No runs yet', emptyText: 'Each run is a job in a fresh sandbox.' }))
+          + runtimesPanel()
+          + statesStrip(this.states) + '</div>';
       }
 
       root.innerHTML = '<style>'
         + '.scripts-page > *{flex-shrink:0}.scripts-side > *{flex-shrink:0}'
         + '.scripts-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.scripts-steps > div{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--fg2)}.scripts-steps i{display:block;height:4px;border-radius:2px;background:var(--line)}.scripts-steps .done i,.scripts-steps .cur i{background:var(--ok-fg)}.scripts-steps .cur span{font-weight:700;color:var(--fg)}'
-        + '.scripts-list{display:flex;flex-direction:column;gap:2px}.scripts-code{min-height:400px;max-height:560px}.scripts-code .codebox{min-height:400px}'
-        + '.scripts-side{width:340px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}.scripts-out{background:var(--fg);color:var(--bg);border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;margin:0;min-height:96px;overflow:auto}'
+        + '.scripts-list{display:flex;flex-direction:column;gap:2px}.scripts-code{min-height:320px;max-height:560px;display:flex;flex-direction:column;gap:8px}.scripts-code .codebox{min-height:320px}.scripts-edit{min-height:360px;font-family:var(--mono);font-size:12px;white-space:pre}'
+        + '.scripts-side{width:340px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}.scripts-out{background:var(--fg);color:var(--bg);border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;margin:0;min-height:96px;max-height:320px;overflow:auto}'
         + '@media (max-width:1100px){.scripts-side{width:100%}}'
-        + '</style>'
-        + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Scripts</div>' + UI.btn('From template', { size: 'sm', attrs: 'data-templates' }) + '</div>'
-        + UI.search('Filter scripts', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
-        + UI.seg([{ id: 'all', label: 'All' }, { id: 'Python', label: 'Python' }, { id: 'Node', label: 'Node.js' }], st.filter, 'data-rtseg')
-        + '<div class="scripts-list">' + list.map((x) => UI.listItem(esc(x.id), esc(x.runtime + (x.version ? ', ' + x.version : '')), { active: x.id === s.id, attrs: 'data-script="' + esc(x.id) + '"', right: statusPill(st.over[x.id] || x.status) })).join('') + (list.length ? '' : UI.empty('No scripts match', 'Try another word or create one from a template.')) + '</div>'
-        + '<div class="muted" style="font-size:12px;margin-top:auto">Promotion path: ad-hoc (one conversation), saved (workspace, versioned), published tool (tool-admin review, JSON Schema, signed).</div></div>'
-        + '<div class="page scripts-page">' + UI.pagehead(s.id, esc(s.runtime) + ', ' + esc(s.packages), UI.btn('Diff ' + (s.version && s.version.startsWith('saved') ? 'v' + (parseInt(s.version.replace(/\D/g, ''), 10) - 1) : 'previous'), { attrs: 'data-diff', disabled: !(s.version && s.version.startsWith('saved')) }) + UI.btn('Run once', { icon: 'play', attrs: 'data-runonce' }) + (status === 'published tool' ? UI.btn('Open in Registry', { kind: 'primary', attrs: 'data-goreg' }) : status === 'in review' ? UI.btn('In review', { kind: 'primary', disabled: true }) : status === 'ad-hoc' ? UI.btn('Save to workspace', { kind: 'primary', attrs: 'data-save' }) : UI.btn('Submit for promotion', { kind: 'primary', attrs: 'data-promote' })))
-        + stepper
-        + (st.over[s.id] === 'in review' ? UI.notice('Submitted for promotion. A tool admin reviews the JSON Schema inputs and outputs, side-effect class and declared egress in the <a href="#" data-goreg>Registry</a>.', 'info') : '')
-        + '<div class="cols"><div class="grow scripts-code" style="min-width:0">' + codeHtml(s, st) + '</div>'
-        + '<div class="scripts-side">' + UI.tabs([{ id: 'checks', label: 'Checks' }, { id: 'dry', label: 'Dry run' }, { id: 'output', label: 'Output' }], st.tab) + side + '</div></div>'
-        + UI.panel('Code interpreter sessions', (st.interpExpired ? UI.notice('The session in <b>Reconcile card feed</b> expired after 30 idle minutes. Files produced remain attached to the conversation; the next run starts a fresh sandbox.', 'warn', UI.btn('Open conversation', { size: 'sm', attrs: 'data-gochat' })) : '')
-          + UI.table(['Conversation', 'Runtime', 'Runs', 'Idle', 'Expires', 'Files', ''], [['Reconcile card feed', 'Python 3.13', '6', st.interpExpired ? '30 m' : '12 m', st.interpExpired ? UI.pill('expired', 'danger') : 'in 18 m', 'cleaned.csv, variance.png', UI.btn('Open', { size: 'sm', kind: 'ghost', attrs: 'data-gochat' })], ['Q3 travel overrun', 'Node.js 24', '2', '3 m', 'in 27 m', 'none', UI.btn('Open', { size: 'sm', kind: 'ghost', attrs: 'data-gochat="c1"' })]], { clickable: false, cls: 'bare', minWidth: '0' })
-          + '<div class="muted" style="font-size:12px">In chat, a model can run Python or Node repeatedly in a per-session sandbox and return output, files and charts. Sessions expire after 30 idle minutes.</div>')
-        + UI.panel('Runtimes', UI.table(['Runtime', 'Image contents', 'Checks before any run'], RUNTIMES.map((r) => [esc(r[0]) + (st.twoRuntimes && !/Node|Python/.test(r[0]) ? ' ' + UI.pill('not offered', 'outline') : ''), esc(r[1]), esc(r[2])]), { clickable: false, cls: 'bare', minWidth: '0' }) + '<div class="muted" style="font-size:12px">Curated images, no network, gVisor or rootless container with a read-only root. Nothing is installed at run time; new packages arrive through the air-gap import path and an image rebuild.</div>')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</style>' + left + page;
 
-      if (st.openTemplates) { st.openTemplates = false; setTimeout(() => templateCatalog(ctx), 30); }
-      if (bound) return; bound = true;
+      // ---- events ----
+      ctx.on('click', '[data-script]', (e, t) => { st.sel = t.dataset.script; st.hiLine = null; st.editing = null; st.draft = null; st.runView = null; st.problem = null; st.demoNote = null; st.script = null; loadScript(st.sel).then(later); ctx.rerender(); });
+      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
+      ctx.on('click', '[data-langseg] [data-seg]', (e, t) => { st.filter = t.dataset.seg; ctx.rerender(); });
+      ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
+      ctx.on('click', '[data-templates]', () => templateCatalog());
+      ctx.on('click', '[data-new]', () => newScript(null));
+      ctx.on('click', '[data-goreg]', (e) => { e.preventDefault(); if (s && s.registry) ctx.navigate('registry', { entry: s.registry.id }); });
+      ctx.on('input', '[data-stdin]', (e, t) => { st.stdin = t.value; });
+      ctx.on('input', '[data-source]', (e, t) => { st.draft = t.value; });
+      ctx.on('input', '[data-note]', (e, t) => { st.note = t.value; });
+      ctx.on('click', '[data-edit]', () => { st.editing = s.id; st.draft = s.source; ctx.rerender(); });
+      ctx.on('click', '[data-canceledit]', () => { st.editing = null; st.draft = null; ctx.rerender(); });
+      ctx.on('click', '[data-saveversion]', async () => { const source = st.draft; const note = st.note || null; const r = await act(() => App.patch('/api/scripts/' + s.id, { source, note }), 'Saved as v' + (s.version + 1) + '. Checks re-ran.'); if (r) { st.editing = null; st.draft = null; st.note = ''; st.hiLine = null; } });
+      ctx.on('click', '[data-recheck]', () => act(() => App.post('/api/scripts/' + s.id + '/checks'), 'Checks re-ran on v' + s.version + '.'));
+      ctx.on('click', '[data-runsandbox]', () => runScript(st.stdin || null));
+      ctx.on('click', '[data-runonce]', () => runScript(st.stdin || null));
+      ctx.on('click', '[data-runrow]', (e, t) => { App.get('/api/script-runs/' + t.dataset.runrow).then((x) => { st.runView = x; st.tab = 'output'; later(); }).catch((err) => App.fail(err)); });
+      ctx.on('click', 'tr.row[data-check]', (e, t) => {
+        const c = s.checks.find((x) => x.name === t.dataset.check);
+        if (c.line) { st.hiLine = c.line; ctx.rerender(); }
+        ctx.drawer({ title: esc(c.name) + ' ' + UI.pill(c.result, c.tone), body: '<div class="fg2">' + esc(c.detail) + '</div>' + UI.kv([['Runs', 'on the server, before any execution'], ['Language', esc(LANG[s.language])], ['Blocks a run', c.tone === 'danger' ? 'yes' : 'no']].concat(c.line ? [['Line', String(c.line)]] : []), 1) + (c.name === 'Script guardrail' ? UI.notice('The script checkpoint flags or blocks secrets, disallowed modules and suspicious patterns. Rules live in <a href="#" data-goguard>Guardrails</a>.', 'info') : ''), actions: (c.tone === 'danger' ? UI.btn('Edit the script', { attrs: 'data-close data-fix' }) : '') + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { const g = d.querySelector('[data-goguard]'); if (g) g.addEventListener('click', (ev) => { ev.preventDefault(); App.closeOverlay(); ctx.navigate('guardrails'); }); const f = d.querySelector('[data-fix]'); if (f) f.addEventListener('click', () => { st.editing = s.id; st.draft = s.source; later(); }); } });
+      });
+      ctx.on('click', '[data-diff]', async () => {
+        try {
+          const prev = await App.get('/api/scripts/' + s.id + '/versions/' + (s.version - 1));
+          const lines = diffLines(prev.source, s.source);
+          ctx.modal({ cls: 'wide', title: 'Diff ' + esc(s.name) + ': v' + (s.version - 1) + ' to v' + s.version, body: '<pre class="codebox" data-lang="diff">' + lines.map((l) => l.startsWith('+') ? '<span style="color:var(--ok-fg)">' + esc(l) + '</span>' : l.startsWith('-') ? '<span style="color:var(--danger-fg)">' + esc(l) + '</span>' : esc(l)).join('\n') + '</pre>' + (prev.note ? '<div class="fg2" style="font-size:12px">v' + (s.version - 1) + ': ' + esc(prev.note) + '</div>' : ''), actions: UI.btn('Restore v' + (s.version - 1), { attrs: 'data-restore' }) + UI.btn('Close', { kind: 'primary', attrs: 'data-close' }), onMount(m) { m.querySelector('[data-restore]').addEventListener('click', () => { App.closeOverlay(); act(() => App.post('/api/scripts/' + s.id + '/restore', { version: s.version - 1 }), 'v' + (s.version - 1) + ' restored as v' + (s.version + 1) + '. Versions are never overwritten.'); }); } });
+        } catch (err) { App.fail(err, 'The previous version could not be loaded'); }
+      });
+      ctx.on('click', '[data-promote]', () => promoteModal());
 
-      const on = ctx.on;
-      on('click', '[data-script]', (e, t) => { cur.st.sel = t.dataset.script; cur.st.hiLine = null; cur.ctx.rerender(); });
-      on('input', '[data-search]', (e, t) => { cur.st.query = t.value; const v = t.value; cur.ctx.rerender(); const i = cur.ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
-      on('click', '[data-rtseg] [data-seg]', (e, t) => { cur.st.filter = t.dataset.seg; cur.ctx.rerender(); });
-      on('click', '[data-tab]', (e, t) => { cur.st.tab = t.dataset.tab; cur.ctx.rerender(); });
-      on('click', '.state-card', (e, t) => cur.ctx.app.applyState(+t.dataset.state));
-      on('click', 'tr.row[data-check]', (e, t) => {
-        const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); const name = t.dataset.check; const c = s.checks.find((x) => x[0] === name);
-        const detail = name === 'Bandit' ? 'B404 (low): import of subprocess-like module flagged by pattern match on line 14. Informational for a script with no network.' : name === 'Script-generation guardrail' ? (cur.st.removedLine[s.id] ? 'No disallowed modules, secrets or suspicious patterns.' : 'Disallowed module "requests" on line 14. Scripts have no network. Remove the import or promote the script and declare an internal destination.') : name === 'ESLint' ? 'prefer-const (line 3), no-unused-vars (line 4). Warnings do not block a run.' : 'No findings.';
-        if (name === 'Script-generation guardrail' || name === 'Bandit') { cur.st.hiLine = cur.st.removedLine[s.id] ? null : 14; cur.st.tab = 'checks'; ctx.rerender(); }
-        ctx.drawer({ title: esc(name) + ' ' + UI.pill(c[1], c[2]), body: '<div class="fg2">' + esc(detail) + '</div>' + UI.kv([['Runs', 'inside the sandbox, before any execution'], ['Runtime', esc(s.runtime)], ['Blocks a run', c[2] === 'danger' ? 'yes' : 'no']], 1) + (name === 'Script-generation guardrail' ? UI.notice('The checkpoint flags or blocks secrets, disallowed modules and suspicious patterns in generated scripts. Rules live in <a href="#" data-goguard>Guardrails</a>.', 'info') : ''), actions: (c[2] === 'danger' ? UI.btn('Remove line 14', { attrs: 'data-close data-removeline' }) : '') + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { const g = d.querySelector('[data-goguard]'); if (g) g.addEventListener('click', (ev) => { ev.preventDefault(); ctx.navigate('guardrails'); }); const r = d.querySelector('[data-removeline]'); if (r) r.addEventListener('click', () => removeLine(ctx)); } });
-      });
-      on('click', '[data-removeline]', () => removeLine(cur.ctx));
-      on('click', '[data-runsandbox], [data-runonce]', () => runSandbox(cur.ctx));
-      on('click', '[data-diff]', () => { const ctx = cur.ctx; const s = find(cur.st.sel); ctx.modal({ title: 'Diff ' + esc(s.id) + ': v3 to v4', body: '<pre class="codebox" data-lang="diff">' + ['@@ -8,4 +8,6 @@', '         key = (r["txn_id"], r["posted"])', '-        if key in seen: continue', '+        if key in seen:', '+            continue', '         seen.add(key)', '-        r["amount"] = float(r["amount"])', '+        r["amount"] = Decimal(r["amount"].replace(",", ""))'].map((l) => l.startsWith('+') ? '<span style="color:var(--ok-fg)">' + esc(l) + '</span>' : l.startsWith('-') ? '<span style="color:var(--danger-fg)">' + esc(l) + '</span>' : esc(l)).join('\n') + '</pre><div class="fg2" style="font-size:12px">v4 switches to Decimal so money never passes through binary floating point, matching the calc service.</div>', actions: UI.btn('Restore v3', { attrs: 'data-close data-restore' }) + UI.btn('Close', { kind: 'primary', attrs: 'data-close' }), cls: 'wide', onMount(m) { m.querySelector('[data-restore]').addEventListener('click', () => ctx.toast('v3 restored as v5. Versions are never overwritten.')); } }); });
-      on('click', '[data-save]', async () => { const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); const ok = await ctx.confirm({ title: 'Save ' + esc(s.id) + ' to the workspace', tag: 'saved', tone: 'info', body: '<p class="fg2" style="margin:0">Saved scripts are versioned in Finance Ops and can be run by members with the scripts:run scope. They still have no network.</p>', kv: [['Label', s.label], ['Version', 'v1']], ok: 'Save' }); if (ok) { cur.st.over[s.id] = 'saved'; s.version = 'saved v1'; s.stage = 1; ctx.rerender(); ctx.toast(esc(s.id) + ' saved as v1 in Finance Ops.', 'ok'); } });
-      on('click', '[data-promote]', async () => {
-        const ctx = cur.ctx; const st = cur.st; const s = find(st.sel) || st.added.find((x) => x.id === st.sel);
-        const checks = s.checks.map((c) => s.id === 'clean_card_feed.py' && st.removedLine[s.id] && c[0] === 'Script-generation guardrail' ? ['Script-generation guardrail', 'passed', 'ok'] : c);
-        const blocked = checks.some((c) => c[2] === 'danger');
-        if (blocked) { ctx.modal({ title: 'Cannot submit ' + esc(s.id), body: UI.problem('Script-generation guardrail: blocked module', 'Line 14 imports requests. Scripts have no network. Remove the import, or declare an internal destination reached through the egress proxy once the tool is promoted.', 'd91f0b2a7c3e4f5061728394a5b6c7d8') + UI.table(['Check', 'Result'], checks.map((c) => [esc(c[0]), UI.pill(c[1], c[2])]), { clickable: false, minWidth: '0', cls: 'bare' }), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Remove line 14 and retry', { kind: 'primary', attrs: 'data-fix' }), onMount(m) { m.querySelector('[data-fix]').addEventListener('click', () => { App.closeOverlay(); removeLine(ctx); }); } }); return; }
-        ctx.modal({ title: 'Submit ' + esc(s.id) + ' for promotion', body: '<p class="fg2" style="margin:0">Promotion creates a draft tool in the Registry. A tool admin reviews it; nothing reaches a tenant before review.</p><div class="formgrid">' + UI.field('Tool name', UI.input('cardfeed.clean')) + UI.field('Side-effect class', UI.select(['read-only', 'write', 'destructive', 'external-comms'], 'read-only')) + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], s.label)) + UI.field('Egress allow-list', UI.input('none'), 'Internal destinations only, through the egress proxy') + '</div>' + UI.code('{ "input": { "csv": "MinIORef" },\n  "output": { "cleaned": "MinIORef", "dropped": "integer" } }', 'json') + UI.notice('Checks: ' + checks.map((c) => c[0] + ' ' + c[1]).join(', ') + '. The archive is signed with cosign on approval.', 'ok'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Submit', { kind: 'primary', attrs: 'data-ok' }), cls: 'wide', onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { App.closeOverlay(); st.over[s.id] = 'in review'; ctx.rerender(); ctx.toast('cardfeed.clean 0.1.0 submitted as a draft tool. <a href="#/registry?tab=review" style="color:inherit">Open the review queue</a>', 'ok', 6000); }); } });
-      });
-      on('click', '[data-goreg]', (e) => { e.preventDefault(); cur.ctx.navigate('registry', { entry: 'report.generate (script)' }); });
-      on('click', '[data-gochat]', (e, t) => cur.ctx.navigate('chat', { convo: t.dataset.gochat || 'c4' }));
-      on('click', '[data-templates]', () => templateCatalog(cur.ctx));
+      if (st.openTemplates) { st.openTemplates = false; setTimeout(templateCatalog, 30); }
+      if (st.openTemplate != null) { const i = st.openTemplate; st.openTemplate = null; setTimeout(() => newScript(TEMPLATES[i]), 30); }
+
+      function statesStrip(states) { return '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(states) + '</div>'; }
+      function runtimesPanel() {
+        return UI.panel('Runtimes', UI.table(['Runtime', 'Image', 'Checks before any run'], (rt.languages || []).map((l) => [esc(LANG[l] || l), '<span class="mono">' + esc((rt.images && rt.images[l]) || (l === 'python' ? 'SCRIPT_IMAGE_PYTHON' : 'SCRIPT_IMAGE_NODE')) + '</span>', 'script guardrail, blocked modules, secrets scan']), { clickable: false, cls: 'bare', minWidth: '0' })
+          + UI.kv([['Sandbox', esc(rt.runner === 'none' ? 'none configured: runs are refused' : rt.runner) + ' ' + UI.pill(rt.available ? 'answering' : 'not answering', rt.available ? 'ok' : 'danger')], ['Default limits', rt.defaults ? esc(rt.defaults.timeoutSeconds + ' s, ' + rt.defaults.memoryMb + ' MB, ' + rt.defaults.cpus + ' CPU, ' + rt.defaults.pids + ' processes, ' + rt.defaults.outputKb + ' KB output') : '']], 2)
+          + '<div class="muted" style="font-size:12px">Each run is a fresh container: no network, read-only root, nobody user, all capabilities dropped. Nothing is installed at run time.</div>');
+      }
+      function outputPane(sc, r) {
+        const running = r.state === 'queued' || r.state === 'running';
+        return (r.state === 'timeout' ? UI.notice('<b>Sandbox timeout.</b> The run stopped at the ' + sc.limits.timeoutSeconds + ' s limit. Output so far is kept below.', 'warn', UI.btn('Run again', { size: 'sm', attrs: 'data-runsandbox' })) : '')
+          + (r.error ? UI.notice(esc(r.error), 'danger') : '')
+          + '<div class="hstack"><div class="eyebrow grow">' + (running ? 'Running in sandbox' : 'Output, run ' + esc(shortId(r.id))) + '</div>' + runPill(r.state, r.exitCode) + '</div>'
+          + (running ? UI.meter(r.state === 'queued' ? 'Queued for a worker' : 'Executing, no network', '…', r.state === 'queued' ? 20 : 60, 'accent') : '')
+          + '<pre class="scripts-out">' + esc(r.stdout || (running ? '' : '(no output)')) + '</pre>'
+          + (r.stderr ? '<div class="eyebrow">stderr</div><pre class="scripts-out">' + esc(r.stderr) + '</pre>' : '')
+          + (running ? '' : UI.kv([['Duration', esc(secs(r.durationMs)) + ' of ' + sc.limits.timeoutSeconds + ' s'], ['Exit', r.exitCode == null ? esc(r.state === 'timeout' ? 'killed at the limit' : 'none') : String(r.exitCode)], ['Output', r.truncated ? 'truncated at ' + sc.limits.outputKb + ' KB' : 'complete'], ['Runner', esc(r.runner || '')]], 2));
+      }
+      async function runScript(stdin) {
+        if (!s) return;
+        try {
+          const r = await App.post('/api/scripts/' + s.id + '/run', { stdin });
+          st.runView = { id: r.runId, scriptId: s.id, state: 'queued' }; st.tab = st.tab === 'checks' ? 'output' : st.tab; st.problem = null;
+          toast('Run queued. Output appears when the sandbox finishes.', 'ok');
+          ctx.rerender();
+        } catch (err) {
+          const pr = err.problem || {};
+          if (err.status === 409) { st.tab = 'checks'; st.problem = { title: pr.title || 'Refused', detail: err.message, trace: pr.trace_id }; ctx.rerender(); toast('Refused before start: ' + esc(err.message), 'danger', 6000); }
+          else App.fail(err, 'The run could not start');
+        }
+      }
+      function templateCatalog() {
+        ctx.modal({ cls: 'wide', title: 'Template catalog', body: '<p class="fg2" style="margin:0">Templates fill in a new script from a few parameters. It is always created as a draft and passes the same checks before it can run.</p>' + UI.table(['Template', 'Produces', 'Runtime', ''], TEMPLATES.map((t, i) => ['<b>' + esc(t.name) + '</b>', esc(t.produces), esc(LANG[t.language]), UI.btn('Use', { size: 'sm', attrs: 'data-use="' + i + '"' })]), { clickable: false, minWidth: '0' }), actions: UI.btn('Close', { attrs: 'data-close' }), onMount(m) { m.querySelectorAll('[data-use]').forEach((b) => b.addEventListener('click', () => { App.closeOverlay(); setTimeout(() => newScript(TEMPLATES[+b.dataset.use]), 30); })); } });
+      }
+      function newScript(t) {
+        const me = App.me && App.me.user ? App.me.user : {};
+        const labels = LABELS.filter((l) => !me.clearance || LABELS.indexOf(l) <= LABELS.indexOf(me.clearance));
+        ctx.modal({ cls: 'wide', title: t ? 'New script from template: ' + esc(t.name) : 'New script', body: '<div class="formgrid">' + UI.field('Runtime', UI.select((rt.languages || ['python', 'javascript']).map((l) => ({ value: l, label: LANG[l] })), t ? t.language : 'python', 'data-lang' + (t ? ' disabled' : '')), 'Only Python and JavaScript (Node.js) are offered') + UI.field('Name', UI.input(t ? t.file : '', { attrs: 'data-name', placeholder: 'clean_feed.py' }))
+          + UI.field('Label', UI.select(labels, 'internal', 'data-label'), 'Runs and output carry this label') + UI.field('Time limit, seconds', UI.input(String((rt.defaults && rt.defaults.timeoutSeconds) || 60), { type: 'number', attrs: 'data-timeout' }))
+          + (t ? t.params.map((p, i) => UI.field(p[0], UI.input(p[1], { attrs: 'data-p="' + i + '"' }))).join('') : '<div class="span2">' + UI.field('Source', UI.textarea('', { rows: 8, attrs: 'data-src' })) + '</div>') + '</div>'
+          + UI.notice('The draft passes the script guardrail, the blocked-module check and the secrets scan before it can run.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(m) {
+            m.querySelector('[data-ok]').addEventListener('click', async () => {
+              const params = Array.prototype.map.call(m.querySelectorAll('[data-p]'), (x) => x.value);
+              const source = t ? t.source(params) : m.querySelector('[data-src]').value;
+              const limits = Object.assign({}, rt.defaults || { timeoutSeconds: 60, memoryMb: 512, cpus: 1, pids: 64, outputKb: 64 }, { timeoutSeconds: Number(m.querySelector('[data-timeout]').value) || 60 });
+              const body = { name: m.querySelector('[data-name]').value.trim(), language: m.querySelector('[data-lang]').value, label: m.querySelector('[data-label]').value, source, limits };
+              if (!body.source.trim()) { toast('Write the source first.', 'warn'); return; }
+              App.closeOverlay();
+              const r = await act(() => App.post('/api/scripts', body), 'Draft ' + esc(body.name) + ' created. Its checks ran.');
+              if (r && r.id) { st.sel = r.id; st.tab = 'checks'; st.runView = null; st.script = null; }
+            });
+          } });
+      }
+      function promoteModal() {
+        const guess = s.name.replace(/\.(py|mjs|js)$/, '').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+        ctx.modal({ cls: 'wide', title: 'Submit ' + esc(s.name) + ' for promotion', body: '<p class="fg2" style="margin:0">Promotion creates a draft tool in the Registry and submits it for review. A tool admin other than you approves it; nothing reaches a tenant before review. The tool pins version ' + s.version + '.</p><div class="formgrid">'
+          + UI.field('Tool name', UI.input('scripts.' + guess, { attrs: 'data-tname' })) + UI.field('Tool version', UI.input('0.1.0', { attrs: 'data-tver' }))
+          + UI.field('Side-effect class', UI.select([{ value: 'read', label: 'read-only' }, { value: 'write', label: 'write' }, { value: 'destructive', label: 'destructive' }], 'read', 'data-side'), 'Scripts have no network; most are read-only') + UI.field('Max label', UI.select(LABELS.slice(LABELS.indexOf(s.label)), s.label, 'data-label'))
+          + '<div class="span2">' + UI.field('Description', UI.textarea('', { rows: 2, attrs: 'data-desc', placeholder: 'What the tool does, when to use it and what it returns' })) + '</div>'
+          + UI.field('Input schema (JSON Schema)', UI.textarea('{\n  "type": "object",\n  "properties": {},\n  "required": []\n}', { rows: 6, attrs: 'data-in' })) + UI.field('Output schema', UI.textarea('{\n  "type": "object"\n}', { rows: 6, attrs: 'data-out' })) + '</div>'
+          + UI.notice('Checks on v' + s.version + ': ' + esc(s.checks.map((c) => c.name + ' ' + c.result).join(', ')) + '. The registry runs its own checks on submission.', 'ok'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Submit', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(m) {
+            m.querySelector('[data-ok]').addEventListener('click', async () => {
+              let body;
+              try { body = { toolName: m.querySelector('[data-tname]').value.trim(), version: m.querySelector('[data-tver]').value.trim() || '0.1.0', sideEffect: m.querySelector('[data-side]').value, label: m.querySelector('[data-label]').value, description: m.querySelector('[data-desc]').value.trim(), inputSchema: JSON.parse(m.querySelector('[data-in]').value), outputSchema: m.querySelector('[data-out]').value.trim() ? JSON.parse(m.querySelector('[data-out]').value) : null }; }
+              catch (err) { toast('A schema is not valid JSON: ' + esc(err.message), 'danger'); return; }
+              if (!body.description) { toast('Describe the tool; the registry checks the description.', 'warn'); return; }
+              App.closeOverlay();
+              const r = await act(() => App.post('/api/scripts/' + s.id + '/promote', body), esc(body.toolName) + ' ' + esc(body.version) + ' submitted for review. <a href="#/registry?tab=review" style="color:inherit">Open the review queue</a>', 'ok');
+              if (r && r.checksPassed === false) toast('Some registry checks fail; the reviewer will see them. Fix the description or schemas in a new version.', 'warn', 7000);
+            });
+          } });
+      }
     }
   });
-
-  function removeLine(ctx) { const st = ctx.state; st.removedLine[st.sel] = true; st.hiLine = null; ctx.rerender(); ctx.toast('Line 14 removed. Checks re-ran: all clean.', 'ok'); }
-
-  function outputPane(s, run) {
-    const limitsKv = run.phase === 'timeout' ? UI.kv([['CPU time', '60.0 s of 60 s'], ['Memory', '410 MB of 512 MB'], ['Output', '2 lines kept, 64 KB cap'], ['Exit', 'killed at cap']], 2) : run.phase === 'done' ? UI.kv([['CPU time', esc(s.dry.match(/runtime\s+([\d.]+ s)/) ? s.dry.match(/runtime\s+([\d.]+ s)/)[1] : '0.4 s') + ' of 60 s'], ['Memory', esc(s.dry.match(/, (\d+ MB)/) ? s.dry.match(/, (\d+ MB)/)[1] : '38 MB') + ' of 512 MB'], ['Files produced', s.output.includes('files produced') ? 'cleaned.csv' : 'none'], ['Exit', s.output.includes('exit 1') ? UI.pill('1', 'danger') : UI.pill('0', 'ok')]], 2) : '';
-    return (run.phase === 'timeout' ? UI.notice('<b>Sandbox timeout.</b> The run stopped at the 60 s cap. Output so far is kept below.', 'warn', UI.btn('Run again', { size: 'sm', attrs: 'data-runsandbox' })) : '')
-      + '<div class="hstack"><div class="eyebrow grow">' + (run.phase === 'running' ? 'Running in sandbox' : run.phase === 'timeout' ? 'Output, stopped at cap' : 'Output') + '</div>' + (run.phase === 'running' ? '<span class="muted" style="font-size:12px">' + esc(run.step) + '</span>' : UI.pill(run.phase === 'timeout' ? 'timed out' : s.output.includes('exit 1') ? 'exit 1' : 'exit 0', run.phase === 'timeout' ? 'warn' : s.output.includes('exit 1') ? 'danger' : 'ok')) + '</div>'
-      + (run.phase === 'running' ? UI.meter(run.step, run.pct + '%', run.pct, 'accent') : '')
-      + '<pre class="scripts-out">' + esc(run.lines.join('\n')) + (run.phase === 'running' ? '<span class="blink">▍</span>' : '') + '</pre>' + limitsKv;
-  }
-
-  function runSandbox(ctx) {
-    const st = ctx.state; const s = find(st.sel) || st.added.find((x) => x.id === st.sel);
-    if (st.runs[s.id] && st.runs[s.id].phase === 'running') return;
-    if (s.blockedLine && !st.removedLine[s.id]) { ctx.toast('Refused before start: the script-generation guardrail blocked the requests import on line 14.', 'danger', 5000); st.tab = 'checks'; st.hiLine = 14; ctx.rerender(); return; }
-    st.tab = st.tab === 'checks' ? 'output' : st.tab;
-    const steps = [['Starting sandbox image ' + s.runtime.toLowerCase().replace(' ', '-'), 20], ['Running ' + (s.lang === 'python' ? 'ruff, Bandit' : 'node --check, ESLint'), 40], ['Staging sample input from MinIO', 55], ['Executing, no network', 80], ['Collecting output and files', 95]];
-    const lines = s.output.split('\n'); let i = 0, li = 0;
-    st.runs[s.id] = { phase: 'running', step: steps[0][0], pct: steps[0][1], lines: [] };
-    ctx.rerender();
-    const tick = () => {
-      const r = st.runs[s.id];
-      if (i < steps.length - 1) { i++; r.step = steps[i][0]; r.pct = steps[i][1]; if (i >= 3 && li < lines.length) r.lines.push(lines[li++]); ctx.rerender(); st.timer = setTimeout(tick, 380); return; }
-      if (li < lines.length) { r.lines.push(lines[li++]); ctx.rerender(); st.timer = setTimeout(tick, 120); return; }
-      r.phase = 'done'; ctx.rerender();
-      ctx.toast(s.output.includes('exit 1') ? 'Run finished with exit 1. Saved scripts have no network.' : 'Run finished. Output labelled ' + esc(s.label) + ' and attached to this script.', s.output.includes('exit 1') ? 'warn' : 'ok');
-    };
-    clearTimeout(st.timer); st.timer = setTimeout(tick, 380);
-  }
-
-  function templateCatalog(ctx) {
-    ctx.modal({
-      title: 'Template catalog ' + UI.pill('platform, shared across tenants', 'outline'),
-      body: '<p class="fg2" style="margin:0">Templates are versioned and parameterised with JSON Schema. Instantiating one always creates a draft that follows the normal review path.</p>'
-        + UI.table(['Kind', 'Template', 'Produces', 'Runtimes', ''], TEMPLATES.map((t, i) => [UI.pill(t.kind, 'outline'), '<b>' + esc(t.name) + '</b>', esc(t.produces), esc(t.runtimes), UI.btn('Use', { size: 'sm', attrs: 'data-use="' + i + '"' })]), { clickable: false, minWidth: '0' }),
-      actions: UI.btn('Close', { attrs: 'data-close' }), cls: 'wide',
-      onMount(m) { m.querySelectorAll('[data-use]').forEach((b) => b.addEventListener('click', () => templateForm(ctx, TEMPLATES[+b.dataset.use]))); }
-    });
-  }
-
-  function templateForm(ctx, t) {
-    const two = ctx.state.twoRuntimes; const isScript = t.kind === 'Script';
-    const runtimes = two ? ['Node.js 24', 'Python 3.13'] : ['Python 3.13', 'Node.js 24', 'Tcl 9.0', 'Perl 5.40'];
-    ctx.modal({
-      title: 'New ' + esc(t.kind.toLowerCase()) + ' from template: ' + esc(t.name),
-      body: '<div class="muted" style="font-size:12px">Parameter form generated from the template\'s JSON Schema, version 1.2.0.</div>'
-        + '<div class="formgrid">' + (isScript ? UI.field('Runtime', UI.select(runtimes, runtimes[0], 'data-rt'), two ? 'Only Node.js 24 and Python 3.13 are offered in this workspace' : '') : '') + UI.field('Name', UI.input(isScript ? 'clean_vendor_feed.py' : t.name.toLowerCase().replace(/\s+/g, '-'), { attrs: 'data-name' }))
-        + (isScript ? UI.field('Input columns', UI.input('txn_id, posted, merchant, amount')) + UI.field('Dedupe key', UI.input('txn_id, posted')) + UI.field('Amount format', UI.select(['decimal, thousands separator', 'integer cents'], 'decimal, thousands separator')) : t.kind === 'Tool' ? UI.field('Source', UI.input('openapi/ledger-api-v4.yaml')) + UI.field('Side-effect class', UI.select(['read-only', 'write'], 'read-only')) : t.kind === 'Agent' ? UI.field('Profile', UI.select(['analyst', 'chat-default', 'fast', 'coder'], 'analyst')) + UI.field('Limits', UI.input('20 steps, 10,000 tokens, 120 s')) : UI.field('Trigger', UI.select(['event upload.completed', 'cron schedule', 'manual'], 'event upload.completed')) + UI.field('Approval role', UI.input('knowledge curator')))
-        + '<div class="span2">' + UI.field('Task for the model', UI.textarea(isScript ? 'Drop duplicate rows by txn_id and posted date, parse amounts as Decimal, write CSV to stdout.' : 'Describe what the draft should do.', { rows: 2 })) + '</div></div>'
-        + (two ? UI.notice('<b>Two runtimes.</b> Finance Ops allows Node.js 24 and Python 3.13 only. Tcl and Perl images are installed but not offered here.', 'info') : '')
-        + UI.notice('The draft passes the script-generation guardrail, then the language checks, then a dry run on sample input, before you can run it.', 'info'),
-      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-ok' }), cls: 'wide',
-      onMount(m) {
-        m.querySelector('[data-ok]').addEventListener('click', () => {
-          const name = (m.querySelector('[data-name]').value || '').trim() || 'draft'; const rt = m.querySelector('[data-rt]') ? m.querySelector('[data-rt]').value : '';
-          App.closeOverlay();
-          if (!isScript) { ctx.toast('Draft ' + esc(t.kind.toLowerCase()) + ' ' + esc(name) + ' created in the ' + (t.kind === 'Workflow' ? 'Workflows editor' : 'Registry') + '.', 'ok', 5000); setTimeout(() => ctx.navigate(t.kind === 'Workflow' ? 'workflows' : 'registry'), 800); return; }
-          const st = ctx.state; st.added = st.added || [];
-          const py = rt.startsWith('Python');
-          st.added.push({ id: name, runtime: rt, version: '', status: 'ad-hoc', stage: 0, label: 'internal', packages: py ? 'curated wheels: pandas' : 'curated npm: none (built-ins only)', lang: py ? 'python' : 'javascript', code: py ? '# generated from template ' + t.name + ' 1.2.0\nimport csv, sys\nfrom decimal import Decimal\n\nKEY = ("txn_id", "posted")\n\ndef clean(rows):\n    seen = set()\n    for r in rows:\n        k = tuple(r[c] for c in KEY)\n        if k in seen:\n            continue\n        seen.add(k)\n        r["amount"] = Decimal(r["amount"].replace(",", ""))\n        yield r' : "// generated from template " + t.name + " 1.2.0\nimport { parse } from 'node:csv';\nconst seen = new Set();\nexport function clean(rows) {\n  return rows.filter((r) => { const k = r.txn_id + '|' + r.posted; if (seen.has(k)) return false; seen.add(k); return true; });\n}", checks: py ? [['ruff', 'clean', 'ok'], ['Bandit', 'clean', 'ok'], ['Script-generation guardrail', 'passed', 'ok'], ['Secrets scan', 'clean', 'ok']] : [['node --check', 'clean', 'ok'], ['ESLint', 'clean', 'ok'], ['Script-generation guardrail', 'passed', 'ok'], ['Secrets scan', 'clean', 'ok']], note: 'Generated draft. Checks passed; run a dry run on sample input, then run once, save, or submit for promotion.', dry: 'not run yet', sample: 'vendor-feed-sample.csv (120 rows, internal)', output: 'txn_id,posted,merchant,amount\n9001,2026-09-04,Fabrikam,1200.00\n… 118 more rows\n\nfiles produced: cleaned.csv (9 KB)' });
-          st.sel = name; st.tab = 'checks'; ctx.rerender(); ctx.toast('Draft ' + esc(name) + ' created from ' + esc(t.name) + '. Guardrail and language checks passed.', 'ok');
-        });
-      }
-    });
-  }
 })();
