@@ -30,7 +30,7 @@ import { memoryRoutes } from '../routes/memory.js';
 import { connectionAdminRoutes } from '../routes/admin/connections.js';
 import { trainingRoutes } from '../routes/training.js';
 import { zoneAdminRoutes } from '../routes/admin/zones.js';
-import { platformAdminRoutes } from '../routes/admin/platform.js';
+import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import type { Services } from '../services.js';
@@ -94,12 +94,14 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(healthRoutes(s, state));
   // OIDC, SAML and device-flow protocol endpoints: public paths with their own parsing and checks.
   app.use(federationPublicRoutes(s));
+  // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
+  app.use(acmeChallengeRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path)) ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path)) ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
