@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import type { ConnectionOptions } from 'node:tls';
 import { Client, InvalidCredentialsError, type Entry } from 'ldapts';
+import { checkHost, parseAllowList, type AllowList } from '../../mcp/hosts.js';
 import { resolveSecret } from '../secrets.js';
 import { timed, type AuthResult, type ExternalUser, type IdentityProvider, type LdapConfig, type Step } from './types.js';
 
@@ -35,7 +36,9 @@ export class LdapProvider implements IdentityProvider {
     readonly id: string,
     readonly name: string,
     private readonly cfg: LdapConfig,
-    private readonly production: boolean
+    private readonly production: boolean,
+    /** The directory must be an internal host unless IDENTITY_ALLOWED_HOSTS names it. */
+    private readonly allow: AllowList = parseAllowList('')
   ) {
     if (cfg.url.startsWith('ldap://') && !cfg.startTLS && (!cfg.allowInsecure || production)) {
       throw new Error(`${name}: ldap:// without StartTLS is refused; use ldaps:// or startTLS`);
@@ -53,8 +56,12 @@ export class LdapProvider implements IdentityProvider {
   }
 
   private async connect(steps?: Step[]): Promise<Client> {
+    const { addresses } = await timed(steps, 'Check the directory host', () => checkHost(new URL(this.cfg.url).hostname, this.allow));
+    // Dial the address that was checked (TLS still verifies the configured name), so DNS cannot rebind in between.
+    const dial = new URL(this.cfg.url);
+    dial.hostname = isIP(addresses[0]!) === 6 ? `[${addresses[0]}]` : addresses[0]!;
     const client = new Client({
-      url: this.cfg.url,
+      url: dial.toString(),
       timeout: this.cfg.timeoutMs,
       connectTimeout: this.cfg.timeoutMs,
       ...(this.cfg.url.startsWith('ldaps://') ? { tlsOptions: this.tlsOptions() } : {})

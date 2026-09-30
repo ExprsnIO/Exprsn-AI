@@ -94,7 +94,13 @@ export async function checkUrl(raw: string, allow: AllowList): Promise<{ host: s
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new HostRefused('The endpoint must be http:// or https://.');
   if (url.username || url.password) throw new HostRefused('Put credentials in the server\'s authorization, not in the URL.');
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return checkHost(url.hostname, allow);
+}
+
+/** Resolves a hostname (or takes an address literal) and checks every address it resolves to. */
+export async function checkHost(hostname: string, allow: AllowList): Promise<{ host: string; addresses: string[] }> {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host) throw new HostRefused('The endpoint has no host.');
   const addresses = isIP(host) ? [host] : await new Promise<string[]>((resolve, reject) => dnsLookup(host, { all: true, verbatim: true }, (err, list) => (err ? reject(new HostRefused(`${host} does not resolve: ${err.code ?? err.message}.`)) : resolve(list.map((x) => x.address)))));
   if (!addresses.length) throw new HostRefused(`${host} does not resolve.`);
   for (const a of addresses) {

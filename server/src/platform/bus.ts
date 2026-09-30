@@ -50,8 +50,19 @@ export class Bus {
     this.local.emit(topic, payload);
   }
 
-  on<T = unknown>(topic: string, fn: (payload: T) => void): () => void {
-    const h = fn as (p: unknown) => void;
+  /**
+   * Listeners are isolated: one that throws (or rejects) is logged and skipped, so it cannot fail the publisher, stop
+   * later listeners, or keep the event from reaching other instances.
+   */
+  on<T = unknown>(topic: string, fn: (payload: T) => unknown): () => void {
+    const h = (payload: unknown) => {
+      try {
+        const r = fn(payload as T);
+        if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch((err: unknown) => this.log.error({ err, topic }, 'bus listener failed'));
+      } catch (err) {
+        this.log.error({ err, topic }, 'bus listener failed');
+      }
+    };
     this.local.on(topic, h);
     return () => this.local.off(topic, h);
   }

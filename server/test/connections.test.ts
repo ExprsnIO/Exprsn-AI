@@ -1,9 +1,9 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { allowedIndex, allowedSql, classifyOpenSearch, classifySql } from '../src/connections/classify.js';
-import type { ConnectionSpec, DataDriver, QueryResult } from '../src/connections/drivers.js';
+import { OpenSearchDriver, PostgresDriver, type ConnectionSpec, type DataDriver, type QueryResult } from '../src/connections/drivers.js';
 import { FakeOllama } from './fake-ollama.js';
 import { loginAdmin, type Harness } from './helpers.js';
 import { localUser } from './helpers.js';
@@ -279,5 +279,41 @@ describe('data connections', () => {
     } finally {
       await ollama.stop();
     }
+  });
+});
+
+describe('connection drivers only reach internal hosts', () => {
+  const spec = (engine: ConnectionSpec['engine'], endpoint: string): ConnectionSpec => ({ engine, endpoint, database: 'app', tls: false, username: 'reader', password: 'pw' });
+  let server: Server | null = null;
+  afterEach(async () => {
+    await new Promise((r) => (server ? server.close(r) : r(null)));
+    server = null;
+  });
+  const listen = async (handler: (req: IncomingMessage, res: ServerResponse) => void) => {
+    server = createServer(handler);
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
+    return `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
+  };
+
+  it('refuses a PostgreSQL endpoint on a public address before connecting', async () => {
+    await expect(new PostgresDriver(spec('postgres', '8.8.8.8:5432')).test(1000)).rejects.toThrow(/public address/);
+    await expect(new PostgresDriver(spec('postgres', '169.254.169.254:5432')).test(1000)).rejects.toThrow(/link-local/);
+  });
+
+  it('refuses an OpenSearch endpoint on a public address, and never follows a redirect', async () => {
+    await expect(new OpenSearchDriver(spec('opensearch', 'http://8.8.8.8:9200')).test(1000)).rejects.toThrow(/public address/);
+    const url = await listen((_req, res) => {
+      res.writeHead(302, { location: 'http://169.254.169.254/latest/meta-data/' });
+      res.end();
+    });
+    await expect(new OpenSearchDriver(spec('opensearch', url)).test(1000)).rejects.toThrow();
+  });
+
+  it('still talks to an internal OpenSearch', async () => {
+    const url = await listen((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(req.url === '/' ? { version: { number: '2.19.0' } } : { status: 'green' }));
+    });
+    expect((await new OpenSearchDriver(spec('opensearch', url)).test(1000)).version).toBe('OpenSearch 2.19.0');
   });
 });

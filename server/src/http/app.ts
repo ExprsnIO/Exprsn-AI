@@ -165,7 +165,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   return app;
 }
 
-function errorHandler(s: Services): ErrorRequestHandler {
+export function errorHandler(s: Pick<Services, 'log'>): ErrorRequestHandler {
   return (err, req, res, _next) => {
     let problem: HttpProblem;
     if (err instanceof HttpProblem) problem = err;
@@ -176,7 +176,13 @@ function errorHandler(s: Services): ErrorRequestHandler {
       s.log.error({ err, trace_id: req.traceId }, 'unhandled error');
       problem = new HttpProblem(500, 'Internal error', 'Something went wrong on our side. Quote the trace id if you report it.');
     }
-    if (res.headersSent) return;
+    if (res.headersSent) {
+      // A streamed response failed part-way: no problem body can follow, so end the connection now rather than
+      // leave the client waiting for the request timeout.
+      if (err instanceof HttpProblem) s.log.warn({ status: problem.status, detail: problem.detail, trace_id: req.traceId }, 'error after the response started');
+      if (!res.writableEnded) res.destroy();
+      return;
+    }
     for (const [k, v] of Object.entries(problem.headers)) res.setHeader(k, v);
     res.status(problem.status).type('application/problem+json').send(JSON.stringify(problem.toBody(req.traceId, req.originalUrl)));
   };

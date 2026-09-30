@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+Fixes from the pre-1.0 codebase review.
+
+### Security
+- Secret references (`env:`, `file:`) in user stores and upstream IdPs are confined by the operator: `env:` names must
+  be on `SECRET_REF_ENV`, `file:` paths inside `SECRET_REF_DIRS`, and the server's own settings and secret files are
+  never readable. **Upgrade note:** list the variables your identity YAML references in `SECRET_REF_ENV` (the dev
+  Compose file sets `DEV_*`); `file:/run/secrets/...` references keep working.
+- LDAP and SQL user stores must be internal hosts unless `IDENTITY_ALLOWED_HOSTS` names them; a SQLite store cannot be
+  the application's database. Data connections get the same confinement (`CONNECTIONS_ALLOWED_HOSTS`); PostgreSQL and
+  LDAP dial the checked address and OpenSearch never follows redirects.
+- A chat stream can only be resumed through the conversation it belongs to.
+- Sign-in, "Test a login" and second-factor attempts reserve their place in the lockout count before the credential is
+  checked, so parallel requests cannot exceed it.
+- Ending someone's session (Users, Sessions, Federation) or OAuth grant needs roles that could grant theirs.
+- Tool results pass the `context` guardrail checkpoint before the model sees them.
+- A message cannot raise a conversation above its workspace's ceiling.
+- Scheduled training jobs run with their owner's current roles and are skipped when the owner is disabled, gone or no
+  longer allowed to submit.
+- Authorisation denials are capped per principal (20 a minute in full, then one summary event).
+- CI actions, kubeconform and base images are pinned by SHA, checksum and digest.
+
+### Reliability
+- One instance with unreadable mTLS files no longer stops gateway polling for every instance.
+- Bootstrap no longer fails at start when a workspace the identity file declares has been archived.
+- A response that fails after it started streaming is closed at once instead of waiting for the request timeout.
+- Data-key rotation reaches every instance (a bus event, and the active key is re-read at least every five minutes).
+- A throwing event-bus listener no longer breaks the publisher or other listeners.
+- The gateway queue no longer adds an abort listener per wait round.
+- The Compare screen detaches its socket listeners and timers when you leave it.
+
+### Other
+- Audit and usage exports are written and downloaded in sealed parts instead of in memory.
+- User creation is one transaction; tenant-wide session revocation lives in `SessionService`.
+- The Users and Tenants lists no longer query per row.
+- The CI parse check covers `web/js/federation.js`.
+- New Playwright specs for refusal states (a user store referencing a server secret, a connection to a public host).
+
 ## 1.0.0-rc.1
 
 The first release candidate: every screen of the design prototype backed by the server. Sprint details are in

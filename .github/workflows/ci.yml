@@ -17,8 +17,8 @@ jobs:
     name: Lint, typecheck, unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run lint
@@ -26,15 +26,15 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Console scripts parse
-        run: for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done
+        run: for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done
 
   e2e:
     name: Console end-to-end (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -51,7 +51,7 @@ jobs:
       - name: Run
         working-directory: e2e
         run: npx playwright test
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: playwright-report
@@ -79,8 +79,8 @@ jobs:
         ports: ["6379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 3s --health-timeout 3s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: npm }
       - name: Start OpenLDAP with the development seed
         run: |
@@ -107,7 +107,7 @@ jobs:
     name: Container image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: docker build -f deploy/docker/Dockerfile -t exprsn-ai:ci .
       - name: Starts and answers health checks
         run: |
@@ -121,8 +121,8 @@ jobs:
     name: Dependency audit and SBOM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: npm }
       # Production dependencies only; high and critical advisories fail the build.
       - name: npm audit
@@ -132,7 +132,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file sbom.cdx.json
           node -e "const s=require('./sbom.cdx.json'); console.log('CycloneDX', s.specVersion, (s.components||[]).length, 'top-level components')"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-npm
           path: sbom.cdx.json
@@ -142,7 +142,7 @@ jobs:
     name: Container image scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: docker build -f deploy/docker/Dockerfile -t exprsn-ai:scan .
       # Fixed CRITICAL and HIGH findings in the OS packages or the bundled npm modules fail the build.
       - name: Trivy vulnerability scan
@@ -162,7 +162,7 @@ jobs:
           scan-type: image
           format: cyclonedx
           output: sbom-image.cdx.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: sbom-image
@@ -175,14 +175,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       KUBECONFORM_VERSION: v0.6.7
+      # From the release's CHECKSUMS file (kubeconform-linux-amd64.tar.gz); update together with the version.
+      KUBECONFORM_SHA256: 95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with: { version: v3.16.4 }
       - name: Install kubeconform
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz -C "$RUNNER_TEMP/bin" kubeconform
+          curl -fsSLo "$RUNNER_TEMP/kubeconform.tar.gz" "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  $RUNNER_TEMP/kubeconform.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$RUNNER_TEMP/bin" kubeconform
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Lint, render and validate every CI values file
         run: |
@@ -209,8 +213,8 @@ jobs:
     name: Streaming load test (in-process)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Lint the load test
@@ -224,7 +228,7 @@ jobs:
         run: |
           npx tsx loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instances 4 \
             --max-error-rate 0 --max-p95-ttft-ms 500 --max-p99-ttft-ms 1000 --json | tee loadtest-summary.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: loadtest-summary

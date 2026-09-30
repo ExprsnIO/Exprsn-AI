@@ -1,8 +1,9 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, get, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { io as ioClient } from 'socket.io-client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UserRepo } from '../src/repos/users.js';
 import { attachRealtime } from '../src/realtime/socket.js';
 import { harness, localUser, login, loginAdmin, PASSWORD, type Harness } from './helpers.js';
 
@@ -80,6 +81,27 @@ describe('HTTP API', () => {
       expect(r.res.status).toBe(429);
     });
 
+    it('does not let parallel guesses get past the lockout', async () => {
+      await localUser(h, 'alice', ['member']);
+      const results = await Promise.all(Array.from({ length: 20 }, () => login(h, 'alice', 'wrong password here')));
+      const statuses = results.map((r) => r.res.status);
+      // Only five attempts may reach the password check; the rest are refused as locked, however they interleave.
+      expect(statuses.filter((x) => x === 401).length).toBeLessThanOrEqual(5);
+      expect(statuses.filter((x) => x === 429).length).toBeGreaterThanOrEqual(15);
+      const failures = (await h.s.audit.list(h.tenantId)).filter((e) => e.action === 'auth.login.failed');
+      expect(failures.length).toBeLessThanOrEqual(5);
+      expect((await login(h, 'alice')).res.status).toBe(429);
+    });
+
+    it('gives a successful sign-in its address reservation back', async () => {
+      await localUser(h, 'alice', ['member']);
+      await login(h, 'alice', 'wrong password here');
+      expect((await login(h, 'alice')).res.status).toBe(200);
+      const rows = await h.s.db('login_throttle');
+      expect(rows.find((r: { key: string }) => r.key.startsWith('u:'))).toBeUndefined();
+      expect(rows.find((r: { key: string }) => r.key.startsWith('ip:'))?.failures).toBe(1); // the failure, not the success
+    });
+
     it('refuses disabled users', async () => {
       const u = await localUser(h, 'alice', ['member']);
       await h.s.users.update(h.tenantId, u.id, { state: 'disabled' });
@@ -144,6 +166,19 @@ describe('HTTP API', () => {
   });
 
   describe('gating', () => {
+    it('audits denials without letting one principal flood the chain', async () => {
+      await localUser(h, 'alice', ['member']);
+      const { agent } = await login(h, 'alice');
+      for (let i = 0; i < 30; i++) await agent.get('/api/admin/sessions').expect(403);
+      const denied = () => h.s.audit.list(h.tenantId).then((l) => l.filter((e) => e.action === 'authz.denied'));
+      expect(await denied()).toHaveLength(20);
+      await h.s.denials.flushAll();
+      const summary = (await h.s.audit.list(h.tenantId)).filter((e) => e.action === 'authz.denied.suppressed');
+      expect(summary).toHaveLength(1);
+      expect(summary[0]!.detail).toMatchObject({ count: 10, byRoute: { 'GET /api/admin/sessions': 10 } });
+      expect((await h.s.audit.verify(h.tenantId)).status).toBe('verified');
+    });
+
     it('refuses state changes without the CSRF token', async () => {
       await localUser(h, 'alice', ['member']);
       const { agent } = await login(h, 'alice');
@@ -277,6 +312,40 @@ describe('HTTP API', () => {
       expect(r.body.step).toBe('self');
     });
 
+    it('creates a local user all at once or not at all', async () => {
+      await localUser(h, 'ida', ['identity-admin'], 'confidential');
+      const a = await loginAdmin(h, 'ida');
+      const credentials = () => h.s.db('local_credentials').count({ n: '*' }).then((r) => Number(r[0]!.n));
+      const before = await credentials();
+      const spy = vi.spyOn(UserRepo.prototype, 'setRoles').mockRejectedValueOnce(new Error('role table unavailable'));
+      try {
+        await a.agent.post('/api/admin/users').set('x-csrf-token', a.csrf).send({ username: 'newbie', displayName: 'New Bie', password: 'a long enough passphrase 42', roles: ['member'] }).expect(500);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await h.s.users.byUsername(h.tenantId, 'newbie')).toBeUndefined();
+      expect(await credentials()).toBe(before);
+      await a.agent.post('/api/admin/users').set('x-csrf-token', a.csrf).send({ username: 'newbie', displayName: 'New Bie', password: 'a long enough passphrase 42', roles: ['member'] }).expect(201);
+    });
+
+    it('only ends sessions of people whose roles the admin could grant', async () => {
+      await localUser(h, 'root', ['system-admin'], 'restricted');
+      await localUser(h, 'mem', ['member']);
+      await localUser(h, 'ida', ['identity-admin'], 'confidential');
+      await loginAdmin(h, 'root');
+      await login(h, 'mem');
+      const a = await loginAdmin(h, 'ida');
+      const sessions = (await a.agent.get('/api/admin/sessions').expect(200)).body as { id: string; user: { username: string } }[];
+      const of = (u: string) => sessions.find((x) => x.user.username === u)!.id;
+      const refused = await a.agent.delete(`/api/admin/sessions/${of('root')}`).set('x-csrf-token', a.csrf).expect(403);
+      expect(refused.body.step).toBe('role');
+      // The Sessions tab of Federation applies the same rule.
+      const viaFederation = await a.agent.post('/api/admin/federation/sessions/revoke').set('x-csrf-token', a.csrf).send({ kind: 'session', id: of('root') }).expect(403);
+      expect(viaFederation.body.step).toBe('role');
+      await a.agent.delete(`/api/admin/sessions/${of('mem')}`).set('x-csrf-token', a.csrf).expect(204);
+      await a.agent.delete(`/api/admin/sessions/${of('ida')}`).set('x-csrf-token', a.csrf).expect(204); // your own is always yours to end
+    });
+
     it('redacts audit events above the reader\'s clearance', async () => {
       await localUser(h, 'aud', ['auditor'], 'internal');
       await h.s.audit.append({ tenantId: h.tenantId, action: 'secret.thing', kind: 'admin', actor: { user: 'x' }, label: 'restricted', detail: { payload: 'hidden' } });
@@ -326,5 +395,39 @@ describe('Socket.io', () => {
     const gone = new Promise<string>((resolve) => sock.on('disconnect', resolve));
     await agent.post('/api/auth/logout').set('x-csrf-token', csrf).expect(204);
     expect(await gone).toBe('io server disconnect');
+  });
+});
+
+describe('error handler', () => {
+  it('ends a response that fails after it started streaming instead of leaving it open', async () => {
+    const { default: express } = await import('express');
+    const { default: pino } = await import('pino');
+    const { errorHandler } = await import('../src/http/app.js');
+    const app = express();
+    app.get('/stream', (_req, res, next) => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write('{"seq":1}\n');
+      setTimeout(() => next(new Error('the model went away')), 10);
+    });
+    app.use(errorHandler({ log: pino({ level: 'silent' }) }));
+    const server = createServer(app);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const started = Date.now();
+      const outcome = await new Promise<string>((resolve) => {
+        const req = get(`http://127.0.0.1:${(server.address() as AddressInfo).port}/stream`, (res) => {
+          res.on('data', () => undefined);
+          res.on('end', () => resolve('end'));
+          res.on('error', () => resolve('closed'));
+          res.on('close', () => resolve('closed'));
+        });
+        req.on('error', () => resolve('closed'));
+      });
+      expect(outcome).toBe('closed');
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    }
   });
 });

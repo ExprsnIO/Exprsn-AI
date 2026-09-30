@@ -1,5 +1,5 @@
 import { RateLimiterMemory } from 'rate-limiter-flexible';
-import { labelRank, type Label } from '../authz/labels.js';
+import { clears, labelRank, type Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
 import type { GuardAction, Guardrails } from '../guardrails/types.js';
 import type { CalcWorker } from '../chat/calc.js';
@@ -9,6 +9,16 @@ import { functionName, validateAgainst } from './schema.js';
 import type { EntryRow, RegistryService, SideEffect } from './service.js';
 
 const RESULT_LIMIT = 64 * 1024;
+
+/** A tool result as the model will see it: context and memory tags defused (as in retrieved context), parsed back. */
+function defuseResult(json: string): unknown {
+  const safe = json.replace(/<\/?(context|memory)\b/gi, (m) => m.replace('<', '&lt;'));
+  try {
+    return JSON.parse(safe) as unknown;
+  } catch {
+    return { text: safe }; // a redaction can leave text that is no longer JSON
+  }
+}
 
 /** An Ollama tool definition. */
 export interface ToolDef {
@@ -56,6 +66,8 @@ export interface ToolOutcome {
   denied?: boolean;
   /** The call did not run: it needs approval first. */
   needsApproval?: boolean;
+  /** The call ran but the context guardrail withheld its result from the model. */
+  withheld?: boolean;
   /** When the tool declares an output schema: did the result match it? */
   valid?: boolean | null;
   durationMs: number;
@@ -173,10 +185,27 @@ export class ToolDispatcher {
 
     try {
       const result = await this.execute(ctx, tool.entry, args);
+      const valid = tool.entry.output_schema ? validateAgainst(tool.entry.output_schema, result).length === 0 : null;
       const text = JSON.stringify(result ?? null);
       const capped = text.length > RESULT_LIMIT ? { truncated: true, text: text.slice(0, RESULT_LIMIT) } : result;
-      const valid = tool.entry.output_schema ? validateAgainst(tool.entry.output_schema, result).length === 0 : null;
-      return out({ ok: true, result: capped, decision: d.action, valid });
+      // Whatever an MCP server, script or workflow returns is untrusted input to the model: the same context
+      // checkpoint retrieved knowledge passes, and the same tag defusing, before it goes into the conversation.
+      const g = await this.guard().check({
+        tenantId: p.tenantId,
+        workspaceId: p.workspaceId ?? null,
+        checkpoint: 'context',
+        text: JSON.stringify(capped ?? null),
+        // A result has no label of its own: it takes the label of the context it lands in, which the caller is always
+        // cleared for (the harness may run a tool at its ceiling, above the tester's clearance).
+        label: clears(p.clearance, ctx.label) ? ctx.label : p.clearance,
+        principal: p,
+        ...(ctx.source ? { source: ctx.source } : {}),
+        meta: { via: 'tool-result', tool: tool.entry.name, impl: tool.entry.impl, sideEffect: tool.sideEffect }
+      });
+      if (g.action === 'block' || g.action === 'require-approval') {
+        return out({ decision: g.action, withheld: true, valid, error: `The result of ${tool.entry.name} was withheld by a guardrail${g.reason ? `: ${g.reason}` : '.'}` });
+      }
+      return out({ ok: true, result: defuseResult(g.action === 'redact' ? g.text : JSON.stringify(capped ?? null)), decision: d.action, valid });
     } catch (err) {
       if (ctx.signal?.aborted) throw err;
       return out({ decision: d.action, error: (err as Error).message.slice(0, 1000) });

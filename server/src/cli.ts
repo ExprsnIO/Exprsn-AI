@@ -80,11 +80,16 @@ async function adminCreate(s: Services, argv: string[]): Promise<void> {
   const policy = checkPasswordPolicy(password, username);
   if (!policy.ok) throw new Error(policy.reason);
 
-  const user = await s.users.create(tenant.id, { username, displayName, email: values.email ?? null, clearance, mfaRequired: true });
-  await s.users.update(tenant.id, user.id, { clearance_direct: clearance });
-  await s.db('local_credentials').insert({ user_id: user.id, password_hash: await hashPassword(password), updated_at: Date.now() });
-  await s.users.upsertIdentity(user.id, local.id, user.id, []);
-  await s.users.setRoles(user.id, 'direct', roles);
+  const passwordHash = await hashPassword(password);
+  const user = await s.db.transaction(async (trx) => {
+    const users = s.users.within(trx);
+    const u = await users.create(tenant.id, { username, displayName, email: values.email ?? null, clearance, mfaRequired: true });
+    await users.update(tenant.id, u.id, { clearance_direct: clearance });
+    await trx('local_credentials').insert({ user_id: u.id, password_hash: passwordHash, updated_at: Date.now() });
+    await users.upsertIdentity(u.id, local.id, u.id, []);
+    await users.setRoles(u.id, 'direct', roles);
+    return u;
+  });
   await s.audit.append({ tenantId: tenant.id, action: 'user.created', kind: 'admin', actor: { service: 'cli' }, target: { user: user.id, username }, detail: { roles, clearance, store: local.name } });
   process.stdout.write(`Created ${username} in tenant ${tenant.slug} with ${roles.join(', ')}. A second factor is required at first sign-in.\n`);
 }

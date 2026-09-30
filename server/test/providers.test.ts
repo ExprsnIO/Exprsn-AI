@@ -9,7 +9,13 @@ import { SqlProvider, parseGroups } from '../src/identity/providers/sql.js';
 import { ldapConfigSchema, sqlConfigSchema, type Step } from '../src/identity/providers/types.js';
 import { hashPassword } from '../src/identity/passwords.js';
 import { provision } from '../src/identity/provisioning.js';
+import { configureSecretPolicy, secretPolicy } from '../src/identity/secrets.js';
+import { SERVER_ENV_NAMES } from '../src/config/index.js';
+import { parseAllowList } from '../src/mcp/hosts.js';
 import { harness, localUser, PASSWORD, type Harness } from './helpers.js';
+
+// These suites build providers without a server, so they set the secret policy the server would.
+configureSecretPolicy(secretPolicy({ envAllow: 'LDAP_*,HR_*,NOT_SET_ANYWHERE', dirs: '', serverEnvNames: SERVER_ENV_NAMES, serverSecretFiles: [] }));
 
 describe('LDAP filter escaping (RFC 4515)', () => {
   it('escapes filter metacharacters', () => {
@@ -48,6 +54,24 @@ describe('LDAP provider', () => {
 
   it('requires secret references rather than inline secrets', () => {
     expect(() => ldapConfigSchema.parse({ ...base, bindPassword: 'hunter2' })).toThrow();
+  });
+
+  it('refuses references to the server\'s own secrets and to variables the operator has not listed', () => {
+    expect(() => ldapConfigSchema.parse({ ...base, bindPassword: 'env:DATA_KEY' })).toThrow(/server's own settings/);
+    expect(() => ldapConfigSchema.parse({ ...base, bindPassword: 'env:HOME' })).toThrow(/SECRET_REF_ENV/);
+    expect(() => ldapConfigSchema.parse({ ...base, bindPassword: 'file:/etc/passwd' })).toThrow(/SECRET_REF_DIRS/);
+  });
+
+  it('never binds to a public directory host, before the bind password leaves the server', async () => {
+    process.env.LDAP_PW = 'x';
+    const p = new LdapProvider('p', 'dir', ldapConfigSchema.parse({ ...base, url: 'ldaps://8.8.8.8:636', timeoutMs: 500 }), true);
+    const steps: Step[] = [];
+    expect((await p.authenticate('mokafor', 'pw', steps)).status).toBe('error');
+    expect(steps[0]).toMatchObject({ title: 'Check the directory host', ok: false });
+    expect(steps[0]!.detail).toMatch(/public address/);
+    expect(steps.some((x) => x.title.startsWith('Service bind'))).toBe(false);
+    const allowed = new LdapProvider('p', 'dir', ldapConfigSchema.parse({ ...base, url: 'ldaps://127.0.0.1:1', timeoutMs: 500 }), true, parseAllowList('8.8.8.8'));
+    expect((await allowed.authenticate('mokafor', 'pw')).status).toBe('error');
   });
 });
 
@@ -189,5 +213,41 @@ describe('SQL user-table provider (SQLite)', () => {
       if (ok.status !== 'ok') throw new Error('expected ok');
       expect(await provision(h.s.users, h.tenantId, store, ok.user)).toMatchObject({ status: 'refused', reason: 'identity_conflict' });
     });
+  });
+});
+
+describe('SQL user-table provider targets', () => {
+  const cols = { username: 'login', passwordHash: 'pw' };
+
+  it('refuses a database on a public host before connecting', async () => {
+    process.env.HR_PUBLIC = 'postgres://reader:pw@8.8.8.8:5432/hr';
+    const p = new SqlProvider('p', 'HR', sqlConfigSchema.parse({ dialect: 'pg', connection: 'env:HR_PUBLIC', table: 'staff', columns: cols, timeoutMs: 500 }));
+    const steps: Step[] = [];
+    expect(await p.test(steps)).toBe(false);
+    expect(steps[0]).toMatchObject({ title: 'Check the database host', ok: false });
+    expect(steps[0]!.detail).toMatch(/public address/);
+    expect((await p.authenticate('jdoe', PASSWORD)).status).toBe('error');
+    await p.close();
+  });
+
+  it('refuses a connection that is not a URL', async () => {
+    process.env.HR_KV = 'host=10.0.0.1 user=reader';
+    const p = new SqlProvider('p', 'HR', sqlConfigSchema.parse({ dialect: 'pg', connection: 'env:HR_KV', table: 'staff', columns: cols }));
+    const steps: Step[] = [];
+    expect(await p.test(steps)).toBe(false);
+    expect(steps[0]!.detail).toMatch(/must be a URL/);
+  });
+
+  it('refuses the application\'s own SQLite database', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'exprsn-appdb-'));
+    const appDb = path.join(dir, 'exprsn-ai.sqlite');
+    new Database(appDb).close();
+    process.env.HR_APPDB = appDb;
+    const p = new SqlProvider('p', 'HR', sqlConfigSchema.parse({ dialect: 'sqlite', connection: 'env:HR_APPDB', table: 'local_credentials', columns: cols }), { allow: parseAllowList(''), refusedSqliteFiles: [appDb] });
+    const steps: Step[] = [];
+    expect(await p.test(steps)).toBe(false);
+    expect(steps[0]!.detail).toMatch(/application's own database/);
+    await p.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

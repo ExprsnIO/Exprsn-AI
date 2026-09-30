@@ -4,6 +4,7 @@ import type { Scheduler } from '../platform/jobs.js';
 import { json } from '../db/knex.js';
 import { clears, labelRank, type Label } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
+import { permissionsFor } from '../authz/permissions.js';
 import { PLATFORM_TENANT } from '../audit/chain.js';
 import { canonicalJson } from '../crypto/index.js';
 import { badRequest, conflict, forbidden, HttpProblem, notFound, tooManyRequests } from '../http/problem.js';
@@ -870,8 +871,20 @@ export class TrainingService {
       await record(`skipped: ${newest.name} is still v${newest.version}`, null, null);
       return null;
     }
-    const owner = await this.db('users').where({ id: sc.created_by }).first();
-    const p: Principal = { kind: 'user', userId: sc.created_by, tenantId: sc.tenant_id, tenantSlug: '', username: owner?.username ?? 'scheduler', displayName: 'scheduler', roles: ['ml-admin'], clearance: (owner?.clearance as Label | undefined) ?? 'internal', scopes: null, sessionId: null, apiKeyId: null, mfa: true };
+    // The job runs with the owner's standing authority as it is now, never a role the schedule assumes: an owner who
+    // has left, been disabled or lost the training role stops their schedules from submitting anything.
+    const owner = (await this.db('users').where({ id: sc.created_by, tenant_id: sc.tenant_id }).first()) as { id: string; username: string; display_name: string; state: string; clearance: Label } | undefined;
+    if (!owner || owner.state !== 'active') {
+      await record('skipped: the schedule\'s owner no longer has an active account', null, null);
+      return null;
+    }
+    const roles = [...new Set((await s.users.roles(owner.id)).map((r) => r.role))];
+    if (!permissionsFor(roles).has('training:submit')) {
+      await record('skipped: the schedule\'s owner may no longer submit training jobs', null, null);
+      return null;
+    }
+    const tenant = await s.tenants.byId(sc.tenant_id);
+    const p: Principal = { kind: 'user', userId: owner.id, tenantId: sc.tenant_id, tenantSlug: tenant?.slug ?? '', username: owner.username, displayName: owner.display_name, roles, clearance: owner.clearance, scopes: null, sessionId: null, apiKeyId: null, mfa: true };
     try {
       const j = await this.submit(p, { name: `${slug(sc.name)}-${stamp(now)}`.slice(0, 63), baseModel: tpl.base_model, datasetId: newest.id, method: tpl.method, trainer: tpl.trainer, hardware: tpl.hardware, maxHours: tpl.max_hours, deadline: null, priority: sc.priority, preemptible: tpl.preemptible, packaging: tpl.packaging, canary: tpl.canary, checkpointEvery: tpl.checkpoint_every, steps: tpl.steps }, { scheduleId: sc.id });
       await record(`submitted ${j.name} on ${newest.name} v${newest.version}`, j.id, newest.id);

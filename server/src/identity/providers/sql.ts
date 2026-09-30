@@ -1,4 +1,7 @@
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import knexFactory, { type Knex } from 'knex';
+import { checkHost, parseAllowList, type AllowList } from '../../mcp/hosts.js';
 import { resolveSecret } from '../secrets.js';
 import { burnPasswordCheck, hashScheme, verifyPassword } from '../passwords.js';
 import { timed, type AuthResult, type ExternalUser, type IdentityProvider, type SqlConfig, type Step } from './types.js';
@@ -34,12 +37,40 @@ export class SqlProvider implements IdentityProvider {
   constructor(
     readonly id: string,
     readonly name: string,
-    private readonly cfg: SqlConfig
+    private readonly cfg: SqlConfig,
+    private readonly outbound: { allow: AllowList; refusedSqliteFiles: string[] } = { allow: parseAllowList(''), refusedSqliteFiles: [] }
   ) {}
 
-  private db(): Knex {
+  /**
+   * The store's database may only be an internal host (or one on IDENTITY_ALLOWED_HOSTS), and a SQLite store may not
+   * be the application's own database file: either would turn "Test a login" into an oracle for someone else's data.
+   */
+  private async checkTarget(conn: string): Promise<void> {
+    if (this.cfg.dialect === 'sqlite') {
+      const real = (p: string) => {
+        try {
+          return realpathSync(p);
+        } catch {
+          return path.resolve(p);
+        }
+      };
+      if (this.outbound.refusedSqliteFiles.some((f) => real(f) === real(conn))) throw new Error('The store cannot be the application\'s own database.');
+      return;
+    }
+    let host: string;
+    try {
+      host = new URL(conn).hostname;
+    } catch {
+      throw new Error('The connection must be a URL (postgres://… or mysql://…).');
+    }
+    await checkHost(host, this.outbound.allow);
+  }
+
+  private async db(steps?: Step[]): Promise<Knex> {
     if (this.knex) return this.knex;
     const conn = resolveSecret(this.cfg.connection);
+    await timed(steps, 'Check the database host', () => this.checkTarget(conn));
+    if (this.knex) return this.knex;
     const pool = { min: 0, max: 4, acquireTimeoutMillis: this.cfg.timeoutMs };
     switch (this.cfg.dialect) {
       case 'pg':
@@ -62,7 +93,7 @@ export class SqlProvider implements IdentityProvider {
       steps,
       `Query ${this.cfg.table}`,
       async () => {
-        const q = this.db()(this.cfg.table).select(cols).limit(2);
+        const q = (await this.db())(this.cfg.table).select(cols).limit(2);
         if (this.cfg.caseInsensitive) q.whereRaw('LOWER(??) = ?', [c.username, username.toLowerCase()]);
         else q.where(c.username, username);
         return (await q) as Row[];
@@ -78,7 +109,7 @@ export class SqlProvider implements IdentityProvider {
     const gt = this.cfg.groupTable;
     if (gt) {
       const key = row[this.cfg.columns.id ?? this.cfg.columns.username];
-      const rows = await timed(steps, `Query ${gt.table}`, () => this.db()(gt.table).select(gt.groupColumn).where(gt.userColumn, key as string) as Promise<Row[]>, (r) => `${r.length} groups`);
+      const rows = await timed(steps, `Query ${gt.table}`, async () => (await this.db())(gt.table).select(gt.groupColumn).where(gt.userColumn, key as string) as Promise<Row[]>, (r) => `${r.length} groups`);
       groups.push(...rows.map((r) => String(r[gt.groupColumn])));
     }
     return [...new Set(groups)];
@@ -124,10 +155,11 @@ export class SqlProvider implements IdentityProvider {
 
   async test(steps: Step[]): Promise<boolean> {
     try {
-      await timed(steps, `Connect (${this.cfg.dialect})`, () => this.db().raw('select 1'));
+      const db = await this.db(steps);
+      await timed(steps, `Connect (${this.cfg.dialect})`, () => db.raw('select 1'));
       const c = this.cfg.columns;
       const cols = [c.id, c.username, c.passwordHash, c.displayName, c.email, c.disabled, c.groups].filter((x): x is string => !!x);
-      await timed(steps, `Read columns of ${this.cfg.table}`, () => this.db()(this.cfg.table).select(cols).limit(0));
+      await timed(steps, `Read columns of ${this.cfg.table}`, () => db(this.cfg.table).select(cols).limit(0));
       return true;
     } catch {
       return false;

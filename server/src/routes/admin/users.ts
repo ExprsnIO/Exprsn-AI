@@ -27,10 +27,8 @@ export function userAdminRoutes(s: Services): Router {
   r.get('/users', manage, async (req, res) => {
     const q = parseBody(z.object({ q: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(500).default(100), offset: z.coerce.number().int().min(0).default(0) }), req.query);
     const rows = await s.users.list(principalOf(req).tenantId, q);
-    const out = await Promise.all(
-      rows.map(async (u) => ({ id: u.id, username: u.username, displayName: u.display_name, email: u.email, state: u.state, clearance: u.clearance, roles: await s.users.roleIds(u.id), lastLoginAt: u.last_login_at }))
-    );
-    res.json(out);
+    const roles = await s.users.roleIdsFor(rows.map((u) => u.id));
+    res.json(rows.map((u) => ({ id: u.id, username: u.username, displayName: u.display_name, email: u.email, state: u.state, clearance: u.clearance, roles: roles.get(u.id) ?? [], lastLoginAt: u.last_login_at })));
   });
 
   r.get('/users/:id', manage, async (req, res) => {
@@ -79,12 +77,18 @@ export function userAdminRoutes(s: Services): Router {
     if (!clears(p.clearance, body.clearance)) throw forbidden('You cannot grant a clearance above your own.', { step: 'clearance' });
     const local = (await s.providers.list(p.tenantId)).find((x) => x.kind === 'local');
     if (!local) throw conflict('This tenant has no local user store. Add one under Identity first.');
+    const passwordHash = await hashPassword(body.password); // slow on purpose: outside the transaction
     try {
-      const user = await s.users.create(p.tenantId, { username: body.username, displayName: body.displayName, email: body.email, clearance: body.clearance, mfaRequired: rolesRequireMfa(body.roles) });
-      await s.users.update(p.tenantId, user.id, { clearance_direct: body.clearance });
-      await s.db('local_credentials').insert({ user_id: user.id, password_hash: await hashPassword(body.password), updated_at: Date.now() });
-      await s.users.upsertIdentity(user.id, local.id, user.id, []);
-      await s.users.setRoles(user.id, 'direct', body.roles);
+      // One transaction: a failure part-way never leaves a user without a credential, identity or roles.
+      const user = await s.db.transaction(async (trx) => {
+        const users = s.users.within(trx);
+        const u = await users.create(p.tenantId, { username: body.username, displayName: body.displayName, email: body.email, clearance: body.clearance, mfaRequired: rolesRequireMfa(body.roles) });
+        await users.update(p.tenantId, u.id, { clearance_direct: body.clearance });
+        await trx('local_credentials').insert({ user_id: u.id, password_hash: passwordHash, updated_at: Date.now() });
+        await users.upsertIdentity(u.id, local.id, u.id, []);
+        await users.setRoles(u.id, 'direct', body.roles);
+        return u;
+      });
       await audit(req, 'user.created', { user: user.id, username: user.username }, { roles: body.roles, clearance: body.clearance, store: local.name });
       res.status(201).json({ id: user.id, username: user.username });
     } catch (err) {
@@ -174,6 +178,8 @@ export function userAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const target = await s.sessions.get(p.tenantId, String(req.params.id));
     if (!target) throw notFound('Session');
+    // As for role changes and factor resets: only someone who could grant all of the owner's roles may end their session.
+    if (target.user_id !== p.userId && !canManage(p.roles, await s.users.roleIds(target.user_id))) throw forbidden('This session belongs to someone holding roles you cannot grant, so you cannot end it.', { step: 'role' });
     await s.sessions.revoke(p.tenantId, target.id);
     await audit(req, 'session.revoked', { session: target.id, user: target.user_id }, { note: 'Refresh tokens and sockets for this session end with it.' });
     res.status(204).end();

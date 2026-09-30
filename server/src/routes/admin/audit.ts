@@ -148,12 +148,21 @@ export function auditAdminRoutes(s: Services): Router {
     if (!x || !(x.kind === 'audit' ? perms.has('audit:read') : perms.has('usage:read'))) throw notFound('Export');
     if (!clears(p.clearance, x.max_label)) throw forbidden(`This export holds ${x.max_label} rows, above your clearance.`, { step: 'clearance' });
     if (x.state !== 'ready') throw new HttpProblem(409, 'Not ready', 'The export is still being prepared.');
-    const content = await s.exports.content(x);
-    if (!content) throw notFound('Export file');
+    // Streamed part by part; the first part is read before the headers go out, so a missing file is still a 404.
+    const parts = s.exports.parts(x);
+    let first: IteratorResult<Buffer>;
+    try {
+      first = await parts.next();
+    } catch {
+      throw notFound('Export file');
+    }
+    if (!x.blob_key) throw notFound('Export file');
     await audit(req, 'export.downloaded', 'admin', { export: x.id, file: x.file }, { rows: x.rows });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${x.file}"`);
-    res.send(content);
+    if (!first.done) res.write(first.value);
+    for await (const part of parts) if (!res.write(part)) await new Promise((r) => res.once('drain', r));
+    res.end();
   });
 
   return r;

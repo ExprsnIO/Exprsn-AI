@@ -36,7 +36,10 @@ the maintainers rather than in issues.
 ## Authorisation
 
 - One evaluator for every request: role → credential scopes → tenant → clearance → zone. Denials name the failing
-  step and are audited.
+  step and are audited: the first 20 per principal per minute in full, then one `authz.denied.suppressed` event with
+  the count per route, so a caller cannot flood the chain.
+- Sign-in, "Test a login" and second-factor attempts are counted before the credential is checked (an atomic
+  reservation), so parallel guesses cannot get past the lockout.
 - Tenant isolation: every repository method takes the tenant id from the principal; nothing reads a tenant from the
   request body.
 - Grant rules prevent privilege escalation: only a system admin can grant system admin, roles can be granted only by
@@ -55,14 +58,22 @@ content.
   the change. A failed verification notifies tenant admins and auditors in the console and by email.
 - **Corrections** are new rows that reference the row they correct; the original stays.
 - **Exports** never contain rows above the requester's clearance: a selection that would is refused with the count,
-  and the filtered export records how many rows it left out. Export files are sealed with the tenant key; downloads
-  are audited.
+  and the filtered export records how many rows it left out. Export files are written and sealed with the tenant key
+  in parts of about 1 MiB (each bound to its position), and downloads stream them, so neither holds the file in
+  memory; downloads are audited.
 - **SIEM:** every event is streamed as it is appended (NDJSON over HTTPS, bearer token).
 
 ## Secrets
 
 Configuration holds references (`env:`, `file:`), never values. The server reads secret files at use time. Container
 and systemd deployments pass secrets as files (Docker secrets, systemd credentials), not environment variables.
+
+References are written by tenant admins (user stores, upstream IdPs), so what they can reach is the operator's
+choice: `env:` names must be on `SECRET_REF_ENV`, `file:` paths must resolve inside `SECRET_REF_DIRS`, and the
+server's own settings and secret files are never readable. Without this, an LDAP store pointed at a host the admin
+controls would receive `DATA_KEY` as its bind password, and a SQL store on `DATABASE_URL` would turn "Test a login"
+into a password oracle for every tenant. LDAP and SQL store hosts, data connections, MCP servers, workflow HTTP steps,
+mirrors and upstream IdPs are all confined to internal addresses (plus their allow-lists), never link-local.
 
 ## Encryption at rest
 
@@ -109,12 +120,20 @@ filter, private `/tmp`, only the state directory writable.
   carry the connection's label and the knowledge base's access. Database sources sync by watermark on a schedule (no
   logical replication). Chat citations show the source, not the passage, which is not stored with the answer.
 - Data connections: PostgreSQL and OpenSearch only; a username and password sealed with the tenant key (no OpenBao
-  dynamic credentials yet); writes through a connection are refused outright.
+  dynamic credentials yet); writes through a connection are refused outright. Hosts must be internal unless
+  `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses.
+- SQL user stores: the database host is checked before connecting, but the driver resolves the name again when it
+  dials (LDAP stores and data connections dial the checked address). The connection string comes from a reference the
+  operator allowed, which narrows the window to someone who controls that DNS name.
+- The denial cap is counted per instance (the lockout is in the database, shared by all): a caller whose requests
+  are spread across N instances gets up to N times 20 full denial events per minute.
 - Scripts need docker or podman on the host; with `SCRIPT_RUNNER=none`, or when no runtime answers, runs are refused.
   The sandbox relies on the container runtime's isolation (no gVisor or Firecracker).
 - Tools: in chat, profiles offer only read-only tools that need no confirmation; write and destructive tools need an
   approval, which agent runs and workflows provide. MCP servers are checked against internal addresses after DNS
-  resolution; hosts in `MCP_ALLOWED_HOSTS` (never link-local) are trusted by the operator. Agent runs read agent
+  resolution; hosts in `MCP_ALLOWED_HOSTS` (never link-local) are trusted by the operator. Tool results pass the
+  `context` checkpoint (`meta.via: tool-result`) before the model sees them: a block withholds the result (the call
+  itself has already run), a redaction replaces it. Agent runs read agent
   memories but do not write them yet.
 - Workflows: the HTTP step may call any private address (narrowed by `WORKFLOW_HTTP_HOSTS` when set; there is no
   per-tenant host list yet). Run events go live only to the person who started the run; approvers see pending

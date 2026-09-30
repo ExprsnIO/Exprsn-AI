@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -25,8 +25,7 @@ const bool = z
 const here = path.dirname(fileURLToPath(import.meta.url));
 const defaultWebRoot = path.resolve(here, '../../../web');
 
-const schema = z
-  .object({
+const base = z.object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     HOST: z.string().default('0.0.0.0'),
     PORT: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -99,6 +98,8 @@ const schema = z
 
     /** MCP servers: internal hosts only, unless a host or CIDR is on this comma-separated allow-list. */
     MCP_ALLOWED_HOSTS: z.string().default(''),
+    /** Data connections (PostgreSQL, OpenSearch): internal hosts only, unless this comma list (hosts, *.domain, CIDRs) names them. */
+    CONNECTIONS_ALLOWED_HOSTS: z.string().default(''),
     MCP_TIMEOUT_MS: z.coerce.number().int().min(250).max(600_000).default(15_000),
     MCP_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
     /** Script sandbox: docker or podman CLI (auto picks whichever is installed), or none. */
@@ -207,13 +208,27 @@ const schema = z
 
     DEFAULT_TENANT: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).default('default'),
     IDENTITY_CONFIG: z.string().optional(),
+    /**
+     * Secret references in user stores and upstream IdPs. `env:` names must match this comma list of names or
+     * `PREFIX*` patterns (empty: no env: references); the server's own configuration variables are always refused.
+     */
+    SECRET_REF_ENV: z.string().default(''),
+    /** `file:` references must resolve (symlinks followed) inside one of these absolute directories. */
+    SECRET_REF_DIRS: z.string().default('/run/secrets,/run/credentials,/etc/exprsn-ai/credentials'),
+    /** LDAP and SQL user stores must be internal hosts unless this comma list (hosts, *.domain, CIDRs) names them. */
+    IDENTITY_ALLOWED_HOSTS: z.string().default(''),
 
     WEBAUTHN_RP_ID: z.string().optional(),
     WEBAUTHN_RP_NAME: z.string().default('Exprsn-AI'),
 
     WEB_ROOT: z.string().default(defaultWebRoot),
     METRICS_TOKEN: z.string().min(16).optional()
-  })
+  });
+
+/** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
+export const SERVER_ENV_NAMES: ReadonlySet<string> = new Set([...Object.keys(base.shape), ...FILE_VARS.map((n) => `${n}_FILE`)]);
+
+const schema = base
   .transform((c) => {
     const url = new URL(c.PUBLIC_URL);
     return {

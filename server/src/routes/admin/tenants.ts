@@ -60,15 +60,19 @@ export function tenantAdminRoutes(s: Services): Router {
     return w;
   };
 
-  const tenantView = async (t: Tenant) => {
-    const [workspaces, counts, key, quota, users] = await Promise.all([
-      s.tenants.workspaces(t.id, { includeArchived: true }),
-      s.tenants.memberCounts(t.id),
-      s.keys.describe(t.id),
+  /** Views of several tenants: workspaces, member and user counts and keys come from one query each for the whole list. */
+  const tenantViews = async (list: Tenant[]) => {
+    const ids = list.map((t) => t.id);
+    const [workspaces, counts, keys, users] = await Promise.all([s.tenants.workspacesFor(ids, { includeArchived: true }), s.tenants.memberCountsFor(ids), s.keys.describeMany(ids), s.tenants.userCountsFor(ids)]);
+    return Promise.all(list.map((t) => tenantView(t, { workspaces: workspaces.get(t.id) ?? [], counts, key: keys.get(t.id)!, users: users.get(t.id) ?? 0 })));
+  };
+
+  const tenantView = async (t: Tenant, pre?: { workspaces: Workspace[]; counts: Map<string, number>; key: Awaited<ReturnType<typeof s.keys.describe>>; users: number }) => {
+    const [{ workspaces, counts, key, users }, quota, sync] = await Promise.all([
+      pre ?? (async () => ({ workspaces: await s.tenants.workspaces(t.id, { includeArchived: true }), counts: await s.tenants.memberCounts(t.id), key: await s.keys.describe(t.id), users: (await s.tenants.userCountsFor([t.id])).get(t.id) ?? 0 }))(),
       s.quotas.view(t.id, null),
-      s.db('users').where({ tenant_id: t.id }).count({ n: '*' })
+      s.jobs.list(t.id, { type: 'directory.sync', limit: 1 })
     ]);
-    const sync = await s.jobs.list(t.id, { type: 'directory.sync', limit: 1 });
     return {
       id: t.id,
       slug: t.slug,
@@ -76,7 +80,7 @@ export function tenantAdminRoutes(s: Services): Router {
       directoryDn: t.directory_dn,
       state: t.state,
       createdAt: t.created_at,
-      users: Number((users[0] as { n?: unknown } | undefined)?.n ?? 0),
+      users,
       key: { kms: key.kms, name: key.keyName, version: key.version, state: key.state },
       quota,
       lastSync: sync[0] ? { state: sync[0].state, at: sync[0].finished_at ?? sync[0].created_at, result: sync[0].result } : null,
@@ -89,7 +93,7 @@ export function tenantAdminRoutes(s: Services): Router {
   r.get('/tenants', requirePermission(s, 'tenant:manage'), async (req, res) => {
     const p = principalOf(req);
     const list = isSystemAdmin(p) ? await s.tenants.list() : [(await s.tenants.byId(p.tenantId))!];
-    res.json(await Promise.all(list.map(tenantView)));
+    res.json(await tenantViews(list));
   });
 
   r.get('/tenants/:tid', manage, async (req, res) => {
@@ -132,13 +136,7 @@ export function tenantAdminRoutes(s: Services): Router {
       if (t.state === 'offboarding' || t.state === 'offboarded') throw conflict('This tenant is offboarded; its key is destroyed and it cannot be re-enabled.');
     }
     const updated = await s.tenants.update(t.id, body);
-    if (body.state === 'disabled') {
-      const ids = (await s.db('sessions').where({ tenant_id: t.id, revoked_at: null }).select('id')).map((x: { id: string }) => x.id);
-      if (ids.length) {
-        await s.db('sessions').whereIn('id', ids).update({ revoked_at: Date.now() });
-        s.bus.publish('sessions.revoked', ids);
-      }
-    }
+    if (body.state === 'disabled') await s.sessions.revokeAllForTenant(t.id);
     await audit(req, t.id, body.state === 'disabled' ? 'tenant.disabled' : 'tenant.updated', { slug: t.slug }, { before: { name: t.name, directoryDn: t.directory_dn, state: t.state }, after: body });
     res.json(await tenantView(updated));
   });
@@ -152,7 +150,6 @@ export function tenantAdminRoutes(s: Services): Router {
     if (t.id === p.tenantId) throw forbidden('You cannot offboard your own tenant.', { step: 'self' });
     if (t.state === 'offboarding' || t.state === 'offboarded') throw conflict('This tenant is already offboarded or being offboarded.');
     const result = await s.offboarding.start(t.id, p.userId);
-    s.bus.publish('sessions.revoked', await s.offboarding.revokedSessionIds(t.id));
     await audit(req, t.id, 'tenant.offboarded', { slug: t.slug }, { ...result, steps: ['key destroyed', 'sessions and API keys revoked', 'deletion job queued'] });
     res.status(202).json(result);
   });

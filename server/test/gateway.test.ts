@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeOllama } from './fake-ollama.js';
 import { harness, localUser, loginAdmin, type Client, type Harness } from './helpers.js';
@@ -49,6 +50,41 @@ describe('Ollama gateway', () => {
     await h.s.gateway.pollAll();
     const snap = await a.agent.get('/api/admin/pools').expect(200);
     expect(snap.body[0].instances[0].health).toBe('unreachable');
+  });
+
+  it('keeps polling every other instance when one has unreadable mTLS files', async () => {
+    const pool = (await post(a, '/api/admin/pools', { name: 'cpu', accelerator: 'cpu' }).expect(201)).body;
+    await post(a, `/api/admin/pools/${pool.id}/instances`, { name: 'good', url: ollama.url, deploy: 'baremetal' }).expect(201);
+    // Saved as an admin would have saved it; the files are missing when the poller builds its client.
+    await h.s.gateway.repo.createInstance({ poolId: pool.id, name: 'bad-tls', url: 'https://10.0.0.9:11434', deploy: 'baremetal', tls: { caFile: '/nonexistent/ca.pem', certFile: '/nonexistent/cert.pem', keyFile: '/nonexistent/key.pem' }, settings: {} });
+    await expect(h.s.gateway.pollAll()).resolves.toBeUndefined();
+    ollama.down = true;
+    await h.s.gateway.pollAll();
+    const instances = (await a.agent.get('/api/admin/pools').expect(200)).body[0].instances;
+    expect(instances.find((i: { name: string }) => i.name === 'good').health).toBe('unreachable'); // still polled
+    const bad = instances.find((i: { name: string }) => i.name === 'bad-tls');
+    expect(bad.health).toBe('unreachable');
+    expect(bad.healthDetail ?? bad.health_detail).toMatch(/mTLS files could not be read/);
+  });
+
+  it('leaves no abort listeners behind on a request that waited for a slot', async () => {
+    await approvedModel();
+    const held = [await h.s.gateway.leaseModel('llama3.1:8b', 'internal', new AbortController().signal), await h.s.gateway.leaseModel('llama3.1:8b', 'internal', new AbortController().signal)];
+    const ac = new AbortController();
+    const waiting = h.s.gateway.leaseModel('llama3.1:8b', 'internal', ac.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getEventListeners(ac.signal, 'abort').length).toBe(1);
+    held[0]!.release();
+    const lease = await waiting;
+    expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
+    lease.release();
+    held[1]!.release();
+    // An already-aborted signal is refused at once instead of waiting out the queue timeout.
+    const full = [await h.s.gateway.leaseModel('llama3.1:8b', 'internal', new AbortController().signal), await h.s.gateway.leaseModel('llama3.1:8b', 'internal', new AbortController().signal)];
+    const gone = new AbortController();
+    gone.abort(new Error('client left'));
+    await expect(h.s.gateway.leaseModel('llama3.1:8b', 'internal', gone.signal)).rejects.toThrow('client left');
+    full.forEach((l) => l.release());
   });
 
   it('refuses pickle checkpoints and blobs whose digest does not match', async () => {

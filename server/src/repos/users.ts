@@ -43,6 +43,11 @@ export const normaliseGroup = (g: string): string => g.trim().toLowerCase().repl
 export class UserRepo {
   constructor(private readonly db: Db) {}
 
+  /** The same repository inside a transaction, so several writes commit or roll back together. */
+  within(trx: Db): UserRepo {
+    return new UserRepo(trx);
+  }
+
   async get(tenantId: string, id: string): Promise<UserRow | undefined> {
     const r = await this.db('users').where({ tenant_id: tenantId, id }).first();
     return r ? userFromRow(r) : undefined;
@@ -95,6 +100,18 @@ export class UserRepo {
 
   async roleIds(userId: string): Promise<string[]> {
     return [...new Set((await this.roles(userId)).map((r) => r.role))];
+  }
+
+  /** Role ids for many users in one query (list screens). */
+  async roleIdsFor(userIds: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>(userIds.map((id) => [id, []]));
+    if (!userIds.length) return out;
+    const rows = (await this.db('user_roles').whereIn('user_id', userIds).select('user_id', 'role')) as { user_id: string; role: string }[];
+    for (const r of rows) {
+      const list = out.get(r.user_id)!;
+      if (!list.includes(r.role)) list.push(r.role);
+    }
+    return out;
   }
 
   async setRoles(userId: string, source: 'mapping' | 'direct', roles: string[]): Promise<void> {

@@ -239,6 +239,30 @@ describe('MCP servers', () => {
       expect(msg.tools[0].error).toMatch(/No issue searches today/);
       expect(mcp.calls).toHaveLength(1);
 
+      // Tool results pass the context checkpoint before the model sees them: a block withholds the result (the
+      // call itself ran), a redaction replaces it.
+      const ask = async (content: string) => {
+        const sentX = (await m.agent.post(`/api/conversations/${sent.conversationId}/messages`).set('x-csrf-token', m.csrf).send({ content, profile: 'general' }).expect(202)).body;
+        for (let i = 0; i < 100; i++) {
+          view = (await m.agent.get(`/api/conversations/${sent.conversationId}`).expect(200)).body;
+          const x = view.messages.find((y: { id: string }) => y.id === sentX.messageId);
+          if (x.state === 'complete' || x.state === 'failed') return x;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        throw new Error('no answer');
+      };
+      const seen: string[] = [];
+      h.s.guardrails = { check: async (i) => (i.checkpoint === 'context' && i.meta?.via === 'tool-result' ? (seen.push(i.text), { action: 'block', text: i.text, findings: [], reason: 'Looks like an injected instruction.' }) : { action: 'allow', text: i.text, findings: [] }) };
+      const withheld = await ask('Search once more');
+      expect(mcp.calls).toHaveLength(2);
+      expect(seen[0]).toContain('travel-1');
+      expect(withheld.tools[0].error).toMatch(/withheld by a guardrail: Looks like an injected instruction/);
+      expect(withheld.content).not.toContain('travel-1');
+      h.s.guardrails = { check: async (i) => (i.checkpoint === 'context' && i.meta?.via === 'tool-result' ? { action: 'redact', text: i.text.replace('travel-1', '[REDACTED]'), findings: [] } : { action: 'allow', text: i.text, findings: [] }) };
+      const redacted = await ask('And again');
+      expect(redacted.tools[0].output).toEqual({ hits: ['[REDACTED]'] });
+      expect(redacted.content).toBe('Found {"hits":["[REDACTED]"]}');
+
       await a.agent.delete(`/api/admin/mcp-servers/${reg.id}`).set('x-csrf-token', a.csrf).expect(200);
       expect((await h.s.gateway.repo.profile(h.tenantId, profile.id))!.tools).toEqual([]);
       const entries = (await h.s.registry.list(h.tenantId, { kind: 'tool' })).filter((e) => e.impl === 'mcp');

@@ -22,6 +22,8 @@ services:
       DATABASE_URL: postgres://exprsn:exprsn@postgres:5432/exprsn_ai
       REDIS_URL: redis://redis:6379
       IDENTITY_CONFIG: /etc/exprsn-ai/identity.yaml
+      # identity.dev.yaml references these as env:DEV_*; nothing else is referenceable.
+      SECRET_REF_ENV: DEV_*
       DEV_LDAP_ADMIN_PASSWORD: dev-ldap-admin
       DEV_HR_PG_URL: postgres://hr_readonly:hr_readonly_dev@postgres:5432/hr
       DEV_PARTNER_MYSQL_URL: mysql://portal_readonly:portal_readonly_dev@mysql:3306/portal
@@ -34,11 +36,11 @@ services:
       redis: { condition: service_started }
 
   redis:
-    image: redis:7-bookworm
+    image: redis:7-bookworm@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f
     ports: ["6379:6379"]
 
   postgres:
-    image: postgres:17-bookworm
+    image: postgres:17-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
     environment: { POSTGRES_USER: exprsn, POSTGRES_PASSWORD: exprsn, POSTGRES_DB: exprsn_ai }
     volumes:
       - ./sql/pg-init.sh:/docker-entrypoint-initdb.d/00-init.sh:ro
@@ -47,14 +49,14 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U exprsn"], interval: 3s, timeout: 3s, retries: 30 }
 
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
     environment: { MYSQL_ROOT_PASSWORD: dev-root, MYSQL_DATABASE: portal, MYSQL_USER: exprsn, MYSQL_PASSWORD: exprsn }
     volumes: ["./sql/mysql-partner.sql:/docker-entrypoint-initdb.d/10-partner.sql:ro"]
     ports: ["3306:3306"]
     healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pdev-root"], interval: 3s, timeout: 3s, retries: 40 }
 
   openldap:
-    image: osixia/openldap:1.5.0
+    image: osixia/openldap:1.5.0@sha256:18742e9c449c9c1afe129d3f2f3ee15fb34cc43e5f940a20f3399728f41d7c28
     command: --copy-service
     environment:
       LDAP_ORGANISATION: Northwind

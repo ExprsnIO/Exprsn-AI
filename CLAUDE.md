@@ -40,7 +40,7 @@ npm run build                # tsc to server/dist
 npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate | backup:create | backup:restore-drill>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
-for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
+for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
 helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
 cd e2e && npm ci && CHROME=/opt/pw-browsers/chromium npx playwright test   # console end-to-end suite across every screen

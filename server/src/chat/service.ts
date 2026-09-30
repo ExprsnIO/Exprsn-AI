@@ -177,11 +177,17 @@ export class ChatService {
     return { ...c, created_at: Number(c.created_at), updated_at: Number(c.updated_at), archived_at: c.archived_at == null ? null : Number(c.archived_at) };
   }
 
+  /** A conversation's label may never rise above its workspace's ceiling, however it is raised. */
+  private async assertWorkspaceCeiling(workspaceId: string | null, label: Label): Promise<void> {
+    if (!workspaceId) return;
+    const ws = (await this.db('workspaces').where({ id: workspaceId }).first('label_ceiling')) as { label_ceiling: Label } | undefined;
+    if (ws && labelRank(label) > labelRank(ws.label_ceiling)) throw forbidden(`This workspace's ceiling is ${ws.label_ceiling}; this message would make the conversation ${label}.`, { step: 'zone' });
+  }
+
   async createConversation(p: Principal, input: { title?: string | null; label?: Label; kind?: 'chat' | 'compare'; profileId?: string | null }): Promise<ConversationRow> {
-    const ws = p.workspaceId ? ((await this.db('workspaces').where({ id: p.workspaceId }).first('label_ceiling')) as { label_ceiling: Label } | undefined) : undefined;
     const label = input.label ?? 'internal';
     if (!clears(p.clearance, label)) throw forbidden(`Your clearance is ${p.clearance}; a ${label} conversation is above it.`, { step: 'clearance' });
-    if (ws && labelRank(label) > labelRank(ws.label_ceiling)) throw forbidden(`This workspace's ceiling is ${ws.label_ceiling}.`, { step: 'zone' });
+    await this.assertWorkspaceCeiling(p.workspaceId ?? null, label);
     const t = Date.now();
     const id = ulid();
     const row: ConversationRow = { id, tenant_id: p.tenantId, workspace_id: p.workspaceId ?? null, user_id: p.userId, kind: input.kind ?? 'chat', title: await this.seal(p.tenantId, id, 'title', input.title ?? null), profile_id: input.profileId ?? null, label, head_id: null, created_at: t, updated_at: t, archived_at: null };
@@ -350,6 +356,7 @@ export class ChatService {
     if (c.kind !== 'chat') throw conflict('This is a comparison; start a chat from one of its answers instead.');
     const atts = await this.readyAttachments(p, input.attachments ?? []);
     const label = highest(c.label, input.label ?? 'public', ...atts.map((a) => a.label));
+    await this.assertWorkspaceCeiling(c.workspace_id, label);
     const r = await this.resolveFor(p, input.profile, label);
     if (atts.some((a) => a.type.startsWith('image/')) && !r.model.capabilities.includes('vision')) throw conflict(`${r.model.name} cannot read images; pick a profile with a vision model.`);
     await this.admit(p, c.workspace_id);
@@ -481,9 +488,10 @@ export class ChatService {
   /** Chunks after `after` while streaming here; otherwise the stored message. */
   async resume(p: Principal, conversationId: string, messageId: string, after: number) {
     const c = await this.conversation(p, conversationId);
-    const st = this.streams.get(messageId);
-    if (st) return { state: st.state, seq: st.seq, chunks: st.chunks.filter((x) => x.seq > after) };
+    // The message must belong to the caller's conversation before the process-wide stream map is consulted.
     const m = await this.message(c, messageId);
+    const st = this.streams.get(m.id);
+    if (st && st.conversationId === c.id) return { state: st.state, seq: st.seq, chunks: st.chunks.filter((x) => x.seq > after) };
     const v = await this.messageView(m);
     return { state: v.state, seq: v.seq, content: v.content, thinking: v.thinking, tools: v.tools, usage: v.usage, error: v.error };
   }

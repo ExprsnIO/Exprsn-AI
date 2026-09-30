@@ -533,7 +533,7 @@
       const a = { key: 'k' + Math.random().toString(36).slice(2), name: file.name, size: file.size, state: 'uploading' };
       st.pending.push(a); paint();
       try {
-        const res = await fetch('/api/attachments?name=' + enc(file.name) + '&label=' + label, { method: 'PUT', body: file, credentials: 'same-origin', headers: { 'X-CSRF-Token': App.state.csrf || '', 'Content-Type': file.type || 'application/octet-stream', Accept: 'application/json' } });
+        const res = await fetch('/api/attachments?name=' + enc(file.name) + '&label=' + enc(label), { method: 'PUT', body: file, credentials: 'same-origin', headers: { 'X-CSRF-Token': App.state.csrf || '', 'Content-Type': file.type || 'application/octet-stream', Accept: 'application/json' } });
         const data = /json/.test(res.headers.get('content-type') || '') ? await res.json() : null;
         if (!res.ok) { a.state = 'failed'; a.reason = (data && (data.detail || data.title)) || res.statusText; if (res.status === 401) App.sessionEnded('Your session ended. Sign in again.'); }
         else { Object.assign(a, data); attCache[a.id] = a; }

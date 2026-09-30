@@ -135,6 +135,30 @@ export class TenantRepo {
     return [...by.values()];
   }
 
+  /** Workspaces of several tenants in one query, grouped by tenant (list screens). */
+  async workspacesFor(tenantIds: string[], opts: { includeArchived?: boolean } = {}): Promise<Map<string, Workspace[]>> {
+    const out = new Map<string, Workspace[]>(tenantIds.map((id) => [id, []]));
+    if (!tenantIds.length) return out;
+    const q = this.db('workspaces').whereIn('tenant_id', tenantIds);
+    if (!opts.includeArchived) q.andWhere({ state: 'active' });
+    for (const w of (await q.orderBy('name')).map(wsFromRow)) out.get(w.tenant_id)?.push(w);
+    return out;
+  }
+
+  /** Member counts for every workspace of several tenants in one query. */
+  async memberCountsFor(tenantIds: string[]): Promise<Map<string, number>> {
+    if (!tenantIds.length) return new Map();
+    const rows = await this.db('workspace_members as m').join('workspaces as w', 'w.id', 'm.workspace_id').whereIn('w.tenant_id', tenantIds).groupBy('m.workspace_id').select('m.workspace_id').countDistinct({ n: 'm.user_id' });
+    return new Map(rows.map((r: Record<string, unknown>) => [String(r.workspace_id), Number(r.n)]));
+  }
+
+  /** Users per tenant in one query. */
+  async userCountsFor(tenantIds: string[]): Promise<Map<string, number>> {
+    if (!tenantIds.length) return new Map();
+    const rows = await this.db('users').whereIn('tenant_id', tenantIds).groupBy('tenant_id').select('tenant_id').count({ n: '*' });
+    return new Map(rows.map((r: Record<string, unknown>) => [String(r.tenant_id), Number(r.n)]));
+  }
+
   async memberCounts(tenantId: string): Promise<Map<string, number>> {
     const rows = await this.db('workspace_members as m').join('workspaces as w', 'w.id', 'm.workspace_id').where({ 'w.tenant_id': tenantId }).groupBy('m.workspace_id').select('m.workspace_id').countDistinct({ n: 'm.user_id' });
     return new Map(rows.map((r: Record<string, unknown>) => [String(r.workspace_id), Number(r.n)]));

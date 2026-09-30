@@ -80,6 +80,9 @@ config:
   extra: {}
     # OLLAMA_MAX_INFLIGHT: "4"
     # MCP_ALLOWED_HOSTS: "*.tools.internal"
+    # SECRET_REF_ENV: "IDP_*"            # env: names the identity YAML may reference (file:/run/secrets/... needs nothing)
+    # IDENTITY_ALLOWED_HOSTS: "ldap.corp.example.com"
+    # CONNECTIONS_ALLOWED_HOSTS: "10.20.0.0/16"
     # CLAMD_HOST: clamav.sandbox.svc
 
 # Identity YAML (docs/identity.md), mounted at /etc/exprsn-ai/identity.yaml and applied at every start.

@@ -1,5 +1,6 @@
 import type { Db } from '../db/knex.js';
 import type { Logger } from 'pino';
+import { parseAllowList, type AllowList } from '../mcp/hosts.js';
 import type { ProviderRepo, ProviderRow } from '../repos/providers.js';
 import { LdapProvider } from './providers/ldap.js';
 import { LocalProvider } from './providers/local.js';
@@ -33,7 +34,9 @@ export class IdentityChain {
     private readonly db: Db,
     private readonly providers: ProviderRepo,
     private readonly log: Logger,
-    private readonly production: boolean
+    private readonly production: boolean,
+    /** Where LDAP and SQL stores may connect: internal hosts (plus the allow-list), never the app's own SQLite file. */
+    private readonly outbound: { allow: AllowList; refusedSqliteFiles: string[] } = { allow: parseAllowList(''), refusedSqliteFiles: [] }
   ) {}
 
   build(row: ProviderRow): IdentityProvider {
@@ -47,10 +50,10 @@ export class IdentityChain {
         provider = new LocalProvider(row.id, row.name, this.db, row.tenant_id);
         break;
       case 'ldap':
-        provider = new LdapProvider(row.id, row.name, cfg as LdapConfig, this.production);
+        provider = new LdapProvider(row.id, row.name, cfg as LdapConfig, this.production, this.outbound.allow);
         break;
       case 'sql':
-        provider = new SqlProvider(row.id, row.name, cfg as SqlConfig);
+        provider = new SqlProvider(row.id, row.name, cfg as SqlConfig, this.outbound);
         break;
       case 'oidc':
       case 'saml':

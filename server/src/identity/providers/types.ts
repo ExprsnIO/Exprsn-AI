@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { LABELS } from '../../authz/labels.js';
+import { secretRefProblem } from '../secrets.js';
 
 export interface ExternalUser {
   /** Stable id inside the store: the LDAP DN or the SQL row key. The link to our user row. */
@@ -49,7 +50,11 @@ export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 /** A secret is referenced, never stored: `env:NAME` or `file:/absolute/path`. */
 export const secretRef = z
   .string()
-  .regex(/^(env:[A-Z_][A-Z0-9_]*|file:\/.+)$/, 'Use a secret reference: env:NAME or file:/absolute/path');
+  .regex(/^(env:[A-Z_][A-Z0-9_]*|file:\/.+)$/, 'Use a secret reference: env:NAME or file:/absolute/path')
+  .superRefine((ref, ctx) => {
+    const problem = secretRefProblem(ref);
+    if (problem) ctx.addIssue({ code: 'custom', message: problem });
+  });
 
 const identifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/, 'Must be a plain SQL identifier');
 
