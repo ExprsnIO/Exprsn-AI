@@ -20,11 +20,15 @@ must not carry over.
 
 | Sprint | Theme | Migration | Status |
 | --- | --- | --- | --- |
-| 11 | Account self-service and security notifications | `013_account` | Planned |
-| 12 | Chat: streaming guardrails, held turns, resumable streams, agent memory | `014_chat_hold` | Planned |
-| 13 | Integrations: OpenAI-compatible API, webhooks, prompt library, sharing, export, billing | `015_integrations` | Planned |
-| 14 | Federation: OAuth grants and revocation, logout, PAR, DPoP, SAML SLO, KMS signing | `016_federation2` | Planned |
-| 15 | Operations: shared rate limits, key re-wrap, ACME dns-01, backups, streaming blobs, zones, connections | `017_ops` | Planned |
+| 11 | Account self-service and security notifications | `013_account` | **Done** |
+| 12 | Chat: streaming guardrails, held turns, resumable streams, agent memory | `014_chat_hold` | **Done** |
+| 13 | Integrations: OpenAI-compatible API, webhooks, prompt library, sharing, export, billing | `015_integrations` | **Done** |
+| 14 | Federation: OAuth grants and revocation, logout, PAR, DPoP, SAML SLO, KMS signing | `016_federation2` | **Done** |
+| 15 | Operations: shared rate limits, key re-wrap, ACME dns-01, backups, streaming blobs, zones, connections | `017_ops` | **Done** |
+
+**Status (1.1.0).** Every item from B-101 to B-504 is delivered; what each sprint built and its tests are in
+[Sprints.md](Sprints.md). B-601 (tag `v1.0.0`, publish the image and chart) is left to the maintainers. B-602 is done:
+the version is `1.1.0`, and the CHANGELOG, `docs/api.md` and the known gaps are updated.
 
 ---
 

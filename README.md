@@ -2,7 +2,7 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** release candidate `1.0.0-rc.1`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+**Status:** version `1.1.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
 and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
 the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
 rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
@@ -11,8 +11,13 @@ connections; the tool registry, MCP servers, agent runs and a script sandbox; wo
 generation; and training, network zones, platform operations (signed import bundles, mirrors, ACME, backups and
 restore drills) and federation (OIDC provider, SAML IdP, upstream OIDC and SAML, Kerberos, device flow). Every console
 screen is live. Sprint 10 added a Helm chart with NetworkPolicies, supply-chain scanning, a streaming load test,
-runbooks, an OWASP ASVS level 2 review, AA and AAA accessibility modes and a Playwright suite across the console. See
-[Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
+runbooks, an OWASP ASVS level 2 review, AA and AAA accessibility modes and a Playwright suite across the console
+(release candidate `1.0.0-rc.1`). Sprints 11 to 15 make up 1.1.0: password change and reset, a breached-password
+check, step-up re-authentication and security notices; streaming output guardrails, held answers and resumable
+streams; an OpenAI-compatible API, signed webhooks, a prompt library, conversation sharing and export, and billing
+statements; token revocation, logout, PAR, DPoP, SAML single logout and signing in OpenBao; and shared rate limits, key
+re-wrap, ACME dns-01, blob-store backups with restore, and sandboxed media. See [Sprints.md](Sprints.md) and
+[CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 

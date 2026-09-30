@@ -2,10 +2,11 @@
 
 This is the Sprint 10 review of the application server (`server/src`) and its deployment files against the
 [OWASP Application Security Verification Standard 4.0.3](https://github.com/OWASP/ASVS/tree/v4.0.3/4.0), level 2.
-It covers the code on the `claude/determined-hawking-n7wmk1` branch as of 30 September 2026. Where the review found a
-gap that was safe to close, the fix landed with it (listed under [Fixes from this review](#fixes-from-this-review),
-tested in `server/test/asvs.test.ts`). The rest are follow-ups at the end of each chapter and in
-[security.md](security.md#known-gaps-tracked-in-the-plan).
+It covers the code on the `claude/determined-hawking-n7wmk1` branch as of 30 September 2026, and was updated for
+release 1.1.0 (the `release/1.1.0` branch): rows changed by Sprints 11 to 15 say "since 1.1.0" and cite their tests.
+Where the review found a gap that was safe to close, the fix landed with it (listed under
+[Fixes from this review](#fixes-from-this-review), tested in `server/test/asvs.test.ts`). The rest are follow-ups at
+the end of each chapter and in [security.md](security.md#known-gaps-tracked-in-the-plan).
 
 Statuses, per requirement group:
 
@@ -20,26 +21,30 @@ Evidence cites `file:line` under `server/src/` unless another root is named, and
 
 | Chapter | Met | Partly | Not met | N/A |
 | --- | ---: | ---: | ---: | ---: |
-| V1 Architecture | 7 | 5 | 0 | 2 |
-| V2 Authentication | 4 | 5 | 0 | 1 |
-| V3 Session management | 3 | 3 | 0 | 1 |
-| V4 Access control | 2 | 1 | 0 | 0 |
+| V1 Architecture | 9 | 3 | 0 | 2 |
+| V2 Authentication | 6 | 3 | 0 | 1 |
+| V3 Session management | 6 | 0 | 0 | 1 |
+| V4 Access control | 3 | 0 | 0 | 0 |
 | V5 Validation, sanitization and encoding | 3 | 2 | 0 | 0 |
 | V6 Stored cryptography | 3 | 1 | 0 | 0 |
 | V7 Error handling and logging | 3 | 1 | 0 | 0 |
-| V8 Data protection | 1 | 2 | 0 | 0 |
+| V8 Data protection | 3 | 0 | 0 | 0 |
 | V9 Communication | 1 | 1 | 0 | 0 |
 | V10 Malicious code | 2 | 0 | 0 | 1 |
-| V11 Business logic | 0 | 1 | 0 | 0 |
-| V12 Files and resources | 3 | 3 | 0 | 0 |
+| V11 Business logic | 1 | 0 | 0 | 0 |
+| V12 Files and resources | 5 | 1 | 0 | 0 |
 | V13 API and web service | 1 | 1 | 0 | 2 |
 | V14 Configuration | 4 | 1 | 0 | 0 |
-| **Total (71 groups)** | **37** | **27** | **0** | **7** |
+| **Total (71 groups)** | **50** | **14** | **0** | **7** |
 
-No group is "not met" outright, but several individual requirements are, and they are named in the partly rows:
-self-service password change (2.1.5), a full breached-password check (2.1.7), user notification of authentication
-changes (2.2.3), user revocation of OAuth grants (3.5.1), re-authentication before sensitive account changes (3.7.1),
-and shared (cross-instance) rate limits (11.1.4).
+The 1.0 review (37 met, 27 partly) named individual requirements that were not met: self-service password change
+(2.1.5), a full breached-password check (2.1.7), user notification of authentication changes (2.2.3), user revocation
+of OAuth grants (3.5.1), re-authentication before sensitive account changes (3.7.1) and shared (cross-instance) rate
+limits (11.1.4). Release 1.1.0 (Sprints 11 to 15, [Backlog-1.1.0.md](../Backlog-1.1.0.md)) closed each of them
+(2.2.3 except a notice for a sign-in from a new location), and with them the follow-ups on key re-wrap, KMS signing,
+NTP skew, blob-store backups, conversation retention, signer dual control and sandboxed media; fourteen groups moved
+from partly to met. No group is "not met"; what remains is named in the partly rows and under
+[Follow-ups not fixed](#follow-ups-not-fixed).
 
 ## Fixes from this review
 
@@ -66,13 +71,13 @@ and shared (cross-instance) rate limits (11.1.4).
 | 1.3 Session management architecture | N/A | Level 1 has no requirements here (placeholder group in 4.0.3) | |
 | 1.4 Access control architecture | Met | Single policy decision point `authz/policy.ts` (role, scopes, tenant, clearance, zone), enforced server-side by `requirePermission` (`http/middleware.ts:339`); denials audited | |
 | 1.5 Input and output architecture | Met | zod validation at every route (`parseBody`), output encoding by the console (`UI.esc`) and the federation pages (`routes/federation-public.ts:23` `esc`); no serialization of untrusted objects | |
-| 1.6 Cryptographic architecture | Met | Per-tenant data keys wrapped by a KMS (`platform/datakeys.ts`, `platform/kms.ts`), key rotation by version (`cli.ts kms:rotate`), offboarding destroys keys | Key-encryption keys cannot be re-wrapped (known gap) |
+| 1.6 Cryptographic architecture | Met | Per-tenant data keys wrapped by a KMS (`platform/datakeys.ts`, `platform/kms.ts`), key rotation by version (`cli.ts kms:rotate`), key-encryption keys re-wrapped under a new `DATA_KEY` or KMS by `kms:rewrap` (`platform/rewrap.ts`, 1.1.0), offboarding destroys keys; test "re-wraps every data key under a new DATA_KEY…" (`sprint15-ops.test.ts`) | |
 | 1.7 Errors, logging and auditing architecture | Met | pino JSON logs with trace ids (`observability/index.ts`), audit hash chain with KMS-signed checkpoints (`audit/chain.ts`, `audit/checkpoints.ts`), SIEM stream (`audit/siem.ts`) | |
 | 1.8 Data protection and privacy architecture | Met | Labels `public < internal < confidential < restricted` on data, clearance on users (`authz/labels.ts`); sealed content at rest | |
 | 1.9 Communications architecture | Partly | Internal networks for database and Ollama in Compose (`deploy/docker/compose.yml`), mTLS per Ollama instance (`gateway/ollama.ts:121`), LDAPS with verification (`identity/providers/ldap.ts:49`) | Connections between the app and PostgreSQL/MySQL/Redis are encrypted only when the operator's URL asks for it; no setting refuses plaintext database links (1.9.1) |
 | 1.10 Malicious software architecture | Met | Source control with CI gates and dependency review (Dependabot, `npm audit`) | |
-| 1.11 Business logic architecture | Partly | Business flows are documented in `docs/api.md`; jobs and runs are checkpointed and idempotent (`platform/jobs.ts`) | 1.11.2 (no shared unsynchronised state): rate limits are per instance in memory (`http/app.ts:112`), so limits multiply with instances |
-| 1.12 Secure file upload architecture | Partly | Uploads stored sealed in the blob store outside the web root, served with server-chosen types and `nosniff` (`chat/attachments.ts`, `routes/media.ts:21`) | Downloads of user files are same-origin (no separate download domain, 1.12.2); mitigated by server-chosen content types and CSP |
+| 1.11 Business logic architecture | Met | Business flows are documented in `docs/api.md`; jobs and runs are checkpointed and idempotent (`platform/jobs.ts`); since 1.1.0 rate limits, the failed-credential throttle and the denial cap share one atomic Redis counter across instances when `REDIS_URL` is set (`platform/ratelimit.ts`), and the Helm chart refuses several replicas without Redis; tests "shares one counter between limiters on the same store…" (`sprint15-access.test.ts`), "two instances share one limit…" (`integration/operations.test.ts`) | While Redis is unreachable each instance counts in memory (see [security.md](security.md#known-gaps-tracked-in-the-plan)) |
+| 1.12 Secure file upload architecture | Met | Uploads stored sealed in the blob store outside the web root, served with server-chosen types; since 1.1.0 every media file, preview and image is served with `Content-Security-Policy: sandbox` and `nosniff` (`media/origin.ts` `sandboxHeaders`, `routes/media.ts` `sendBytes`), and optionally from a separate origin through signed, short-lived URLs (`MEDIA_ORIGIN`); tests in `sprint15-access.test.ts` ("serves media and previews with a sandbox CSP and nosniff…") | Without `MEDIA_ORIGIN` downloads stay on the app origin, sandboxed |
 | 1.13 API architecture | N/A | Placeholder group in 4.0.3 | |
 | 1.14 Configuration architecture | Partly | Container and systemd hardening (`deploy/`), Helm chart with NetworkPolicy, zod-validated configuration (`config/index.ts`); no unsupported client-side technology (1.14.6) | 1.14.5 (sandboxing) is per feature: scripts run in docker or podman without gVisor or Firecracker (known gap) |
 
@@ -80,16 +85,16 @@ and shared (cross-instance) rate limits (11.1.4).
 
 | Group | Status | Evidence | Follow-up |
 | --- | --- | --- | --- |
-| 2.1 Password security | Partly | Local accounts: at least 12 and up to 256 characters, no composition rules, no truncation (argon2id), the username refused, common and service-named passwords refused (`identity/passwords.ts:46-74`); login accepts up to 1024 characters (`routes/auth.ts:16`); passwords are never logged (redaction, `observability/index.ts:9`) | 2.1.5 and 2.1.6: there is no self-service password change for local accounts, and no admin password reset (local accounts are bootstrap and break-glass accounts; directory accounts change passwords in their store). 2.1.7: the list is short and local, not a breached-password corpus (a k-anonymity or offline HIBP check is the follow-up). 2.1.8 (strength meter) and 2.1.11 (paste) are console concerns |
-| 2.2 General authenticator security | Partly | Lockout per account and per address in the database (`identity/lockout.ts`), 5 attempts by default (`config/index.ts:204`); `/api/auth` limited to 30 requests per minute (`http/app.ts:113`); sign-in and callback pages outside `/api` limited (this review); failures and successes audited (`routes/auth.ts:94`); TOTP and WebAuthn as second factors; test "locks an account after repeated failures" | 2.2.3 (notify the user after changes to authentication details) is audited but not notified to the user |
-| 2.3 Authenticator lifecycle | Partly | Initial passwords are set by an admin under the policy (`routes/admin/users.ts:75`); TOTP enrolment is forced for admin roles on first sign-in | 2.3.1: there is no forced change of an admin-set initial password on first use; see Known gaps for first-factor enrolment |
+| 2.1 Password security | Partly | Local accounts: at least 12 and up to 256 characters, no composition rules, no truncation (argon2id), the username refused, common and service-named passwords refused (`identity/passwords.ts:46-74`); login accepts up to 1024 characters (`routes/auth.ts:16`); passwords are never logged (redaction, `observability/index.ts:9`). Since 1.1.0: self-service password change with the current password (2.1.5, `routes/me.ts` `POST /password`), admin reset and email reset (2.1.6, `routes/admin/users.ts`, `routes/auth.ts` `/password/forgot`, `/password/reset`), and a breached-password check against the HIBP range API (only a five-character SHA-1 prefix leaves) or an offline sorted file (2.1.7, `identity/breached.ts`); tests in `account.test.ts` ("changes the password, ends every other session and OAuth grant…", "refuses a known-breached password through the range API, sending only the prefix", "searches a sorted hash file without loading it") | 2.1.7: the breached check is off by default (`BREACHED_PASSWORDS=off`, because the range API is on the internet) and fails open when its source cannot be reached; turn it on with a mirror or the offline file. 2.1.8: the console has no password strength meter. 2.1.11 (paste) is a console concern |
+| 2.2 General authenticator security | Partly | Lockout per account and per address in the database (`identity/lockout.ts`), 5 attempts by default (`config/index.ts:204`); `/api/auth` limited to 30 requests per minute (`http/app.ts:113`); sign-in and callback pages outside `/api` limited (this review); failed bearer, API-key and DPoP credentials throttled to 20 a minute per address (`http/middleware.ts` `badBearer`, 1.1.0); failures and successes audited (`routes/auth.ts:94`); TOTP and WebAuthn as second factors; security notices in the console and by email for password, factor, recovery-code, API-key, session and OAuth-grant changes and admin resets (2.2.3, `identity/security-alerts.ts`, 1.1.0); tests "locks an account after repeated failures", "notifies on factor, recovery code, key and session changes, and on admin actions" (`account.test.ts`), "answers 429 to the 21st bad bearer token a minute…" (`sprint15-access.test.ts`) | 2.2.3: a sign-in from a new location or device does not send a notice; email notices need `SMTP_URL` and an address on the account |
+| 2.3 Authenticator lifecycle | Met | Initial passwords are set by an admin under the policy (`routes/admin/users.ts:75`) and, since 1.1.0, must be changed on first use: an admin-set or reset password puts the session in a `password` stage that reaches only the change route (2.3.1, `identity/account.ts`, `http/middleware.ts`); invitation and reset links are random 256-bit tokens stored as digests, single use, expiring after `PASSWORD_INVITE_HOURS` or `PASSWORD_RESET_MINUTES`; TOTP enrolment is forced for admin roles on first sign-in; tests "sets a temporary password: audited, the old one stops working, the next sign-in must change it", "invites by email instead of a password" (`account.test.ts`) | An admin-set temporary password does not expire by time, but it only reaches the change route. See Known gaps for first-factor enrolment |
 | 2.4 Credential storage | Met | argon2id m=19456, t=2, p=1 (`identity/passwords.ts:6`), SQL stores accept only argon2 or bcrypt and never plain or unsalted digests (test "never accepts plain-text or unknown hash formats") | |
-| 2.5 Credential recovery | Partly | No knowledge-based questions or password hints; recovery codes stored as HMACs and single-use (`identity/mfa.ts:166-190`); admins can reset factors, forcing re-enrolment | 2.5.2/2.5.6: there is no self-service password recovery for local accounts (by design: directory accounts recover in their store) |
+| 2.5 Credential recovery | Met | No knowledge-based questions or password hints; recovery codes stored as HMACs and single-use (`identity/mfa.ts:166-190`); admins can reset factors, forcing re-enrolment. Since 1.1.0, local accounts recover by an emailed single-use link (`routes/auth.ts` `/password/forgot`, `/password/reset`): the same answer whether or not the account exists, the token stored as its sha256 and carried in the URL fragment, throttled, and a reset ends every session and grant and sends a notice; the second factor is still required at the next sign-in; test "stores only the hash, works once, expires, revokes sessions, and never shows the token" (`account.test.ts`) | |
 | 2.6 Look-up secret verifier | Met | Ten recovery codes, random, HMAC'd at rest, each usable once (`identity/mfa.ts:170`); test "accepts a recovery code once" | |
 | 2.7 Out-of-band verifier | N/A | No SMS, email or push authenticators | |
 | 2.8 One-time verifier | Met | TOTP 30 s step, window 1, single use per step (`identity/mfa.ts:16`, `:98`), sealed seeds; five failures end the pending session (`routes/auth.ts:59`); test "requires TOTP on later sign-ins and rejects a replayed code"; the last factor of an admin cannot be removed (this review) | |
 | 2.9 Cryptographic verifier | Met | WebAuthn passkeys with signature counters and origin and RP ID checks (`identity/mfa.ts:130-160`) | |
-| 2.10 Service authentication | Partly | API keys are 256-bit, HMAC'd, scoped, expiring (`identity/apikeys.ts:55`); OAuth client secrets shown once and stored as digests (test "shows a client secret once and stores only its digest"); service secrets passed as files | Signing keys are sealed with the platform data key rather than held in the KMS (known gap) |
+| 2.10 Service authentication | Partly | API keys are 256-bit, HMAC'd, scoped, expiring (`identity/apikeys.ts:55`); OAuth client secrets shown once and stored as digests (test "shows a client secret once and stores only its digest"); service secrets passed as files; with `KMS_PROVIDER=openbao`, OIDC and SAML signing happens in OpenBao transit and no private signing key enters the process (`federation/keys.ts`, 1.1.0; test "signs ID tokens and SAML assertions in the KMS…" in `sprint14.test.ts`) | With `KMS_PROVIDER=local` the signing keys are sealed with the platform data key and unsealed in memory while in use |
 
 ## V3 Session management
 
@@ -97,11 +102,11 @@ and shared (cross-instance) rate limits (11.1.4).
 | --- | --- | --- | --- |
 | 3.1 Fundamental session management | Met | Session tokens only in cookies, never in URLs (`http/middleware.ts:200-217`) | |
 | 3.2 Session binding | Met | 256-bit random tokens (`identity/sessions.ts:178`), HMAC'd in the database; rotated when a factor completes (`identity/sessions.ts:224`); a new sign-in revokes the session the browser held (this review, `routes/auth.ts:124`) | |
-| 3.3 Session termination | Partly | Logout revokes server-side (`routes/auth.ts:223`); idle 30 min and absolute 12 h timeouts (`config/index.ts:200-201`); users see and revoke their sessions (`routes/me.ts:90-110`); disabling a user ends sessions and keys (test "disables a user and ends their sessions and keys") | 3.3.3: no password change exists to offer "sign out other sessions" after it (the separate "revoke others" action exists) |
+| 3.3 Session termination | Met | Logout revokes server-side (`routes/auth.ts:223`); idle 30 min and absolute 12 h timeouts (`config/index.ts:200-201`); users see and revoke their sessions (`routes/me.ts:90-110`); a password change or reset ends every other session and OAuth grant (3.3.3, `routes/me.ts`, `routes/auth.ts`, 1.1.0); disabling a user ends sessions and keys (test "disables a user and ends their sessions and keys"); test "changes the password, ends every other session and OAuth grant, and keeps this one" (`account.test.ts`) | |
 | 3.4 Cookie-based session management | Met | `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` (`http/middleware.ts:202-209`); production refuses non-HTTPS cookies (`config/index.ts:242`); the upstream-federation cookie is `HttpOnly`, `Lax` (or `None; Secure` for SAML POST) and lives 10 minutes | |
-| 3.5 Token-based session management | Partly | OAuth access tokens are ES256 JWTs with `typ at+jwt`, audience and tenant checks, and live-grant checks (`federation/oidc.ts:706-717`, `federation/service.ts:100`); refresh tokens rotate with family revocation (test "rotates refresh tokens and revokes the family…"); clients revoke through RFC 7009 and admins disable clients with their tokens | 3.5.1: users cannot list or revoke the OAuth grants and consents they gave to applications themselves (only by admins disabling the client or the user); access tokens are not individually revocable (known gap; at most 30 minutes) |
+| 3.5 Token-based session management | Met | OAuth access tokens are ES256 JWTs with `typ at+jwt`, audience and tenant checks, and live-grant checks (`federation/oidc.ts`, `federation/service.ts`); refresh tokens rotate with family revocation (test "rotates refresh tokens and revokes the family…"); since 1.1.0 users list and remove the applications they allowed in Settings, which ends their tokens at once (3.5.1, `routes/me.ts` `/grants`), and access tokens are individually revocable through a shared deny-list (RFC 7009) with introspection for the issuing client (RFC 7662); tests "ends the grant's tokens at once and notifies the user", "refuses a revoked access token before it expires…" (`sprint14.test.ts`) | |
 | 3.6 Federated re-authentication | N/A | Level 3 only | |
-| 3.7 Defenses against session management exploits | Partly | Admin roles need an MFA-verified session for every admin request (`http/middleware.ts:343`); API keys cannot create keys or manage factors (test "cannot create keys or manage factors with a key") | 3.7.1: creating API keys, removing factors and regenerating recovery codes need a signed-in browser session but no fresh re-authentication (step-up with a recent-MFA window and a console prompt is the follow-up) |
+| 3.7 Defenses against session management exploits | Met | Admin roles need an MFA-verified session for every admin request (`http/middleware.ts:343`); API keys cannot create keys or manage factors (test "cannot create keys or manage factors with a key"); since 1.1.0 creating an API key, removing a factor and regenerating recovery codes need a password, TOTP or passkey check within `STEPUP_WINDOW_SECONDS` (3.7.1, `http/middleware.ts` `requireRecentAuth`, `routes/me.ts` `POST /step-up`), and a password change needs the current password; tests "lets a fresh sign-in through, asks again outside the window, and accepts the password", "guards factor removal and recovery codes, and accepts a TOTP code" (`account.test.ts`) | |
 
 ## V4 Access control
 
@@ -109,7 +114,7 @@ and shared (cross-instance) rate limits (11.1.4).
 | --- | --- | --- | --- |
 | 4.1 General access control design | Met | Enforced server-side on every route with deny by default (`http/middleware.ts:318-360`); the tenant always comes from the principal; tests in `policy.test.ts` and "keeps members out of admin routes and audits the denial" | |
 | 4.2 Operation level access control | Met | Resource ownership checked in services (for example `routes/me.ts:81`, `routes/chat.ts:133`); CSRF tokens bound to the session plus `Origin` checks (`http/middleware.ts:302`); tests "refuses state changes without the CSRF token", "refuses cross-origin state changes" | |
-| 4.3 Other access control considerations | Partly | Admin interfaces need MFA (`authz/permissions.ts` `requiresMfa`); grant rules stop escalation (`routes/admin/users.ts:77-79`); directory listing is off (static files only from `WEB_ROOT`) | 4.3.1 is met for admin roles; dual control covers baseline guardrails, zones and model approval, but adding or revoking a bundle signer key is single-person (known gap) |
+| 4.3 Other access control considerations | Met | Admin interfaces need MFA (`authz/permissions.ts` `requiresMfa`); grant rules stop escalation (`routes/admin/users.ts:77-79`); directory listing is off (static files only from `WEB_ROOT`); dual control covers baseline guardrails, zones, model approval and, since 1.1.0, adding and revoking bundle signer keys (`ops/signers.ts`; test "needs a second platform admin to add or revoke a signer key (after the first)" in `sprint15-ops.test.ts`) | The first signer key is registered by one platform admin |
 
 ## V5 Validation, sanitization and encoding
 
@@ -128,7 +133,7 @@ and shared (cross-instance) rate limits (11.1.4).
 | 6.1 Data classification | Met | Labels on conversations, attachments, knowledge and exports; tenant content sealed at rest (`platform/datakeys.ts`) | |
 | 6.2 Algorithms | Met | AES-256-GCM with row-bound associated data (`platform/datakeys.ts:125-140`, `crypto/index.ts:21`), HMAC-SHA-256, argon2id, ES256 and RS256 signatures; no ECB, CBC or MD5 for security (MD5 appears only as a feature hash in `guardrails/linear.ts:18`) | |
 | 6.3 Random values | Met | `crypto.randomBytes` for tokens, keys, nonces and codes (`crypto/index.ts:7`); the one security-adjacent `Math.random` (the password-timing dummy) replaced (this review) | |
-| 6.4 Secret management | Partly | OpenBao transit adapter for key-encryption keys (`platform/kms.ts`), secrets as files (`config/index.ts:7`), secret references in configuration (`identity/secrets.ts`) | 6.4.2: with `KMS_PROVIDER=local` the key-encryption key is `DATA_KEY` in process memory; OIDC and SAML signing keys are unsealed in memory (known gap) |
+| 6.4 Secret management | Partly | OpenBao transit adapter for key-encryption keys (`platform/kms.ts`), secrets as files (`config/index.ts:7`), secret references in configuration (`identity/secrets.ts`); since 1.1.0, with OpenBao, OIDC and SAML signing happens in transit (`federation/keys.ts`, B-408), and `kms:rewrap` moves every data key, checkpoint signature and backup to a new key-encryption key (`platform/rewrap.ts`, B-407); tests in `sprint14.test.ts` (with `fake-openbao.ts`) and `sprint15-ops.test.ts` | 6.4.2: with `KMS_PROVIDER=local` the key-encryption key is `DATA_KEY` in process memory and the signing keys are unsealed in memory; the SAML SP decryption key for upstream encrypted assertions is sealed locally even with OpenBao |
 
 ## V7 Error handling and logging
 
@@ -136,16 +141,16 @@ and shared (cross-instance) rate limits (11.1.4).
 | --- | --- | --- | --- |
 | 7.1 Log content | Met | Authorization and cookie headers, CSRF tokens, passwords, secrets, tokens and codes redacted, and credential-bearing query parameters removed from logged URLs (`observability/index.ts:9-58`, this review); session ids in audit are HMACs, never tokens | |
 | 7.2 Log processing | Met | Every sign-in success and failure, MFA step, and access-control denial is audited (`routes/auth.ts`, `http/middleware.ts:347`); tests "writes sign-ins to the audit chain", "keeps members out of admin routes and audits the denial" | |
-| 7.3 Log protection | Met | pino writes JSON (no log injection through newlines); the audit chain is append-only and hash-linked with KMS-signed checkpoints, and verification is read-only (`audit/chain.ts`, `audit/checkpoints.ts`, tests in `audit.test.ts`); time from the server clock with skew measured against the database | Clock skew is measured against the database, not NTP (known gap) |
+| 7.3 Log protection | Met | pino writes JSON (no log injection through newlines); the audit chain is append-only and hash-linked with KMS-signed checkpoints, and verification is read-only (`audit/chain.ts`, `audit/checkpoints.ts`, tests in `audit.test.ts`); time from the server clock with skew measured against the database and, since 1.1.0, against NTP when `NTP_SERVER` is set (`platform/ntp.ts`, `ops/service.ts`; tests "measures the offset by SNTP…", "shows NTP skew on the platform status" in `sprint15-access.test.ts`) | The SNTP query is unauthenticated (no NTS); it is a check, not a time source |
 | 7.4 Error handling | Partly | One error handler returns RFC 9457 problems with a trace id and a generic message for unexpected errors (`http/app.ts:165-180`); public readiness, federation error pages and userinfo no longer echo internal errors (this review) | 7.4.1: admin-only diagnostic routes (store tests, MCP and connection checks, `routes/admin/identity.ts:125`, `routes/admin/federation.ts:474`) deliberately show driver messages to identity and platform admins; review whether any include secrets |
 
 ## V8 Data protection
 
 | Group | Status | Evidence | Follow-up |
 | --- | --- | --- | --- |
-| 8.1 General data protection | Partly | No sensitive data cached server-side outside the sealed stores; `no-store` on every API answer (this review) and on federation pages; backups are sealed and drilled (`ops/backups.ts`) | 8.1.6: backups cover the database only (blob store and KMS keys need their own tooling, known gap) |
+| 8.1 General data protection | Met | No sensitive data cached server-side outside the sealed stores; `no-store` on every API answer (this review) and on federation pages; backups are sealed and drilled (`ops/backups.ts`) and, since 1.1.0, include the blob store (8.1.6, `PLATFORM_BACKUP_BLOBS`, on by default) and restore into an empty database with `backup:restore` (`ops/restore.ts`); test "restores a backup into an empty database and blob store, and the app starts on it" (`sprint15-ops.test.ts`) | KMS key material is backed up with the KMS's own tooling |
 | 8.2 Client-side data protection | Met | `Cache-Control: no-store` on API and protocol answers (`http/app.ts:105`, `routes/federation-public.ts:87`); the console stores only the theme and a signed-in flag, and the federation resume address in `sessionStorage` | |
-| 8.3 Sensitive private data | Partly | Tokens and secrets never in URLs except where OAuth and SAML require them (codes, SAML messages), and those are redacted from logs (this review); exports clearance-gated and audited; offboarding destroys keys then purges (`tenancy/offboarding.ts`); memory export and forget (`memory/service.ts`) | 8.3.4/8.3.8: no per-user data retention schedule for conversations (tenant offboarding and manual deletion only) |
+| 8.3 Sensitive private data | Met | Tokens and secrets never in URLs except where OAuth and SAML require them (codes, SAML messages), and those are redacted from logs (this review); exports clearance-gated and audited; offboarding destroys keys then purges (`tenancy/offboarding.ts`); memory export and forget (`memory/service.ts`); since 1.1.0 a tenant retention period deletes idle conversations with their messages, buffers and unused attachments on a schedule and audits each purge (8.3.4, 8.3.8, `chat/service.ts` retention, `chat.retention` job; test "purges conversations past the tenant retention period, and audits it (B-206)" in `sprint12.test.ts`) | Retention is one period per tenant (no per-workspace or per-user periods) |
 
 ## V9 Communication
 
@@ -166,7 +171,7 @@ and shared (cross-instance) rate limits (11.1.4).
 
 | Group | Status | Evidence | Follow-up |
 | --- | --- | --- | --- |
-| 11.1 Business logic security | Partly | Sequential flows enforced server-side (sign-in stages, lifecycles, approvals, dual control); quotas shared through the database (`tenancy/quotas.ts`); rate limits on `/api` (600 per minute per user or address), `/api/auth` (30), OAuth token endpoints (60) and browser sign-in endpoints (120, this review); guardrail and flag queues alert on anomalies | 11.1.4: rate limits live in each instance's memory, so N instances allow N times the limit (a Redis-backed limiter when `REDIS_URL` is set is the follow-up); failed bearer-token attempts are answered before the `/api` limiter (keys are 256-bit, so brute force is not practical, but the attempts are not throttled) |
+| 11.1 Business logic security | Met | Sequential flows enforced server-side (sign-in stages, lifecycles, approvals, dual control); quotas shared through the database (`tenancy/quotas.ts`); rate limits on `/api` (600 per minute per user or address), `/api/auth` (30), OAuth token endpoints (60) and browser sign-in endpoints (120, this review); since 1.1.0 they share one atomic Redis counter (a Lua script) across instances when `REDIS_URL` is set (11.1.4, `platform/ratelimit.ts`, B-406), and failed bearer, API-key and DPoP credentials are throttled to 20 a minute per address (B-111); guardrail and flag queues alert on anomalies; tests in `sprint15-access.test.ts` and `integration/operations.test.ts` | Without Redis, or while it is down, limits count per instance; the failed-credential throttle is per address, so clients behind one NAT share it |
 
 ## V12 Files and resources
 
@@ -175,8 +180,8 @@ and shared (cross-instance) rate limits (11.1.4).
 | 12.1 File upload | Met | Size caps on every raw upload (`ATTACHMENT_MAX_BYTES`, `MEDIA_MAX_BYTES`, `PLATFORM_BUNDLE_MAX_BYTES`; `routes/chat.ts:117`); media duration, resolution and stream caps; decompression caps (`federation/saml.ts:203`); per-tenant quotas | |
 | 12.2 File integrity | Met | Types sniffed from bytes, not names or declared types (`chat/attachments.ts:41`); ClamAV when configured (`chat/attachments.ts:103`); classification before use | |
 | 12.3 File execution | Met | File names validated (`routes/chat.ts:119`) and never used as paths (blob keys are ids); git subpaths confined to the checkout (`knowledge/sources.ts` `gitItems`); no uploaded file is executed or included | |
-| 12.4 File storage | Partly | Uploads sealed in the blob store outside the web root | Files are not stored on a separate host or domain; mitigated by sealing and server-chosen content types |
-| 12.5 File download | Partly | Server-chosen content types with `nosniff` and `Content-Disposition` (`routes/media.ts:21`, `routes/images.ts:74`); filenames sanitised (`routes/media.ts:18`, `routes/admin/platform.ts:203`) | 12.5.2: media assets are served `inline` from the app origin; their types are fixed server-side (image, audio, video or `application/octet-stream`), which keeps HTML and script out, but a sandboxing `Content-Security-Policy: sandbox` on user-content responses would add depth |
+| 12.4 File storage | Met | Uploads sealed in the blob store outside the web root, under ids, never names; since 1.1.0 media and images can be served from a separate origin that serves nothing else (`MEDIA_ORIGIN`, `media/origin.ts`) | |
+| 12.5 File download | Met | Server-chosen content types with `nosniff` and `Content-Disposition` (`routes/media.ts`, `routes/images.ts`); filenames sanitised (`routes/media.ts:18`, `routes/admin/platform.ts:203`); since 1.1.0 every media file, preview and image is served with `Content-Security-Policy: sandbox` (12.5.2, `media/origin.ts` `SANDBOX_CSP`, B-413); tests "serves media and previews with a sandbox CSP and nosniff…", "sandboxes media on the application origin when no media origin is set" (`sprint15-access.test.ts`) | |
 | 12.6 SSRF protection | Partly | See 5.2.6: allow-lists and post-DNS checks with connect pinning for MCP, federation and platform operations; internal-only workflow HTTP; git refuses link-local hosts (this review) | Operator-chosen service URLs (pool instances, zone endpoints, connections, image backends) are trusted without an address check |
 
 ## V13 API and web service
@@ -198,23 +203,20 @@ and shared (cross-instance) rate limits (11.1.4).
 | 14.4 HTTP security headers | Met | Helmet on every answer, including root-mounted federation and ACME routes (applied before them in `http/app.ts:70`): CSP with `default-src 'self'`, `script-src 'self'`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`; `X-Content-Type-Options: nosniff`; `Referrer-Policy: no-referrer`; HSTS behind HTTPS; UTF-8 content types; test "sends security headers and a trace id" | `style-src 'unsafe-inline'` is needed for element style attributes set by the console |
 | 14.5 HTTP request header validation | Met | Only the methods each route defines; `Origin` checked on state changes (`http/middleware.ts:306`) and on Socket.io handshakes (`realtime/socket.ts`); CORS `*` only on discovery and JWKS, which carry no credentials | |
 
-## Follow-ups not fixed in this sprint
+## Follow-ups not fixed
 
-These are larger than a minimal fix, or change console behaviour owned elsewhere:
+The 1.0 review listed ten follow-ups. Release 1.1.0 closed eight of them: step-up re-authentication (3.7.1, Sprint 11),
+password change, admin reset and forced change (2.1.5, 2.1.6, 2.3.1, 3.3.3, Sprint 11), the breached-password check
+(2.1.7, Sprint 11), shared rate limits and the failed-credential throttle (11.1.4, 2.2.1, Sprint 15), security notices
+(2.2.3, Sprint 11), sandboxed media (12.5.2, Sprint 15), conversation retention (8.3.8, Sprint 12) and connected
+applications (3.5.1, Sprint 14). These remain:
 
-1. Re-authentication (step-up) for sensitive account changes: API key creation, factor removal, recovery-code
-   regeneration and session revocation should need a recent second factor (for example within 15 minutes), with a
-   console prompt that re-verifies and retries (3.7.1).
-2. Self-service password change for local accounts, requiring the current password, and a "sign out other sessions"
-   choice after it; admin password reset with a forced change at next sign-in (2.1.5, 2.1.6, 2.3.1, 3.3.3).
-3. A full breached-password check for local accounts: an offline HIBP k-anonymity range file or a larger bundled
-   list (2.1.7).
-4. Shared rate limits across instances (Redis-backed `rate-limiter-flexible` when `REDIS_URL` is set), and a limiter
-   on failed bearer-token and API-key attempts (11.1.4, 2.2.1).
-5. User notification (console and email) when a factor, API key or session set changes (2.2.3).
-6. Address checks for operator-chosen service URLs (pool instances, zone endpoints, connections, image backends),
+1. Address checks for operator-chosen service URLs (pool instances, zone endpoints, connections, image backends),
    and pinning git's connection to the checked address (5.2.6, 12.6.1).
-7. `Content-Security-Policy: sandbox` on inline user-content responses (media and image previews) (12.5.2).
-8. A setting that refuses plaintext connections to the database and Redis in production (1.9.1, 9.2.2).
-9. Conversation retention schedules per tenant (8.3.8).
-10. A "Connected applications" list where users see and revoke the OAuth grants and consents they gave (3.5.1).
+2. A setting that refuses plaintext connections to the database and Redis in production (1.9.1, 9.2.2).
+3. Key material outside the process with `KMS_PROVIDER=local`, and the SAML SP decryption key in the KMS (6.4.2);
+   OpenBao covers key-encryption keys and signing.
+4. A console password strength meter (2.1.8), and the breached-password check on by default where a mirror or the
+   offline file is available (2.1.7).
+5. A security notice for a sign-in from a new location or device (2.2.3).
+6. A written threat model per feature (1.1.2), and gVisor or Firecracker isolation for scripts (1.14.5).

@@ -1,8 +1,106 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
-Fixes from the pre-1.0 codebase review.
+Sprints 11 to 15: the [1.1.0 backlog](Backlog-1.1.0.md), which closes most of the known gaps and ASVS follow-ups of
+the release candidate and adds the platform features the 1.0 review found missing. Sprint details are in
+[Sprints.md](Sprints.md); the remaining gaps are in [docs/security.md](docs/security.md), [docs/asvs.md](docs/asvs.md)
+(now 50 groups met, 14 partly, 7 not applicable) and [docs/accessibility.md](docs/accessibility.md).
+
+### Account and security
+- Password change for local accounts in Settings: the current password is required, reuse is refused, and every other
+  session and OAuth grant ends.
+- Admin password reset (a temporary password or an emailed single-use link) and email invitations; admin-set and reset
+  passwords must be changed at the next sign-in, after the second factor.
+- Password reset by email from the sign-in screen: the same answer whether or not the account exists, a single-use
+  token stored as a digest, throttled; a reset ends sessions and grants and lifts a lockout.
+- Breached-password check against the HIBP range API (only a five-character prefix leaves) or an offline file
+  (`BREACHED_PASSWORDS`, off by default).
+- Step-up re-authentication for creating API keys, removing factors and regenerating recovery codes
+  (`STEPUP_WINDOW_SECONDS`).
+- Security notices in the console and by email for password, factor, recovery-code, API-key, session and grant
+  changes and admin resets; plain-text and HTML email templates with every value escaped.
+
+### Chat
+- Output guardrails while an answer streams: text is released a sentence at a time, after the deterministic
+  `model-output` rules have screened it; a block stops the model.
+- `require-approval` on an answer holds it for review in the Flags queue until a reviewer approves or rejects it.
+- Resumable streams across instances: a client catches up from any instance, and an interrupted answer can be
+  continued.
+- Agent memory write-back through the memory checkpoint, under each agent's memory policy.
+- Citations keep the quoted passage; Sources show it within the reader's clearance.
+- Conversation retention per tenant, purged by the `chat.retention` job and audited.
+
+### Integrations
+- OpenAI-compatible API at `/v1` (models, chat completions with streaming and tools, embeddings) with the same
+  profiles, clearance, quotas, guardrails and metering as chat; OAuth tokens scoped `inference:invoke:<profile>` are
+  bound to those profiles.
+- Signed webhooks for audit actions, job states, flags and approvals, delivered as jobs with retries and a
+  per-endpoint breaker, with a delivery log and replay; per-tenant allowed hosts for webhooks and workflow HTTP steps.
+- Prompt library of versioned templates with variables, per workspace or tenant, with a picker in chat.
+- Read-only conversation sharing with a person, a workspace or an expiring link; Markdown and JSON conversation export.
+- Billing: price books, monthly statements from the usage meter, CSV and JSON export, and an optional Stripe invoice
+  push.
+
+### Federation
+- Connected applications in Settings: users see and remove the applications they allowed.
+- Access-token revocation (RFC 7009) through a shared deny-list, and introspection (RFC 7662).
+- RP-initiated, front-channel and back-channel logout; `prompt=login` and `max_age`.
+- Pushed authorization requests and signed request objects; DPoP sender-constrained tokens.
+- SAML single logout in both directions, and encrypted assertions (AES-GCM with RSA-OAEP).
+- With OpenBao, OIDC and SAML signing in transit, so no private signing key is in the process.
+
+### Operations
+- Rate limits, a throttle on failed bearer credentials (20 a minute per address) and the denial cap share one atomic
+  Redis counter across instances.
+- `kms:rewrap` moves every data key, checkpoint signature and backup to a new `DATA_KEY` or KMS.
+- ACME dns-01 through a signed webhook or RFC 2136 with TSIG, wildcards included; issued certificates are written to
+  `ACME_CERT_DIR` on every instance.
+- Streamed backups that include the blob store, and `backup:restore` into an empty database; streaming blob stores
+  with S3 multipart uploads for large import bundles.
+- `PLATFORM_BUNDLE_REQUIRE_CHECKS` makes the bundle scan and staging steps mandatory; signer keys are under dual
+  control.
+- Media and images served with `Content-Security-Policy: sandbox`, optionally from a separate `MEDIA_ORIGIN`.
+- Clock skew against NTP on the platform status; zones enforced when MCP servers and connections are registered.
+- MySQL data connections, read-only, and OpenBao dynamic database credentials.
+
+### Accessibility
+- The accessibility mode is stored per user and follows them to another browser.
+- `UI.tabs` implements the full ARIA tabs pattern with arrow keys, Home and End.
+- Move buttons for workflow steps and Up and Down buttons for classifier levels (WCAG 2.5.7).
+- The Chat title is an `h1`.
+
+### Testing
+- 411 unit and API tests (1 skipped) across 31 files, with new suites `account.test.ts`, `sprint12.test.ts`,
+  `sprint13.test.ts`, `sprint14.test.ts`, `sprint15-access.test.ts` and `sprint15-ops.test.ts`, and fakes for mail and
+  the HIBP range API, webhook receivers, Stripe, OpenBao transit and DNS.
+- `integration/operations.test.ts`: shared limits across two instances on Redis, and streamed backups restored into
+  PostgreSQL and MySQL.
+- The test harness serves each app on 127.0.0.1 before SuperTest sees it (`test/loopback.ts`,
+  `test/setup-loopback.ts`), which fixes a port-shadowing flake on macOS.
+
+### Upgrade notes
+- Migrations `013_account` to `017_ops` run on start (`DB_MIGRATE_ON_START`) or with `exprsn-ai migrate`.
+- Chat answers now stream a sentence at a time when `model-output` rules apply (the platform baseline has them), because
+  each sentence is screened before it is sent.
+- `POST /platform/signers` answers `202` with a proposal once any signer key exists (the first key is still added at
+  once, `201`), and revoking a key answers `202`; a second platform admin approves.
+- New permissions `webhooks:manage`, `prompts:manage`, `billing:read` and `billing:manage`. Tenant admins get the first
+  three, knowledge curators get `prompts:manage`, and system admins hold all of them.
+- New settings, all optional with safe defaults: breached passwords (`BREACHED_*`), step-up and password links
+  (`STEPUP_WINDOW_SECONDS`, `PASSWORD_RESET_*`, `PASSWORD_INVITE_HOURS`), chat streams and retention
+  (`CHAT_STREAM_LEASE_SECONDS`, `CHAT_RETENTION_SWEEP_MINUTES`), `/v1` (`OPENAI_STREAM_MODE`), webhooks (`WEBHOOK_*`),
+  billing (`BILLING_*`, `STRIPE_*`), DPoP (`DPOP_PROOF_MAX_AGE_SECONDS`), key re-wrap (`DATA_KEY_PREVIOUS`,
+  `KMS_PREVIOUS_PROVIDER`), bundles and backups (`PLATFORM_BUNDLE_REQUIRE_CHECKS`, `PLATFORM_BACKUP_BLOBS`), ACME
+  (`ACME_CHALLENGE`, `ACME_DNS_*`, `ACME_CERT_DIR`), media (`MEDIA_ORIGIN`, `MEDIA_URL_TTL_SECONDS`), NTP (`NTP_SERVER`,
+  `NTP_TIMEOUT_MS`) and OpenBao database credentials (`OPENBAO_DATABASE_MOUNT`). See [docs/deploy.md](docs/deploy.md).
+- New CLI commands: `kms:rewrap` and `backup:restore`.
+- Backups now include the blob store by default (`PLATFORM_BACKUP_BLOBS=true`), so they are larger; set it to `false`
+  to keep database-only backups.
+
+## Pre-1.0 review fixes
+
+Fixes from the pre-1.0 codebase review, made after `1.0.0-rc.1` and included in 1.1.0.
 
 ### Security
 - Secret references (`env:`, `file:`) in user stores and upstream IdPs are confined by the operator: `env:` names must
