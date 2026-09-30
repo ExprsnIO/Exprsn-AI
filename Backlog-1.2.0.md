@@ -9,10 +9,29 @@ Rules as for 1.1.0: everything follows `docs/PLAN.md` and `CLAUDE.md`, and where
 
 | Sprint | Theme | Migration | Status |
 | --- | --- | --- | --- |
-| 16 | Chat and AI depth: `/v1` context and tools, guard model while streaming, held prompts, live sharing, finer retention | `018_chat_depth` | Planned |
-| 17 | Identity and security, and accessibility | `019_identity3` | Planned |
-| 18 | Platform hardening: operator URL checks, TLS to backends, consistent backups, ACME, training data protection | `020_platform3` | Planned |
-| 19 | Knowledge, integrations and workflows | `021_integrations2` | Planned |
+| 16 | Chat and AI depth: `/v1` context and tools, guard model while streaming, held prompts, live sharing, finer retention | `018_chat_depth` | **Done** |
+| 17 | Identity and security, and accessibility | `019_identity3` | **Done** |
+| 18 | Platform hardening: operator URL checks, TLS to backends, consistent backups, ACME, training data protection | `020_platform3` | **Done** |
+| 19 | Knowledge, integrations and workflows | `021_integrations2` | **Done** |
+
+**Status (1.2.0).** Every item from B-701 to B-1104 is delivered; what each sprint built and its tests are in
+[Sprints.md](Sprints.md), and the changes are in [CHANGELOG.md](CHANGELOG.md). One item deviates from its wording:
+B-1101 does not run axe-core. The Playwright suite uses an in-page checker (`e2e/tests/support/a11y.ts`) modelled on
+axe's WCAG A/AA rules, because axe-core is not a dependency of the suite; it covers a subset of those rules and runs in
+the Standard mode only (see [docs/accessibility.md](docs/accessibility.md#known-gaps)). What each sprint left open is
+in the "Known gaps" of [docs/security.md](docs/security.md) and under "Follow-ups not fixed" in
+[docs/asvs.md](docs/asvs.md).
+
+- Sprint 16: done. Open: the final guard-model check covers the answer, not the thinking; a reader removed from a
+  workspace keeps an open watch until they reconnect; `/v1` and compare refuse a prompt that would be held.
+- Sprint 17: done. B-1101 as above.
+- Sprint 18: done. Open: `REQUIRE_BACKEND_TLS` is off by default; an object deleted during a backup is missing from it;
+  Harbor takes OCI layout tars only; the SOA primary is not followed; a streamed checkpoint is authenticated only at
+  its end; the trainer's client certificate check relies on the mTLS proxy.
+- Sprint 19: done. Open: row access comes from the configured column, not the database's grants; a replication slot
+  holds WAL while its stream is stopped; ordered delivery is per instance; the Ed25519 key is sealed, not held in the
+  KMS; Stripe refunds and disputes are not reconciled; a chat caller of a paused workflow tool gets an error rather than
+  a pending result.
 
 ---
 

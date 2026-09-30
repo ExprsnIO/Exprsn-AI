@@ -25,16 +25,21 @@ from prototype data to live only when every control on it is backed by the serve
 | 13 | Integrations: OpenAI-compatible API, webhooks, prompts, sharing, export, billing (1.1.0) | Chat, Tenants, Usage and audit | **Done** |
 | 14 | Federation, second part: grants, revocation, logout, PAR, DPoP, SAML SLO, KMS signing (1.1.0) | Settings, Identity | **Done** |
 | 15 | Operations: shared rate limits, key re-wrap, dns-01, backups, streaming blobs, zones, connections (1.1.0) | Platform, Connections | **Done** |
-| 16–19 | 1.2.0: chat depth, identity and accessibility, platform hardening, knowledge and integrations | see [Backlog-1.2.0.md](Backlog-1.2.0.md) | Planned |
+| 16 | Chat and AI depth: `/v1` context and tools, guard model while streaming, held prompts, live and anonymous sharing, finer retention (1.2.0) | Chat, Flags, Tenants, Shared (new, signed out) | **Done** |
+| 17 | Identity, security and accessibility: sign-in notices, strength meter, upstream step-up, DPoP nonces, SAML metadata, enrolment links, automated WCAG checks and reflow (1.2.0) | Sign in, Settings, User stores, Identity, Platform; accessibility in Pools, Media, Models, Workflows | **Done** |
+| 18 | Platform hardening: service URL checks, backend TLS, consistent backups, ACME binding and hooks, sealed training data, input caps, zone re-checks, registry pushes (1.2.0) | Platform, Zones | **Done** |
+| 19 | Knowledge, integrations and workflows: MySQL sources, row access, logical replication, ordered and Ed25519 webhooks, price books and Stripe reconciliation, awaited workflow tools (1.2.0) | Knowledge, Tenants, Usage and audit, Runs, Workflows, Images | **Done** |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
-servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform); seventeen database migrations
-(`001_core` to `017_ops`); 411 unit and API tests (against a fake Ollama, a fake MCP server, fake script, media, image
-and training workers, a fake ACME directory, a fake upstream identity provider, a fake OpenBao, and fake mail, HIBP
-range, webhook, Stripe and DNS endpoints) plus the integration suite against PostgreSQL, MySQL, OpenLDAP and Redis; a
-Helm chart, supply-chain CI and a streaming load test. The version is `1.1.0`: Sprints 11 to 15 delivered the
-[1.1.0 backlog](Backlog-1.1.0.md).
+servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform), plus the signed-out Shared page for
+anonymous links; twenty-one database migrations (`001_core` to `021_integrations2`); 477 unit and API tests (against a
+fake Ollama, a fake MCP server, fake script, media, image and training workers, a fake ACME directory, a fake upstream
+identity provider, a fake OpenBao, and fake mail, HIBP range, webhook, Stripe, DNS, Harbor, Verdaccio and devpi
+endpoints) plus the integration suite against PostgreSQL, MySQL, OpenLDAP and Redis; 55 Playwright tests across the
+console, including the accessibility and reflow checks; a Helm chart, supply-chain CI and a streaming load test. The
+version is `1.2.0`: Sprints 16 to 19 delivered the [1.2.0 backlog](Backlog-1.2.0.md), after Sprints 11 to 15 delivered
+the [1.1.0 backlog](Backlog-1.1.0.md).
 
 ---
 
@@ -747,3 +752,171 @@ gaps ([docs/security.md](docs/security.md)) are updated for what Sprints 11 to 1
 each test app on 127.0.0.1 before SuperTest sees it (`server/test/loopback.ts`, `setup-loopback.ts`), which fixed a
 macOS port-shadowing flake. The suite: 411 tests passed and 1 skipped across 31 files. Tagging `v1.0.0` and publishing
 the image and chart (B-601) remain with the maintainers.
+
+## Sprint 16: Chat and AI depth (done)
+
+Delivered in `server/src/chat` (`service.ts`, `context.ts`, `sharing.ts`), `server/src/guardrails` (`stream.ts`,
+`engine.ts`), `server/src/openai`, `server/src/prompts/service.ts`, `server/src/realtime/socket.ts`,
+`server/src/routes/sharing.ts`, `server/src/routes/sharing-public.ts` (mounted at `/api/public`),
+`server/src/routes/admin/tenants.ts` (migration `018_chat_depth`) and the console screens `chat.js`, `flags.js`,
+`tenants.js` and the new signed-out `shared.js`. New settings `CHAT_GUARD_HOLDBACK_SENTENCES` (1),
+`CHAT_GUARD_STREAM_CONCURRENCY` (16) and `SHARE_ANONYMOUS_PER_MINUTE` (30); no new permissions or dependencies. The load
+test takes `--guard-model`, `--holdback` and `--sentence-words` ([docs/loadtest.md](docs/loadtest.md): a hold-back of
+1 adds about 10 ms to the time to first token; run the guard model in its own pool).
+
+- `/v1` context (B-701): `X-Exprsn-Knowledge: <ids>` and `X-Exprsn-Memory: on` add chat's knowledge and memory context
+  under chat's clearance and ceiling rules, with citations and passages in an `exprsn` extension field.
+- `/v1` server tools (B-702): `X-Exprsn-Tools: profile` runs the profile's read-only tools on the server through the
+  dispatcher (up to six rounds) and returns only the final answer. Each header needs its own permission or scope
+  (`knowledge:read`, `memory:write`, `tools:invoke`).
+- Guard model while streaming (B-703): the guard model and classifiers check a streamed answer in the background,
+  bounded per instance; with a hold-back of N, a sentence window is shown only once a clean verdict covers it and the
+  next N-1. Generation never waits for a verdict. Tool results shown in chat pass the stream screen.
+- Held prompts (B-704): `require-approval` at `user-input` holds the prompt in the Flags queue; approval re-checks the
+  owner and generates, rejection withdraws the prompt and notifies the user.
+- Live sharing (B-705): readers of a shared conversation watch answers stream in socket rooms the server chooses, and
+  lose them at once when the share is revoked or the label raised.
+- Anonymous links (B-706): off per tenant by default, only for conversations labelled `public`, expiring, rate-limited
+  per address, audited, and opened on the signed-out `#/shared` page.
+- Retention per workspace and per user (B-707): the shortest applicable period wins.
+- Prompt templates pass the `user-input` checkpoint when saved, versioned and published (B-708).
+
+**Done when:** `/v1` cites a knowledge base the caller may read and never one they may not; `/v1` runs profile tools on
+the server and returns only the final answer; a phrase only the guard model blocks is never released with the default
+hold-back; a held prompt generates nothing until approved and a rejection tells the user; an anonymous link opens a
+public conversation signed out and never an internal one; a workspace with a shorter period purges first; a template
+with a blocked secret cannot be saved or published; a shared reader receives `chat.chunk` and loses it at once on
+revoke (`server/test/sprint16.test.ts`, `e2e/tests/shared.spec.ts`).
+
+## Sprint 17: Identity, security and accessibility (done)
+
+Delivered in `server/src/identity` (`signin-notices.ts`, `admin-create.ts`, `account.ts`, `passwords.ts`,
+`providers/sql.ts`), `server/src/federation` (`proposals.ts`, `metadata.ts`, `saml.ts`, `upstream.ts`, `oidc.ts`,
+`jose.ts`), `server/src/http/middleware.ts`, `server/src/routes` (`auth.ts`, `me.ts`, `federation-public.ts`,
+`admin/users.ts`, `admin/federation.ts`, `admin/platform.ts`), `server/src/cli.ts` (migration `019_identity3`) and the
+console screens `signin.js`, `settings.js`, `directories.js`, `identity.js` and `platform.js`, with accessibility fixes
+in `web/css/app.css`, `web/js/app.js`, `pools.js`, `media.js`, `models.js` and `workflows.js`. New settings
+`SIGNIN_NOTICES` (on), `DPOP_NONCES` (off), `DPOP_NONCE_SECONDS` (300), `API_PUBLIC_URL` and
+`FEDERATION_METADATA_REFRESH_HOURS` (24); new CLI option `admin:create --enrol-link`. No new permissions or
+dependencies.
+
+- New sign-in notices (B-801): a sign-in from a new browser (a signed device cookie, `exai_device`) or a new network
+  (/24 or /48) sends a security notice; an account's first sign-in only records the browser and network.
+- Password strength meter (B-802) on every password form, from `POST /api/auth/password/check` (entropy estimate, the
+  policy's rules, the breached result when enabled); Platform warns while `BREACHED_PASSWORDS=off`.
+- Upstream step-up (B-803): re-authenticating at the upstream OIDC or SAML IdP (`prompt=login`/`max_age=0`,
+  `ForceAuthn`) counts as step-up, bound by state and nonce and a single-use handle.
+- Admin password reset revokes the account's API keys unless the option is unticked (B-804).
+- Optional DPoP nonces (B-805): stateless HMAC windows; `API_PUBLIC_URL` gives the `htu` base behind a proxy prefix.
+- Resource-server introspection (B-806): a client flagged `introspect: any` after a second identity admin approves
+  (`federation/proposals.ts`).
+- SAML (B-807): optional whole-response signing; SP and upstream IdP metadata fetched by URL through the outbound checks
+  (`federation/metadata.ts`), refreshed daily; certificate and endpoint changes wait for approval, and an entity ID
+  change is refused.
+- Console sign-out loads each front-channel logout URI on a signed-out page (B-808).
+- SQL user stores dial the checked address and re-check the name for every new connection (B-809).
+- First admin enrolment (B-810): `admin:create --enrol-link` prints a single-use link that sets the password and enrols
+  the second factor; until it is used, no admin route answers.
+- Accessibility (B-1101 to B-1104): an in-page WCAG A/AA checker (`e2e/tests/support/a11y.ts`, modelled on axe-core's
+  rules, with no axe dependency) runs on every screen and design state, a streaming chat and sign-in, in light and dark
+  (Standard mode); no two-dimensional scrolling at 320 and 640 px, with wide tables scrolling in a named,
+  keyboard-reachable region; one tab panel per tab list (`App.tabPanel`); `--faint-text` at 4.5:1 or more wherever
+  faint text is shown, no nested buttons in Pools rows, and Media caption contrast fixed.
+
+**Done when:** the first sign-in from a new browser notifies and the second does not; the meter shows on every
+password form and Platform warns when the breached check is off; an upstream OIDC user with no local factor creates an
+API key after re-authenticating upstream; a reset revokes keys by default; a proof without the current nonce gets
+`use_dpop_nonce` and a prefixed deployment accepts proofs; an approved resource server introspects another client's
+token and an ordinary client cannot; a fetched metadata certificate change waits for approval; console sign-out loads
+each front-channel URI; a SQL store whose name re-resolves to a link-local address is refused; an admin created with the
+link must use it before any admin route (`server/test/sprint17.test.ts`, 16 tests); the accessibility and reflow checks
+pass on every screen (`e2e/tests/y-accessibility.spec.ts`, `e2e/tests/y-reflow.spec.ts`,
+`e2e/tests/password-meter.spec.ts`).
+
+## Sprint 18: Platform hardening (done)
+
+Delivered in `server/src/platform` (`egress.ts`, `yaml.ts`, `diagnostics.ts`, `rewrap.ts`), `server/src/ops`
+(`cert-hooks.ts`, `push.ts`, `acme.ts`, `dns.ts`, `certs.ts`, `backups.ts`, `restore.ts`, `bundles.ts`),
+`server/src/training` (`worker.ts`, `trainer.ts`, `service.ts`), `server/src/routes/trainer-worker.ts`,
+`server/src/zones/service.ts`, `server/src/mcp/hosts.ts`, `server/src/gateway`, `server/src/images`,
+`server/src/routes/admin` (`platform.ts`, `gateway.ts`, `zones.ts`) (migration `020_platform3`) and the console screens
+`platform.js` and `zones.js`. The training worker contract, version 2, is in
+[docs/training-worker.md](docs/training-worker.md). New settings `SERVICE_ALLOWED_HOSTS`, `SERVICE_INTERNAL_ONLY`,
+`REQUIRE_BACKEND_TLS` (off), `BACKEND_TLS_EXEMPT`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`, `ACME_DNS_RFC2136_TRANSPORT`,
+`ACME_RELOAD_COMMANDS`, `ACME_HOOK_TIMEOUT_MS` and `TRAINER_*` (`CALLBACK_URL`, `PLAINTEXT_FALLBACK`,
+`KEY_TTL_SECONDS`, `CLIENT_CERT_SHA256`, `ARTIFACT_MAX_BYTES`, `CA_FILE`, `CERT_FILE`, `KEY_FILE`);
+`ACME_DNS_RFC2136_ZONE` is now optional. No new permissions or dependencies.
+
+- Operator-chosen service URLs (B-901): pool instances, zone endpoints, image backends and the trainer refuse
+  metadata, link-local and unspecified addresses when saved and at every connection (`platform/egress.ts`); loopback
+  and private addresses stay allowed. `mcp/hosts.ts` also refuses 100.100.100.200, 192.0.0.192 and fd00:ec2::254.
+- Backend TLS (B-902): `REQUIRE_BACKEND_TLS` in production refuses plaintext PostgreSQL, MySQL, Redis, S3 and OpenBao
+  links, with per-link exemptions in `BACKEND_TLS_EXEMPT`; SQLite is exempt.
+- Consistent backups (B-903): a backup reads one snapshot, and the blob archive holds exactly the objects that
+  snapshot's rows name.
+- ACME (B-904): external account binding; RFC 2136 over UDP with TCP fallback and zone discovery from the SOA; push
+  hooks per certificate, named reload commands or signed webhooks (`ops/cert-hooks.ts`).
+- Training data protection (B-905, worker contract 2): rows are sealed with a per-run key the worker fetches once
+  (with a client certificate check when configured); checkpoints and GGUF files are sealed under the tenant key in the
+  platform's blob store (`training/worker.ts`, `routes/trainer-worker.ts`).
+- `kms:rewrap` re-signs image provenance (the row and the PNG) and training model cards (B-906).
+- Input limits (B-907): size, depth, node and alias caps for YAML (`platform/yaml.ts`); secrets masked in diagnostics
+  and problem details (`platform/diagnostics.ts`).
+- Zones (B-908): MCP servers and connections outside their zone are listed with a suggested zone and a move proposal
+  under dual control; admins are told when the first zones appear.
+- Registry pushes (B-909): promoted artefacts go to Harbor (OCI layout tars), Verdaccio and devpi through their APIs
+  (`ops/push.ts`); outcomes are recorded and a push can be repeated.
+- A training job whose start fails gets its wait reason back.
+
+**Done when:** a pool instance pointing at 169.254.169.254 is refused and clients refuse a metadata address at connect;
+production with `sslmode=disable` refuses to start with `REQUIRE_BACKEND_TLS` on; a blob written during a backup is
+neither missing nor orphaned after restore; an EAB order completes against the fake ACME and a renewal calls the hooks;
+the submit request carries no plaintext rows and a contract-1 worker is refused unless the fallback is set; old images
+still verify after a re-wrap; a billion-laughs YAML is refused and a driver message shows its password masked;
+out-of-zone members are listed with a move proposal; a promoted npm package appears in a fake Verdaccio
+(`server/test/sprint18.test.ts`, 18 tests, with the registry fakes in `sprint18-fakes.ts`).
+
+## Sprint 19: Knowledge, integrations and workflows (done)
+
+Delivered in `server/src/knowledge` (`acl.ts`, `replication.ts`, `service.ts`, `sources.ts`), `server/src/connections`
+(`replication.ts`, `drivers.ts`), `server/src/webhooks/service.ts`, `server/src/billing` (`service.ts`, `stripe.ts`),
+`server/src/routes/integrations-public.ts`, `server/src/routes/admin` (`billing.ts`, `integrations.ts`),
+`server/src/agents/service.ts`, `server/src/workflows` (`graph.ts`, `service.ts`), `server/src/registry/dispatch.ts`,
+`server/src/images/service.ts`, `server/src/scripts/runner.ts` (migration `021_integrations2`) and the console screens
+`knowledge.js`, `tenants.js`, `usage-audit.js`, `runs.js`, `workflows.js` and `images.js`. New settings
+`KNOWLEDGE_REPLICATION` (on for sources that ask for it), `KNOWLEDGE_REPLICATION_TICK_MS` (10000),
+`STRIPE_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_TOLERANCE_SECONDS` (300), `IMAGE_SAFETY_REQUIRED` (off) and `SCRIPT_RUNTIME`.
+No new permissions or dependencies. CI turns on `wal_level=logical` in its PostgreSQL service for the replication test.
+
+- MySQL knowledge sources (B-1001): tables and views feed knowledge bases by watermark, as PostgreSQL does.
+- Row-level access (B-1002): a database source may name an access column (groups or users per row), carried onto
+  documents and chunks and enforced at retrieval; an empty value admits nobody (`knowledge/acl.ts`).
+- PostgreSQL logical replication (B-1003): `pgoutput` over the `pg` package, one leased stream per source, acknowledged
+  after apply, falling back to watermarks (`knowledge/replication.ts`, `connections/replication.ts`).
+- Webhooks (B-1004): ordered delivery per endpoint (per instance), and Ed25519 signatures with a per-tenant key
+  published as a JWKS (`GET /webhooks/keys/:tenant`), with rotation.
+- Billing (B-1005): per-tenant price books, currency and taxes; a signed, idempotent Stripe webhook
+  (`POST /billing/stripe/webhook`) marks statements paid, failed or void.
+- Workflows (B-1006): a paused workflow tool gives an agent run a pending result it awaits; approval timeouts per step;
+  run events reach approvers live.
+- `IMAGE_SAFETY_REQUIRED` withholds images and sampled frames no classifier checked (B-1007).
+- `SCRIPT_RUNTIME=runsc` runs scripts under gVisor, and runs are refused if the container engine lacks the runtime
+  (B-1008).
+
+**Done when:** a MySQL view feeds a knowledge base; a member not in a row's group never retrieves its chunk; a streamed
+update reaches the index at once and a broken stream falls back; ordered deliveries arrive in event order and an
+Ed25519 signature verifies with the published key; a paid Stripe invoice marks the statement paid; a calling agent run
+resumes when the workflow's approval completes; with the setting on and no classifier, generation returns withheld;
+the runner passes `--runtime=runsc` and reports it (`server/test/sprint19-knowledge.test.ts`,
+`server/test/sprint19-integrations.test.ts`, `server/test/sprint19-workflows.test.ts`, and
+`server/test/integration/replication.test.ts` against PostgreSQL with `wal_level=logical`).
+
+## Release 1.2.0
+
+The workspace, the server and the chart are versioned `1.2.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
+the backlog in [Backlog-1.2.0.md](Backlog-1.2.0.md). The ASVS assessment ([docs/asvs.md](docs/asvs.md)), the known
+gaps ([docs/security.md](docs/security.md)) and [docs/accessibility.md](docs/accessibility.md) are updated for what
+Sprints 16 to 19 closed. `API_RATE_PER_MINUTE` (600) now sets the `/api` limit per user (per address when signed
+out), which was fixed at 600, and the console suite's server raises it to 6000. A flake in `memory.test.ts` (a random sealed value could contain the searched substring) is fixed.
+The suite: 477 tests passed and 1 skipped across 37 files, and 55 Playwright tests passed. Tagging `v1.0.0` and
+publishing the image and chart (B-601) remain with the maintainers.

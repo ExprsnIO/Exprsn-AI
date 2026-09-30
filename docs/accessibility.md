@@ -111,6 +111,14 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   sign-in and all 26 signed-in screens, in Standard and Enhanced, light and dark, against the e2e server's seeded data.
   No violations remain; the last findings fixed were low-contrast helper text on Classifiers, an unfocusable scrolling
   YAML block on Profiles, and toggles that picked up the browser's grey button background in dark mode.
+- **In CI** since 1.2.0 (B-1101, B-1102): the Playwright suite checks every screen, each of its design states (the
+  "States" popover, which also opens the drawers and dialogs the boards describe), the sign-in screen and a streaming
+  chat answer, in light and dark, and fails on any finding (`e2e/tests/y-accessibility.spec.ts`). It uses an in-page
+  checker (`e2e/tests/support/a11y.ts`) modelled on axe-core's WCAG A/AA rules: contrast with alpha and opacity, names,
+  roles and ARIA references, required parents and children, one tab panel per tab list, aria-hidden focus, scrolling
+  regions, nested controls, lists, language and title. `e2e/tests/y-reflow.spec.ts` checks every screen for
+  two-dimensional scrolling at 320 and 640 px. Fixed on the way: faint text below 4.5:1 (B-1104), nested buttons in
+  Pools rows, the Media caption contrast, and tab content outside its panel (B-1103).
 - **Keyboard walk** in Chromium: skip link, landmarks, `aria-current`, focus on screen change, palette combobox and
   arrows, dialog labelling, focus trap in both directions, Esc and focus return, header re-render keeping focus,
   popover focus and Esc, focusable table rows, focus kept on re-render, persistence across reload, system contrast and
@@ -118,15 +126,12 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
 
 ## Known gaps
 
-- The Playwright suite (B-1101, `e2e/tests/y-accessibility.spec.ts`) checks every screen, each of its design states
-  (the "States" popover, which also opens the drawers and dialogs the boards describe), the sign-in screen and a
-  streaming chat answer, in light and dark, and fails on any finding. It uses an in-page checker
-  (`e2e/tests/support/a11y.ts`) modelled on axe-core's WCAG A/AA rules (contrast with alpha and opacity, names,
-  roles and ARIA references, required parents and children, one tab panel per tab list, aria-hidden focus, scrolling
-  regions, nested controls, lists, language and title), because axe-core is not a dependency of the suite. It does
-  not cover every axe rule (for example `aria-allowed-attr` per role, `target-size`, or contrast over background
-  images, which it skips), and it checks the Standard mode only; Enhanced was last scanned with axe-core by hand in
-  Sprint 10. `e2e/tests/y-reflow.spec.ts` checks reflow at 320 and 640 px on every screen.
+Sprint 17 closed the gaps listed for 1.1.0: tab panels (B-1103), reflow (B-1102) and faint-text contrast (B-1104) are
+described above, and the checks now run in CI (B-1101). These remain:
+
+- The CI checker is not axe-core, which is not a dependency of the suite. It does not cover every axe rule (for
+  example `aria-allowed-attr` per role, `target-size`, or contrast over background images, which it skips), and it
+  checks the Standard mode only; Enhanced was last scanned with axe-core by hand in Sprint 10.
 - Reflow is checked on each screen's default state; dialogs and drawers are full-width at narrow sizes but were not
   measured one by one.
 - No screen-reader session (NVDA, JAWS, VoiceOver) has been recorded yet; the checks above are automated or keyboard
