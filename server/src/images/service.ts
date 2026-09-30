@@ -96,7 +96,7 @@ const n0 = (v: unknown) => (v == null ? null : Number(v));
 const rowFrom = (r: Record<string, unknown>): ImageRow => ({ ...(r as unknown as ImageRow), width: Number(r.width), height: Number(r.height), seed: Number(r.seed), steps: Number(r.steps), step: Number(r.step ?? 0), gpu_ms: Number(r.gpu_ms ?? 0), safety_score: n0(r.safety_score), created_at: Number(r.created_at), started_at: n0(r.started_at), finished_at: n0(r.finished_at) });
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 /** tEXt chunks are Latin-1: keep the JSON ASCII. */
-const asciiJson = (v: unknown) => JSON.stringify(v).replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+export const asciiJson = (v: unknown) => JSON.stringify(v).replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 export const PROVENANCE_KEYWORD = 'exprsn-provenance';
 
 /** At most `n` jobs at once per worker on this instance ("one job per GPU"). */

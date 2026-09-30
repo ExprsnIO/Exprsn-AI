@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { isIP } from 'node:net';
+import { connect as tcpConnect, isIP } from 'node:net';
 import { fetch as undiciFetch } from 'undici';
 import type { Config } from '../config/index.js';
 import { checkUrl, guardedAgent, parseAllowList } from '../mcp/hosts.js';
@@ -204,6 +204,9 @@ export interface ParsedMessage {
   opcode: number;
   rcode: number;
   zone: { name: string; type: number; cls: number }[];
+  /** The answer section (the prerequisite section of an UPDATE). */
+  answers: { name: string; type: number; cls: number; ttl: number; rdata: Buffer }[];
+  /** The authority section (the update section of an UPDATE). */
   updates: { name: string; type: number; cls: number; ttl: number; rdata: Buffer }[];
   additional: { name: string; type: number; cls: number; ttl: number; rdata: Buffer; start: number }[];
 }
@@ -220,7 +223,12 @@ export function parseMessage(msg: Buffer): ParsedMessage {
     zone.push({ name: n.name, type: msg.readUInt16BE(n.next), cls: msg.readUInt16BE(n.next + 2) });
     pos = n.next + 4;
   }
-  for (let i = 0; i < counts[1]!; i++) pos = readRr(msg, pos).next;
+  const answers: ParsedMessage['answers'] = [];
+  for (let i = 0; i < counts[1]!; i++) {
+    const r = readRr(msg, pos);
+    answers.push(r);
+    pos = r.next;
+  }
   const updates: ParsedMessage['updates'] = [];
   for (let i = 0; i < counts[2]!; i++) {
     const r = readRr(msg, pos);
@@ -234,7 +242,7 @@ export function parseMessage(msg: Buffer): ParsedMessage {
     additional.push({ ...r, start });
     pos = r.next;
   }
-  return { id, flags, opcode: (flags >> 11) & 0xf, rcode: flags & 0xf, zone, updates, additional };
+  return { id, flags, opcode: (flags >> 11) & 0xf, rcode: flags & 0xf, zone, answers, updates, additional };
 }
 
 export function parseTsig(msg: Buffer): ParsedTsig | null {
@@ -282,6 +290,21 @@ export function buildTxtUpdate(o: { id: number; zone: string; name: string; valu
   return Buffer.concat([header, zone, update]);
 }
 
+/** B-904: a plain query (one question, no recursion wanted), e.g. for the SOA that names a record's zone. */
+export function buildQuery(o: { id: number; name: string; type: number }): Buffer {
+  return Buffer.concat([u16(o.id), u16(0), u16(1), u16(0), u16(0), u16(0), encodeName(o.name), u16(o.type), u16(CLASS_IN)]);
+}
+
+export const DNS_TYPE_SOA = TYPE_SOA;
+
+/** The zone apex from an SOA answer, or from the SOA in the authority section of a referral or NXDOMAIN answer. */
+export function soaOwner(msg: ParsedMessage): string | null {
+  return (msg.answers.find((r) => r.type === TYPE_SOA) ?? msg.updates.find((r) => r.type === TYPE_SOA))?.name ?? null;
+}
+
+/** Frames a message for DNS over TCP (RFC 1035 section 4.2.2: a two-byte length first). */
+export const tcpFrame = (msg: Buffer): Buffer => Buffer.concat([u16(msg.length), msg]);
+
 export const txtValue = (rdata: Buffer): string => {
   const parts: string[] = [];
   for (let p = 0; p < rdata.length; ) {
@@ -292,18 +315,24 @@ export const txtValue = (rdata: Buffer): string => {
   return parts.join('');
 };
 
-/** RFC 2136 dynamic update over UDP to the zone's primary, signed with a TSIG key; the answer's TSIG is checked too. */
+/**
+ * RFC 2136 dynamic update to the zone's primary, signed with a TSIG key; the answer's TSIG is checked too. Sprint 18
+ * (B-904): over UDP with a fallback to TCP when the answer is truncated or UDP gets no answer (or TCP only, or UDP
+ * only), and the zone found from the SOA record when it is not configured.
+ */
 export class Rfc2136DnsProvider implements DnsProvider {
   readonly name: string;
   private readonly host: string;
   private readonly port: number;
+  private readonly zones = new Map<string, string>();
 
   constructor(
     server: string,
-    private readonly zone: string,
+    private readonly zone: string | null,
     private readonly key: TsigKey,
     private readonly timeoutMs = 5000,
-    private readonly ttl = 60
+    private readonly ttl = 60,
+    private readonly transport: 'auto' | 'udp' | 'tcp' = 'auto'
   ) {
     const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(server);
     if (v6) {
@@ -317,10 +346,10 @@ export class Rfc2136DnsProvider implements DnsProvider {
       this.host = h!;
       this.port = p ? Number(p) : 53;
     }
-    this.name = `RFC 2136 at ${server} (zone ${zone.replace(/\.$/, '')})`;
+    this.name = `RFC 2136 at ${server} (${zone ? `zone ${zone.replace(/\.$/, '')}` : 'zone from SOA'}, ${transport === 'auto' ? 'UDP with TCP fallback' : transport.toUpperCase()})`;
   }
 
-  private send(msg: Buffer): Promise<Buffer> {
+  private sendUdp(msg: Buffer): Promise<Buffer> {
     const socket = createSocket(isIP(this.host) === 6 ? 'udp6' : 'udp4');
     const id = msg.readUInt16BE(0);
     return new Promise<Buffer>((resolve, reject) => {
@@ -341,13 +370,62 @@ export class Rfc2136DnsProvider implements DnsProvider {
     });
   }
 
+  private sendTcp(msg: Buffer): Promise<Buffer> {
+    return new Promise<Buffer>((resolve, reject) => {
+      const sock = tcpConnect({ host: this.host, port: this.port });
+      let buf = Buffer.alloc(0);
+      const done = (err: Error | null, r?: Buffer) => {
+        clearTimeout(timer);
+        sock.destroy();
+        if (err) reject(err);
+        else resolve(r!);
+      };
+      const timer = setTimeout(() => done(new Error(`No answer over TCP from the DNS server ${this.host}:${this.port} within ${this.timeoutMs} ms`)), this.timeoutMs);
+      sock.on('error', (err) => done(err));
+      sock.on('connect', () => sock.write(tcpFrame(msg)));
+      sock.on('data', (c: Buffer) => {
+        buf = Buffer.concat([buf, c]);
+        if (buf.length > 65_537) return done(new Error('The DNS answer over TCP is too long.'));
+        if (buf.length >= 2 && buf.length >= 2 + buf.readUInt16BE(0)) done(null, buf.subarray(2, 2 + buf.readUInt16BE(0)));
+      });
+      sock.on('end', () => done(new Error('The DNS server closed the TCP connection without an answer.')));
+    });
+  }
+
+  /** One exchange over the configured transport; `auto` retries over TCP on a truncated answer or no UDP answer. */
+  async exchange(msg: Buffer): Promise<{ answer: Buffer; transport: 'udp' | 'tcp' }> {
+    if (this.transport === 'tcp') return { answer: await this.sendTcp(msg), transport: 'tcp' };
+    let answer: Buffer;
+    try {
+      answer = await this.sendUdp(msg);
+    } catch (err) {
+      if (this.transport === 'udp') throw err;
+      return { answer: await this.sendTcp(msg), transport: 'tcp' };
+    }
+    const truncated = (answer.readUInt16BE(2) & 0x0200) !== 0;
+    if (truncated && this.transport === 'auto') return { answer: await this.sendTcp(msg), transport: 'tcp' };
+    return { answer, transport: 'udp' };
+  }
+
+  /** The zone that holds `name`: the configured one, or the owner of the SOA the server answers with. */
+  async zoneFor(name: string): Promise<string> {
+    if (this.zone) return this.zone.replace(/\.$/, '').toLowerCase();
+    const cached = this.zones.get(name);
+    if (cached) return cached;
+    const { answer } = await this.exchange(buildQuery({ id: randomBytes(2).readUInt16BE(0), name, type: TYPE_SOA }));
+    const owner = soaOwner(parseMessage(answer));
+    if (!owner) throw new Error(`The DNS server did not name the zone of ${name} (no SOA in its answer); set ACME_DNS_RFC2136_ZONE.`);
+    this.zones.set(name, owner);
+    return owner;
+  }
+
   private async update(domain: string, value: string, remove: boolean): Promise<void> {
     const name = challengeName(domain);
-    const zone = this.zone.replace(/\.$/, '').toLowerCase();
+    const zone = await this.zoneFor(name);
     if (name !== zone && !name.endsWith(`.${zone}`)) throw new Error(`${name} is not inside the zone ${zone} (ACME_DNS_RFC2136_ZONE).`);
     const msg = buildTxtUpdate({ id: randomBytes(2).readUInt16BE(0), zone, name, value, ttl: this.ttl, remove });
     const { signed, mac } = signTsig(msg, this.key);
-    const res = await this.send(signed);
+    const { answer: res } = await this.exchange(signed);
     const parsed = parseMessage(res);
     const tsig = parseTsig(res);
     if (tsig?.error) throw new Error(`The DNS server refused the update: TSIG ${TSIG_ERRORS[tsig.error] ?? tsig.error}.`);
@@ -367,8 +445,8 @@ export class Rfc2136DnsProvider implements DnsProvider {
 
 export function createDnsProvider(cfg: Config): DnsProvider | null {
   if (cfg.ACME_DNS_PROVIDER === 'webhook' && cfg.ACME_DNS_WEBHOOK_URL && cfg.ACME_DNS_WEBHOOK_SECRET) return new WebhookDnsProvider(cfg.ACME_DNS_WEBHOOK_URL, cfg.ACME_DNS_WEBHOOK_SECRET, cfg.PLATFORM_ALLOWED_HOSTS);
-  if (cfg.ACME_DNS_PROVIDER === 'rfc2136' && cfg.ACME_DNS_RFC2136_SERVER && cfg.ACME_DNS_RFC2136_ZONE && cfg.ACME_DNS_TSIG_NAME && cfg.ACME_DNS_TSIG_SECRET) {
-    return new Rfc2136DnsProvider(cfg.ACME_DNS_RFC2136_SERVER, cfg.ACME_DNS_RFC2136_ZONE, { name: cfg.ACME_DNS_TSIG_NAME, algorithm: cfg.ACME_DNS_TSIG_ALGORITHM, secret: cfg.ACME_DNS_TSIG_SECRET });
+  if (cfg.ACME_DNS_PROVIDER === 'rfc2136' && cfg.ACME_DNS_RFC2136_SERVER && cfg.ACME_DNS_TSIG_NAME && cfg.ACME_DNS_TSIG_SECRET) {
+    return new Rfc2136DnsProvider(cfg.ACME_DNS_RFC2136_SERVER, cfg.ACME_DNS_RFC2136_ZONE ?? null, { name: cfg.ACME_DNS_TSIG_NAME, algorithm: cfg.ACME_DNS_TSIG_ALGORITHM, secret: cfg.ACME_DNS_TSIG_SECRET }, 5000, 60, cfg.ACME_DNS_RFC2136_TRANSPORT);
   }
   return null;
 }

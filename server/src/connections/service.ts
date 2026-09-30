@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { scrubError } from '../platform/diagnostics.js';
 import { json, type Db } from '../db/knex.js';
 import { clears, type Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
@@ -288,10 +289,20 @@ export class ConnectionService {
     return { engine: c.engine, endpoint: c.endpoint, database: c.database, tls: c.tls, username: cred?.username ?? null, password: cred?.password ?? null };
   }
 
+  /** B-907: the secrets of the last spec built per connection, masked out of driver messages. */
+  private readonly secretsOf = new Map<string, string[]>();
+
   private async driver(c: ConnectionRow) {
     const make = this.drivers[c.engine];
     if (!make) throw conflict(`The ${c.engine} engine is not installed on this platform.`);
-    return make(await this.spec(c));
+    const spec = await this.spec(c);
+    this.secretsOf.set(c.id, spec.password ? [spec.password] : []);
+    return make(spec);
+  }
+
+  /** A driver's error message with the connection's password and any other credentials masked. */
+  private scrub(c: ConnectionRow, err: unknown): string {
+    return scrubError(err, this.secretsOf.get(c.id) ?? []);
   }
 
   async test(tenantId: string, id: string): Promise<{ ok: boolean; ms: number; version?: string; readOnly?: boolean; detail: string; health: ConnectionRow['health'] }> {
@@ -304,7 +315,7 @@ export class ConnectionService {
       await this.db('data_connections').where({ id }).update({ health, health_detail: r.detail.slice(0, 300), checked_at: Date.now() });
       return { ok: true, ms, version: r.version, readOnly: r.readOnly, detail: r.detail, health };
     } catch (err) {
-      const detail = (err as Error).message.slice(0, 300);
+      const detail = this.scrub(c, err).slice(0, 300);
       await this.db('data_connections').where({ id }).update({ health: 'unreachable', health_detail: detail, checked_at: Date.now() });
       return { ok: false, ms: Date.now() - t, detail, health: 'unreachable' };
     }
@@ -316,7 +327,7 @@ export class ConnectionService {
     try {
       schema = await (await this.driver(c)).introspect(c.timeout_s * 1000);
     } catch (err) {
-      throw new HttpProblem(502, 'Introspection failed', `${c.name} could not be read: ${(err as Error).message}`.slice(0, 500));
+      throw new HttpProblem(502, 'Introspection failed', `${c.name} could not be read: ${this.scrub(c, err)}`.slice(0, 500));
     }
     await this.db('data_connections').where({ id }).update({ schema: JSON.stringify(schema), schema_at: Date.now() });
     const ok = schema.filter((o) => allowed(c, o.name)).length;
@@ -398,8 +409,9 @@ export class ConnectionService {
     try {
       r = await (await this.driver(c)).query(cl, text, { limit: c.row_limit, timeoutMs: c.timeout_s * 1000 });
     } catch (err) {
-      await record('connection.query.failed', { error: (err as Error).message.slice(0, 300) });
-      throw new HttpProblem(502, 'Query failed', `${c.name}: ${(err as Error).message}`.slice(0, 500), { extensions: { kind: 'failed' } });
+      const message = this.scrub(c, err);
+      await record('connection.query.failed', { error: message.slice(0, 300) });
+      throw new HttpProblem(502, 'Query failed', `${c.name}: ${message}`.slice(0, 500), { extensions: { kind: 'failed' } });
     }
     const ms = Date.now() - t;
     const m = this.mask(c, cl.objects, r);
