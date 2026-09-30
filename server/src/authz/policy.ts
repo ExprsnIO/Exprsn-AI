@@ -67,6 +67,14 @@ export function authorize(p: Principal, action: Permission, resource: Resource =
   return { allow: true, step: null, reason: 'allowed', action, policy: POLICY_VERSION };
 }
 
+/**
+ * The zone step on its own, for routing decisions made without a principal (the gateway choosing a pool): data may
+ * enter a zone only when the zone's ceiling is at or above its label. No ceiling means no zone step applies.
+ */
+export function zoneAdmits(label: Label | undefined, zoneCeiling: Label | null | undefined): boolean {
+  return !label || !zoneCeiling || labelRank(label) <= labelRank(zoneCeiling);
+}
+
 export interface ExplainedStep {
   step: DecisionStep;
   ok: boolean;

@@ -103,6 +103,7 @@ export function gatewayAdminRoutes(s: Services): Router {
       z.object({ name: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/), description: z.string().trim().max(500).nullable().default(null), accelerator: z.enum(['cuda', 'rocm', 'metal', 'cpu']), zone: z.string().trim().regex(/^[a-z0-9-]{1,63}$/).default('inference'), labelCeiling: z.enum(LABELS).default('internal') }),
       req.body
     );
+    await s.zones.assertPoolFits(body.zone, body.labelCeiling);
     try {
       const p = await g.repo.createPool(body);
       await audit(req, 'pool.created', { pool: p.id, name: p.name }, { accelerator: p.accelerator, zone: p.zone, labelCeiling: p.label_ceiling });
@@ -117,6 +118,7 @@ export function gatewayAdminRoutes(s: Services): Router {
     const pool = await g.repo.pool(String(req.params.id));
     if (!pool) throw notFound('Pool');
     const body = parseBody(z.object({ description: z.string().trim().max(500).nullable().optional(), zone: z.string().regex(/^[a-z0-9-]{1,63}$/).optional(), labelCeiling: z.enum(LABELS).optional(), accelerator: z.enum(['cuda', 'rocm', 'metal', 'cpu']).optional() }).strict(), req.body);
+    if (body.zone !== undefined || body.labelCeiling !== undefined) await s.zones.assertPoolFits(body.zone ?? pool.zone, body.labelCeiling ?? pool.label_ceiling);
     await g.repo.updatePool(pool.id, body);
     await audit(req, 'pool.updated', { pool: pool.id, name: pool.name }, { before: { zone: pool.zone, labelCeiling: pool.label_ceiling }, after: body });
     res.json(await g.repo.pool(pool.id));
@@ -236,6 +238,7 @@ export function gatewayAdminRoutes(s: Services): Router {
     if (!pool) throw notFound('Pool');
     if (model.state === 'retired') throw conflict('A retired model cannot be placed.');
     if (labelRank(model.label) > labelRank(pool.label_ceiling)) throw forbidden(`${model.name} is approved for ${model.label} data but ${pool.name}'s ceiling is ${pool.label_ceiling}.`, { step: 'zone' });
+    await s.zones.assertAdmits(pool, model.label);
     const pl = await g.repo.place(model.id, pool.id, body.residency, p.userId);
     const job = body.pull ? await s.jobs.enqueue({ tenantId: p.tenantId, type: 'model.pull', payload: { modelId: model.id, poolId: pool.id }, createdBy: p.userId, maxAttempts: 1 }) : null;
     await audit(req, 'model.placed', { model: model.name, pool: pool.name }, { residency: body.residency, pullJob: job?.id ?? null });
@@ -311,6 +314,10 @@ export function gatewayAdminRoutes(s: Services): Router {
         await s.db('models').where({ id: m.id }).delete();
         throw forbidden(`${m.name} is labelled ${m.label} but ${pool.name}'s ceiling is ${pool.label_ceiling}.`, { step: 'zone' });
       }
+      await s.zones.assertAdmits(pool, m.label).catch(async (err: unknown) => {
+        await s.db('models').where({ id: m.id }).delete();
+        throw err;
+      });
       await g.repo.place(m.id, pool.id, 'warm', p.userId);
       jobId = (await s.jobs.enqueue({ tenantId: p.tenantId, type: 'model.pull', payload: { modelId: m.id, poolId: pool.id }, createdBy: p.userId, maxAttempts: 1 })).id;
     }
@@ -447,7 +454,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     if (p.pool_id && !pls.some((x) => x.pool_id === p.pool_id)) throw conflict(`${m.name} is not placed on the chosen pool.`);
     const poolsList = await g.repo.pools();
     const reachable = poolsList.filter((x) => pls.some((y) => y.pool_id === x.id) && (!p.pool_id || x.id === p.pool_id));
-    if (!reachable.some((x) => labelRank(x.label_ceiling) >= labelRank(p.label))) throw conflict(`No pool running ${m.name} is cleared for ${p.label} data.`);
+    const ceilings = await Promise.all(reachable.map((x) => s.zones.poolCeiling(x)));
+    if (!ceilings.some((c) => labelRank(c) >= labelRank(p.label))) throw conflict(`No pool running ${m.name} is cleared for ${p.label} data.`);
     if (p.think_ceiling !== 'off' && !m.capabilities.includes('thinking')) throw conflict(`${m.name} does not support thinking; set the ceiling to off.`);
     if (p.tools.length && (!m.capabilities.includes('tools') || m.evaluation?.toolsWithheld)) throw conflict(`${m.name} has no tools capability${m.evaluation?.toolsWithheld ? ' (withheld until its tool-calling test passes)' : ''}.`);
   };
