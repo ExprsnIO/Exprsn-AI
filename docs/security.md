@@ -111,14 +111,18 @@ filter, private `/tmp`, only the state directory writable.
 - First-factor enrolment: an admin with no second factor enrols one at first sign-in, so until then the account is
   protected by its password alone. Have new admins sign in and enrol promptly; an identity admin can reset factors
   (which forces re-enrolment) if an account may have been enrolled by someone else.
-- Guardrails: the model-output check runs on the finished (or stopped) answer. While it streams the user sees the
-  text, and a block or redaction replaces it afterwards; the guard model is not yet run sentence by sentence during
-  streaming. In chat, `require-approval` refuses the turn, because chat has no approval flow to hold it in.
+- Guardrails: while an answer streams, only the deterministic `model-output` rules (patterns, detectors, lists,
+  labels, budgets, meta) screen it sentence by sentence; the guard model and classifiers run once on the finished
+  answer, so text they would block can be shown first and is replaced afterwards. A phrase that spans a sentence
+  boundary is blocked when its second half arrives, but the first half has already been shown. The final sentence is released
+  before that full check. Tool results shown in chat are not screened by the stream screen. In chat, a
+  `require-approval` on the prompt (`user-input`) still refuses the turn; on the answer it holds it for review.
 - The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
   labelled cases (the console warns below 200 per label).
 - Knowledge: row-level permissions of source databases are not mapped to chunk access; a database source's chunks
   carry the connection's label and the knowledge base's access. Database sources sync by watermark on a schedule (no
-  logical replication). Chat citations show the source, not the passage, which is not stored with the answer.
+  logical replication). A citation's passage is chosen by word overlap with the answer (the best-matching sentences of
+  the chunk), not by the model saying what it quoted.
 - Data connections: PostgreSQL and OpenSearch only; a username and password sealed with the tenant key (no OpenBao
   dynamic credentials yet); writes through a connection are refused outright. Hosts must be internal unless
   `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses.
@@ -133,8 +137,8 @@ filter, private `/tmp`, only the state directory writable.
   approval, which agent runs and workflows provide. MCP servers are checked against internal addresses after DNS
   resolution; hosts in `MCP_ALLOWED_HOSTS` (never link-local) are trusted by the operator. Tool results pass the
   `context` checkpoint (`meta.via: tool-result`) before the model sees them: a block withholds the result (the call
-  itself has already run), a redaction replaces it. Agent runs read agent
-  memories but do not write them yet.
+  itself has already run), a redaction replaces it. Agent runs propose memories only through the `remember` tool
+  when their definition allows it; a model without tool calling cannot propose any.
 - Workflows: the HTTP step may call any private address (narrowed by `WORKFLOW_HTTP_HOSTS` when set; there is no
   per-tenant host list yet). Run events go live only to the person who started the run; approvers see pending
   approvals through `GET /api/workflow-approvals` and the notification. A workflow published as a tool is pinned to one
@@ -142,8 +146,14 @@ filter, private `/tmp`, only the state directory writable.
   the run continues on its own; a tool step's own approval pause has a fixed 24-hour timeout.
 - Images and media frames are checked by the classifier at `IMAGE_SAFETY_URL`; without one, images are marked "not
   classified" rather than blocked.
-- A chat stream lives on the instance that runs it: if that instance stops, the answer ends where it was and is
-  kept as stored so far. Resume after a restart shows the stored text, not a continuation.
+- Resumable streams: an answer is marked interrupted only after `CHAT_STREAM_LEASE_SECONDS` without a heartbeat, and
+  the stored text is the last snapshot (up to two seconds behind what clients saw). Continuing it relies on the
+  model carrying on from an assistant prefill, which Ollama supports but a model may phrase imperfectly. An answer
+  interrupted before its full `model-output` check ran shows what passed the streaming screen until it is continued
+  or regenerated. Without Redis the catch-up buffer lives in the database; running several instances still needs Redis
+  for the bus and the socket adapter.
+- Conversation retention deletes conversations by last activity for the whole tenant (no per-workspace or per-user
+  periods yet); usage records, audit events and flags that quote a purged answer are kept under their own rules.
 - Training: the orchestrator sends the scrubbed rows of a dataset to the training worker in the submit request, so
   they are in plaintext in transit to it and on its scratch storage for the run; run the worker inside the training
   zone over TLS, with encrypted scratch that it clears after each run. Checkpoints and GGUF artefacts live in the

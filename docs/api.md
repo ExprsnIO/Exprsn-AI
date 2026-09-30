@@ -918,3 +918,72 @@ Audit actions: `oidc.authorized`, `oidc.consent.granted`/`denied`, `oidc.token.i
 `federation.test_login`, and `auth.login*` with `target.kind` `oidc`, `saml` or `kerberos`.
 
 Access tokens whose audience is `<issuer>/api` are also accepted by the console API as `Authorization: Bearer <jwt>`, like API keys: the token's scopes narrow the user's roles, the client, grant, user and tenant must still be active, and an admin-role user's token must carry a second factor in `amr`.
+
+## Sprint 12: Chat (streaming guardrails, held answers, resumable streams, agent memory, citations, retention)
+
+### Streaming and output guardrails
+
+Answer text is not sent token by token. It is buffered to a sentence end or line break (or 240 characters without
+one), the whole answer so far is screened by the enforced deterministic `model-output` rules (patterns, PII and
+secret detectors, allow-lists, label, budget and meta rules), and only the part that passed goes out as `chat.chunk`
+(thinking is screened the same way). A `block` stops the generation and nothing more is sent; a `require-approval`
+sends nothing more and lets the answer finish for review; a `redact` sends the new text with the spans replaced.
+The full `model-output` check (guard model and classifiers included) still runs once on the finished answer, as
+before. When no deterministic rule applies at `model-output`, deltas stream as they arrive.
+
+### Held answers (`require-approval` at `model-output`)
+
+The answer is stored whole and sealed with `state: held`; the owner's view and catch-up show `state: held` with empty
+content, thinking, tools and citations, and `chat.status {state: held}` / `chat.done {state: held}` say so. A flag of
+`kind: hold` (action `require-approval`) goes to the review queue.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /flags/:ref` | For a `hold` flag also `held: {messageId, state, content}` (the full answer), or `null` when it is gone; withheld above the reviewer's clearance like the rest |
+| `POST /flags/:ref/decide` `{decision: approved\|rejected, reason?}` | Only for `hold` flags (`409` otherwise; `confirmed`/`dismissed` are refused on them). `approved`: the answer becomes `complete` and visible; `rejected`: it becomes `withdrawn` with the text "This answer was withdrawn after review." Either way the sequence number rises, the owner gets `chat.released {conversationId, messageId, state, seq}` and a notification, and the message's `guard.review` records the decision. A reviewer cannot decide on an answer in their own conversation (`403`, `step: dual-control`). An approval counts as a false positive of the rule, a rejection as a true positive. Audit: `chat.held`, `chat.hold.approved`, `chat.hold.rejected` |
+
+Held and withdrawn answers are never sent back to the model as history.
+
+### Resumable streams
+
+Each chunk carries a sequence number and goes out on the bus. The generating instance writes the chunks, sealed, in
+small batches to a shared catch-up buffer (Redis when `REDIS_URL` is set, the `chat_stream_chunks` table otherwise),
+stores a snapshot of the released text every two seconds and then drops the batches the snapshot covers. It renews
+a heartbeat on the answer; an answer whose heartbeat is older than `CHAT_STREAM_LEASE_SECONDS` is marked
+`interrupted` (by whichever instance notices first: a catch-up, a conversation view, or the `chat.sweep` job), with
+`chat.done {state: interrupted}` and the audit action `chat.interrupted`. An instance shutting down marks its own
+answers interrupted.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /conversations/:id/messages/:mid/stream?after=<seq>` | From any instance. Streaming: `{state, seq, chunks}` with the chunks after `after`, or, for a client behind the last snapshot, `{state, seq, content, thinking, tools}` (the snapshot with the buffered chunks after it applied). Otherwise the stored message as before |
+| `POST /conversations/:id/messages/:mid/continue` `{profile?, think?}` (`chat:write`, `inference:invoke`) | For an `interrupted` or `stopped` answer: generates the rest in place (same message; sequence numbers continue). The model gets the stored text as the start of its turn. `202 {messageId, profile, model, think, from}`; `409` for any other state. The finished answer passes the output check as a whole; usage adds to the stored totals |
+
+### Agent memory write-back
+
+An agent definition may carry `memory: {write: off|propose, types: [progress, quirk], maxPerRun: 1-20}` (default
+off). With `propose`, runs are offered a built-in `remember` tool `{text, type}`; each call becomes a `do` step titled
+`remember` that proposes an `agent`-scope memory (owner: the agent's name, `origin: agent`, `source: {runId}`) through
+the memory checkpoint (tenant policy, the credential ban and the `memory` guardrail rules with `meta.agent`). The
+policy's type list and per-run cap, a text a curator rejected before, and a duplicate are refused as a `denied` step
+whose error the model sees. Proposals wait for a knowledge curator (`POST /memory/:id/accept`); memory views carry
+`run` for them. Audit: `memory.proposed`.
+
+### Citations
+
+Knowledge citations on an answer now also carry `span: [start, end]` (within the cited chunk) and `passage` (that
+text), stored sealed with the answer. A reader whose clearance is below a citation's label gets `passage: null,
+span: null, restricted: true`. Memory citations carry no passage.
+
+### Conversation retention (`tenant:manage`)
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /admin/tenants/:tid/retention` | `{conversationDays, updatedBy, updatedAt, lastRunAt, lastPurged, sweepMinutes}`; `conversationDays: null` keeps conversations until their owners delete them |
+| `PUT /admin/tenants/:tid/retention` `{conversationDays: 1-3650 \| null}` | Sets the policy. Audit: `tenant.retention.updated` |
+| `POST /admin/tenants/:tid/retention/run` | Applies it now as the `chat.retention` job: `202 {jobId}`; `409` without a policy. Audit: `tenant.retention.run` |
+
+The `chat.retention` job (every `CHAT_RETENTION_SWEEP_MINUTES` per tenant) deletes conversations not updated for more
+than the period, with their messages, catch-up buffers and attachments no remaining message uses; conversations with
+an answer still generating wait for the next run. Each purge is audited as `chat.retention.purged` with
+`{days, before, conversations, messages, attachments}`.
