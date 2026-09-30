@@ -25,6 +25,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 13 | Integrations: OpenAI-compatible API, webhooks, prompts, sharing, export, billing (1.1.0) | Chat, Tenants, Usage and audit | **Done** |
 | 14 | Federation, second part: grants, revocation, logout, PAR, DPoP, SAML SLO, KMS signing (1.1.0) | Settings, Identity | **Done** |
 | 15 | Operations: shared rate limits, key re-wrap, dns-01, backups, streaming blobs, zones, connections (1.1.0) | Platform, Connections | **Done** |
+| 16–19 | 1.2.0: chat depth, identity and accessibility, platform hardening, knowledge and integrations | see [Backlog-1.2.0.md](Backlog-1.2.0.md) | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
