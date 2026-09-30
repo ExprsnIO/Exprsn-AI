@@ -73,6 +73,8 @@ async function main() {
   const cfg = loadConfig({
     NODE_ENV: 'development',
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn',
+    // The suite opens every screen and design state several times as one admin; keep it clear of the per-user limit.
+    API_RATE_PER_MINUTE: '6000',
     HOST: '127.0.0.1',
     PORT: String(port),
     PUBLIC_URL: url,

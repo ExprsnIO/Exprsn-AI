@@ -130,7 +130,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(csrfProtection(s));
 
   // Counted in the shared counter store: one limit across every instance when REDIS_URL is set.
-  const general = new Limiter(s.counters, 'api', 600, 60_000);
+  const general = new Limiter(s.counters, 'api', s.cfg.API_RATE_PER_MINUTE, 60_000);
   const authLimiter = new Limiter(s.counters, 'auth', 30, 60_000);
   const limit = (limiter: Limiter): express.RequestHandler => async (req, _res, next) => {
     const r = await limiter.consume(req.principal?.userId ?? req.ip ?? 'unknown');

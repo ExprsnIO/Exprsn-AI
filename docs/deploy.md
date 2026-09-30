@@ -59,6 +59,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `BILLING_PROVIDER` | `none` | `stripe` lets a system admin push a finished month's statement as a Stripe invoice |
 | `STRIPE_SECRET_KEY` (`_FILE`), `STRIPE_API_URL`, `STRIPE_DAYS_UNTIL_DUE` | —, `https://api.stripe.com`, `30` | Stripe restricted key (invoice items and invoices, write), API base (a mirror or proxy in air-gapped installs), invoice terms |
 | `BILLING_CLOSE_MINUTES` | `360` | How often the scheduler closes last month's statements (0 turns off) |
+| `API_RATE_PER_MINUTE` | `600` | Requests a minute per user (or per address when signed out) across `/api`; shared across instances with Redis |
 | `SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_HOURS` | `30`, `12` | Session lifetime |
 | `LOCKOUT_MAX_ATTEMPTS`, `LOCKOUT_WINDOW_MINUTES`, `LOCKOUT_DURATION_MINUTES` | `5`, `15`, `15` | Sign-in lockout |
 | `STEPUP_WINDOW_SECONDS` | `300` | Creating API keys, removing a second factor and regenerating recovery codes need a password or factor check this recent (signing in counts) |

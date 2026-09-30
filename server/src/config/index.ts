@@ -329,6 +329,8 @@ const base = z.object({
     // --- end Sprint 19 ---
 
     COOKIE_SECURE: bool.optional(),
+    /** Requests a minute per user (or per address when signed out) across `/api`. */
+    API_RATE_PER_MINUTE: z.coerce.number().int().min(60).max(100_000).default(600),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
     SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
     MFA_PENDING_MINUTES: z.coerce.number().int().min(1).max(30).default(5),
