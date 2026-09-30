@@ -66,7 +66,11 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `BREACHED_HIBP_URL`, `BREACHED_TIMEOUT_MS` | `https://api.pwnedpasswords.com`, `3000` | Range API base (`GET <url>/range/<prefix>`); point it at an internal mirror in air-gapped sites |
 | `BREACHED_FILE` | — | Required for `file` and `both`: uppercase SHA-1 hashes, one per line, sorted, optionally followed by `:count` (the format of HIBP's "ordered by hash" download). Searched in place by binary search, never loaded into memory |
 | `PASSWORD_RESET_MINUTES`, `PASSWORD_RESET_PER_HOUR` | `60`, `5` | Lifetime of emailed reset links; reset requests per hour per identifier and per account (four times that per client address). Needs `SMTP_URL` |
-| `PASSWORD_INVITE_HOURS` | `72` | Lifetime of invitation links for local accounts created without a password |
+| `PASSWORD_INVITE_HOURS` | `72` | Lifetime of invitation links for local accounts created without a password, and of `admin:create --enrol-link` links |
+| `SIGNIN_NOTICES` | `true` | Security notice for a sign-in from a new browser (a signed, long-lived device cookie) or a new network (/24 or /48 of the client address; set the trusted proxy so it is the real one) |
+| `DPOP_NONCES`, `DPOP_NONCE_SECONDS` | `false`, `300` | Require server-issued DPoP nonces (RFC 9449 section 8): a proof without the current `DPoP-Nonce` gets `use_dpop_nonce`. Turn on once your DPoP clients retry with the nonce |
+| `API_PUBLIC_URL` | — | The public base of the API when a reverse proxy serves it under another origin or path prefix (for example `https://gw.example.internal/ai`); DPoP proofs for API calls must name `<API_PUBLIC_URL>/api/...` as `htu` |
+| `FEDERATION_METADATA_REFRESH_HOURS` | `24` | How often SAML metadata registered by URL (service providers and upstream identity providers) is fetched again; a changed certificate or endpoint waits for an identity admin's approval |
 | `DEFAULT_TENANT` | `default` | Tenant used when sign-in names none |
 | `IDENTITY_CONFIG` | — | Path to the identity YAML ([identity.md](identity.md)) |
 | `METRICS_TOKEN` (`_FILE`) | — | Bearer token for `/metrics`; without it `/metrics` is off in production |
@@ -95,6 +99,10 @@ echo -n 'ldap-service-password' > secrets/ldap_bind_password.txt
 PUBLIC_URL=https://ai.example.internal docker compose up -d --build
 docker compose exec app node server/dist/cli.js admin:create --username root --display-name "Platform admin"
 ```
+
+With `--enrol-link` instead of a password, `admin:create` prints a single-use link (valid for `PASSWORD_INVITE_HOURS`)
+that sets the password and then asks for the second factor before anything else, so the first admin is never
+usable with a password alone. Hand the link over a trusted channel.
 
 The app container runs read-only as a non-root user with all capabilities dropped. PostgreSQL sits on an internal
 network. `docker compose --profile inference up -d` adds Ollama on its own internal network; add `-f compose.gpu.yml`

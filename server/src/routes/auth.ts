@@ -259,7 +259,7 @@ export function authRoutes(s: Services): Router {
     if (req.authSession) {
       const user = await s.users.get(req.authSession.tenant_id, req.authSession.user_id);
       // An identity admin setting someone else's password checks it against that user's name.
-      username = body.username && req.principal && effectivePermissions(req.principal).has('identity:manage') ? body.username : (user?.username ?? '');
+      username = body.username && req.principal && (effectivePermissions(req.principal).has('identity:manage') || effectivePermissions(req.principal).has('users:manage')) ? body.username : (user?.username ?? '');
       key = `pwcheck:s:${req.authSession.id}`;
     } else {
       const found = body.token ? await s.account.findToken(body.token) : null;

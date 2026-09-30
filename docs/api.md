@@ -1246,3 +1246,68 @@ The `billing.close` schedule closes last month's statements. Audit actions: `bil
 - Media is sandboxed; see "Media origin" above. Platform routes for signer proposals, dns-01 and backups are under
   "Sprint 9: Platform operations". Data connections gained MySQL and OpenBao dynamic credentials; MCP server
   registration and tool approval check zones (`422`/`403 step: zone`, the refusal audited as `mcp.register.refused`).
+
+## Sprint 17: Identity and security
+
+### Sign-in and account (`/api/auth`, `/api/me`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /auth/login` (and upstream and Kerberos sign-ins) | Now also sets a long-lived signed device cookie (`exai_device`, `__Host-` prefixed with secure cookies). A sign-in from a browser or a network (/24, /48) the account has not used before sends a `New sign-in to your account` security notice (`SIGNIN_NOTICES`); the account's first sign-in does not. Audit `auth.login.new_context` |
+| `POST /auth/password/check` `{password, token?, username?, breach?}` | The strength meter: `{bits, score 0-4, label, rules[{id, label, ok}], acceptable, breached {mode, checked, found, unavailable}}`. Needs a session (any stage) or a live reset, invite or enrolment `token`; `username` (whose name the password must not contain) is taken from the body only for callers with `identity:manage` or `users:manage`. With `BREACHED_PASSWORDS` on, the breach corpus is asked unless `breach: false`. Throttled to 600 an hour per session or link (`429`) |
+| `POST /auth/password/reset` | With an enrolment link (`admin:create --enrol-link`) also signs in: `{…, session}` with `stage: enroll`, which reaches only the factor enrolment routes; audit `password.enrol.accepted` |
+| `POST /auth/logout` | When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers `200 {signedOut, next}`; `next` is the signed-out page (`/oauth/logged-out?handle=…`, single use, ten minutes) that loads each one in a frame. Otherwise `204` as before |
+| `GET /me` | `stepUp.methods` includes `upstream` for a session from an enabled upstream OIDC or SAML provider, with `stepUp.upstream {name, protocol}` |
+| `POST /me/step-up/upstream` | Starts a re-authentication at the session's upstream IdP (`prompt=login`, `max_age=0`; SAML `ForceAuthn`), bound to this browser and session; `{url, provider}`. `409` for a session that did not come from an upstream provider |
+| `POST /me/step-up/upstream/complete` `{handle}` | Redeems the handle the upstream callback put in `/#/settings?stepup=<handle>`. Only the session that started it can redeem it, once, within five minutes; then the step-up time moves (`auth.step_up`). `400` otherwise |
+
+The upstream callback accepts a step-up only when the IdP reports a fresh authentication (`auth_time`, or the
+assertion's `AuthnInstant`, no older than the request minus a minute) as the same upstream account; otherwise it
+shows an error page (`auth.step_up.failed` for another account).
+
+### Users (`users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/users/:id/password` | Now takes `revokeApiKeys` (default `true`): the account's API keys are revoked with the reset. The answer adds `apiKeysRevoked` |
+
+### Protocol endpoints (outside `/api`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /oauth/logged-out?handle=` | The signed-out page after a console sign-out, with a frame per front-channel logout URL (CSP `frame-src` names exactly their origins); then back to the sign-in screen |
+| `POST /oauth/token`, API calls with `DPoP` | With `DPOP_NONCES=true` every token response carries `DPoP-Nonce`; a proof without the current nonce gets `400 {error: use_dpop_nonce}` at the token endpoint and `401` with `WWW-Authenticate: DPoP error="use_dpop_nonce"` (and `DPoP-Nonce`) at `/oauth/userinfo` and the API. API proofs name `<API_PUBLIC_URL or PUBLIC_URL origin><path>` as `htu` |
+| `POST /oauth/introspect` | A client registered as a resource server (`introspect: any`) sees the access tokens of every client in its tenant; refresh tokens stay visible to their own client only |
+
+### Federation admin (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/federation/oidc/clients[/:id]` | Now also returns `introspect` (`own` or `any`) and `introspectPending` |
+| `POST /admin/federation/oidc/clients/:id/introspect` `{mode: own\|any, reason?}` | `own` applies at once. `any` (confidential clients only) is a proposal (`202 {client, proposal}`) that a second identity admin approves |
+| `GET /admin/federation/proposals[?state=]` | Changes waiting for approval (and decided ones): `{id, kind (client.introspect, metadata.sp, metadata.idp), targetId, name, summary, state, proposedBy (null: the metadata refresh), mine, …}` |
+| `POST /admin/federation/proposals/:id/approve` `{note?}` | Applies the change. A person's proposal needs another identity admin (`403` dual control); the metadata refresh's needs any identity admin |
+| `POST /admin/federation/proposals/:id/reject` `{note?}`, `…/withdraw` | Rejects (not your own), or withdraws your own |
+| `POST /admin/federation/saml/sps` | Now takes `metadataUrl` instead of `xml` (fetched through the upstream host checks: internal or `FEDERATION_ALLOWED_HOSTS`, pinned, no redirects, 1 MB) and `signResponse` (sign the whole response as well as the assertion) |
+| `PATCH /admin/federation/saml/sps/:id` | Now takes `signResponse` |
+| `POST /admin/federation/upstream` | SAML metadata given as a URL is remembered and refreshed like SP metadata |
+| `GET /admin/federation/metadata` | Metadata sources `{id, kind (sp, idp), url, fetchedAt, error}` |
+| `PUT /admin/federation/metadata/:id` `{url}` | Starts fetching a registered SP's or SAML IdP's metadata from a URL; it must describe the same entity. A difference from what is in force becomes a proposal |
+| `POST /admin/federation/metadata/:id/refresh` | Fetches now: `{state: unchanged\|proposed\|pending\|error, proposal, source}` |
+| `DELETE /admin/federation/metadata/:id` | Stops fetching (the values in force stay) |
+
+Every source is fetched again every `FEDERATION_METADATA_REFRESH_HOURS` (job `federation.metadata`). A change of
+certificates, assertion consumer services, SSO or logout endpoints is proposed, never applied, until approved; the
+previous values stay in force meanwhile. Metadata that now names another entity ID is refused (`error`).
+
+### Platform (`platform:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/platform/summary` | Adds `passwords {breachedCheck}`; the console warns while it is `off` |
+
+Audit actions: `auth.login.new_context`, `auth.step_up.started`, `password.enrol.accepted`, `user.enrol_link.issued`,
+`federation.client.introspect_changed`, `federation.proposal.created`, `federation.proposal.approved`,
+`federation.proposal.rejected`, `federation.proposal.withdrawn`, `federation.metadata.refreshed`,
+`federation.metadata.failed`, `federation.metadata.source_set`, `federation.metadata.source_removed`,
+`federation.saml_sp.metadata_applied`, `identity.provider.metadata_applied`.

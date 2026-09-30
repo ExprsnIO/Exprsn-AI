@@ -103,7 +103,7 @@ describe('Sprint 17: identity and security', () => {
       await localUser(h, 'traveller', ['member']);
       // The account's first sign-in has nothing to compare with.
       const first = await login(h, 'traveller');
-      expect(first.res.headers['set-cookie']!.some((c: string) => c.startsWith('exai_device='))).toBe(true);
+      expect((first.res.headers['set-cookie'] as unknown as string[]).some((c) => c.startsWith('exai_device='))).toBe(true);
       expect(await notices(first.agent)).toHaveLength(0);
       // The same browser again: known device, known network.
       await first.agent.post('/api/auth/login').send({ username: 'traveller', password: PASSWORD });
