@@ -140,7 +140,7 @@
         const done = (data) => { if (st.node === key) { st.nodeData = data; st.nodeKey = key; } };
         const p = node.type === 'workspace'
           ? Promise.all([App.get(wUrl(tenant.id, node.ws.id) + '/members'), App.get(wUrl(tenant.id, node.ws.id) + '/quota')]).then(([members, quota]) => done({ members, quota }))
-          : Promise.all(tenant.workspaces.map((w) => App.get(wUrl(tenant.id, w.id) + '/quota').then((q) => [w.id, q]))).then((list) => { const quotas = {}; list.forEach((x) => { quotas[x[0]] = x[1]; }); done({ quotas }); });
+          : Promise.all([Promise.all(tenant.workspaces.map((w) => App.get(wUrl(tenant.id, w.id) + '/quota').then((q) => [w.id, q]))), App.get(tUrl(tenant.id) + '/retention').catch(() => null)]).then(([list, retention]) => { const quotas = {}; list.forEach((x) => { quotas[x[0]] = x[1]; }); done({ quotas, retention }); });
         p.catch((err) => { if (st.node === key) { st.nodeData = { error: err }; st.nodeKey = key; } })
           .finally(() => { if (st.nodeLoading === key) st.nodeLoading = null; if (App.state.route === 'tenants') ctx.rerender(); });
       };
@@ -228,6 +228,7 @@
             ['Workspaces', num(wss.filter((w) => w.state === 'active').length) + (wss.some((w) => w.state !== 'active') ? ', ' + num(wss.filter((w) => w.state !== 'active').length) + ' archived' : '')]
           ], 2), { actions: (canMap && t.state === 'active' && (st.providers || []).some((p) => p.kind !== 'local' && p.enabled) ? UI.btn('Sync now', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-sync' }) : '') + (own && App.can('identity:manage') ? UI.btn('Open user stores', { size: 'sm', kind: 'ghost', attrs: 'data-go="directories"' }) : '') })
           + UI.panel('Quota, tenant total', LIMITS.map((L) => meterFor(t.quota, L)).join('') + '<div class="muted" style="font-size:12px">Workspace limits nest under the tenant limit. Raised by a system admin.</div>', { actions: isSys() ? UI.btn('Raise limits', { size: 'sm', kind: 'ghost', attrs: 'data-traise' }) : '' }) + '</div>'
+          + retentionPanel(nd && nd.retention)
           + '<div class="eyebrow">Workspaces</div>' + UI.table(['Workspace', { label: 'Members', right: true }, 'Label ceiling', 'Visibility', { label: 'Mappings', right: true }, 'Tokens today'], wss.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>' + (w.state !== 'active' ? ' ' + UI.pill(w.state, 'outline') : ''), '<span class="num">' + num(w.members) + '</span>', UI.label(w.label, { sm: true }), w.visibility === 'tenant' ? 'whole tenant' : 'members only', own && st.mappings ? '<span class="num">' + num(wsMappings(w.id).length) + '</span>' : '<span class="muted">n/a</span>', esc(qTokens(w))], attrs: 'data-node="w:' + esc(w.id) + '"' })), { minWidth: '560px', emptyTitle: 'No workspaces', emptyText: 'Create one to give a directory group a place to work.' });
       } else {
         const w = node.ws;
@@ -435,6 +436,34 @@
         });
       }
 
+      /** Conversation retention (Sprint 12): conversations idle for longer than N days are deleted by a scheduled job. */
+      function retentionPanel(r) {
+        if (!r) return '';
+        const keep = r.conversationDays == null ? 'until their owners delete them' : 'deleted after ' + num(r.conversationDays) + ' days without activity';
+        const last = r.lastRunAt ? new Date(r.lastRunAt).toLocaleString() + ', ' + num(r.lastPurged || 0) + ' deleted' : 'not run yet';
+        return UI.panel('Conversation retention', UI.kv([['Conversations', esc(keep)], ['Checked', 'every ' + num(r.sweepMinutes) + ' min'], ['Last run', esc(last)]], 3) + '<div class="muted" style="font-size:12px">Each purge is written to the audit chain with its counts. Messages, their catch-up buffers and attachments no remaining message uses are deleted with the conversation.</div>',
+          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-retention' }) + (r.conversationDays != null ? UI.btn('Run now', { size: 'sm', kind: 'ghost', attrs: 'data-retrun' }) : '') });
+      }
+
+      function retentionModal() {
+        const r = nd && nd.retention; if (!r) return;
+        ctx.modal({
+          title: 'Conversation retention, ' + esc(tenant.name),
+          body: '<div class="formgrid">' + UI.field('Delete conversations idle for more than (days)', UI.input(r.conversationDays == null ? '' : String(r.conversationDays), { attrs: 'data-rdays inputmode="numeric"', placeholder: 'keep until the owner deletes them' }), 'Between 1 and 3650. Leave empty to keep conversations until their owners delete them.') + '</div>'
+            + UI.notice('Deletion cannot be undone. It applies to every user\'s conversations in this tenant, from the next scheduled run.', 'warn') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-rsave' }),
+          onMount(m) {
+            submit(m, '[data-rsave]', () => {
+              const v = String(m.querySelector('[data-rdays]').value || '').trim();
+              const days = v === '' ? null : Number(v);
+              if (days !== null && !(Number.isInteger(days) && days >= 1 && days <= 3650)) { errorBox(m, new Error('Enter whole days between 1 and 3650, or leave it empty.')); return false; }
+              st.nodeKey = null;
+              return App.api('PUT', tUrl(tenant.id) + '/retention', { conversationDays: days });
+            }, (x) => (x.conversationDays == null ? 'Conversations are kept until their owners delete them.' : 'Conversations idle for more than ' + num(x.conversationDays) + ' days will be deleted.'));
+          }
+        });
+      }
+
       function limitsModal(scope) {
         const isTenant = scope === 'tenant';
         const q = isTenant ? tenant.quota : nd && nd.quota;
@@ -508,6 +537,14 @@
       ctx.on('click', '[data-newtenant]', () => tenantModal(null));
       ctx.on('click', '[data-raise]', () => limitsModal('workspace'));
       ctx.on('click', '[data-traise]', () => limitsModal('tenant'));
+      ctx.on('click', '[data-retention]', () => retentionModal());
+      ctx.on('click', '[data-retrun]', async () => {
+        const r = nd && nd.retention; if (!r) return;
+        const ok = await ctx.confirm({ title: 'Apply the retention policy now?', tone: 'danger', body: 'Conversations idle for more than ' + num(r.conversationDays) + ' days are deleted now, as the schedule would. This cannot be undone.', ok: 'Run now' });
+        if (!ok) return;
+        st.nodeKey = null;
+        await act(() => App.post(tUrl(tenant.id) + '/retention/run', {}), 'Retention run queued. The result shows here when it finishes.');
+      });
       ctx.on('click', '[data-addmember]', () => addMemberModal());
       ctx.on('click', '[data-wsstate]', async (e, t) => {
         const w = node.ws; const ok = await ctx.confirm({ title: 'Restore ' + w.name + '?', body: '<div class="fg2">Members can select it again.</div>', ok: 'Restore' });

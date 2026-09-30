@@ -62,8 +62,13 @@
     const score = typeof c.score === 'number' ? ', score ' + c.score.toFixed(2) : '';
     return { title: c.document || 'Document', sub: (c.kb || 'Knowledge base') + (c.section ? ', ' + c.section : '') + score };
   }
+  /** The quoted passage stored with a knowledge citation, or why it is not shown. */
+  function passageHtml(c) {
+    if (c.restricted) return '<span class="muted s ch-pass">The quoted passage is above your clearance.</span>';
+    return c.passage ? '<span class="s ch-pass">“' + esc(c.passage) + '”</span>' : '';
+  }
   function sourcesHtml(m, cls) {
-    return (m.citations || []).map((c) => { const t = citeText(c); return '<button type="button" class="' + cls + '" data-src="' + esc(c.n) + '" data-mid="' + esc(m.id) + '"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span></span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</button>'; }).join('');
+    return (m.citations || []).map((c) => { const t = citeText(c); return '<button type="button" class="' + cls + '" data-src="' + esc(c.n) + '" data-mid="' + esc(m.id) + '"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span>' + passageHtml(c) + '</span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</button>'; }).join('');
   }
 
   function pickProfile(st, preferred) {
@@ -108,7 +113,7 @@
     live.sock = App.socket;
     const guard = (fn) => (d) => { if (!visible()) { detach(); return; } fn(S(), d || {}); };
     live.handlers = {
-      'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone),
+      'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone), 'chat.released': guard(onReleased),
       'attachment.state': guard(onAttachment), connect: guard(onReconnect)
     };
     Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
@@ -121,6 +126,7 @@
     if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model }; }
     if (d.state === 'context' && d.citations) { st.citeFor = st.citeFor || {}; st.citeFor[d.messageId] = true; }
     const m = byId(st, d.messageId);
+    if (m && d.state === 'held') m.heldLive = true;
     if (m && d.state !== 'queued' && m.state === 'queued') m.state = 'streaming';
     if (m && d.profile) m.profile = d.profile;
     if (m && d.model) m.model = d.model;
@@ -161,6 +167,12 @@
     if (d.state === 'failed') App.toast('<b>The answer failed</b> ' + esc(d.error || ''), 'danger', 6000);
     refreshProfiles();
     schedule();
+  }
+  /** A reviewer approved or rejected a held answer: read the conversation again. */
+  function onReleased(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) return;
+    loadConv(false).then(schedule);
+    App.toast(d.state === 'complete' ? 'An answer held for review was approved and is shown now.' : 'An answer held for review was withdrawn by the reviewer.', d.state === 'complete' ? 'ok' : 'warn');
   }
   function onAttachment(st, d) {
     const a = (st.pending || []).find((x) => x.id === d.id);
@@ -302,16 +314,20 @@
         + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
     }
     h += toolsHtml(m);
-    if (m.content || streaming) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
+    const held = m.state === 'held' || (streaming && m.heldLive);
+    if (held) h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Held for review.</b> <span class="muted">A guardrail asked a reviewer to check this answer. It appears here once approved' + (streaming ? '; the model is still finishing it.' : '.') + '</span></div>';
+    if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
     if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
     if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
+    if (m.state === 'interrupted') h += '<div class="ch-final">' + UI.pill('interrupted', 'warn') + ' <span class="muted">The server generating this answer stopped. What was produced is kept; continue it to generate the rest.</span></div>';
+    if (m.state === 'withdrawn') h += '<div class="ch-final">' + UI.pill('withdrawn', 'danger') + ' <span class="muted">A reviewer rejected this answer.</span></div>';
     if (m.state === 'failed') h += UI.notice('<b>The answer failed.</b> ' + esc(m.error || 'No detail was recorded.'), 'danger');
     if (m.state === 'complete' && !m.content && !(m.tools || []).length) h += '<div class="ch-final muted">The model returned an empty answer.</div>';
     h += '<div class="ch-mactions">';
     if (streaming) h += UI.btn('Stop', { kind: 'ghost', size: 'xs', icon: 'stop', attrs: 'data-stop="' + esc(m.id) + '"' });
-    else h += UI.iconbtn('copy', 'Copy answer', { cls: 'sm', attrs: 'data-cp="' + esc(m.id) + '"' }) + (App.can('chat:write') && App.can('inference:invoke') ? UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + esc(m.id) + '"' }) : '');
+    else h += (m.state === 'held' ? '' : UI.iconbtn('copy', 'Copy answer', { cls: 'sm', attrs: 'data-cp="' + esc(m.id) + '"' })) + (App.can('chat:write') && App.can('inference:invoke') ? ((m.state === 'interrupted' || m.state === 'stopped') ? UI.btn('Continue', { kind: 'ghost', size: 'xs', icon: 'play', attrs: 'data-continue="' + esc(m.id) + '"' }) : '') + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + esc(m.id) + '"' }) : '');
     h += branchSwitch(conv, m) + '<span class="right muted">' + usageLine(m) + '</span></div>';
     return h + '</div>';
   }
@@ -675,6 +691,7 @@
         + '.ch-atts{display:flex;flex-direction:column;gap:6px}.ch-att{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px}.ch-att.bad{border-color:var(--danger-fg)}.ch-attwhy{color:var(--danger-fg)}'
         + '.ch-actions{display:flex;align-items:center;gap:12px}.ch-hint{font-size:12px}'
         + '.ch-answer .ch-cite{display:inline-block;margin-left:2px;font-size:11px;font-weight:700;vertical-align:super;text-decoration:none;font-family:var(--sans)}'
+        + '.ch-held{padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);font-size:13px}.ch-pass{display:block;margin-top:2px;color:var(--fg2);font-style:italic}.ch-quote{margin:0;padding:8px 12px;border-left:3px solid var(--accent);background:var(--panel);font-size:14px}'
         + '.ch-srcs{display:flex;flex-direction:column;gap:4px}.ch-src,.ch-isrc{display:flex;gap:8px;align-items:flex-start;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit;font-size:12px;text-align:left;cursor:pointer}.ch-isrc{border-color:transparent;background:none}'
         + '.ch-src:hover,.ch-isrc:hover,.ch-src.hi,.ch-isrc.hi{background:var(--accent-tint)}.ch-src .n,.ch-isrc .n{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}.ch-src .t,.ch-isrc .t{display:block;font-weight:600}.ch-src .s,.ch-isrc .s{display:block}'
         + '.ch-dd{max-height:320px;overflow:auto;min-width:260px}.ch-dd button{height:auto;min-height:28px;padding:4px 10px}.ch-dd .sub{display:block;font-size:11px;color:var(--muted);font-weight:400}'
@@ -733,6 +750,17 @@
         t.disabled = true;
         try { const r = await App.post(mUrl(st.conv.id, t.dataset.stop) + '/stop'); ctx.toast(r && r.state === 'stopped' ? 'Stopped. What was produced is kept and metered.' : 'The answer had already finished.'); } catch (err) { t.disabled = false; handleError(err, 'Could not stop'); }
       });
+      ctx.on('click', '[data-continue]', async (e, t) => {
+        const m = byId(st, t.dataset.continue); if (!m || !st.conv) return;
+        t.disabled = true;
+        try {
+          await App.post(mUrl(st.conv.id, m.id) + '/continue', {});
+          // The stored text (and its sequence number) is where the continuation starts: read it before new chunks.
+          await loadConv(false);
+          ctx.toast('Continuing the answer from where it stopped.');
+          paint();
+        } catch (err) { t.disabled = false; handleError(err, 'Could not continue the answer'); }
+      });
       ctx.on('click', '[data-regen]', (e, t) => regenerate(ctx, t.dataset.regen));
       ctx.on('click', '[data-edit]', (e, t) => editMessage(ctx, t.dataset.edit));
       ctx.on('click', '[data-branch]', async (e, t) => {
@@ -773,6 +801,7 @@
         const tx = citeText(c); const mem = c.kind === 'memory';
         ctx.drawer({ title: esc(tx.title), body: '<div class="fg2">' + esc(tx.sub) + '</div>'
           + UI.kv((mem ? [['Kind', 'memory'], ['Scope', esc(c.scope || '')], ['Type', esc(c.type || '')]] : [['Knowledge base', esc(c.kb || '')], ['Document', esc(c.document || '')], ['Section', esc(c.section || 'none')], ['Score', typeof c.score === 'number' ? esc(c.score.toFixed(3)) : 'not recorded']]).concat([['Label', c.label ? UI.label(c.label, { sm: true }) : ''], ['Cited as', '[' + esc(c.n) + '] in this answer']]), 1)
+          + (!mem && (c.passage || c.restricted) ? '<div class="eyebrow">Quoted passage</div>' + (c.restricted ? UI.notice('The passage is labelled ' + esc(c.label || '') + ', above your clearance, so it is not shown.', 'warn') : '<blockquote class="ch-quote serif">' + esc(c.passage) + '</blockquote><div class="muted" style="font-size:11px">Characters ' + esc((c.span || [])[0]) + ' to ' + esc((c.span || [])[1]) + ' of the cited chunk, stored with the answer.</div>') : '')
           + UI.notice(mem ? 'An accepted memory went into the prompt as a labelled block. You can change or forget it on the Memory screen.' : 'The passage went into the prompt as a labelled context block; the conversation\'s label rose to at least its label.', 'info'),
           actions: UI.btn(mem ? 'Open in Memory' : 'Open in Knowledge', { attrs: 'data-close data-gosrc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
           onMount(d) { d.querySelector('[data-gosrc]').addEventListener('click', () => (mem ? ctx.navigate('memory', { tab: c.scope === 'workspace' ? 'workspace' : 'mine' }) : ctx.navigate('knowledge', { kb: c.kbId }))); } });
