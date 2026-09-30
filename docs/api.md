@@ -1246,3 +1246,66 @@ The `billing.close` schedule closes last month's statements. Audit actions: `bil
 - Media is sandboxed; see "Media origin" above. Platform routes for signer proposals, dns-01 and backups are under
   "Sprint 9: Platform operations". Data connections gained MySQL and OpenBao dynamic credentials; MCP server
   registration and tool approval check zones (`422`/`403 step: zone`, the refusal audited as `mcp.register.refused`).
+
+## Sprint 18: Platform hardening
+
+- Pool instances (`POST /api/admin/pools/:id/instances`, `PATCH /api/admin/instances/:id`) and zone endpoints
+  (`POST /api/admin/zones/:id/endpoints`) refuse a cloud metadata, link-local or unspecified address with `400`
+  ("The instance URL is refused: ..."); loopback and private addresses are accepted, public ones unless
+  `SERVICE_INTERNAL_ONLY` is on. Connections to instances, endpoints, image backends and the training worker check the
+  address they dial (a name that later resolves to such an address fails with "refused").
+- Problem details never carry credentials: URLs with a password, `password=`/`token=`-style values, bearer and basic
+  authorization values and private-key blocks are masked (`********`), as are driver messages in connection tests
+  and health details.
+- Guardrail rules as YAML (`yaml` in rule-set drafts and rule checks) are refused with `422 Invalid YAML` above 512 KiB,
+  16 levels of nesting or with any alias; the identity file (`IDENTITY_CONFIG`) is capped at 4 MiB, 24 levels and 50
+  aliases.
+
+### Certificate push hooks (`platform:manage`)
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/platform/certificates/:id/hooks` | `{hooks: [{id, kind: command\|webhook, command, url, lastState: ok\|failed\|null, lastDetail, lastAt, createdAt}], commands: [names from ACME_RELOAD_COMMANDS]}` |
+| `POST /api/admin/platform/certificates/:id/hooks` `{kind: "command", command}` or `{kind: "webhook", url}` | `201` hook; a webhook answer carries `secret` once (stored sealed). An unknown command or a non-internal URL is `400`; tracked certificates have no hooks (`409`); at most 10. Audited `platform.cert.hook.added` |
+| `POST /api/admin/platform/certificates/:id/hooks/:hookId/test` | Runs the hook now (`certificate.test`); answers the hook with its `lastState` |
+| `DELETE /api/admin/platform/certificates/:id/hooks/:hookId` | `204`; audited `platform.cert.hook.removed` |
+
+After every issue and renewal, webhooks are POSTed from the issuing instance with `X-Exprsn-Event:
+certificate.issued|certificate.renewed` and `X-Exprsn-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`; the
+body is `{event, certificate: {id, name, domains, serial, fingerprint, notBefore, notAfter}, chainPem}` (never the
+key). Reload commands run on every instance after its certificate files are written. Each run is audited
+`platform.cert.hook.ran` or `platform.cert.hook.failed`.
+
+### Registry pushes (`platform:manage`)
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/platform/push-targets` | `[{id, mirrorId, kind: oci\|npm\|pypi, url, repository, username, hasSecret, state: active\|disabled, lastPushAt, lastPushOk, lastDetail, updatedAt}]` |
+| `PUT /api/admin/platform/mirrors/:id/push-target` `{url, repository?, username?, secret?, state?}` | The mirror's target (created or replaced). Image mirrors push to an OCI registry such as Harbor (`repository`: the project), npm mirrors to Verdaccio, PyPI mirrors to devpi (`repository`: `user/index`); other kinds are `400`. The URL must be internal (`PLATFORM_ALLOWED_HOSTS` for others). `secret` is sealed and never returned; leave it out to keep the stored one. Audited |
+| `DELETE /api/admin/platform/mirrors/:id/push-target` | `204`; audited |
+| `GET /api/admin/platform/bundles/:id/pushes` | `[{id, bundleId, targetId, path, sha256, artefact, state: pushed\|exists\|failed, detail, at}]` |
+| `POST /api/admin/platform/bundles/:id/push` | `202 {jobId}`: pushes a promoted bundle again (`409` when it is not in production or no target is active) |
+
+Promotion queues the push (`ops.bundle.push`) when an active target exists; the outcome is audited
+`platform.bundle.pushed` or `platform.bundle.push.failed`.
+
+### Zones: members outside their zone (`zones:manage`)
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/zones/misplaced` | `{misplaced: [{kind: connection\|mcp, id, name, tenant, zone, label, reason, suggestion, pending}]}`: connections and MCP servers in an undefined or external zone, or labelled above their zone's ceiling, with the zone a move would target and the draft already moving them |
+| `POST /api/admin/zones/:id/proposals` | Also takes `moveMembers: [{kind: connection\|mcp, id}]`; approval moves them into the zone. A member labelled above the zone's ceiling is `422`, the external zone `403` |
+
+`GET /api/admin/zones` gains `misplaced` and each draft's `moveMembers`; `POST /api/admin/zones/seed` and
+`POST /api/admin/zones/:id/draft/approve` answer `misplaced` (a count) when they define the first zones, and then
+audit `zone.members.rechecked` and notify system admins if any member is outside its zone.
+
+### Training worker callbacks (outside `/api`, grant tokens only)
+
+| Route | Result |
+| --- | --- |
+| `POST /trainer/v1/keys/:grant` | `{key, cipher}` once; `401` wrong token, `403` missing client certificate (`TRAINER_CLIENT_CERT_SHA256`), `410` expired or already fetched. Audited `training.worker.key.released` / `.refused` |
+| `PUT /trainer/v1/artifacts/:grant/:name?kind=checkpoint\|gguf\|other` | `201 {ref, name, sha256, bytes}`; the body is streamed into the blob store, sealed under the tenant key. Audited `training.worker.artifact.stored` |
+| `GET /trainer/v1/artifacts/:grant/:name` | The artefact, streamed (`X-Artifact-SHA256`). Audited `training.worker.artifact.read` |
+
+The whole contract is in [training-worker.md](training-worker.md).

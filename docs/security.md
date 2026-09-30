@@ -161,33 +161,44 @@ filter, private `/tmp`, only the state directory writable.
   for the bus and the socket adapter.
 - Conversation retention deletes conversations by last activity for the whole tenant (no per-workspace or per-user
   periods yet); usage records, audit events and flags that quote a purged answer are kept under their own rules.
-- Training: the orchestrator sends the scrubbed rows of a dataset to the training worker in the submit request, so
-  they are in plaintext in transit to it and on its scratch storage for the run; run the worker inside the training
-  zone over TLS, with encrypted scratch that it clears after each run. Checkpoints and GGUF artefacts live in the
-  worker's object store under its own keys, not the tenant's data keys. The draft model's GGUF is pulled by name from the registry the worker pushes to; the gateway does not import a
-  GGUF file directly.
+- Training (worker contract 2, [training-worker.md](training-worker.md)): rows travel encrypted and the run key is
+  released once, but the worker necessarily holds the decrypted rows (and the key) in memory or scratch for the run;
+  run it inside the training zone with encrypted scratch that it clears. Checkpoints and GGUF files uploaded to the
+  platform are sealed under the tenant key; the worker is trusted to delete its local copies. A checkpoint read back
+  is streamed before its GCM tag is checked at the end (a failing read is cut off, not completed). The draft model's
+  GGUF is still pulled by name from the registry the worker pushes to; the gateway does not import a GGUF file
+  directly. The client-certificate check relies on the proxy that terminates mTLS when the server does not.
+  `TRAINER_PLAINTEXT_FALLBACK` brings back contract 1 (plaintext rows) for an old worker.
 - Zones: rendered NetworkPolicy, Compose and nftables files are downloaded and deployed by an operator; the platform
   does not apply them itself (the Helm chart in Sprint 10 can consume them). MCP server and connection registration
   are refused in an undefined or external zone, or above its ceiling, only once zones are defined; members registered
-  before that are reported on the Zones screen, not moved.
+  before that are listed on the Zones screen (and admins are told when the first zones appear), each with a move
+  proposal that a second system admin approves. MCP servers carry no label, so only their zone is checked.
 - Zones: seeding the default set is a single system-admin action (it can only add zones and never lowers what a zone
   holds); every later change needs a second system admin.
 - Import bundles stream through verification and promotion (a 3 GiB bundle verifies with flat memory); S3 uploads
-  use 16 MiB multipart parts, so one object is capped at about 160 GiB. Promotion writes into the mirror store in the blob store; pushing into Harbor, Verdaccio, devpi or the Trivy
-  server is left to each mirror's own sync from `mirrors/<kind>/`.
+  use 16 MiB multipart parts, so one object is capped at about 160 GiB. Promotion writes into the mirror store in the blob store and,
+  where a mirror has a push target, into Harbor (OCI image layout tars only; `docker save` archives are not
+  converted), Verdaccio or devpi through their APIs. npm tarballs and wheels are read into memory to push (capped at
+  512 MiB); image layers are streamed. The Trivy database, model weights, OS packages and OpenTofu providers are still
+  left to each mirror's own sync from `mirrors/<kind>/`.
 - Without `PLATFORM_TRIVY_BIN` or `PLATFORM_STAGING_URL` the scan and staging steps are recorded as "not
   configured" and a bundle can still be promoted unless `PLATFORM_BUNDLE_REQUIRE_CHECKS` is set. Adding and revoking
   signer keys is under dual control, except the very first key, which one platform admin registers (as with the
   default zone set); revoking a compromised key therefore also waits for a second admin.
-- ACME: http-01, or dns-01 through a signed webhook or RFC 2136 (TSIG) dynamic update; no ACME external account
-  binding. RFC 2136 updates go over UDP to the primary only (no TCP fallback, no SOA lookup: the zone is configured).
-  Issued certificates are written to `ACME_CERT_DIR` on every instance and announced on the bus, but the reverse proxy
-  must watch the files (or be reloaded by the operator's tooling); services other than the proxy still take their key
-  through the export.
+- ACME: http-01, or dns-01 through a signed webhook or RFC 2136 (TSIG) dynamic update over UDP with a TCP fallback;
+  external account binding when the CA requires it. When the zone is not configured it is taken from the SOA record,
+  but updates still go to the configured server (the SOA's primary name is not followed). Issued certificates are
+  written to `ACME_CERT_DIR` on every instance and can run push hooks (a reload command named by the operator, or a
+  signed webhook that carries the chain); services that need the private key elsewhere still take it through the
+  audited export.
 - Backups cover the application database and the blob store; the KMS key material must be backed up with its own
-  tooling, and a backup cannot be opened without the KMS key. The blob archive is taken after the database dump, not
-  at the same instant: objects written in between may be in the archive without a row, or the other way round. The
-  dump is logical (streamed, a page at a time); SQLite dumps are not taken inside one transaction. `backup:restore`
+  tooling, and a backup cannot be opened without the KMS key. The dump reads one snapshot and the blob archive holds
+  exactly the objects the snapshot's rows name (plus the content-addressed mirrors and pipeline staging, which no row
+  names, archived as listed); an object deleted while the backup runs is missing from it although its row is in the
+  snapshot. Objects whose keys are derived rather than stored are covered by a fixed list (audit export parts, bundle
+  transfers). With an in-memory SQLite database the dump holds the only connection, so other queries wait until it
+  ends. The dump is logical (streamed, a page at a time). `backup:restore`
   restores into the configured database (tested on the engine the backup came from) with every instance stopped; it
   refuses a database with tenants, users or audit events unless forced with the confirmation phrase, and blob objects
   are written after the database commits. Tables outside the portable schema (`vectors_pg`) are skipped in the drill
@@ -220,8 +231,9 @@ filter, private `/tmp`, only the state directory writable.
   decryption does not offer the OAEP variants IdPs use). Turning on OpenBao replaces the signing keys at once: SAML
   service providers must re-import the IdP metadata for the new certificate.
 - Key-encryption keys are re-wrapped with `kms:rewrap` (data keys, checkpoint signatures, backup archives and
-  manifests). What else the KMS signed directly is not re-signed: image provenance HMACs inside PNG files and training
-  model-card signatures made before the change stop verifying once the previous key is removed. OpenBao's own key
+  manifests). Image provenance manifests (the row and the copy inside the PNG) and training model cards are re-signed
+  too; a model card whose signed fields changed after registration cannot be verified with the previous key and is
+  reported as failed rather than re-signed. OpenBao's own key
   versions are rotated and re-wrapped in OpenBao (`transit/keys/<name>/rotate`, `transit/rewrap`).
 - Step-up (`STEPUP_WINDOW_SECONDS`) accepts the password only from accounts whose store checks passwords (local, LDAP,
   SQL); an account from an upstream OIDC or SAML provider with no second factor cannot step up and signs in again
@@ -253,9 +265,18 @@ filter, private `/tmp`, only the state directory writable.
   with a tenant's data is gone from later recomputations; push a finished month to keep it.
 - Prompt templates are not screened by guardrails when they are written; the filled text passes the chat
   `user-input` checkpoint when it is sent.
-- Pool instance, zone endpoint, connection and image backend URLs are chosen by operators and are not checked against
-  internal or link-local addresses. Git sources refuse link-local hosts, but git's own DNS lookup is not pinned to the
-  checked address.
+- Operator-chosen service URLs (pool instances, zone endpoints, image backends, the training worker) refuse cloud
+  metadata, link-local and unspecified addresses when saved and at every connection (the address dialled is the one
+  checked); loopback and private addresses are the normal case and stay allowed, and public addresses are allowed
+  too unless `SERVICE_INTERNAL_ONLY` is set. Image backends and the trainer come from the environment, so a refused
+  address shows up when they are called, not at start. Git sources refuse link-local hosts, but git's own DNS lookup
+  is not pinned to the checked address.
+- `REQUIRE_BACKEND_TLS` is off by default, so an upgraded production deployment keeps starting with plaintext
+  backend links until the operator turns it on; it checks the connection settings (sslmode, `rediss://`, `https://`),
+  not the certificate the server presents, which is left to each driver's own verification.
+- Diagnostic messages are masked by pattern (credentials in URLs, `key=value` secrets, authorization values, private
+  keys) and, for data connections, by the connection's own password; a driver that reports a secret in another form
+  (a bare value with no key name) is masked only when it is the connection's password.
 - Media and image files are served with `Content-Security-Policy: sandbox` and `nosniff`; without `MEDIA_ORIGIN`
   they still come from the console's origin (sandboxed, so script in them cannot reach it). Signed media URLs are
   bearer URLs for their lifetime (`MEDIA_URL_TTL_SECONDS`).
