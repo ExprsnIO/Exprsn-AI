@@ -2,13 +2,14 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** Sprints 0 to 4 are done: identity and access; tenancy, quotas, audit and platform services (KMS with
+**Status:** Sprints 0 to 8 are done: identity and access; tenancy, quotas, audit and platform services (KMS with
 per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync); the Ollama gateway (pools,
-instances, the model catalogue with dual-control approval, profiles with canary and rollback); and chat and compare
-with streaming, branches, attachments, exact calculation and metering. In the console, **Sign in**, **Settings**,
-**User stores**, **Tenants**, **Usage and audit**, **Models**, **Pools**, **Profiles**, **Chat** and **Compare** are
-live; the other screens show example data with a "Prototype data" banner until their sprint connects them. Next is
-Sprint 5: guardrails, classifiers and flags. See [Sprints.md](Sprints.md).
+instances, the model catalogue with dual-control approval, profiles with canary and rollback); chat and compare with
+streaming, branches, attachments, exact calculation and metering; guardrails at eleven checkpoints with classifiers
+and a flag queue; knowledge bases with hybrid search, memory and read-only data connections; the tool registry, MCP
+servers, agent runs and a script sandbox; and workflows, media processing and image generation. Every console screen
+is live except Training, Zones, Platform and Identity, which show example data with a "Prototype data" banner until
+Sprint 9 connects them. See [Sprints.md](Sprints.md).
 
 ## What's in the repository
 

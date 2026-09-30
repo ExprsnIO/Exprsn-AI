@@ -95,10 +95,29 @@ filter, private `/tmp`, only the state directory writable.
   protected by its password alone. Have new admins sign in and enrol promptly; an identity admin can reset factors
   (which forces re-enrolment) if an account may have been enrolled by someone else.
 - Kerberos SPNEGO, OIDC/SAML federation, device flow and service accounts with client credentials: Sprint 9.
-- Guardrails (input and output checkpoints, the guard model, PII redaction in prompts and answers) arrive in Sprint 5.
-  Until then attachments are classified, but typed prompts and model output are not inspected.
-- The attachment classifier is pattern-based (with checksums for cards and IBANs); Sprint 5 adds trained
-  classifiers.
+- Guardrails: the model-output check runs on the finished (or stopped) answer. While it streams the user sees the
+  text, and a block or redaction replaces it afterwards; the guard model is not yet run sentence by sentence during
+  streaming. In chat, `require-approval` refuses the turn, because chat has no approval flow to hold it in.
+- The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
+  labelled cases (the console warns below 200 per label).
+- Knowledge: row-level permissions of source databases are not mapped to chunk access; a database source's chunks
+  carry the connection's label and the knowledge base's access. Database sources sync by watermark on a schedule (no
+  logical replication). Chat citations show the source, not the passage, which is not stored with the answer.
+- Data connections: PostgreSQL and OpenSearch only; a username and password sealed with the tenant key (no OpenBao
+  dynamic credentials yet); writes through a connection are refused outright.
+- Scripts need docker or podman on the host; with `SCRIPT_RUNNER=none`, or when no runtime answers, runs are refused.
+  The sandbox relies on the container runtime's isolation (no gVisor or Firecracker).
+- Tools: in chat, profiles offer only read-only tools that need no confirmation; write and destructive tools need an
+  approval, which agent runs and workflows provide. MCP servers are checked against internal addresses after DNS
+  resolution; hosts in `MCP_ALLOWED_HOSTS` (never link-local) are trusted by the operator. Agent runs read agent
+  memories but do not write them yet.
+- Workflows: the HTTP step may call any private address (narrowed by `WORKFLOW_HTTP_HOSTS` when set; there is no
+  per-tenant host list yet). Run events go live only to the person who started the run; approvers see pending
+  approvals through `GET /api/workflow-approvals` and the notification. A workflow published as a tool is pinned to one
+  version, cannot be called from another workflow, and when it pauses for an approval its caller gets an error while
+  the run continues on its own; a tool step's own approval pause has a fixed 24-hour timeout.
+- Images and media frames are checked by the classifier at `IMAGE_SAFETY_URL`; without one, images are marked "not
+  classified" rather than blocked.
 - A chat stream lives on the instance that runs it: if that instance stops, the answer ends where it was and is
   kept as stored so far. Resume after a restart shows the stored text, not a continuation.
 - Rate limits are per instance (in memory); quotas are shared through the database.
