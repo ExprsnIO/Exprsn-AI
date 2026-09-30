@@ -52,6 +52,12 @@ export interface GuardDecision {
 
 export interface Guardrails {
   check(input: GuardInput): Promise<GuardDecision>;
+  /**
+   * Fast screening for streamed output (Sprint 12): the enforced deterministic rules (patterns, detectors, lists,
+   * labels, budgets, meta) at a checkpoint, loaded once, as a function over the text so far. Nothing is recorded and
+   * no model or classifier is called; `check` still runs on the finished text. Null when no such rule applies.
+   */
+  streamScreen?(input: Omit<GuardInput, 'text'>): Promise<((text: string) => Promise<GuardDecision>) | null>;
 }
 
 export const allowAll: Guardrails = {

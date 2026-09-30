@@ -101,10 +101,24 @@ class Pause extends Error {
  */
 /** Accepted memories of an agent for a run at a label (the memory service, installed after it is built). */
 export type AgentMemories = (p: Principal, agent: string, label: Label) => Promise<{ id: string; type: string; text: string }[]>;
+/** Files a memory proposal for an agent (the memory service's proposal flow and `memory` checkpoint). */
+export type ProposeMemory = (p: Principal, input: { agent: string; runId: string; text: string; type: string; label: Label }) => Promise<{ id: string }>;
+
+/** The built-in tool through which a run proposes a memory, offered only when the agent's memory policy allows it. */
+export const REMEMBER_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'remember',
+    description: 'Propose a memory for future runs of this agent: progress on a task, or a quirk of a tool or source. A curator decides whether it is kept. Never include credentials or personal data.',
+    parameters: { type: 'object', properties: { text: { type: 'string', description: 'The fact to remember, one sentence.' }, type: { type: 'string', enum: ['progress', 'quirk'] } }, required: ['text', 'type'] }
+  }
+};
 
 export class AgentService {
   /** Reads the agent's accepted memories into a run's first prompt; unset, runs start without them. */
   memories: AgentMemories | null = null;
+  /** Proposes memories from runs whose agent's memory policy allows it; unset, runs cannot write memory. */
+  proposeMemory: ProposeMemory | null = null;
 
   constructor(
     private readonly db: Db,
@@ -453,7 +467,10 @@ export class AgentService {
       const budgets = json<AgentBudgets>(run.budgets, MAX_BUDGETS);
       const resolved = await this.resolveProfile(p, def.profile, run.label);
       const { tools, hidden } = await this.tools.resolve(p, def.tools ?? [], run.label);
-      const toolsOn = tools.length > 0 && resolved.model.capabilities.includes('tools') && !resolved.model.evaluation?.toolsWithheld;
+      // The agent's memory policy decides whether the run may propose memories (through the `remember` tool).
+      const policy = def.memory?.write === 'propose' && this.proposeMemory ? def.memory : null;
+      const toolsOn = (tools.length > 0 || !!policy) && resolved.model.capabilities.includes('tools') && !resolved.model.evaluation?.toolsWithheld;
+      let proposals = Number(((await this.db('agent_steps').where({ run_id: run.id, title: 'remember', state: 'ok' }).count({ c: '*' }).first()) as { c: number | string } | undefined)?.c ?? 0);
       if ((def.tools ?? []).length && !toolsOn && !hidden.length) throw new Error(`${resolved.model.name} has no tools capability; the agent's tools cannot be offered.`);
       const cp = await this.latestCheckpoint(run);
       let n = Math.max(cp.n, Number((await this.db('agent_steps').where({ run_id: run.id }).max({ m: 'n' }).first())?.m ?? 0));
@@ -471,6 +488,33 @@ export class AgentService {
         // Doing and calculating: the calls the model asked for in its last thinking step.
         while (pending.length) {
           const call = pending[0]!;
+          if (call.name === REMEMBER_TOOL.function.name && policy && call.step == null) {
+            if (usage.steps >= budgets.steps) await budgetStop(`Stopped at ${usage.steps} of ${budgets.steps} steps.`);
+            const text = String(call.arguments.text ?? '');
+            const type = String(call.arguments.type ?? 'progress');
+            let result: Record<string, unknown> | null = null;
+            let error: string | null = null;
+            if (proposals >= policy.maxPerRun) error = `The agent's memory policy allows ${policy.maxPerRun} proposal${policy.maxPerRun === 1 ? '' : 's'} per run.`;
+            else if (!policy.types.includes(type)) error = `The agent's memory policy does not allow ${type} memories.`;
+            else {
+              try {
+                const mem = await this.proposeMemory!(p, { agent: run.agent_name, runId: run.id, text, type, label: run.label });
+                proposals++;
+                result = { memory: mem.id, state: 'proposed', note: 'A curator decides whether it is kept.' };
+              } catch (err) {
+                error = err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message;
+              }
+            }
+            n++;
+            usage.steps++;
+            await this.addStep(run, n, { lane: 'do', title: 'remember', state: result ? 'ok' : 'denied', meta: { tool: 'remember', memory: result?.memory ?? null, type }, detail: { arguments: call.arguments, result, error } });
+            messages.push({ role: 'tool', tool_name: REMEMBER_TOOL.function.name, content: JSON.stringify(result ?? { error }) });
+            pending = pending.slice(1);
+            tick();
+            await this.checkpoint(run, n, { messages, pending }, usage);
+            await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
+            continue;
+          }
           const tool = tools.find((t) => t.fn === call.name);
           // A call that already has a step is coming back from an approval; its step was counted then.
           const isNew = call.step == null;
@@ -539,7 +583,7 @@ export class AgentService {
           if (resolved.profile.num_ctx) options.num_ctx = resolved.profile.num_ctx;
           if (resolved.profile.temperature != null) options.temperature = resolved.profile.temperature;
           const think = resolved.profile.think_default === 'off' ? false : resolved.model.name.startsWith('gpt-oss') ? resolved.profile.think_default : true;
-          for await (const chunk of lease.client.chat({ model: resolved.model.name, messages, ...(resolved.model.capabilities.includes('thinking') ? { think } : {}), ...(toolsOn ? { tools: tools.map((t) => t.def) } : {}), options }, stepSignal)) {
+          for await (const chunk of lease.client.chat({ model: resolved.model.name, messages, ...(resolved.model.capabilities.includes('thinking') ? { think } : {}), ...(toolsOn ? { tools: [...tools.map((t) => t.def), ...(policy ? [REMEMBER_TOOL] : [])] } : {}), options }, stepSignal)) {
             if (chunk.message?.content) content += chunk.message.content;
             if (chunk.message?.thinking) thinking += chunk.message.thinking;
             if (chunk.message?.tool_calls?.length) calls.push(...chunk.message.tool_calls);

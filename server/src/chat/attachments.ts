@@ -182,6 +182,15 @@ export class AttachmentService {
     return r ? fromRow(r) : undefined;
   }
 
+  /** Deletes an attachment and its stored content (conversation retention). */
+  async remove(tenantId: string, id: string): Promise<boolean> {
+    const a = await this.get(tenantId, id);
+    if (!a) return false;
+    if (a.blob_key) await this.blobs.delete(a.blob_key);
+    await this.db('attachments').where({ tenant_id: tenantId, id }).delete();
+    return true;
+  }
+
   async content(a: AttachmentRow): Promise<Buffer> {
     const sealed = await this.blobs.get(a.blob_key!);
     if (!sealed) throw new Error('Attachment content is missing');

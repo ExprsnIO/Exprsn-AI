@@ -17,6 +17,8 @@ import { bootstrap } from '../../src/bootstrap.js';
 import { createApp } from '../../src/http/app.js';
 import { attachRealtime } from '../../src/realtime/socket.js';
 import { Bus } from '../../src/platform/bus.js';
+import type { DataKeys } from '../../src/platform/datakeys.js';
+import { RedisStreamStore } from '../../src/chat/streams.js';
 import { FakeOllama } from '../fake-ollama.js';
 import { testConfig, localUser, login, type Harness } from '../helpers.js';
 
@@ -38,6 +40,20 @@ describe.skipIf(!REDIS)('Redis', () => {
     expect(gotB).toEqual([{ n: 1 }]);
     await a.close();
     await b.close();
+  });
+
+  it('keeps the chat catch-up buffer in Redis: append, read after a sequence, trim to a snapshot, drop', async () => {
+    const keys = { seal: async (_t: string, x: string) => `sealed:${x}`, open: async (_t: string, x: string) => x.replace(/^sealed:/, '') } as unknown as DataKeys;
+    const store = new RedisStreamStore(REDIS!, keys, createLogger('silent', false));
+    const mid = `M${Date.now()}`;
+    await store.append('t', mid, [{ seq: 1, delta: 'a' }, { seq: 2, delta: 'b' }]);
+    await store.append('t', mid, [{ seq: 3, delta: 'c' }]);
+    expect((await store.after('t', mid, 1)).map((c) => c.seq)).toEqual([2, 3]);
+    await store.trim(mid, 2);
+    expect((await store.after('t', mid, 0)).map((c) => c.seq)).toEqual([3]);
+    await store.drop([mid]);
+    expect(await store.after('t', mid, 0)).toEqual([]);
+    await store.close();
   });
 
   it('runs jobs through BullMQ and delivers notifications to a socket held by another instance', async () => {

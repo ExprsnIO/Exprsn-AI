@@ -11,7 +11,8 @@ import type { Notifications } from '../platform/notifications.js';
 import { SEVERITY_SLA_MINUTES } from './rules.js';
 
 export type Severity = 'high' | 'medium' | 'low';
-export type FlagKind = 'rule' | 'fail-open' | 'report' | 'reviewer';
+/** `hold`: a chat answer held by a `require-approval` rule, released or withdrawn by the reviewer's decision. */
+export type FlagKind = 'rule' | 'fail-open' | 'report' | 'reviewer' | 'hold';
 export type EscalationLevel = 'workspace' | 'tenant' | 'platform';
 
 export interface FlagRow {
@@ -36,7 +37,7 @@ export interface FlagRow {
   source_kind: string | null;
   source_id: string | null;
   conversation_id: string | null;
-  state: 'open' | 'confirmed' | 'dismissed';
+  state: 'open' | 'confirmed' | 'dismissed' | 'approved' | 'rejected';
   assignee: string | null;
   escalated_to: EscalationLevel | null;
   sla_minutes: number;
@@ -86,6 +87,13 @@ const fromRow = (r: Record<string, unknown>): FlagRow => ({
 });
 
 export const flagRef = (f: Pick<FlagRow, 'number'>) => `F-${f.number}`;
+
+const DECIDED = ['confirmed', 'dismissed', 'approved', 'rejected'];
+/** Reviewer decisions per rule: an approved hold was a false positive (like a dismissal), a rejected one was right. */
+const tally = (rows: { state: string; n: number | string }[]) => {
+  const n = (s: string) => Number(rows.find((r) => r.state === s)?.n ?? 0);
+  return { confirmed: n('confirmed') + n('rejected'), dismissed: n('dismissed') + n('approved') };
+};
 const WINDOW = 240;
 
 /**
@@ -95,6 +103,9 @@ const WINDOW = 240;
  * an empty queue); confirmed flags become eval cases, dismissals count as false positives against their rule.
  */
 export class FlagService {
+  /** Reads a held answer for the reviewer (installed by the chat service). */
+  heldAnswer: ((tenantId: string, messageId: string) => Promise<{ conversationId: string; state: string; content: string } | null>) | null = null;
+
   constructor(
     private readonly db: Db,
     private readonly keys: DataKeys,
@@ -215,21 +226,20 @@ export class FlagService {
     const excerpt = !v.restricted && f.excerpt ? json<{ before: string; span: string; after: string } | null>(await this.keys.open(f.tenant_id, f.excerpt, `flag:${f.id}`), null) : null;
     const prior = f.rule_id ? await this.prior(f.tenant_id, f.rule_id, f.id) : { confirmed: 0, dismissed: 0 };
     const own = !v.restricted && f.conversation_id ? !!(await this.db('conversations').where({ id: f.conversation_id, user_id: p.userId }).first('id')) : false;
+    const held = f.kind === 'hold' && !v.restricted && f.source_kind === 'message' && f.source_id && this.heldAnswer ? await this.heldAnswer(f.tenant_id, f.source_id) : null;
     const history = ((await this.db('guard_flag_events').where({ flag_id: f.id }).orderBy('created_at')) as { action: string; actor: string | null; note: string | null; created_at: number }[]).map((e) => ({ action: e.action, actor: e.actor, note: v.restricted ? null : e.note, at: Number(e.created_at) }));
-    return { ...v, excerpt, prior: v.restricted ? null : prior, ownConversation: own, history };
+    return { ...v, excerpt, prior: v.restricted ? null : prior, ownConversation: own, history, ...(f.kind === 'hold' ? { held: held ? { messageId: f.source_id, state: held.state, content: held.content } : null } : {}) };
   }
 
   private async prior(tenantId: string, ruleId: string, except: string) {
-    const rows = (await this.db('guard_flags').where({ tenant_id: tenantId, rule_id: ruleId }).whereNot({ id: except }).whereIn('state', ['confirmed', 'dismissed']).groupBy('state').select('state').count({ n: '*' })) as { state: string; n: number | string }[];
-    const n = (s: string) => Number(rows.find((r) => r.state === s)?.n ?? 0);
-    return { confirmed: n('confirmed'), dismissed: n('dismissed') };
+    const rows = (await this.db('guard_flags').where({ tenant_id: tenantId, rule_id: ruleId }).whereNot({ id: except }).whereIn('state', DECIDED).groupBy('state').select('state').count({ n: '*' })) as { state: string; n: number | string }[];
+    return tally(rows);
   }
 
   /** False-positive rate of a rule from reviewers' decisions: dismissed over decided. */
   async falsePositives(tenantId: string, setId: string, ruleId: string): Promise<{ confirmed: number; dismissed: number; rate: number | null }> {
-    const rows = (await this.db('guard_flags').where({ tenant_id: tenantId, set_id: setId, rule_id: ruleId }).whereIn('state', ['confirmed', 'dismissed']).groupBy('state').select('state').count({ n: '*' })) as { state: string; n: number | string }[];
-    const confirmed = Number(rows.find((r) => r.state === 'confirmed')?.n ?? 0);
-    const dismissed = Number(rows.find((r) => r.state === 'dismissed')?.n ?? 0);
+    const rows = (await this.db('guard_flags').where({ tenant_id: tenantId, set_id: setId, rule_id: ruleId }).whereIn('state', DECIDED).groupBy('state').select('state').count({ n: '*' })) as { state: string; n: number | string }[];
+    const { confirmed, dismissed } = tally(rows);
     return { confirmed, dismissed, rate: confirmed + dismissed ? dismissed / (confirmed + dismissed) : null };
   }
 
@@ -266,7 +276,7 @@ export class FlagService {
 
   /** Decisions of the last hours (confirm, dismiss, escalate, reassign) on flags the reviewer may see. */
   async decisions(p: Principal, workspaces: string[], hours = 24) {
-    const rows = (await this.db('guard_flag_events as e').join('guard_flags as f', 'f.id', 'e.flag_id').where('e.tenant_id', p.tenantId).whereIn('e.action', ['confirmed', 'dismissed', 'escalated', 'reassigned']).andWhere('e.created_at', '>=', Date.now() - hours * 3_600_000).orderBy('e.created_at', 'desc').limit(200).select('e.action', 'e.actor', 'e.created_at', 'f.id', 'f.number', 'f.rule_name', 'f.label', 'f.workspace_id')) as { action: string; actor: string | null; created_at: number; id: string; number: number; rule_name: string; label: Label; workspace_id: string | null }[];
+    const rows = (await this.db('guard_flag_events as e').join('guard_flags as f', 'f.id', 'e.flag_id').where('e.tenant_id', p.tenantId).whereIn('e.action', ['confirmed', 'dismissed', 'approved', 'rejected', 'escalated', 'reassigned']).andWhere('e.created_at', '>=', Date.now() - hours * 3_600_000).orderBy('e.created_at', 'desc').limit(200).select('e.action', 'e.actor', 'e.created_at', 'f.id', 'f.number', 'f.rule_name', 'f.label', 'f.workspace_id')) as { action: string; actor: string | null; created_at: number; id: string; number: number; rule_name: string; label: Label; workspace_id: string | null }[];
     const names = await this.names(rows.map((r) => r.actor));
     return rows
       .filter((r) => !r.workspace_id || workspaces.includes(r.workspace_id))
@@ -289,9 +299,26 @@ export class FlagService {
     if (!clears(p.clearance, f.label)) throw forbidden(`${flagRef(f)} is labelled ${f.label}, above your clearance of ${p.clearance}. The only action is to reassign it to a reviewer cleared for ${f.label}.`, { step: 'clearance' });
   }
 
+  /**
+   * A decision on a held answer: `apply` releases or withdraws the answer (and refuses a reviewer deciding on their
+   * own), then the flag records the decision.
+   */
+  async decideHold(p: Principal, ref: string, workspaces: string[], decision: 'approved' | 'rejected', reason: string | null, apply: (f: FlagRow) => Promise<void>): Promise<FlagRow> {
+    const f = await this.openFor(p, ref, workspaces);
+    this.cleared(p, f);
+    if (f.kind !== 'hold') throw conflict(`${flagRef(f)} is not a held answer; confirm or dismiss it.`);
+    await apply(f);
+    const t = Date.now();
+    await this.db('guard_flags').where({ id: f.id, state: 'open' }).update({ state: decision, decided_by: p.userId, decided_at: t, reason: reason?.slice(0, 500) ?? null });
+    const after = { ...f, state: decision, decided_by: p.userId, decided_at: t, reason };
+    await this.event(after, decision, p.userId, reason);
+    return after;
+  }
+
   async decide(p: Principal, ref: string, workspaces: string[], decision: 'confirmed' | 'dismissed', reason: string | null): Promise<FlagRow> {
     const f = await this.openFor(p, ref, workspaces);
     this.cleared(p, f);
+    if (f.kind === 'hold') throw conflict(`${flagRef(f)} holds an answer; approve or reject it.`);
     const t = Date.now();
     const evalSet = decision === 'confirmed' ? (f.rule_id ?? 'user-report') : null;
     await this.db('guard_flags').where({ id: f.id, state: 'open' }).update({ state: decision, decided_by: p.userId, decided_at: t, reason: reason?.slice(0, 500) ?? null, ...(evalSet && !f.eval_set ? { eval_set: evalSet } : {}) });

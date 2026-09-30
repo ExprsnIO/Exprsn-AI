@@ -205,6 +205,33 @@ export class GuardrailEngine implements Guardrails {
     return decision;
   }
 
+  /** Rule kinds that answer from the text alone, with no model or classifier call: safe to run on every sentence. */
+  static readonly DETERMINISTIC = new Set(['pattern', 'pii', 'secrets', 'allow-list', 'label', 'budget', 'meta']);
+
+  /**
+   * The streaming screen (Sprint 12): the enforced deterministic rules at the checkpoint, resolved once for the whole
+   * stream. The returned function evaluates them on the text so far; nothing is recorded (the full `check` on the
+   * finished text records the decision), and a rule that errors is skipped here and decided by that full check.
+   */
+  async streamScreen(input: Omit<GuardInput, 'text'>): Promise<((text: string) => Promise<GuardDecision>) | null> {
+    const agent = typeof input.meta?.agent === 'string' ? input.meta.agent : null;
+    const active = (await this.sets.forCheck(input.tenantId, input.workspaceId, agent)).filter((a) => a.rule.enabled && a.rule.stage === 'enforce' && a.rule.checkpoint === input.checkpoint && GuardrailEngine.DETERMINISTIC.has(a.rule.mechanism.kind));
+    if (!active.length) return null;
+    return async (text: string) => {
+      const findings: GuardFinding[] = [];
+      for (const a of active) {
+        const r = await this.evaluate(a.rule, { ...input, text });
+        if (r.error || !r.hit) continue;
+        const base = { ruleId: a.rule.id, ruleName: a.rule.name, setId: a.set.id, action: a.rule.action, stage: 'enforce' as const, ...(r.score != null ? { score: r.score } : {}), ...(r.detail ? { detail: r.detail } : {}) };
+        if (!r.spans.length) findings.push(base);
+        for (const span of r.spans.slice(0, MAX_SPANS_PER_RULE)) findings.push({ ...base, span });
+      }
+      const action = findings.reduce<GuardAction>((acc, f) => (actionRank(f.action) > actionRank(acc) ? f.action : acc), 'allow');
+      const reason = this.reason(action, findings as Recorded[]);
+      return { action, text: action === 'redact' ? redact(text, findings.filter((f) => f.action === 'redact')) : text, findings, ...(reason ? { reason } : {}) };
+    };
+  }
+
   private reason(action: GuardAction, enforced: Recorded[]): string | undefined {
     if (action !== 'block' && action !== 'require-approval' && action !== 'redact') return undefined;
     const f = enforced.find((x) => x.action === action)!;

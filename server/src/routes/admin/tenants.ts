@@ -171,6 +171,38 @@ export function tenantAdminRoutes(s: Services): Router {
     res.json(await s.quotas.view(t.id, null));
   });
 
+  // ---------- conversation retention (Sprint 12) ----------
+
+  const retentionView = async (tenantId: string) => {
+    const r = (await s.db('chat_retention').where({ tenant_id: tenantId }).first()) as { conversation_days: number | null; updated_by: string | null; updated_at: number; last_run_at: number | null; last_purged: number | null } | undefined;
+    return { conversationDays: r?.conversation_days == null ? null : Number(r.conversation_days), updatedBy: r?.updated_by ?? null, updatedAt: r ? Number(r.updated_at) : null, lastRunAt: r?.last_run_at == null ? null : Number(r.last_run_at), lastPurged: r?.last_purged == null ? null : Number(r.last_purged), sweepMinutes: s.cfg.CHAT_RETENTION_SWEEP_MINUTES };
+  };
+
+  r.get('/tenants/:tid/retention', manage, async (req, res) => {
+    res.json(await retentionView((await loadTenant(req)).id));
+  });
+
+  /** Conversations not updated for more than this many days are deleted by a scheduled job; null keeps them. */
+  r.put('/tenants/:tid/retention', manage, async (req, res) => {
+    const t = await loadTenant(req);
+    const body = parseBody(z.object({ conversationDays: z.number().int().min(1).max(3650).nullable() }).strict(), req.body);
+    const before = await retentionView(t.id);
+    const row = { conversation_days: body.conversationDays, updated_by: principalOf(req).userId, updated_at: Date.now() };
+    if (!(await s.db('chat_retention').where({ tenant_id: t.id }).update(row))) await s.db('chat_retention').insert({ tenant_id: t.id, ...row });
+    await audit(req, t.id, 'tenant.retention.updated', { slug: t.slug }, { before: before.conversationDays, after: body.conversationDays });
+    res.json(await retentionView(t.id));
+  });
+
+  /** Applies the policy now, as the schedule would. */
+  r.post('/tenants/:tid/retention/run', manage, async (req, res) => {
+    const t = await loadTenant(req);
+    const policy = await retentionView(t.id);
+    if (policy.conversationDays == null) throw conflict('This tenant keeps conversations until their owners delete them; set a retention period first.');
+    const job = await s.jobs.enqueue({ tenantId: t.id, type: 'chat.retention', payload: { tenantId: t.id }, createdBy: principalOf(req).userId, maxAttempts: 1 });
+    await audit(req, t.id, 'tenant.retention.run', { slug: t.slug }, { days: policy.conversationDays, job: job.id });
+    res.status(202).json({ jobId: job.id });
+  });
+
   // ---------- workspaces ----------
 
   r.get('/tenants/:tid/workspaces', manage, async (req, res) => {
