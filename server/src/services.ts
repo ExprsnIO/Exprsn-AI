@@ -23,7 +23,8 @@ import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
 import { Bus, TOPICS } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
-import { Notifications } from './platform/notifications.js';
+import { Notifications, type MailTransport } from './platform/notifications.js';
+import { AccountService } from './identity/account.js';
 import { QuotaService } from './tenancy/quotas.js';
 import { Offboarding } from './tenancy/offboarding.js';
 import { Gateway } from './gateway/gateway.js';
@@ -128,6 +129,7 @@ export interface Services {
   /** Sprint 9: OIDC provider, SAML IdP, upstream federation, Kerberos SPNEGO and device flow. */
   federation: FederationService;
   kerberos: KerberosVerifier;
+  account: AccountService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -145,6 +147,8 @@ export interface ServiceOverrides {
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
+  /** Email transport (tests record messages instead of sending them). */
+  mail?: MailTransport;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -160,7 +164,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const providers = new ProviderRepo(db);
   const users = new UserRepo(db);
   const tenants = new TenantRepo(db);
-  const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL });
+  const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL, ...(overrides.mail ? { transport: overrides.mail } : {}) });
   configureSecretPolicy(
     secretPolicy({ envAllow: cfg.SECRET_REF_ENV, dirs: cfg.SECRET_REF_DIRS, serverEnvNames: SERVER_ENV_NAMES, serverSecretFiles: FILE_VARS.map((n) => process.env[`${n}_FILE`]) })
   );
@@ -278,6 +282,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     acme: overrides.acme ?? createAcme(cfg),
     federation: new FederationService(() => s),
     kerberos: overrides.kerberos ?? createKerberos(cfg),
+    // Sprint 11: account self-service.
+    account: new AccountService(() => s),
     close: async () => {
       scheduler.stop();
       await denials.flushAll().catch(() => undefined);

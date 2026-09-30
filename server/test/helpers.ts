@@ -9,7 +9,7 @@ import { loadConfig, type Config } from '../src/config/index.js';
 import { createDb, migrate } from '../src/db/knex.js';
 import { createApp } from '../src/http/app.js';
 import { createLogger, Metrics } from '../src/observability/index.js';
-import { createServices, type Services } from '../src/services.js';
+import { createServices, type ServiceOverrides, type Services } from '../src/services.js';
 import { bootstrap } from '../src/bootstrap.js';
 import { hashPassword } from '../src/identity/passwords.js';
 import type { Label } from '../src/authz/labels.js';
@@ -41,11 +41,11 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function harness(overrides: Record<string, string> = {}): Promise<Harness> {
+export async function harness(overrides: Record<string, string> = {}, services: ServiceOverrides = {}): Promise<Harness> {
   const cfg = testConfig(overrides);
   const db = createDb(cfg);
   await migrate(db);
-  const s = createServices(cfg, db, createLogger('silent', false), new Metrics());
+  const s = createServices(cfg, db, createLogger('silent', false), new Metrics(), services);
   await bootstrap(s);
   const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
   return {

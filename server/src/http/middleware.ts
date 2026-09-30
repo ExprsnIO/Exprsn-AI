@@ -145,7 +145,25 @@ export function requireAuth(opts: { stages?: SessionStage[]; sessionOnly?: boole
     if (!req.principal) throw unauthorized();
     if (opts.sessionOnly && !req.authSession) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
     if (req.authSession && !stages.includes(req.authSession.stage)) {
-      throw new HttpProblem(401, 'Unauthorized', req.authSession.stage === 'mfa' ? 'Complete the second factor to continue.' : 'Set up a second factor to continue.', { extensions: { stage: req.authSession.stage } });
+      const detail = req.authSession.stage === 'mfa' ? 'Complete the second factor to continue.' : req.authSession.stage === 'password' ? 'Change your password to continue.' : 'Set up a second factor to continue.';
+      throw new HttpProblem(401, 'Unauthorized', detail, { extensions: { stage: req.authSession.stage } });
+    }
+    next();
+  };
+}
+
+/**
+ * Sprint 11 (B-106): sensitive account changes need a password or factor check within STEPUP_WINDOW_SECONDS
+ * (ASVS 3.7.1). Signing in counts; so does POST /api/me/step-up. Use after requireAuth({ sessionOnly: true }).
+ */
+export function requireRecentAuth(s: Services): RequestHandler {
+  return (req, _res, next) => {
+    const session = req.authSession;
+    if (!session) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
+    if (!s.account.isRecent(session)) {
+      throw new HttpProblem(401, 'Step-up required', 'Confirm your password or a second factor to continue.', {
+        extensions: { step_up: true, window_seconds: s.cfg.STEPUP_WINDOW_SECONDS }
+      });
     }
     next();
   };
