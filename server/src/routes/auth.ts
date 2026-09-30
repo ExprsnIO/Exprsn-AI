@@ -55,17 +55,26 @@ export function authRoutes(s: Services): Router {
     res.json(await sessionBody(next));
   };
 
+  const endPending = async (session: SessionRow, res: Response): Promise<never> => {
+    await s.sessions.revoke(session.tenant_id, session.id);
+    clearSessionCookie(res, s);
+    throw unauthorized('Too many wrong codes. Sign in again.');
+  };
+
+  /** Counts the attempt before the code is checked, so parallel guesses cannot exceed the limit. */
+  const reserveMfa = async (req: Request, res: Response) => {
+    const session = req.authSession as SessionRow;
+    const state = await s.throttle.reserve([`mfa:${session.id}`]);
+    if (state.locked) await endPending(session, res);
+  };
+
   /** Counts a failed second factor; five failures end the pending session. */
   const failMfa = async (req: Request, res: Response, method: string) => {
     const session = req.authSession as SessionRow;
-    const state = await s.throttle.fail([`mfa:${session.id}`]);
+    const state = await s.throttle.failed([`mfa:${session.id}`]);
     await s.audit.append({ tenantId: session.tenant_id, action: 'auth.mfa.failed', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { method }, traceId: req.traceId });
     s.metrics.logins.inc({ result: 'mfa_failed', kind: method });
-    if (state.remaining <= 0 || state.locked) {
-      await s.sessions.revoke(session.tenant_id, session.id);
-      clearSessionCookie(res, s);
-      throw unauthorized('Too many wrong codes. Sign in again.');
-    }
+    if (state.remaining <= 0 || state.locked) await endPending(session, res);
     throw new HttpProblem(401, 'Invalid code', 'That code did not work. Try the next one from your authenticator.', { extensions: { attempts_remaining: state.remaining } });
   };
 
@@ -82,15 +91,18 @@ export function authRoutes(s: Services): Router {
 
     const state = await s.throttle.check(throttleKeys);
     if (state.locked) throw tooManyRequests(`Too many failed sign-ins. Try again in ${Math.ceil(state.retryAfterSeconds / 60)} minutes.`, state.retryAfterSeconds);
+    // Count this attempt before the (slow) password check, so parallel guesses cannot all pass the check above.
+    const reserved = await s.throttle.reserve(throttleKeys);
+    if (reserved.locked) throw tooManyRequests(`Too many failed sign-ins. Try again in ${Math.ceil(reserved.retryAfterSeconds / 60)} minutes.`, reserved.retryAfterSeconds);
 
     if (!tenant || tenant.state !== 'active') {
-      const after = await s.throttle.fail(throttleKeys);
+      const after = await s.throttle.failed(throttleKeys);
       throw invalidCredentials(after.remaining);
     }
 
     const result = await s.chain.authenticate(tenant.id, body.username, body.password);
     if (result.status !== 'ok') {
-      const after = await s.throttle.fail(throttleKeys);
+      const after = await s.throttle.failed(throttleKeys);
       await s.audit.append({
         tenantId: tenant.id,
         action: 'auth.login.failed',
@@ -107,6 +119,7 @@ export function authRoutes(s: Services): Router {
 
     const prov = await provision(s.users, tenant.id, result.provider, result.user);
     if (prov.status === 'refused') {
+      await s.throttle.release(throttleKeys); // the password was right; the refusal is about the account
       await s.audit.append({
         tenantId: tenant.id,
         action: 'auth.login.refused',
@@ -120,6 +133,7 @@ export function authRoutes(s: Services): Router {
       throw forbidden(REFUSALS[prov.reason] ?? 'Sign-in refused.', { reason: prov.reason });
     }
     await s.throttle.succeed(keys.account);
+    if (keys.ip) await s.throttle.release([keys.ip]);
     // A new sign-in in this browser ends the session its cookie held before (ASVS 3.2.1), as federated sign-ins do.
     if (req.authSession) await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
 
@@ -153,12 +167,14 @@ export function authRoutes(s: Services): Router {
 
   r.post('/mfa/totp', pending, async (req, res) => {
     const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/) }), req.body);
+    await reserveMfa(req, res);
     if (await s.mfa.verifyTotp(req.authSession!.user_id, code)) return completeMfa(req, res, 'TOTP');
     await failMfa(req, res, 'TOTP');
   });
 
   r.post('/mfa/recovery', pending, async (req, res) => {
     const { code } = parseBody(z.object({ code: z.string().trim().min(8).max(20) }), req.body);
+    await reserveMfa(req, res);
     if (await s.mfa.useRecoveryCode(req.authSession!.user_id, code)) return completeMfa(req, res, 'recovery code');
     await failMfa(req, res, 'recovery code');
   });
@@ -173,6 +189,7 @@ export function authRoutes(s: Services): Router {
     const { response } = parseBody(z.object({ response: z.looseObject({ id: z.string(), type: z.literal('public-key') }) }), req.body);
     const challenge = await s.sessions.takeChallenge(req.authSession!.id);
     if (!challenge) throw unauthorized('The passkey challenge expired. Try again.');
+    await reserveMfa(req, res);
     const ok = await s.mfa.verifyAuthentication(req.authSession!.user_id, challenge, response as never).catch(() => false);
     if (ok) return completeMfa(req, res, 'passkey');
     await failMfa(req, res, 'passkey');

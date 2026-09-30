@@ -1,11 +1,14 @@
 import type { Logger } from 'pino';
-import type { Config } from './config/index.js';
+import { FILE_VARS, SERVER_ENV_NAMES, type Config } from './config/index.js';
 import type { Db } from './db/knex.js';
 import { AuditLog } from './audit/chain.js';
 import { AuditCheckpoints } from './audit/checkpoints.js';
 import { ExportService } from './audit/exports.js';
 import { SiemForwarder } from './audit/siem.js';
+import { DenialAudit } from './audit/denials.js';
 import { IdentityChain } from './identity/chain.js';
+import { configureSecretPolicy, secretPolicy } from './identity/secrets.js';
+import { parseAllowList } from './mcp/hosts.js';
 import { SessionService } from './identity/sessions.js';
 import { ApiKeyService } from './identity/apikeys.js';
 import { MfaService } from './identity/mfa.js';
@@ -45,7 +48,7 @@ import { createBackends, type ImageBackend } from './images/backends.js';
 import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
 import { ConnectionService } from './connections/service.js';
-import { defaultDrivers, type DriverFactory } from './connections/drivers.js';
+import { createDrivers, type DriverFactory } from './connections/drivers.js';
 import { KnowledgeService } from './knowledge/service.js';
 import { CliGit, type GitFetcher } from './knowledge/sources.js';
 import { MemoryService } from './memory/service.js';
@@ -71,6 +74,8 @@ export interface Services {
   scheduler: Scheduler;
   notifications: Notifications;
   audit: AuditLog;
+  /** Authorisation denials, capped per principal so they cannot flood the chain. */
+  denials: DenialAudit;
   checkpoints: AuditCheckpoints;
   exports: ExportService;
   siem: SiemForwarder;
@@ -151,11 +156,18 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const jobs = new JobQueue(db, log, bus, { mode, redisUrl: cfg.REDIS_URL, pollMs: cfg.JOB_POLL_MS, concurrency: cfg.JOB_CONCURRENCY });
   const scheduler = new Scheduler(jobs, log);
   const audit = new AuditLog(db);
+  const denials = new DenialAudit(audit);
   const providers = new ProviderRepo(db);
   const users = new UserRepo(db);
   const tenants = new TenantRepo(db);
   const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL });
-  const chain = new IdentityChain(db, providers, log, cfg.NODE_ENV === 'production');
+  configureSecretPolicy(
+    secretPolicy({ envAllow: cfg.SECRET_REF_ENV, dirs: cfg.SECRET_REF_DIRS, serverEnvNames: SERVER_ENV_NAMES, serverSecretFiles: FILE_VARS.map((n) => process.env[`${n}_FILE`]) })
+  );
+  const chain = new IdentityChain(db, providers, log, cfg.NODE_ENV === 'production', {
+    allow: parseAllowList(cfg.IDENTITY_ALLOWED_HOSTS),
+    refusedSqliteFiles: cfg.DB_CLIENT === 'sqlite' ? [cfg.SQLITE_FILENAME] : []
+  });
   const sessions = new SessionService(
     db,
     { secret: cfg.SESSION_SECRET, idleMinutes: cfg.SESSION_IDLE_MINUTES, absoluteHours: cfg.SESSION_ABSOLUTE_HOURS, pendingMinutes: cfg.MFA_PENDING_MINUTES },
@@ -197,7 +209,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
-  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...defaultDrivers, ...overrides.drivers });
+  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers });
   const knowledge = new KnowledgeService(
     { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id) },
     {
@@ -224,6 +236,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     scheduler,
     notifications,
     audit,
+    denials,
     checkpoints: new AuditCheckpoints(db, audit, kms, blobs, `${cfg.OPENBAO_KEY_PREFIX}audit-checkpoints`),
     exports: new ExportService(db, audit, blobs, keys, jobs),
     siem,
@@ -237,7 +250,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     throttle: new LoginThrottle(db, { maxAttempts: cfg.LOCKOUT_MAX_ATTEMPTS, windowMinutes: cfg.LOCKOUT_WINDOW_MINUTES, durationMinutes: cfg.LOCKOUT_DURATION_MINUTES }),
     sync: new DirectorySync(db, providers, users, chain, sessions, apiKeys, audit, notifications, log),
     quotas,
-    offboarding: new Offboarding(db, keys, blobs, jobs),
+    offboarding: new Offboarding(db, keys, blobs, jobs, sessions),
     gateway,
     attachments,
     calc,
@@ -267,6 +280,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     kerberos: overrides.kerberos ?? createKerberos(cfg),
     close: async () => {
       scheduler.stop();
+      await denials.flushAll().catch(() => undefined);
       chat.close();
       await gateway.stop();
       await calc.close();

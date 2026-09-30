@@ -77,7 +77,7 @@ raised_by}` in the problem.
 | `GET /admin/audit/stream` | SIEM stream status `{enabled, url, state, delivered, pending, dropped, lastDeliveredAt, lastError}` |
 | `POST /admin/audit/exports` `{kind?, action?, from?, to?, label?, actor?, filtered}` | Queues a CSV export. Without `filtered`, a selection with rows above the caller's clearance fails `403 Export blocked` with `{total, above, clearance}` |
 | `GET /admin/exports` | Exports (audit ones need `audit:read`, usage ones `usage:read`) |
-| `GET /admin/exports/:id/download` | The CSV (logged to audit) |
+| `GET /admin/exports/:id/download` | The CSV (logged to audit), streamed part by part; a part that fails to open ends the connection |
 
 An export is `{id, kind, file, scope, maxLabel, state: queued|running|ready|failed, rows, omitted, jobId, createdBy,
 createdByName, createdAt}`.
@@ -328,8 +328,11 @@ destructive must declare at least that), Secrets scan, Referenced tools publishe
 workspace policy (agents: at most 100 steps, 200,000 tokens, 3,600 s).
 
 A dispatcher outcome (harness, and each doing step of a run): `{name, arguments, ok, result?, error?, decision
-(the tool-call guardrail's action), denied?, needsApproval?, valid (output schema), durationMs}`. Every call passes the
-`tool-call` guardrail checkpoint with `meta: {tool, sideEffect, toolLabel, ceiling, confirm, impl}`.
+(the tool-call guardrail's action), denied?, needsApproval?, withheld?, valid (output schema), durationMs}`. Every call
+passes the `tool-call` guardrail checkpoint with `meta: {tool, sideEffect, toolLabel, ceiling, confirm, impl}`, and its
+result passes the `context` checkpoint with `meta: {via: 'tool-result', tool, impl, sideEffect}` before it goes to the
+model: `block` or `require-approval` withholds it (`ok: false, withheld: true`), `redact` replaces it. Context and memory
+tags inside a result are defused as in retrieved context.
 
 A workflow tool call starts a run of the pinned version as the caller (trigger `tool`, label the higher of the
 workflow's and the caller's data) and executes it within the call, for at most 5 minutes (or the workflow's shorter

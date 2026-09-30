@@ -138,6 +138,9 @@ export function identityAdminRoutes(s: Services): Router {
     const keys = LoginThrottle.keys(p.tenantId, body.username, null);
     const state = await s.throttle.check([keys.account]);
     if (state.locked) throw tooManyRequests('This account is locked after failed attempts.', state.retryAfterSeconds);
+    // Reserved before the check runs, so parallel test logins cannot be used to guess past the lockout.
+    const reserved = await s.throttle.reserve([keys.account]);
+    if (reserved.locked) throw tooManyRequests('This account is locked after failed attempts.', reserved.retryAfterSeconds);
     const steps: Step[] = [];
     const result = await s.chain.authenticate(p.tenantId, body.username, body.password, steps);
     let mapping: { roles: string[]; clearance: string | null } | null = null;
@@ -155,8 +158,9 @@ export function identityAdminRoutes(s: Services): Router {
         const clearance = linked.clearance_direct ? (mapping.clearance ? highest(mapping.clearance as Label, linked.clearance_direct) : linked.clearance_direct) : mapping.clearance;
         mapping = { roles: [...new Set([...mapping.roles, ...direct])].sort(), clearance };
       }
+      await s.throttle.release([keys.account]);
     } else {
-      await s.throttle.fail([keys.account]);
+      await s.throttle.failed([keys.account]);
     }
     await audit(req, 'identity.test_login', { username: body.username.toLowerCase() }, { result: result.status, provider: 'provider' in result ? result.provider.name : null });
     res.json({

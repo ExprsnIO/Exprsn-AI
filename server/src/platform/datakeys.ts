@@ -6,6 +6,7 @@ import { newDataKey, type Kms } from './kms.js';
 import type { Bus } from './bus.js';
 
 const DESTROYED = 'keys.destroyed';
+const ROTATED = 'keys.rotated';
 
 export const PLATFORM_SCOPE = 'platform';
 
@@ -40,7 +41,8 @@ export interface Sealer {
  */
 export class DataKeys {
   private readonly cache = new Map<string, { key: Buffer; at: number; scope: string }>();
-  private readonly active = new Map<string, Promise<KeyRow>>();
+  /** The active key per scope, re-read after `ttlMs` so a rotation missed on the bus still takes effect everywhere. */
+  private readonly active = new Map<string, { p: Promise<KeyRow>; at: number }>();
   private readonly legacy: SecretBox | null;
 
   constructor(
@@ -54,6 +56,8 @@ export class DataKeys {
     this.legacy = legacyDataKey ? new SecretBox(legacyDataKey) : null;
     // Every instance drops its cached copies when any instance destroys a scope's keys.
     bus?.on<{ scope: string }>(DESTROYED, ({ scope }) => this.forget(scope));
+    // ...and re-reads the active version when any instance rotates one, so nobody keeps sealing with a retired key.
+    bus?.on<{ scope: string }>(ROTATED, ({ scope }) => this.active.delete(scope));
   }
 
   private forget(scope: string): void {
@@ -71,14 +75,13 @@ export class DataKeys {
 
   /** The active key row for a scope, creating version 1 on first use. */
   private activeKey(scope: string): Promise<KeyRow> {
-    let p = this.active.get(scope);
-    if (!p) {
-      p = this.loadOrCreate(scope).catch((err) => {
-        this.active.delete(scope);
-        throw err;
-      });
-      this.active.set(scope, p);
-    }
+    const hit = this.active.get(scope);
+    if (hit && Date.now() - hit.at < this.ttlMs) return hit.p;
+    const p = this.loadOrCreate(scope).catch((err) => {
+      if (this.active.get(scope)?.p === p) this.active.delete(scope);
+      throw err;
+    });
+    this.active.set(scope, { p, at: Date.now() });
     return p;
   }
 
@@ -161,7 +164,8 @@ export class DataKeys {
     await this.db('tenant_keys').where({ id: current.id }).update({ state: 'retired' });
     this.active.delete(scope);
     const next = await this.create(scope, current.version + 1);
-    this.active.set(scope, Promise.resolve(next));
+    this.active.set(scope, { p: Promise.resolve(next), at: Date.now() });
+    this.bus?.publish(ROTATED, { scope });
     return { version: next.version };
   }
 
@@ -176,7 +180,17 @@ export class DataKeys {
   }
 
   async describe(scope: string): Promise<{ kms: string; keyName: string; version: number | null; state: string; createdAt: number | null }> {
-    const row = (await this.db('tenant_keys').where({ tenant_id: scope }).orderBy('version', 'desc').first()) as KeyRow | undefined;
-    return { kms: row?.kms ?? this.kms.kind, keyName: this.kekName(scope), version: row?.version ?? null, state: row?.state ?? 'not created', createdAt: row?.created_at ?? null };
+    return (await this.describeMany([scope])).get(scope)!;
+  }
+
+  /** `describe` for several scopes in one query: the latest key version of each. */
+  async describeMany(scopes: string[]): Promise<Map<string, { kms: string; keyName: string; version: number | null; state: string; createdAt: number | null }>> {
+    const rows = scopes.length ? ((await this.db('tenant_keys').whereIn('tenant_id', scopes).orderBy('version', 'desc')) as KeyRow[]) : [];
+    const latest = new Map<string, KeyRow>();
+    for (const r of rows) if (!latest.has(r.tenant_id)) latest.set(r.tenant_id, r);
+    return new Map(scopes.map((scope) => {
+      const row = latest.get(scope);
+      return [scope, { kms: row?.kms ?? this.kms.kind, keyName: this.kekName(scope), version: row?.version ?? null, state: row?.state ?? 'not created', createdAt: row?.created_at ?? null }];
+    }));
   }
 }

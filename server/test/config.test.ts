@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config/index.js';
-import { resolveSecret } from '../src/identity/secrets.js';
+import { loadConfig, SERVER_ENV_NAMES } from '../src/config/index.js';
+import { resolveSecret, secretPolicy, secretRefProblem } from '../src/identity/secrets.js';
 
 const base = { SESSION_SECRET: 'x'.repeat(64), DATA_KEY: Buffer.alloc(32, 1).toString('base64') };
 
@@ -41,9 +41,42 @@ describe('configuration', () => {
 });
 
 describe('secret references', () => {
-  it('resolves env: and file: and rejects anything else', () => {
-    expect(resolveSecret('env:X', { X: 'v' })).toBe('v');
-    expect(() => resolveSecret('env:MISSING', {})).toThrow(/not set/);
-    expect(() => resolveSecret('hunter2', {})).toThrow();
+  const dir = mkdtempSync(path.join(tmpdir(), 'exprsn-secrets-'));
+  const outside = mkdtempSync(path.join(tmpdir(), 'exprsn-outside-'));
+  writeFileSync(path.join(dir, 'ldap_pw'), 'bind-pw\n');
+  writeFileSync(path.join(dir, 'data_key'), 'master-key');
+  writeFileSync(path.join(outside, 'other'), 'not yours');
+  symlinkSync(path.join(outside, 'other'), path.join(dir, 'escape'));
+  const policy = secretPolicy({ envAllow: 'IDP_*,HR_DB', dirs: dir, serverEnvNames: SERVER_ENV_NAMES, serverSecretFiles: [path.join(dir, 'data_key')] });
+
+  it('resolves allowed env: and file: references and rejects anything else', () => {
+    expect(resolveSecret('env:IDP_LDAP_PW', { IDP_LDAP_PW: 'v' }, policy)).toBe('v');
+    expect(resolveSecret('env:HR_DB', { HR_DB: 'x' }, policy)).toBe('x');
+    expect(() => resolveSecret('env:IDP_MISSING', {}, policy)).toThrow(/not set/);
+    expect(resolveSecret(`file:${path.join(dir, 'ldap_pw')}`, {}, policy)).toBe('bind-pw');
+    expect(() => resolveSecret('hunter2', {}, policy)).toThrow();
+  });
+
+  it('refuses variables the operator has not listed, and the server\'s own settings even when a pattern matches', () => {
+    expect(() => resolveSecret('env:HOME', { HOME: '/root' }, policy)).toThrow(/SECRET_REF_ENV/);
+    const everything = secretPolicy({ envAllow: '*', dirs: '', serverEnvNames: SERVER_ENV_NAMES, serverSecretFiles: [] });
+    for (const name of ['DATA_KEY', 'SESSION_SECRET', 'DATABASE_URL', 'DATA_KEY_FILE', 'SQLITE_FILENAME']) {
+      expect(secretRefProblem(`env:${name}`, everything)).toMatch(/server's own settings/);
+      expect(() => resolveSecret(`env:${name}`, { [name]: 'secret' }, everything)).toThrow(/not allowed/);
+    }
+  });
+
+  it('confines file: references to the configured directories, following symlinks, and never reads the server\'s own secret files', () => {
+    expect(secretRefProblem(`file:${path.join(outside, 'other')}`, policy)).toMatch(/SECRET_REF_DIRS/);
+    expect(secretRefProblem(`file:${dir}/../${path.basename(outside)}/other`, policy)).toMatch(/SECRET_REF_DIRS/);
+    expect(() => resolveSecret(`file:${path.join(dir, 'escape')}`, {}, policy)).toThrow(/outside the permitted directories/);
+    expect(secretRefProblem(`file:${path.join(dir, 'data_key')}`, policy)).toMatch(/server's own secrets/);
+    expect(() => resolveSecret('file:relative/path', {}, policy)).toThrow(/absolute/);
+  });
+
+  it('refuses every reference until the server configures a policy', () => {
+    expect(secretRefProblem('env:IDP_X', secretPolicy({ envAllow: '', dirs: '', serverEnvNames: new Set(), serverSecretFiles: [] }))).toMatch(/SECRET_REF_ENV/);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   });
 });

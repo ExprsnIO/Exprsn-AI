@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalKms, OpenBaoKms } from '../src/platform/kms.js';
 import { DataKeys, KeyDestroyedError } from '../src/platform/datakeys.js';
 import { checkKey, FsBlobStore, signV4 } from '../src/platform/blob.js';
-import { TOPICS } from '../src/platform/bus.js';
+import { Bus, TOPICS } from '../src/platform/bus.js';
 import type { JobProgressEvent } from '../src/platform/jobs.js';
 import { csvField } from '../src/audit/exports.js';
 import { harness, type Harness } from './helpers.js';
@@ -138,6 +138,24 @@ describe('per-tenant data keys', () => {
     await expect(keys.seal('tenant-a', 'again', 'x')).rejects.toBeInstanceOf(KeyDestroyedError);
   });
 
+  it('makes every instance seal with the new version once any instance rotates', async () => {
+    const other = new DataKeys(h.s.db, h.s.kms, h.s.cfg.OPENBAO_KEY_PREFIX, undefined, h.s.bus);
+    const keyOf = (sealed: string) => sealed.split('.')[1];
+    const before = await other.seal('tenant-a', 'x', 'r1'); // caches version 1
+    await h.s.keys.rotate('tenant-a');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(keyOf(await other.seal('tenant-a', 'y', 'r2'))).not.toBe(keyOf(before));
+
+    // Without the bus event (a missed message), the cached version expires after the TTL.
+    const deaf = new DataKeys(h.s.db, h.s.kms, h.s.cfg.OPENBAO_KEY_PREFIX, undefined, undefined, 50);
+    const b1 = await deaf.seal('tenant-b', 'x', 'r1');
+    await h.s.keys.rotate('tenant-b');
+    await new Promise((r) => setTimeout(r, 80));
+    const b2 = await deaf.seal('tenant-b', 'y', 'r2');
+    expect(keyOf(b2)).not.toBe(keyOf(b1));
+    expect(await deaf.open('tenant-b', b1, 'r1')).toBe('x');
+  });
+
   it('still opens TOTP seeds sealed with DATA_KEY before the KMS', async () => {
     const { SecretBox } = await import('../src/crypto/index.js');
     const legacy = new SecretBox(h.s.cfg.DATA_KEY!).seal('seed', 'totp:1');
@@ -260,5 +278,26 @@ describe('CSV fields', () => {
     expect(csvField('=HYPERLINK("x")')).toBe('"\'=HYPERLINK(""x"")"');
     expect(csvField({ a: 1 })).toBe('"{""a"":1}"');
     expect(csvField(null)).toBe('');
+  });
+});
+
+describe('event bus', () => {
+  it('isolates a failing listener from the publisher and the other listeners', async () => {
+    const errors: string[] = [];
+    const log = { error: (o: { topic: string }) => errors.push(o.topic), warn: () => undefined, info: () => undefined } as never;
+    const bus = new Bus(log);
+    const got: unknown[] = [];
+    bus.on('t', () => {
+      throw new Error('bad listener');
+    });
+    bus.on('t', async () => {
+      throw new Error('bad async listener');
+    });
+    bus.on('t', (p) => got.push(p));
+    expect(() => bus.publish('t', 1)).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(got).toEqual([1]);
+    expect(errors).toEqual(['t', 't']);
+    await bus.close();
   });
 });

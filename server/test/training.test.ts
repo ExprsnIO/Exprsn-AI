@@ -295,6 +295,29 @@ describe('training', () => {
     expect((await ml1.get('/api/training/schedules').expect(200)).body[0]).toMatchObject({ enabled: false, nextRunAt: null });
   });
 
+  it('fires a schedule only with its owner\'s current authority', async () => {
+    const { ml1 } = await setup();
+    const d = await dataset(h, ml1, 'feedback-approved', 'internal');
+    const tpl = (await ml1.post('/api/training/jobs', jobBody('weekly-template', d.id)).expect(201)).body;
+    await ml1.post('/api/training/schedules', { name: 'weekly refresh', templateJobId: tpl.id, cron: '0 22 * * 4', condition: 'always' }).expect(201);
+    const owner = (await h.s.users.byUsername(h.tenantId, 'mara'))!;
+    const fire = async () => h.s.training.fireSchedule((await h.s.training.schedules(h.tenantId))[0]!);
+    const last = async () => (await h.s.training.schedules(h.tenantId))[0]!.last_result;
+
+    await h.s.users.setRoles(owner.id, 'direct', ['member']);
+    expect(await fire()).toBeNull();
+    expect(await last()).toMatch(/may no longer submit training jobs/);
+
+    await h.s.users.setRoles(owner.id, 'direct', ['ml-admin']);
+    await h.s.users.update(h.tenantId, owner.id, { state: 'disabled' });
+    expect(await fire()).toBeNull();
+    expect(await last()).toMatch(/no longer has an active account/);
+
+    await h.s.users.update(h.tenantId, owner.id, { state: 'active' });
+    const fired = await fire();
+    expect(fired).toMatchObject({ created_by: owner.id });
+  });
+
   it('says clearly when no training worker is configured', async () => {
     h = await harnessWith({});
     await seedBase(h);

@@ -187,6 +187,15 @@ export class SessionService {
     return ids.length;
   }
 
+  /** Revokes every live session in a tenant (tenant disabled or offboarded); their sockets close everywhere. */
+  async revokeAllForTenant(tenantId: string): Promise<number> {
+    const ids = (await this.db('sessions').where({ tenant_id: tenantId, revoked_at: null }).select('id')).map((r: { id: string }) => r.id);
+    if (!ids.length) return 0;
+    await this.db('sessions').whereIn('id', ids).update({ revoked_at: Date.now() });
+    this.onRevoke(ids);
+    return ids.length;
+  }
+
   /** Deletes sessions that ended more than a day ago. */
   async purge(): Promise<number> {
     const cutoff = Date.now() - 24 * 3600_000;

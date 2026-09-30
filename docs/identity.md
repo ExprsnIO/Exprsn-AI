@@ -40,6 +40,22 @@ Configuration never contains secret values. Use references:
 - `file:/absolute/path` reads a file (a Docker secret, systemd credential, or mounted vault file) at use time, so
   rotating it needs no restart.
 
+Tenant admins write these references, so the operator decides what they can reach:
+
+- an `env:` name must be on `SECRET_REF_ENV` (names or `PREFIX*` patterns; empty by default, so no `env:` reference
+  works until the operator lists some);
+- a `file:` path must resolve, following symlinks, inside one of `SECRET_REF_DIRS` (by default `/run/secrets`,
+  `/run/credentials` and `/etc/exprsn-ai/credentials`);
+- the server's own settings (`DATA_KEY`, `DATABASE_URL`, `SESSION_SECRET` and every other variable in
+  [deploy.md](deploy.md), with their `_FILE` forms) and the files those `_FILE` variables name are never readable,
+  whatever the lists say.
+
+A reference that breaks these rules is refused when the store is saved and again when it is read.
+
+LDAP directories and the databases behind SQL stores must resolve to internal addresses unless
+`IDENTITY_ALLOWED_HOSTS` names them; the host is checked before every connection, before any password is sent. A
+SQLite store can never be the application's own database.
+
 ### Managing stores
 
 - **In the console:** Admin → User stores. Add, edit, reorder, enable or disable, and test the connection. "Test a
@@ -71,6 +87,10 @@ Roles and clearance:
 
 Mapped roles and clearance are recomputed at every sign-in. Changing a user's access in the console ends their
 sessions so the change applies on the next request.
+
+Changing someone's roles, resetting their factors and ending their sessions (Users, Sessions, and the Sessions tab of
+Federation, including their OAuth grants) all need the same thing: roles that could grant every role the person
+holds. An identity admin can sign a member out but not a system admin; anyone can end their own sessions.
 
 ## Roles
 

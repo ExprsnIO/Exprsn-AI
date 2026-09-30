@@ -168,7 +168,7 @@ export function requirePermission(s: Services, action: Permission, resourceOf?: 
       Object.assign(decision, { allow: false, step: 'mfa', reason: 'Admin roles need a session verified with a second factor' });
     }
     if (!decision.allow) {
-      await s.audit.append({
+      await s.denials.record(`${p.tenantId}:${p.userId ?? p.apiKeyId ?? 'anonymous'}`, {
         tenantId: p.tenantId,
         action: 'authz.denied',
         kind: 'decision',

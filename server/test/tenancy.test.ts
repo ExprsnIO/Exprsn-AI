@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { bootstrap } from '../src/bootstrap.js';
 import { harness, localUser, login, loginAdmin, PASSWORD, type Harness } from './helpers.js';
 
 describe('tenants, workspaces and quotas', () => {
@@ -188,10 +189,32 @@ describe('audit: checkpoints, corrections, exports, notifications', () => {
     expect(csv.headers['content-type']).toContain('text/csv');
     expect(csv.text).toContain('plain.read');
     expect(csv.text).not.toContain('secret.read');
-    // stored sealed, never as plain CSV
+    // stored sealed, never as plain CSV: the manifest holds only a part count, every part is sealed
     const row = await h.s.db('exports').where({ id: x.body.id }).first();
-    expect((await h.s.blobs.get(row.blob_key))!.toString()).toMatch(/^v2\./);
+    expect(JSON.parse((await h.s.blobs.get(row.blob_key))!.toString())).toEqual({ parts: 1 });
+    expect((await h.s.blobs.get(`exports/${h.tenantId}/${x.body.id}/part-00000.sealed`))!.toString()).toMatch(/^v2\./);
     expect((await h.s.audit.list(h.tenantId, { action: 'export.downloaded' })).length).toBe(1);
+  });
+
+  it('writes large exports in sealed parts and streams them back in order', async () => {
+    await localUser(h, 'aud', ['auditor'], 'internal');
+    const a = await loginAdmin(h, 'aud');
+    const filler = 'x'.repeat(2000);
+    for (let i = 0; i < 1200; i++) await h.s.audit.append({ tenantId: h.tenantId, action: `bulk.${String(i).padStart(4, '0')}`, kind: 'decision', actor: { user: 'x' }, label: 'internal', detail: { filler } });
+    const x = await a.agent.post('/api/admin/audit/exports').set('x-csrf-token', a.csrf).send({}).expect(202);
+    await h.s.jobs.runDue();
+    const row = await h.s.db('exports').where({ id: x.body.id }).first();
+    const { parts } = JSON.parse((await h.s.blobs.get(row.blob_key))!.toString()) as { parts: number };
+    expect(parts).toBeGreaterThan(1);
+    const csv = (await a.agent.get(`/api/admin/exports/${x.body.id}/download`).expect(200)).text;
+    const actions = [...csv.matchAll(/bulk\.(\d{4})/g)].map((m) => Number(m[1]));
+    expect(actions).toEqual(Array.from({ length: 1200 }, (_, i) => i));
+    // A part moved to another position does not open: each is bound to its index.
+    const p0 = await h.s.blobs.get(`exports/${h.tenantId}/${x.body.id}/part-00000.sealed`);
+    await h.s.blobs.put(`exports/${h.tenantId}/${x.body.id}/part-00001.sealed`, p0!);
+    // The failure comes after the download started, so the connection is cut rather than completed.
+    const tampered = await a.agent.get(`/api/admin/exports/${x.body.id}/download`).then((r) => r.text, () => null);
+    expect(tampered === null || !tampered.includes('bulk.1199')).toBe(true);
   });
 
   it('reports usage by user and day, and quotas per workspace', async () => {
@@ -285,5 +308,26 @@ describe('directory sync', () => {
     const [report] = await h.s.sync.syncTenant(h.tenantId);
     expect(report!.aborted).toMatch(/could not be read/);
     expect((await h.s.users.byUsername(h.tenantId, 'ann'))?.state).toBe('active');
+  });
+});
+
+describe('identity config bootstrap', () => {
+  it('restarts cleanly when a workspace the file declares has been archived', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'exprsn-idcfg-'));
+    const file = path.join(dir, 'identity.yaml');
+    writeFileSync(file, 'tenants:\n  - slug: default\n    name: Default\n    workspaces:\n      - name: Finance\n        labelCeiling: confidential\n');
+    const h = await harness({ IDENTITY_CONFIG: file });
+    try {
+      const ws = (await h.s.tenants.workspaces(h.tenantId)).find((w) => w.name === 'Finance')!;
+      await h.s.db('workspaces').where({ id: ws.id }).update({ state: 'archived' });
+      await expect(bootstrap(h.s)).resolves.toBeUndefined();
+      await expect(bootstrap(h.s)).resolves.toBeUndefined();
+      const all = (await h.s.tenants.workspaces(h.tenantId, { includeArchived: true })).filter((w) => w.name === 'Finance');
+      expect(all).toHaveLength(1);
+      expect(all[0]!.state).toBe('archived'); // left archived: un-archiving is an admin's decision
+    } finally {
+      await h.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

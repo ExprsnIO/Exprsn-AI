@@ -2,7 +2,7 @@
 # Exprsn-AI application server. Build from the repository root:
 #   docker build -f deploy/docker/Dockerfile -t exprsn-ai:dev .
 
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
 WORKDIR /app
 # Toolchain for the native modules (argon2, better-sqlite3) when no prebuilt binary matches.
 RUN apt-get update \
@@ -17,7 +17,7 @@ RUN npm run build -w server \
  && npm prune --omit=dev --workspaces --include-workspace-root --no-audit --no-fund \
  && mkdir -p server/node_modules
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8080 \

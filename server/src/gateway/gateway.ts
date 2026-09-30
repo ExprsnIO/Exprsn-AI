@@ -134,7 +134,16 @@ export class Gateway {
           this.runtimes.delete(id);
         }
       }
-      await Promise.all(rows.map((row) => this.poll(this.runtime(row))));
+      // One instance's failure (even a throw while building its client) must not stop the others being polled.
+      await Promise.all(
+        rows.map(async (row) => {
+          try {
+            await this.poll(this.runtime(row));
+          } catch (err) {
+            this.log.error({ instance: row.name, err: (err as Error).message }, 'Polling the instance failed');
+          }
+        })
+      );
       this.publish();
     } finally {
       this.polling = false;
@@ -461,25 +470,37 @@ export class Gateway {
       // Wait on the least-queued instance for a slot, then re-pick.
       const target = list.sort((a, b) => a.waiting.length - b.waiting.length)[0]!;
       await new Promise<void>((resolve, reject) => {
-        const w: Waiter = { resolve, reject, ...(opts.onPosition ? { onPosition: opts.onPosition } : {}) };
-        target.waiting.push(w);
-        opts.onPosition?.(target.waiting.length);
-        const t = setTimeout(() => {
+        if (opts.signal.aborted) return reject(opts.signal.reason as Error);
+        // However the wait ends (a slot, the deadline, an abort, shutdown), the timer and the abort listener go with it:
+        // a request that waits many rounds must not pile listeners onto its signal.
+        const leave = () => {
+          clearTimeout(t);
+          opts.signal.removeEventListener('abort', onAbort);
           const i = target.waiting.indexOf(w);
           if (i >= 0) target.waiting.splice(i, 1);
+        };
+        const onAbort = () => {
+          leave();
+          reject(opts.signal.reason as Error);
+        };
+        const w: Waiter = {
+          resolve: () => {
+            leave();
+            resolve();
+          },
+          reject: (err: Error) => {
+            leave();
+            reject(err);
+          },
+          ...(opts.onPosition ? { onPosition: opts.onPosition } : {})
+        };
+        const t = setTimeout(() => {
+          leave();
           reject(new QueueTimeout(`Every instance serving ${model.name} is busy.`));
         }, remaining);
-        opts.signal.addEventListener('abort', () => {
-          clearTimeout(t);
-          const i = target.waiting.indexOf(w);
-          if (i >= 0) target.waiting.splice(i, 1);
-          reject(opts.signal.reason as Error);
-        }, { once: true });
-        const orig = w.resolve;
-        w.resolve = () => {
-          clearTimeout(t);
-          orig();
-        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+        target.waiting.push(w);
+        opts.onPosition?.(target.waiting.length);
       });
     }
   }

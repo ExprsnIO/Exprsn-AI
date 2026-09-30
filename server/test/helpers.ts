@@ -28,6 +28,8 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
     WEB_ROOT: '/nonexistent',
     BLOB_DIR: mkdtempSync(path.join(tmpdir(), 'exprsn-blobs-')),
     JOB_QUEUE: 'db',
+    // The variables the tests' user stores and upstream IdPs reference.
+    SECRET_REF_ENV: 'LDAP_*,HR_*,SYNC_HR_*,UPSTREAM_SECRET_*,NOT_SET_ANYWHERE',
     ...overrides
   } as NodeJS.ProcessEnv);
 }

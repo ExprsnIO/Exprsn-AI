@@ -61,7 +61,7 @@ For production (Docker Compose or bare-metal systemd, TLS, secrets as files, Oll
 
 ```sh
 npm run lint && npm run typecheck && npm test      # unit and API tests on in-memory SQLite
-for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done
+for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done
 TEST_PG_URL=postgres://… TEST_MYSQL_URL=mysql://… TEST_LDAP_URL=ldap://… TEST_LDAP_INSECURE=true TEST_LDAP_BIND_PW=… \
   npm run test:integration -w server              # user stores against real servers
 ```

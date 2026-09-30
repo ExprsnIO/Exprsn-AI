@@ -49,7 +49,7 @@ services:
     networks: [app, data, inference]
 
   postgres:
-    image: postgres:17-bookworm
+    image: postgres:17-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
     restart: unless-stopped
     environment:
       POSTGRES_DB: exprsn_ai
@@ -65,7 +65,7 @@ services:
     networks: [data]
 
   redis:
-    image: redis:7-bookworm
+    image: redis:7-bookworm@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--save", ""]
     volumes: [redisdata:/data]
@@ -81,7 +81,8 @@ services:
   # no published port, no egress.
   ollama:
     profiles: [inference]
-    image: ollama/ollama:${OLLAMA_VERSION:-latest}
+    # Pinned by digest; set OLLAMA_IMAGE to move to another release.
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.34.4@sha256:8262851b2846b87c649eddf3e76beb270c52f4d1bc94559f47efde16b0841551}
     restart: unless-stopped
     environment:
       OLLAMA_HOST: 0.0.0.0:11434

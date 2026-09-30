@@ -105,6 +105,8 @@ export async function* ndjson<T>(body: AsyncIterable<Uint8Array>): AsyncGenerato
 export class OllamaClient {
   private readonly dispatcher: Dispatcher | undefined;
   private readonly base: string;
+  /** Set when the instance's mTLS files cannot be read: every request fails with it, so only this instance is affected. */
+  private readonly configError: OllamaError | null = null;
 
   constructor(
     url: string,
@@ -113,18 +115,23 @@ export class OllamaClient {
   ) {
     this.base = url.replace(/\/+$/, '');
     if (tls && (tls.caFile || tls.certFile)) {
-      this.dispatcher = new Agent({
-        connect: {
-          ...(tls.caFile ? { ca: readFileSync(tls.caFile) } : {}),
-          ...(tls.certFile ? { cert: readFileSync(tls.certFile) } : {}),
-          ...(tls.keyFile ? { key: readFileSync(tls.keyFile) } : {}),
-          rejectUnauthorized: true
-        }
-      });
+      try {
+        this.dispatcher = new Agent({
+          connect: {
+            ...(tls.caFile ? { ca: readFileSync(tls.caFile) } : {}),
+            ...(tls.certFile ? { cert: readFileSync(tls.certFile) } : {}),
+            ...(tls.keyFile ? { key: readFileSync(tls.keyFile) } : {}),
+            rejectUnauthorized: true
+          }
+        });
+      } catch (err) {
+        this.configError = new OllamaError(`The instance's mTLS files could not be read: ${(err as Error).message}`, null);
+      }
     }
   }
 
   private async req(method: string, path: string, body?: unknown, opts: { timeoutMs?: number | null; signal?: AbortSignal } = {}) {
+    if (this.configError) throw this.configError;
     const signals: AbortSignal[] = [];
     if (opts.timeoutMs !== null) signals.push(AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs));
     if (opts.signal) signals.push(opts.signal);

@@ -1,7 +1,7 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
-import { canGrant, permissionsFor, rolesRequireMfa } from '../../authz/permissions.js';
+import { canGrant, canManage, permissionsFor, rolesRequireMfa } from '../../authz/permissions.js';
 import { resolveMappings } from '../../repos/users.js';
 import { slugify } from '../../repos/tenants.js';
 import { isFederatedKind, parseProviderConfig, secretRef, type OidcUpstreamConfig, type SamlUpstreamConfig, type Step } from '../../identity/providers/types.js';
@@ -431,13 +431,21 @@ export function federationAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const body = parseBody(z.object({ kind: z.enum(['session', 'grant', 'service']), id: z.string().min(1).max(64) }), req.body);
     let revoked: number;
+    // As on the Users screen: only someone who could grant all of the owner's roles may end their session or grant.
+    const mayRevoke = async (userId: string) => {
+      if (userId !== p.userId && !canManage(p.roles, await s.users.roleIds(userId))) throw forbidden('This belongs to someone holding roles you cannot grant, so you cannot revoke it.', { step: 'role' });
+    };
     if (body.kind === 'session') {
       const target = await s.sessions.get(p.tenantId, body.id);
       if (!target) throw notFound('Session');
+      await mayRevoke(target.user_id);
       await s.sessions.revoke(p.tenantId, target.id);
       revoked = 1 + (await fed().oidc.revokeForSession(p.tenantId, target.id));
       await audit(req, 'session.revoked', { session: target.id, user: target.user_id }, { refreshTokensRevoked: revoked - 1 });
     } else if (body.kind === 'grant') {
+      const owner = (await s.db('oidc_refresh_tokens').where({ tenant_id: p.tenantId, family_id: body.id }).first('user_id')) as { user_id: string } | undefined;
+      if (!owner) throw notFound('Grant');
+      await mayRevoke(owner.user_id);
       revoked = await fed().oidc.revokeFamily(p.tenantId, body.id);
       if (!revoked) throw notFound('Grant');
       await audit(req, 'oidc.grant.revoked', { family: body.id });

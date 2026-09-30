@@ -72,7 +72,9 @@ export async function bootstrap(s: Services): Promise<void> {
     let row = await s.tenants.bySlug(t.slug);
     if (!row) row = await s.tenants.create({ slug: t.slug, name: t.name, directoryDn: t.directoryDn ?? null });
     else if (row.name !== t.name || (t.directoryDn ?? null) !== row.directory_dn) row = await s.tenants.update(row.id, { name: t.name, directoryDn: t.directoryDn ?? null });
-    const existingWs = new Set((await s.tenants.workspaces(row.id)).map((w) => w.name));
+    // Archived workspaces count as existing: recreating one would hit the unique name on every start, and
+    // un-archiving is an admin's decision, not the config file's.
+    const existingWs = new Set((await s.tenants.workspaces(row.id, { includeArchived: true })).map((w) => w.name));
     for (const w of t.workspaces) if (!existingWs.has(w.name)) await s.tenants.createWorkspace(row.id, w.name, w.labelCeiling);
 
     for (const p of t.providers) {

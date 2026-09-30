@@ -119,6 +119,30 @@ describe('chat', () => {
     expect(resume.chunks.map((c: { seq: number }) => c.seq)).toEqual([3, 4]);
   });
 
+  it('refuses a message that would raise the conversation above its workspace\'s ceiling', async () => {
+    await seed(h, ollama);
+    const ws = await h.s.tenants.createWorkspace(h.tenantId, 'Low side', 'internal', { visibility: 'tenant' });
+    const m = await member('carol', 'confidential');
+    await m.agent.put('/api/me/workspace').set('x-csrf-token', m.csrf).send({ workspaceId: ws.id }).expect(200);
+    const sent = await m.post('/api/chat', { content: 'Hello', profile: 'general' }).expect(202);
+    await m.done(sent.body.messageId);
+    const r = await m.post(`/api/conversations/${sent.body.conversationId}/messages`, { content: 'Now the secret part', profile: 'secret', label: 'confidential' }).expect(403);
+    expect(r.body).toMatchObject({ step: 'zone', detail: expect.stringMatching(/workspace's ceiling is internal/) });
+    expect((await h.s.db('conversations').where({ id: sent.body.conversationId }).first()).label).toBe('internal');
+  });
+
+  it('never replays another user\'s stream through one of your own conversations', async () => {
+    await seed(h, ollama);
+    const a = await member('alice');
+    const b = await member('bob');
+    const sentA = await a.post('/api/chat', { content: 'Private to Alice', profile: 'general' }).expect(202);
+    const sentB = await b.post('/api/chat', { content: 'Bob here', profile: 'general' }).expect(202);
+    await Promise.all([a.done(sentA.body.messageId), b.done(sentB.body.messageId)]);
+    // Bob owns the conversation but not the message: 404, whether or not the stream is still buffered.
+    await b.agent.get(`/api/conversations/${sentB.body.conversationId}/messages/${sentA.body.messageId}/stream?after=0`).expect(404);
+    await a.agent.get(`/api/conversations/${sentA.body.conversationId}/messages/${sentA.body.messageId}/stream?after=0`).expect(200);
+  });
+
   it('stops a stream, keeps what was produced, and estimates its usage', async () => {
     await seed(h, ollama);
     const m = await member();

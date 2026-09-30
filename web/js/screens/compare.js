@@ -49,18 +49,35 @@
       state: m.state, phase: ACTIVE[m.state] ? m.state : null, content: m.content || '', thinking: m.thinking || '', tools: m.tools || [], seq: m.seq || 0, usage: m.usage, error: m.error, sentAt: m.createdAt });
   }
 
-  // ---------- socket: registered once per socket, always reading the current screen state ----------
+  // ---------- socket: bound while this screen is open, always reading the current screen state ----------
   let bound = null;
+  let handlers = null;
   let orphans = []; // events for message ids not known yet (the POST answer can arrive after the first events)
   function bindSocket() {
     const sock = App.socket;
     if (!sock || bound === sock) return;
+    detach();
     bound = sock;
-    sock.on('chat.status', (d) => dispatch('status', d));
-    sock.on('chat.chunk', (d) => dispatch('chunk', d));
-    sock.on('chat.done', (d) => dispatch('done', d));
-    sock.on('connect', () => activeCols(S()).forEach((c) => catchUp(c)));
+    handlers = {
+      'chat.status': (d) => dispatch('status', d),
+      'chat.chunk': (d) => dispatch('chunk', d),
+      'chat.done': (d) => dispatch('done', d),
+      connect: () => activeCols(S()).forEach((c) => catchUp(c))
+    };
+    Object.keys(handlers).forEach((ev) => sock.on(ev, handlers[ev]));
   }
+  /** Leaving the screen: stop listening, stop the watchdog and gap timers, and drop buffered events. */
+  function detach() {
+    if (bound && handlers) Object.keys(handlers).forEach((ev) => bound.off(ev, handlers[ev]));
+    bound = null;
+    handlers = null;
+    orphans = [];
+    if (watchdog) { clearInterval(watchdog); watchdog = null; }
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    const st = S();
+    if (st && st.run) st.run.columns.forEach((c) => { if (c.gapTimer) { clearTimeout(c.gapTimer); c.gapTimer = null; } });
+  }
+  window.addEventListener('hashchange', () => { if (App.parse().route !== 'compare') detach(); });
   function dispatch(kind, d) {
     if (!d || !d.messageId) return;
     const col = findCol(S(), d.messageId);

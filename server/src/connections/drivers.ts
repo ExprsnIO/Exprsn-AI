@@ -1,4 +1,7 @@
+import { isIP } from 'node:net';
 import pg from 'pg';
+import { fetch, type Dispatcher } from 'undici';
+import { addressProblem, checkHost, guardedAgent, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import type { Classification } from './classify.js';
 
 /** What the service hands a driver: the endpoint and the opened credential. */
@@ -67,17 +70,23 @@ export const quoteIdent = (name: string): string =>
 
 /** PostgreSQL through node-postgres. */
 export class PostgresDriver implements DataDriver {
-  constructor(private readonly spec: ConnectionSpec) {}
+  constructor(
+    private readonly spec: ConnectionSpec,
+    /** Internal hosts only, unless CONNECTIONS_ALLOWED_HOSTS names the host or its network. */
+    private readonly allow: AllowList = parseAllowList('')
+  ) {}
 
   private async client<T>(timeoutMs: number, fn: (c: pg.Client) => Promise<T>): Promise<T> {
     const { host, port } = hostPort(this.spec.endpoint, 5432);
+    // Resolve and check once, then dial the checked address (TLS still verifies the name), so DNS cannot rebind.
+    const { addresses } = await checkHost(host, this.allow);
     const c = new pg.Client({
-      host,
+      host: addresses[0],
       port,
       database: this.spec.database ?? undefined,
       user: this.spec.username ?? undefined,
       password: this.spec.password ?? undefined,
-      ssl: this.spec.tls ? { rejectUnauthorized: true } : undefined,
+      ssl: this.spec.tls ? { rejectUnauthorized: true, ...(isIP(host) ? {} : { servername: host }) } : undefined,
       connectionTimeoutMillis: Math.min(timeoutMs, 10_000),
       statement_timeout: timeoutMs,
       query_timeout: timeoutMs + 2000,
@@ -155,17 +164,34 @@ export class PostgresDriver implements DataDriver {
 /** OpenSearch over its REST API with basic authentication. */
 export class OpenSearchDriver implements DataDriver {
   private readonly base: string;
+  private dispatcher: Dispatcher | null = null;
 
-  constructor(private readonly spec: ConnectionSpec) {
+  constructor(
+    private readonly spec: ConnectionSpec,
+    /** Internal hosts only, unless CONNECTIONS_ALLOWED_HOSTS names the host or its network. */
+    private readonly allow: AllowList = parseAllowList('')
+  ) {
     const e = spec.endpoint.replace(/\/+$/, '');
     this.base = /^https?:\/\//.test(e) ? e : `${spec.tls ? 'https' : 'http'}://${e}`;
+  }
+
+  /** Names are checked in the guarded dispatcher's DNS lookup at dial time; address literals never reach it. */
+  private guard(timeoutMs: number): Dispatcher {
+    const host = new URL(this.base).hostname.replace(/^\[|\]$/g, '');
+    if (isIP(host)) {
+      const problem = addressProblem(host, host, this.allow);
+      if (problem) throw new Error(problem);
+    }
+    this.dispatcher ??= guardedAgent(this.allow, timeoutMs);
+    return this.dispatcher;
   }
 
   private async call(method: string, path: string, body: unknown, timeoutMs: number): Promise<Record<string, unknown>> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.spec.username) headers.authorization = 'Basic ' + Buffer.from(`${this.spec.username}:${this.spec.password ?? ''}`).toString('base64');
-    const res = await fetch(this.base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+    const dispatcher = this.guard(timeoutMs);
+    const res = await fetch(this.base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), dispatcher, redirect: 'error' });
     const text = await res.text();
     let data: Record<string, unknown> = {};
     try {
@@ -222,7 +248,10 @@ export class OpenSearchDriver implements DataDriver {
   }
 }
 
-export const defaultDrivers: Record<ConnectionSpec['engine'], DriverFactory> = {
-  postgres: (spec) => new PostgresDriver(spec),
-  opensearch: (spec) => new OpenSearchDriver(spec)
-};
+/** The real drivers, confined to internal hosts plus `allow` (CONNECTIONS_ALLOWED_HOSTS). */
+export const createDrivers = (allow: AllowList): Record<ConnectionSpec['engine'], DriverFactory> => ({
+  postgres: (spec) => new PostgresDriver(spec, allow),
+  opensearch: (spec) => new OpenSearchDriver(spec, allow)
+});
+
+export const defaultDrivers = createDrivers(parseAllowList(''));
