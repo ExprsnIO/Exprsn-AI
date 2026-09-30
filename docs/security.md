@@ -94,7 +94,6 @@ filter, private `/tmp`, only the state directory writable.
 - First-factor enrolment: an admin with no second factor enrols one at first sign-in, so until then the account is
   protected by its password alone. Have new admins sign in and enrol promptly; an identity admin can reset factors
   (which forces re-enrolment) if an account may have been enrolled by someone else.
-- Kerberos SPNEGO, OIDC/SAML federation, device flow and service accounts with client credentials: Sprint 9.
 - Guardrails: the model-output check runs on the finished (or stopped) answer. While it streams the user sees the
   text, and a block or redaction replaces it afterwards; the guard model is not yet run sentence by sentence during
   streaming. In chat, `require-approval` refuses the turn, because chat has no approval flow to hold it in.
@@ -120,5 +119,45 @@ filter, private `/tmp`, only the state directory writable.
   classified" rather than blocked.
 - A chat stream lives on the instance that runs it: if that instance stops, the answer ends where it was and is
   kept as stored so far. Resume after a restart shows the stored text, not a continuation.
+- Training: the orchestrator sends the scrubbed rows of a dataset to the training worker in the submit request, so
+  they are in plaintext in transit to it and on its scratch storage for the run; run the worker inside the training
+  zone over TLS, with encrypted scratch that it clears after each run. Checkpoints and GGUF artefacts live in the
+  worker's object store under its own keys, not the tenant's data keys. The draft model's GGUF is pulled by name from the registry the worker pushes to; the gateway does not import a
+  GGUF file directly.
+- Zones: rendered NetworkPolicy, Compose and nftables files are downloaded and deployed by an operator; the platform
+  does not apply them itself (the Helm chart in Sprint 10 can consume them). MCP server and connection registration do
+  not yet consult zones (a member in the external or an undefined zone is reported on the Zones screen, not refused).
+- Zones: seeding the default set is a single system-admin action (it can only add zones and never lowers what a zone
+  holds); every later change needs a second system admin.
+- Import bundles are held in memory while they are verified and promoted (the blob store API is buffer-based), so
+  `PLATFORM_BUNDLE_MAX_BYTES` is capped below 2 GiB; multi-gigabyte model bundles need a streaming blob path.
+  Promotion writes into the mirror store in the blob store; pushing into Harbor, Verdaccio, devpi or the Trivy
+  server is left to each mirror's own sync from `mirrors/<kind>/`.
+- Without `PLATFORM_TRIVY_BIN` or `PLATFORM_STAGING_URL` the scan and staging steps are recorded as "not
+  configured" and a bundle can still be promoted; there is no setting yet that makes them mandatory. Adding or
+  revoking a signer key is audited but not under dual control.
+- ACME: http-01 only (no dns-01), so every name must reach this server on port 80 from the CA; no ACME external
+  account binding. Renewed certificates are stored and can be exported, but nothing reloads a listener or pushes the
+  key to the services that use it.
+- Backups cover the application database only: blob store contents (attachments, exports, media, checkpoints) and
+  the KMS key material must be backed up with their own tooling, and a backup cannot be opened without the KMS key.
+  The dump is logical and held in memory (fine for single-node sizes; use native `pg_dump` or `mysqldump` at scale),
+  SQLite dumps are not taken inside one transaction, and there is no restore command into a live database yet: the
+  drill proves a backup is readable and complete, it does not restore production. Tables outside the portable
+  schema (`vectors_pg`) are listed as skipped in the drill and rebuilt by reindexing.
+- Clock skew is measured against the database server, not against NTP.
+- Federation: DPoP, pushed authorization requests, `request` objects, `prompt=login`/`max_age` re-authentication,
+  front- and back-channel logout, SAML single logout and encrypted assertions are not implemented. The SAML IdP signs
+  the assertion, not the whole response, with RSA-SHA256 only; SP metadata is pasted, never fetched. Upstream SAML
+  accepts only exclusive C14N with RSA-SHA256 or ECDSA-SHA256 over SHA-256 digests and refuses IdP-initiated
+  responses; upstream SAML's browser binding needs HTTPS (a `SameSite=None; Secure` cookie).
+- Kerberos needs the optional `kerberos` npm module (GSSAPI bindings) and a keytab on the host; it is not bundled.
+  Mapping takes the principal's user part and looks it up in the tenant's user stores; realms map to tenants only
+  through the per-tenant realm allow-list.
+- Signing keys are sealed with the platform data key rather than signed in the KMS (OpenBao transit signing is not
+  used), so the application process holds unsealed private keys in memory.
+- OAuth access tokens are not individually revocable: they end with their grant, client or user, or after at most
+  30 minutes.
+- Key-encryption keys cannot be re-wrapped: changing `DATA_KEY` or `KMS_PROVIDER` makes existing tenant data keys
+  unreadable. `kms:rotate` adds a data-key version under the same key-encryption key.
 - Rate limits are per instance (in memory); quotas are shared through the database.
-- Screens still showing prototype data change nothing on the server; their APIs arrive in the sprint shown on each.

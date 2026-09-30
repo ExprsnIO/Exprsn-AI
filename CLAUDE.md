@@ -12,15 +12,16 @@ has three parts:
 | `server/` | The application server (npm workspace `@exprsn-ai/server`): Node.js 22, TypeScript strict, Express 5, Socket.io 4, Knex |
 | `web/` | The console the server serves: the prototype's screen modules, wired to the API screen by screen |
 | `design/prototype/` | The clickable design prototype. It is the specification for behaviour and copy, with example data only |
-| `deploy/` | Dockerfile, Compose (production, development, GPU), bare-metal systemd unit and installer, example identity YAML |
-| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md` |
+| `deploy/` | Dockerfile, Compose (production, development, GPU), Helm chart with NetworkPolicies, bare-metal systemd unit and installer, example identity YAML |
+| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `loadtest.md`, `runbooks/` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
 
-Sprints 0 to 8 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
+Sprints 0 to 9 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
 models, pools and profiles; chat, compare and metering; guardrails, classifiers and flags; knowledge, memory and
-connections; registry, MCP servers, agent runs and scripts; workflows, media and images). Every console screen is live
-except **Training**, **Zones**, **Platform** and **Identity**, which show a "Prototype data" banner naming Sprint 9. Check
-`Sprints.md` before starting work so you build the next sprint's scope, not a later one.
+connections; registry, MCP servers, agent runs and scripts; workflows, media and images; training, zones, platform
+operations and federation). Every console screen is live. Sprint 10 (hardening and release) is in progress: the Helm
+chart, supply-chain CI, the streaming load test and the runbooks are in; the ASVS review, accessibility modes, the
+Playwright suite across the console and the 1.0 release remain. Check `Sprints.md` before starting work.
 
 ## Commands
 
@@ -34,10 +35,12 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate>
+npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate | backup:create | backup:restore-drill>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
 for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
+npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
+helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
 ```
 
 Local setup: `cp server/.env.example server/.env`, fill `SESSION_SECRET` (`openssl rand -hex 32`) and `DATA_KEY`
@@ -70,7 +73,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   **`services.ts`** builds the `Services` object (config, db, logger, metrics, bus, KMS and data keys, blob store,
   jobs, notifications, audit with checkpoints, exports and SIEM, repos, identity chain, sessions, API keys, MFA,
   directory sync, quotas, offboarding, gateway, attachments, calculator, chat, guardrails, vectors, connections,
-  knowledge, memory, registry, MCP, tools, scripts, agents, workflows, media, images) passed to every route factory.
+  knowledge, memory, registry, MCP, tools, scripts, agents, workflows, media, images, and the Sprint 9 services
+  training, zones, ops and federation, which read their collaborators lazily through `s`) passed to every route factory.
 - **`config/`**: zod-validated environment. Secrets (`SESSION_SECRET`, `DATA_KEY`, `DATABASE_URL`, `METRICS_TOKEN`,
   `OPENBAO_TOKEN`, `REDIS_URL`, `SMTP_URL`, `S3_SECRET_ACCESS_KEY`, `SIEM_TOKEN`) may be given as `<NAME>_FILE`; empty
   variables count as unset. Production refuses non-HTTPS cookies.
@@ -85,7 +89,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `admin/tenants.ts` (tenants, workspaces, members, quotas, offboarding, policy explainer), `admin/usage.ts`,
   `admin/gateway.ts` (pools, instances, placements, models, profiles), `guardrails.ts` (rule sets, classifiers, flags),
   `knowledge.ts`, `memory.ts`, `admin/connections.ts`, `admin/registry.ts`, `admin/mcp.ts`, `agents.ts`, `scripts.ts`,
-  `workflows.ts`, `media.ts`, `images.ts`, `health.ts`. The full list is `docs/api.md`.
+  `workflows.ts`, `media.ts`, `images.ts`, `training.ts`, `admin/zones.ts`, `admin/platform.ts` (plus the public ACME
+  http-01 route), `admin/federation.ts`, `federation-public.ts` (OIDC, SAML, device and Kerberos endpoints mounted at
+  the root, outside `/api`), `health.ts`. The full list is `docs/api.md`.
 - **`identity/`**: the per-tenant store chain, adapters in `providers/`, JIT provisioning (roles, clearance and
   workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys.
 - **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
@@ -116,6 +122,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
   step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg), **`images/`** (`ImageBackend` for ComfyUI
   and diffusers, safety classifier, signed provenance in the PNG).
+- **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a
+  draft model; `TrainerBackend` over HTTP to the Python worker), **`zones/`** (versioned zone specs with dual control,
+  ceilings enforced through `gateway.zoneCeiling`, NetworkPolicy/Compose/nftables rendering), **`ops/`** (signed import
+  bundles, mirrors, the ACME client, backups and restore drills), **`federation/`** (OIDC provider with ES256 keys,
+  SAML IdP with XML-DSig, upstream OIDC/SAML stores, device flow, `KerberosVerifier`; OAuth access tokens are accepted
+  by `authenticate`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -126,7 +138,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - Tests live in `server/test/` (`helpers.ts` builds an app on in-memory SQLite with a temporary blob directory and
   signs users in, including TOTP; `fake-ollama.ts` also answers embeddings and guard-model verdicts; `fake-mcp.ts`,
   `fake-runner.ts` (scripts) and `sprint8-fakes.ts` (media runner, image backend, safety classifier) stand in for the
-  other external workers; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents);
+  other external workers; `fake-trainer.ts`, `fake-acme.ts` and `fake-idp.ts` stand in for the training worker, an ACME directory and an
+  upstream identity provider; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents);
   `server/test/integration/` runs the stores and platform paths against real servers.
 
 ### Rules for server code (from `docs/PLAN.md`)

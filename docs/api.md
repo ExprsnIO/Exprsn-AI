@@ -618,3 +618,300 @@ tls, allowList, piiColumns, schema: [{name, kind, allowed, columns: [{name, type
 healthDetail, checkedAt, version, syncs: [{kbId, kb, sourceId, object, lastSyncAt, state, docs}]}`. PII columns (by
 name, or marked) and values the classifier recognises (emails, IBANs, cards, national identifiers, phone numbers)
 are masked in every result as `••••` plus the last four characters.
+
+
+## Sprint 9: Training
+
+### Training (`training:submit` to read and submit; `training:manage` to approve and to change windows, schedules, withdrawals and thresholds)
+
+Tenant-scoped (the tenant comes from the session). Datasets and jobs are filtered by the caller's clearance against
+their label (`404` above it). Both permissions belong to the `ml-admin` role, which needs an MFA-verified session.
+The GPU work runs on the training worker (`TRAINER_URL`, contract in `server/src/training/trainer.ts`); without one,
+jobs queue with `waitReason` naming the missing setting.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /training/summary` | `{stages, worker: {available, reason, kind, container?, trainers?, accelerators?, gpus?: {total, free}, reachable?}, quota: {usedHours, limitHours, resets}, tenant, settings, tickSeconds}` |
+| `GET /training/settings` | `{thresholds: {suite: n}, suites: [{id, name, defaultThreshold, threshold}], conversationOptIn, optInScope, optInBy, optInAt}` |
+| `PUT /training/settings` `{thresholds?, conversationOptIn?, optInScope?}` | Per-tenant eval thresholds (`training:manage`). Changing the conversation-data opt-in also needs `tenant:manage` (`403`) |
+| `GET /training/datasets` | Dataset versions: `{id, name, version, ver, rows, label, source, sourceKind: inline\|staging, conversationData, optIn, state: scrubbing\|ready\|failed\|withdrawn, hash, splits: {pct, rows}, scrub: {masked, rowsAffected, byKind, detectors}, pii, usedBy, stored, withdrawn, withdrawnReason, createdBy, createdAt}` |
+| `POST /training/datasets` `{name, version?, label, source, rows? \| stagingPath?, conversationData?, splits?}` | `202`: registers a version (next number by default; `409` if not above the latest). Rows come inline (JSON objects with prompt and completion, instruction and output, messages, or text) or from JSON Lines at `training/staging/<tenant>/<stagingPath>` in the blob store. A `training.dataset` job parses the rows (`failed` with the line number), masks PII with the guardrail detectors (`[EMAIL]`, `[PAYMENT_CARD]`…), hashes the rows (sha256), seals the rows and `pii-report.json` with the tenant key, and deletes the unscrubbed input (`train.dataset` socket event). Conversation data needs the tenant opt-in (`409`); a label above the caller's clearance is refused (`403`) |
+| `GET /training/datasets/:id` | One version |
+| `GET /training/datasets/:id/report` | The scrub report (counts by kind; row, field and kind per finding, never values); every read is audited |
+| `POST /training/datasets/:id/withdraw` `{reason}` | Deletes the rows and cancels jobs not finished training on it: `{dataset, cancelled}` (`training:manage`) |
+| `GET /training/base-models` | Approved or evaluated catalogue models the caller is cleared for |
+| `GET /training/jobs` | Jobs, newest first: `{id, name, desc, baseModel, baseDigest, dataset: {id, name, version, label, rows, state}, method, methodText, trainer, hardware, hardwareText, maxHours, maxGpuHours, priority, preemptible, priorityText, deadline, packaging, canary, checkpointEvery, label, state: queued\|running\|succeeded\|failed\|cancelled\|preempted, stage (0–8), stageTone, awaiting, approval, approvedBy, holding, runNow, waitReason, window, step, steps, epoch, epochs, loss, series: [[step, loss]], gpuHours, checkpoint: {step, ref, at, reason}, container, note, error, evals, registration: {state: pending\|blocked\|registered\|failed, reason, modelId, model}, model: {id, name, state}, owner, createdAt, startedAt, finishedAt}` |
+| `POST /training/jobs` `{name, baseModel, datasetId, method: {kind: lora\|qlora\|full, rank, alpha, learningRate, epochs, seed, seqLen, microBatch}, trainer: unsloth\|axolotl\|trl, hardware: {accelerator: cuda\|rocm\|metal, gpus, memoryGb}, maxHours, deadline, priority: low\|normal\|high, preemptible, packaging, canary, checkpointEvery, steps}` | `201` job. The dataset must be `ready`; the base model approved or evaluated; conversation data only at or below the base model's label (`409`). `429` with `limit: training_gpu_hours_per_month` when the tenant used its training GPU-hours. A confidential or restricted dataset holds the job for approval (`awaiting: true`; ML admins other than the submitter are notified) |
+| `GET /training/jobs/:id` | One job |
+| `GET /training/jobs/:id/card` | The model card: `{model, label, baseModel, baseDigest, dataset: {name, version, hash, label, rows}, trainer, container, hyperparameters, hardware, approval: {byName, at}, evals, packaging: {requested, quantization, tool, artifact, digest, sizeBytes}, registration, manifest: {signature, key, signedAt}}` |
+| `POST /training/jobs/:id/approve` | Approval for confidential or restricted data (`training:manage`): the approver must differ from the submitter (`403`, `step: dual-control`) and be cleared for the label |
+| `POST /training/jobs/:id/pause` | The worker checkpoints at the current step and releases the GPUs; the job waits (`holding`) until resumed. Submitter or ML admin |
+| `POST /training/jobs/:id/resume` | Run now / Resume now: may start outside a window, from the last checkpoint (`409` while awaiting approval; `429` over quota) |
+| `POST /training/jobs/:id/cancel` | Stops the run after the current step, keeping the last checkpoint |
+| `POST /training/jobs/:id/retry` `{change: gpus4\|half-batch\|seq4096\|none}` | Requeues a failed or cancelled job with the same dataset version, seed and container, from its checkpoint, with the change |
+| `GET /training/evals` | Eval results: `{id, jobId, model, hardware, suite, name, score, base, threshold, passed, total, result: pass\|fail, scoreText, thresholdText, createdAt}` |
+| `POST /training/evals` `{jobId \| model, hardware?, suites?}` | `202`: re-runs a job's evals (registration proceeds automatically on a pass), or evaluates a catalogue model on the given hardware classes and suites (`heldout`, `regression`, `redteam`, `tools`) |
+| `GET /training/windows` | `{windows: [{id, name, poolId, pool, kind: always\|daily\|weekly, startDay, startTime, endDay, endTime, reloadMinutes, when, effect, state: idle\|open, open, closing, closesAt, opensAt}], pools: [{id, name, accelerator}]}` |
+| `POST /training/windows` `{name, poolId, kind, startDay?, startTime?, endDay?, endTime?, reloadMinutes}` | `201`. Times are UTC. Lending a gateway pool (`poolId`) also needs `pools:manage` (`403`): the pool is drained when the window opens and its pinned models reloaded `reloadMinutes` before it closes |
+| `DELETE /training/windows/:id` | `204`; an open window is closed first (jobs checkpoint, the pool returns to service) |
+| `GET /training/schedules` | `{id, name, templateJobId, template, cron, cronText, condition: dataset-changed\|always, conditionText, window, priority, enabled, nextRunAt, lastRunAt, lastResult, lastJobId}` |
+| `POST /training/schedules` `{name, templateJobId, cron, condition?, windowId?, priority?}` | `201`; five-field cron in UTC (`400` with the reason) |
+| `PATCH /training/schedules/:id` `{enabled}` | Enables or pauses (the next run is skipped) |
+| `DELETE /training/schedules/:id` | `204` |
+
+The orchestrator runs `training.tick` every `TRAINING_TICK_SECONDS` (and right after a submit, approval or resume):
+windows open (drain) and close (checkpoint, undrain, reload pinned models); running jobs sync with the worker (step,
+loss points, checkpoint, GPU time metered as `training` usage; a job past its maximum duration fails with its
+checkpoint kept, and one over the tenant quota is checkpointed and preempted); due schedules fire (a job with the
+template's spec and the dataset's newest version, skipped when the version is unchanged under `dataset-changed`); and
+queued jobs start in fair-share order (priority, then the tenant's training GPU-hours this month, then deadline and
+age) inside an open window of their tenant, when the worker has the GPUs. A higher-priority job may preempt a
+lower-priority preemptible one; preempted jobs resume from their checkpoint. After training, `training.evaluate` runs
+each suite on every hardware class of the pools cleared for the job's label, against the tenant's thresholds; a failure
+stops the pipeline and is recorded on the card. On a pass, `training.package` converts the checkpoint to GGUF on the
+worker and registers a **draft** model in the gateway catalogue (`source: training:<job>`, `expected_digest`, the job's
+label, format and quantization, the base model's family and licence), signs the card's manifest with the KMS key
+`<OPENBAO_KEY_PREFIX>training-manifests` and notifies the model admins, whose usual pull, evaluation and dual-control
+approval follow. Socket events: `train.progress {id, name, state, stage, stageTone, step, steps, epoch, loss, points,
+gpuHours, checkpoint, note, error, waitReason, awaiting, holding}` (to the owner and to `training:manage` holders) and
+`train.dataset {id, state, error?}`. Audit actions: `training.dataset.{registered,scrubbed,report.read,withdrawn}`,
+`training.job.{submitted,approved,started,paused,resumed,cancelled,retried,preempted,trained,failed}`,
+`training.evals.{queued,passed,failed}`, `training.model.registered`, `training.window.{created,deleted,opened,closed}`,
+`training.schedule.{created,enabled,paused,deleted,fired}`, `training.settings.updated`.
+
+## Sprint 9: Zones (`zones:manage`)
+
+Zones are platform-wide, like pools: every route needs `zones:manage`, which only system admins hold. Zone rows carry
+no tenant; each change is audited into the acting admin's tenant chain (as pool and platform-baseline changes are)
+with `{zone, version}` as the target. A zone is versioned: a proposal creates a draft, which becomes current only when
+a system admin other than the proposer approves it. Until a zone has a current version no zone ceiling applies to
+pools that name it; once zones exist, a pool must name a defined zone.
+
+A zone specification: `{contents, trust: private|external, cidrs: [cidr], maxLabel, accepts: [target], acceptsNote,
+egress: {mode: deny|allow-list, allow: [target], note}, peers: [{zone, transport: vpc-peering|wireguard|ipsec|direct,
+mtls: required|optional}], services: [compose service]}`. A target is `{kind: zone, zone, ports}`, `{kind: cidr, cidr,
+ports}` or `{kind: corporate, ports}` (rendered from `ZONES_CORPORATE_CIDRS`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/zones` | `{airGapped, corporateCidrs, zones, undefinedRefs, problems, defaults, lastChange}`. Each zone: `{id, position, version, spec, external, draft: {version, spec, reason, movePools, proposedBy, proposedByName, proposedAt, mine} \| null, pools: [{id, name, labelCeiling, effectiveCeiling, instances}], members}`; a member is `{ref, name, kind: instance\|endpoint\|connection\|mcp, health: healthy\|degraded\|unhealthy\|unknown, state, detail, since, failures, checks, address, pool, tenant, drainable}` |
+| `POST /admin/zones/seed` | Creates the default zones (edge, app, data, directory, inference, sandbox, training, external) that do not exist, as approved v1. `{created, skipped, adjusted: [{zone, from, to}]}`: a default ceiling is raised to what the zone already holds |
+| `POST /admin/zones` `{id, spec, movePools?, reason?}` | Proposes a new zone (draft v1). `seed` and `rendered` are reserved ids |
+| `POST /admin/zones/:id/proposals` `{patch, movePools?, reason?}` | Proposes a change: `patch` (any spec fields) is merged over the current version; `movePools` (pool names) move into the zone on approval. One open draft per zone (`409`). Other system admins are notified |
+| `GET /admin/zones/:id/blockers?ceiling=<label>` | What must move first for that ceiling: `[{kind: pool\|placement\|profile\|connection, label, pool, model, profile, connection, tenant}]` |
+| `POST /admin/zones/:id/draft/approve` `{note?}` | Dual control: another system admin applies the draft (`403 step: dual-control` for the proposer). Re-checks everything; routing follows at once |
+| `POST /admin/zones/:id/draft/reject` `{note?}`, `POST /admin/zones/:id/draft/withdraw` | Rejects (not the proposer), withdraws (the proposer only) |
+| `GET /admin/zones/:id/versions` | History: `[{version, status: draft\|current\|superseded\|withdrawn\|rejected, spec, movePools, reason, proposedBy(Name), proposedAt, decidedBy(Name), decidedAt, decisionNote}]` |
+| `GET /admin/zones/:id/diff?version=` | The open draft (else current), or version N, against the version current before it: `{zone, from, to, renders: {networkpolicy, compose, nftables: {before, after, text, added, removed}}}`; `text` is a line diff (`+`, `-`, space) |
+| `GET /admin/zones/rendered/:format` | Every current zone as a file (`networkpolicy`, `compose` or `nftables`) |
+| `GET /admin/zones/:id/rendered/:format?version=` | One zone at a version (default current) as a file |
+| `POST /admin/zones/:id/endpoints` `{name, address, kind?}`, `DELETE /admin/zones/:id/endpoints/:endpointId` | Registers a static endpoint (`http(s)://` URL checked with GET, `host:port` with a TCP connect) and checks it at once; removes it. Refused in the external zone |
+| `POST /admin/zones/:id/endpoints/check` | Checks the zone's registered endpoints now; `unhealthy` after `ZONE_HEALTH_FAILURES` consecutive failures |
+| `POST /admin/zones/:id/members/drain`, `.../undrain` `{ref: instance:<id> \| endpoint:<id>}` | Drains an Ollama instance through the gateway (as `POST /admin/instances/:id/drain`), or stops checking an endpoint |
+
+Proposals and approvals are validated against the whole zone set: peers and zone targets must be defined; a
+zone-to-zone rule needs a peer link, and an egress rule needs the target to accept the source; CIDRs may not overlap;
+a service belongs to one zone; the external zone stays empty (no pools, connections, MCP servers, endpoints or
+services), is capped at `internal`, and in the air-gapped posture (`ZONES_AIR_GAPPED`, default true) has no peers,
+ingress or egress while no zone may name a public address. Violations: `422 Invalid zone` with `problems: [{zone,
+field, message}]` (problems the current set already has elsewhere do not block). A ceiling below what the zone holds:
+`422 Ceiling too low` with `step: zone-ceiling, zone, ceiling, blockers`.
+
+Elsewhere: `POST/PATCH /admin/pools` refuse a pool in the external zone or in a zone whose ceiling is below the pool's
+(`403 step: zone`), or in an undefined zone once zones exist (`422 Unknown zone`); placements refuse models labelled
+above the zone ceiling (`403 step: zone`); profile publication and gateway routing use a pool's effective ceiling
+(the lower of its own and its zone's). The socket event `zones.state` (to holders of `pools:manage`) says zones,
+drafts or endpoint health changed. The `zones.health` job checks registered endpoints every `ZONE_HEALTH_MINUTES`.
+
+## Sprint 9: Platform operations
+
+Every route below is under `/api/admin/platform`, needs a session (or API key) with `platform:manage` (system
+admins; the role needs a second factor), answers `Cache-Control: no-store`, and writes an audit event in the
+caller's tenant for every change. Platform rows carry no tenant data and no labels, so there is no clearance
+filtering; long work runs as jobs (`ops.*`) whose progress reaches the caller's sockets as `job.progress`. Scheduled
+work (backups, drills, the RPO watch, mirror probes, the certificate sweep) runs once per bucket, recorded in the
+default tenant's chain with `actor.service = "platform-ops"`.
+
+### Summary
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/summary` | `{kms: {kind, ok, detail}, blobs, clock: {skewMs, against}, secretsFromFiles: [{name, file}], scanner, staging, licenceAllow, scanFailSeverity, bundleMaxBytes, acme: {directoryUrl, registered, kid, contact, renewDays, checkMinutes}, backup: {everyMinutes, retain, rpoMinutes, rtoMinutes, drillEveryMinutes, dbClient, alert}, keyRotationDays, bundles: {total, ready, rejected, expedited}, certificates: {total, expiring, nextExpiry}, mirrors: {total, stale}}`. `clock.skewMs` is the difference between this server's clock and the database server's |
+
+### Import signer keys
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/signers` | `[{id, name, algorithm, fingerprint, short, publicKeyPem, state, createdAt, revokedAt, revokeReason}]`; `fingerprint` is the sha256 of the SPKI DER (hex), `short` its first three bytes (`3f:9a:c1`) |
+| `POST /platform/signers` `{name, publicKeyPem}` | Registers the public half of an offline signing key (Ed25519 or ECDSA P-256); 201. 400 for any other key type, 409 when already registered |
+| `POST /platform/signers/:id/revoke` `{reason}` | Revokes it; bundles signed by it fail step 2 from then on, including verified bundles not yet promoted |
+
+### Import bundles
+
+A bundle is a POSIX tar whose first two entries are `manifest.json` and `manifest.sig`, followed by
+`files/<path>` for every file the manifest lists:
+
+```json
+{ "format": "exprsn-bundle/1", "id": "2026-38-weekly", "created": "2026-09-18T22:10:00Z", "contents": "optional summary",
+  "files": [{ "path": "npm/left-pad-1.3.0.tgz", "sha256": "<hex>", "size": 1234, "mirror": "npm" }],
+  "sbom": { "bomFormat": "CycloneDX", "specVersion": "1.5", "components": [{ "name": "left-pad", "version": "1.3.0", "licenses": [{ "license": { "id": "MIT" } }] }] } }
+```
+
+`mirror` is one of `images`, `npm`, `pypi`, `trivy`, `models`, `apt`, `tofu`. `manifest.sig` is
+`{"algorithm": "ed25519" | "ecdsa-p256-sha256", "key": "<fingerprint hex>", "signature": "<base64>"}`, a detached
+signature over the exact bytes of `manifest.json` (ECDSA in DER encoding). Links, devices and paths outside the
+bundle make it invalid.
+
+Bundle views: `{id, name, state, expedited, ticket, transfer, contents, size, digest, manifestId, signer: {fingerprint, short, name, algorithm, state} | null, steps: [{title, state, detail, at}] × 7, report, error, jobId, createdAt, receivedAt, verifiedAt, promotedAt}`.
+`state` is `awaiting transfer`, `verifying`, `ready to promote`, `promoting`, `in production` or `rejected`; each
+step is `waiting`, `running`, `passed`, `failed` or `skipped` (not configured). The steps: transfer received,
+signature verified against the offline key, digest matched the manifest, SBOM and vulnerability scan, licence
+check, staging deploy, promoted to internal mirrors. `report` holds `{files, byMirror, components, scanner,
+findings, blocking, licences, licenceProblems, staging, promotedTo, kindsWithoutMirror}` as far as the pipeline got.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/bundles` | Newest first, up to 500 |
+| `GET /platform/bundles/:id` | One bundle |
+| `POST /platform/bundles` `{name, transfer: diode \| removable media \| upload, contents?, expedited?, ticket?}` | Opens an import that waits for its transfer; 201. `name` is lower-case letters, digits, `.`, `-`, `_`. An expedited import needs its security ticket (400 without). 409 for a duplicate name |
+| `PUT /platform/bundles/:id/transfer` | The bundle file as the raw body (`Content-Type: application/octet-stream` or `application/x-tar`, never JSON), capped at `PLATFORM_BUNDLE_MAX_BYTES` (413). Stores it in the blob store at `platform/bundles/<id>/transfer.tar`, records its sha256 and queues verification (`ops.bundle.verify`); 202. Accepted while awaiting a transfer or after a rejection |
+| `POST /platform/bundles/:id/verify` | Runs the pipeline again (for example after a signer key was added); 202. 409 while promoting, in production or already verifying |
+| `POST /platform/bundles/:id/promote` | Only for `ready to promote`; 202 and an `ops.bundle.promote` job that checks the digest and signature again, writes each file to `mirrors/<kind>/sha256/<digest>` with an index at `mirrors/<kind>/index/<bundle>.json`, and records the promotion on every mirror of that kind |
+| `DELETE /platform/bundles/:id` | Deletes a rejected (quarantined) bundle, or one still awaiting its transfer, and its file; 204. The audit event keeps the reason and both the actual and expected signer fingerprints |
+
+A signature failure rejects the bundle before anything past the first two entries is read; nothing is written
+anywhere before promotion. System admins are notified of every rejection.
+
+### Mirrors
+
+Views: `{id, name, kind, store, url, host, consumer, maxAgeDays, lastBundle, lastPromotedAt, ageDays, policy, stale, lastCheckAt, lastCheckOk, lastCheckDetail, createdAt, updatedAt}`.
+`policy` is `ok`, `older than N days`, `never promoted` or `unreachable`; `maxAgeDays: null` means content-addressed
+(never stale; the default for `models`, 7 days otherwise).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/mirrors` | Every mirror, by name |
+| `POST /platform/mirrors` `{name, kind, store, url, consumer?, maxAgeDays?}` | 201. The URL must resolve only to internal addresses (private, loopback, CGNAT) unless `PLATFORM_ALLOWED_HOSTS` names it; 400 otherwise |
+| `PATCH /platform/mirrors/:id` | Any of the fields above; the audit event records before and after |
+| `DELETE /platform/mirrors/:id` | 204; files already in its store stay |
+| `POST /platform/mirrors/check` `{mirrorIds?}` | Queues `ops.mirror.check`: a GET to each URL through a dispatcher that re-checks every resolved address at connect time; any answer below 500 counts as up; 202 `{jobId}` |
+
+### Certificates
+
+Views: `{id, name, domains, issuedTo, use, method: acme | tracked, state, status, days, autoRenew, issuer, serial, fingerprint, notBefore, notAfter, hasKey, error, jobId, renewedAt, createdAt}`.
+`status` is `pending`, `issuing`, `valid`, `expiring` (inside `ACME_RENEW_DAYS`), `expired`, `failed` or `revoked`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/certificates` | By expiry |
+| `POST /platform/certificates` `{domains, issuedTo?, use?: TLS \| mTLS \| LDAPS \| other, autoRenew?}` | Orders from `ACME_DIRECTORY_URL` (409 when unset) with a fresh ECDSA P-256 key and an http-01 challenge; 202 and an `ops.cert.issue` job. The account is registered on first use (ES256 JWS, key sealed with the platform data key) |
+| `POST /platform/certificates/track` `{pem, issuedTo?, use?}` | Tracks a certificate issued elsewhere (the CA's own, for example) for expiry; refuses PEM that contains a private key |
+| `PATCH /platform/certificates/:id` `{issuedTo?, use?, autoRenew?}` | Edits the description and renewal |
+| `POST /platform/certificates/:id/renew` | ACME only; a new order with a new key. A failed renewal keeps the certificate in place and notifies system admins |
+| `POST /platform/certificates/:id/revoke` `{reason: unspecified \| keyCompromise \| superseded \| cessationOfOperation}` | Revokes at the CA (RFC 8555 `revokeCert`) and stops renewal |
+| `DELETE /platform/certificates/:id` | Removes a tracked, failed, expired or revoked certificate (409 for a valid ACME one: revoke it first) |
+| `GET /platform/certificates/:id/chain` | The PEM chain as `application/pem-certificate-chain` |
+| `POST /platform/certificates/:id/key` | The private key (PKCS#8 PEM) for the deploy tooling. POST so it is CSRF-checked; audited as `platform.cert.key.exported` every time |
+
+The sweep (`ops.cert.sweep`, every `ACME_CHECK_MINUTES`) renews ACME certificates inside the window and notifies
+system admins (socket and email) once a day about certificates that expire within it without renewal, or within 7
+days despite it. The http-01 answer is public: `GET /.well-known/acme-challenge/:token` (outside `/api`, no session)
+returns the key authorization of an order in flight as `text/plain`, 404 otherwise.
+
+### Data keys
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/keys` | `[{scope, name, tenant, kms, version, rotatedAt, nextRotation, versions, state}]`: the platform data key and each tenant's; `nextRotation` is `rotatedAt + PLATFORM_KEY_ROTATION_DAYS` |
+| `POST /platform/keys/:scope/rotate` | A new data key version (`platform` or a tenant id); old versions stay readable; audited as `kms.key.rotated`. 404 for an unknown scope |
+
+### Backups and restore drills
+
+A backup is a logical dump of every table of the application database (one repeatable-read transaction on
+PostgreSQL and MySQL), gzipped, encrypted with a fresh AES-256-GCM key wrapped by the KMS
+(`<OPENBAO_KEY_PREFIX>platform-backups`), and stored with a KMS-signed manifest (tables, row counts, migrations,
+archive digest, wrapped key) at `platform/backups/<id>.bin` and `.manifest.json`. Opening one needs only the KMS.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /platform/backups` | `{backups: [{id, state, kind, dbClient, tables, rows, bytes, manifestHash, signed, error, jobId, createdAt, finishedAt}], drills: [{id, backupId, state, steps: [{title, state, ms, detail}], rpoMs, rtoMs, rpoTargetMs, rtoTargetMs, withinTarget, detail: {counts, chains, skipped, migrations}, error, jobId, createdAt, finishedAt}], alert, rpoMinutes, rtoMinutes, everyMinutes, retain, dbClient, blobStore, kms}` |
+| `POST /platform/backups` | Queues `ops.backup.create`; 202. 409 while one runs. The newest `PLATFORM_BACKUP_RETAIN` successful backups are kept |
+| `POST /platform/backups/drills` `{backupId?}` | Restores a backup (default: the newest) into a scratch SQLite file, never the live database, and checks the manifest signature, the archive digest, the schema version, every table's row count and each tenant's audit chain and signed checkpoints; 202. Records measured RPO (backup age at the start) and RTO (drill duration) against the targets |
+| `GET /platform/backups/drills/:id` | One drill |
+| `POST /platform/backups/alert/acknowledge` | Acknowledges the "backup target missed" alert (raised by `ops.backup.watch` when the newest backup is older than `PLATFORM_BACKUP_RPO_MINUTES`; cleared by the next backup) |
+
+CLI: `exprsn-ai backup:create` and `exprsn-ai backup:restore-drill [--backup <id>]` do the same without the queue
+(the drill exits 2 when it fails).
+
+## Sprint 9: Federation (Identity screen)
+
+The OIDC provider, SAML IdP, upstream federation, Kerberos SPNEGO and device flow. Flows and design decisions are in
+`docs/identity.md` ("Federation"). The default tenant's issuer is `FEDERATION_ISSUER` (default `PUBLIC_URL`); other
+tenants' issuers are `<issuer>/t/<slug>` and their protocol endpoints live under that prefix.
+
+### Protocol endpoints (outside `/api`, under the tenant's issuer)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/openid-configuration` | Discovery (issuer, endpoints, `S256`, `ES256`, grant types). CORS open |
+| `GET /.well-known/jwks.json` | The key set: `next`, `signing` and retired keys still in their overlap window (public members only) |
+| `GET /oauth/authorize` | Authorization code: `response_type=code`, `client_id`, exact `redirect_uri`, `scope`, `state`, `nonce`, `code_challenge` + `code_challenge_method=S256` (required for public clients and clients with PKCE required), `prompt=none\|consent`, `audience`/`resource`. Unknown client or redirect URI → error page (no redirect). Other errors redirect with `error`, `state` and `iss` (RFC 9207). Without a session (or with the Strict cookie withheld on a cross-site redirect): a continue page that resumes or opens the console sign-in. Consent page when needed |
+| `POST /oauth/authorize` (form) `handle, csrf, decision=allow\|deny` | The consent decision; the token is bound to the session; cross-origin refused |
+| `POST /oauth/token` (form; client auth by HTTP Basic, form `client_secret`, or `client_id` alone for public clients) | `grant_type=authorization_code` (`code, redirect_uri, code_verifier`), `refresh_token` (`refresh_token`, optional narrower `scope`; rotated on use, reuse revokes the family), `client_credentials` (`scope?`, `audience?`), `urn:ietf:params:oauth:grant-type:device_code` (`device_code`), `urn:ietf:params:oauth:grant-type:token-exchange` (`subject_token`, `subject_token_type=urn:ietf:params:oauth:token-type:access_token`, `scope?`, `audience?`). Returns `{access_token, token_type: Bearer, expires_in, scope, id_token?, refresh_token?}`; errors are RFC 6749 JSON (`invalid_client` 401, `invalid_grant`, `invalid_scope`, `unauthorized_client`, `authorization_pending`, `slow_down`, `access_denied`, `expired_token`). 60 requests a minute per address |
+| `GET/POST /oauth/userinfo` (Bearer) | `sub`, `tenant` and the identity claims of the token's scopes; `401 WWW-Authenticate: Bearer error="invalid_token"` when the token, client, user or grant is no longer live |
+| `POST /oauth/revoke` (form, client auth) `token` | RFC 7009: revokes a refresh token's family, or the grant behind an access token; always 200 for an authenticated client |
+| `POST /oauth/device_authorization` (form, client auth) `scope` | RFC 8628: `{device_code, user_code: "XXXX-XXXX", verification_uri, verification_uri_complete, expires_in, interval}` |
+| `GET /device?user_code=` | The verification page (approves through `/api/auth/device`) |
+| `GET /saml/metadata` | IdP metadata: entity ID `<issuer>/saml/idp`, signing certificate, SSO for both bindings, NameID formats |
+| `GET /saml/sso?SAMLRequest=&RelayState=&SigAlg=&Signature=`, `POST /saml/sso` (form) | SP-initiated SSO (HTTP-Redirect with DEFLATE, or HTTP-POST). Registered, enabled SP; registered ACS URL; signature checked when the SP requires signed requests. Redirects to `/saml/continue?h=` |
+| `GET /saml/continue?h=` | With the console session: a page that posts the signed `SAMLResponse` (and `RelayState`) to the ACS; its CSP allows that origin in `form-action` |
+| `GET /federation/oidc/start?provider=&return=` | Starts an upstream OIDC sign-in (PKCE, nonce, state; browser-binding cookie) |
+| `GET /federation/oidc/callback?code=&state=` | Completes it: code exchange, ID token verification, JIT provisioning, session (second factor for admin roles) |
+| `GET /federation/saml/start?provider=&return=` | Starts an upstream SAML sign-in (AuthnRequest over HTTP-Redirect) |
+| `POST /federation/saml/acs` (form) `SAMLResponse, RelayState` | Completes it (signed assertion, audience, recipient, `InResponseTo`, validity) |
+| `GET /federation/saml/:providerId` | Our SP metadata for that upstream provider (the URL is our entity ID) |
+| `GET /auth/negotiate?return=` | Kerberos SPNEGO: `401 WWW-Authenticate: Negotiate` without a ticket; with `Authorization: Negotiate <token>` verifies it, maps the principal through the user stores and signs in (302); `WWW-Authenticate: Negotiate <token>` for mutual authentication |
+
+`return` accepts only this server's `/oauth/authorize?…`, `/saml/continue?…` and `/device` paths.
+
+### Sign-in helpers (`/api/auth`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /auth/sign-in-options?tenant=` | Public. `{upstream: [{id, name, protocol, start}], kerberos: false \| {start}}` for the sign-in screen |
+| `GET /auth/device?user_code=` | Signed-in browser session. `{client: {name, type}, scopes, expiresAt}` of a pending device request in the caller's tenant (scopes already intersected with the caller's permissions); 404 when unknown, used or expired |
+| `POST /auth/device` `{userCode, approve}` | Approves or denies it as the caller (audited `oidc.device.approved`/`denied`) |
+
+### Admin (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/federation` | `{issuer, discoveryUrl, jwksUrl, rotation: {days, overlapDays, rotatesAt}, keyStore, keys, idp: {entityId, metadataUrl, ssoUrl, assertionMinutes, certificate}, upstream: {redirectUri, acsUrl, allowList}, device: {verificationUri, minutes, interval}, kerberos: {available, service, detail, enabled, realms}, settings}` |
+| `GET /admin/federation/keys` | `{keys, jwks, rotatesAt}`. A key: `{kid, alg, state: signing \| next, published \| verify only, overlap, createdAt, activatesAt, retiresAt, removesAt, jwk}` |
+| `POST /admin/federation/keys/rotate` `{immediate?}` | Publishes a new key that signs after the overlap (or at once with `immediate`); a pending next key is replaced. `201 {next, previous, keys}` |
+| `GET /admin/federation/scopes` | The scope catalogue `[{scopes, grants, consent}]` |
+| `GET/PATCH /admin/federation/settings` `{consent?: {firstPartyPreconsented?, thirdPartyAsk?, remember?}, kerberos?: {enabled?, realms?}}` | Per-tenant consent policy and Kerberos settings |
+| `GET /admin/federation/oidc/clients`, `GET …/:id` | Clients: `{id, clientId, name, type: first_party\|public\|service\|third_party, typeLabel, grants, scopes, redirectUris, pkceRequired, status, accessTtl, refreshTtl, models, confidential, secretCreatedAt, serviceUserId, lastUsedAt, createdAt, consent}`. Never the secret |
+| `POST /admin/federation/oidc/clients` `{name, type, redirectUris, scopes, grants (authorization_code, refresh_token, client_credentials, device_code, token_exchange), pkceRequired?, accessTtl? (300\|600\|1800), models?}` | `201 {client, secret}`: the secret (`xs_live_…`) is returned only here, and `null` for public clients. Redirect URIs: exact https, loopback http or a private-use scheme; wildcards refused. Client credentials only for service accounts, which get a `svc-<name>` user with the `member` role |
+| `PATCH /admin/federation/oidc/clients/:id` `{name?, redirectUris?, scopes?, pkceRequired?, accessTtl?, models?}` | Edits (public clients always require PKCE) |
+| `POST /admin/federation/oidc/clients/:id/secret` | Rotates the secret: `201 {client, secret}`, shown once; the old one stops at once |
+| `POST /admin/federation/oidc/clients/:id/disable`, `…/enable` | Disabling revokes refresh tokens and pending device codes: `{client, revoked}` |
+| `GET /admin/federation/saml/sps` | Service providers: `{id, name, entityId, acsUrls, nameIdFormat, cert: {subject, issuer, validTo, fingerprint, expired}, signedRequests, attributeMap, status, lastUsedAt, createdAt}` |
+| `POST /admin/federation/saml/parse` `{xml}` | Parses SP metadata for review: `{entityId, acsUrls, certificate, cert, nameIdFormat, signedRequests}` |
+| `POST /admin/federation/saml/sps` `{name, xml, nameIdFormat?, attributeMap?}` | Registers it (re-parsed on the server) |
+| `PATCH /admin/federation/saml/sps/:id` `{status?, signedRequests?, nameIdFormat?}` | Enabling with an expired certificate needs `signedRequests: false` (`409` otherwise) |
+| `DELETE /admin/federation/saml/sps/:id` | Removes it |
+| `GET /admin/federation/upstream` | Upstream providers: `{id, name, protocol, protocolLabel, source, reach, status: connected\|unreachable\|disabled, usedBy, spEntityId, startUrl}` |
+| `POST /admin/federation/upstream/check` `{protocol: oidc\|saml, source}` | Reachability: resolves and checks the address (internal only, or `FEDERATION_ALLOWED_HOSTS`), fetches discovery and JWKS, or reads SAML metadata (URL or pasted XML): `{ok, reach, steps, parsed}` |
+| `POST /admin/federation/upstream` `{name, protocol, source, clientId?, clientSecret? (env:/file: reference)}` | Adds an `oidc` or `saml` user store after a successful check. Edit, reorder or remove it in User stores |
+| `GET /admin/federation/sessions` | Console sessions, OAuth grants and recently used service clients: `[{kind: session\|grant\|service, id, user, username, signedInAt, method, client}]` |
+| `POST /admin/federation/sessions/revoke` `{kind, id}` | Revokes a session (and its refresh tokens), a grant, or disables a service client |
+| `POST /admin/federation/test-login` `{method: kerberos\|password\|device, username}` | Runs the sign-in pieces without a session: `{ok, steps, pending?}` |
+
+Audit actions: `oidc.authorized`, `oidc.consent.granted`/`denied`, `oidc.token.issued`/`refused`/`revoked`,
+`oidc.refresh.reused`, `oidc.device.approved`/`denied`, `oidc.grant.revoked`, `saml.sso`, `saml.sso.refused`,
+`federation.key.rotated`, `federation.settings.updated`, `federation.client.created`/`updated`/`secret_rotated`/
+`disabled`/`enabled`, `federation.saml_sp.created`/`updated`/`deleted`, `federation.upstream.checked`,
+`federation.test_login`, and `auth.login*` with `target.kind` `oidc`, `saml` or `kerberos`.
+
+Access tokens whose audience is `<issuer>/api` are also accepted by the console API as `Authorization: Bearer <jwt>`, like API keys: the token's scopes narrow the user's roles, the client, grant, user and tenant must still be active, and an admin-role user's token must carry a second factor in `amr`.

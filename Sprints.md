@@ -18,14 +18,15 @@ from prototype data to live only when every control on it is backed by the serve
 | 6 | Knowledge, memory, connections | Knowledge, Memory, Connections | **Done** |
 | 7 | Registry, MCP servers, agent runs, scripts | Registry, MCP servers, Runs, Scripts | **Done** |
 | 8 | Workflows, media, images | Workflows, Media, Images | **Done** |
-| 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | **Next** |
-| 10 | Hardening and release | all | Planned |
+| 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | **Done** |
+| 10 | Hardening and release | all | **In progress** |
 
-Current codebase: every sidebar screen except Training, Zones, Platform and Identity is live (Sign in, Settings, User
-stores, Tenants, Usage and audit, Models, Pools, Profiles, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge,
-Memory, Connections, Registry, MCP servers, Runs, Scripts, Workflows, Media and Images); eight database migrations
-(`001_core` to `008_workflows`); 219 unit and API tests (against a fake Ollama, a fake MCP server and fake script,
-media and image runners) plus the integration suite against PostgreSQL, MySQL, OpenLDAP and Redis.
+Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
+Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
+servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform); twelve database migrations (`001_core`
+to `012_federation`); 281 unit and API tests (against a fake Ollama, a fake MCP server, fake script, media, image and
+training workers, a fake ACME directory and a fake upstream identity provider) plus the integration suite against
+PostgreSQL, MySQL, OpenLDAP and Redis; a Helm chart, supply-chain CI and a streaming load test.
 
 ---
 
@@ -315,15 +316,186 @@ Sprints 5 to 8 were built side by side against one guardrail seam (`server/src/g
 - Chat has a knowledge picker per conversation, `[n]` citation markers and a Sources list under each answer.
 - Agent runs read the agent's accepted memories through the `memory` checkpoint.
 
-## Sprint 9: Training, zones, platform, federation (next)
+## Sprint 9: Training, zones, platform, federation (done)
 
-Training jobs (datasets with PII scrub, approval for confidential data, windows, checkpoints, evals, GGUF conversion to
-a registry draft); zones (definitions, ceilings, draft and approve, rendered Compose and firewall configuration);
-platform (signed import bundles, mirrors, ACME certificates, backups and restore drills); the Identity screen: OIDC
-provider (ES256 JWKS, key rotation, clients), SAML IdP, upstream OIDC/SAML federation, Kerberos SPNEGO and device flow.
+Built side by side on shared scaffolding (migrations `009_training` to `012_federation`, services in `services.ts`
+reading their collaborators through `s`, and the Sprint 9 blocks in `config/index.ts`).
 
-## Sprint 10: Hardening and release
+### Training
+
+Delivered in `server/src/training` (`service.ts`, `trainer.ts`, `scrub.ts`, `calendar.ts`), `server/src/routes/training.ts`
+(migration `009_training`) and the live console screen `training.js`.
+
+- Dataset versions with a manifest (rows, sha256 hash, label, source, splits, PII-scrub summary, tenant opt-in):
+  rows inline or JSON Lines from the blob store's staging area; a job masks PII with the guardrail detectors, seals the
+  rows and the scrub report (counts, rows and fields, never values) with the tenant key and deletes the unscrubbed
+  input; conversation data only with the tenant admin's opt-in and at or below the base model's label; withdraw
+  (rows deleted, unfinished jobs cancelled); report reads audited.
+- Training jobs as durable pipeline state (base model, dataset version, LoRA/QLoRA/full, trainer, hardware, max
+  duration, priority, deadline, packaging, canary): approval by a different ML admin, cleared for the label, before any
+  training on confidential or restricted data; pause (checkpoint, GPUs released), run or resume now, cancel, retry
+  from the checkpoint with a change (4 GPUs, half micro-batch, sequence length 4,096); preemption by the worker, by a
+  higher-priority job or at window close always checkpoints and resumes from that step, not from zero.
+- The orchestrator tick (`training.tick`): windows (always, daily, weekly; UTC) that lend a gateway pool through the
+  existing drain, undrain and pinned load operations; run sync with loss series and progress on the socket
+  (`train.progress`); GPU time metered as `training` usage against the tenant's training GPU-hours (429 on admission,
+  checkpoint and preempt when used up while running, maximum duration enforced); recurring schedules (cron, "only when
+  the dataset version changed", enable and pause); fair-share queue ordering (priority, then tenant GPU-hours this
+  month, then deadline).
+- Evals per hardware class (the accelerators of pools cleared for the job's label) with per-tenant thresholds; a
+  failing suite stops the pipeline before registration and is recorded on the model card; re-run evals registers on a
+  pass. GGUF conversion on the worker, then registration as a draft in the gateway catalogue (digest pinned, label,
+  licence and family from the base) with a KMS-signed card manifest; the model admins' pull, evaluation and dual-control
+  approval follow, and the job's stage follows the model through approval and canary.
+- `TrainerBackend`: the HTTP contract to the Python GPU worker (info, submit, status, checkpoint, cancel, evaluate,
+  convert) with an HTTP adapter, an unavailable adapter when `TRAINER_URL` is unset (jobs say so), and a test fake.
+  New settings: `TRAINER_URL`, `TRAINER_TOKEN`, `TRAINER_TIMEOUT_MS`, `TRAINING_TICK_SECONDS`.
+
+**Done when:** a job on a confidential dataset waits until a different ML admin approves it; a preempted or paused job
+resumes from its checkpoint; an eval below threshold blocks registration and is on the model card; a passing job is
+converted and registered as a draft model; a tenant over its training GPU-hours gets 429 (`server/test/training.test.ts`).
+
+### Zones
+
+Delivered in `server/src/zones` (`spec.ts`, `render.ts`, `service.ts`), `server/src/routes/admin/zones.ts`, additive
+changes to the gateway and policy (`zoneAdmits`), and the live console screen `zones.js`.
+
+- Zone definitions (`server/src/zones/`, migration `010_zones`): contents, CIDRs, trust (private or external), label
+  ceiling, accepted sources, egress (deny or allow-list), peers with transport and mTLS, Compose services. Pools,
+  connections and MCP servers join a zone through their existing `zone` column.
+- Versioned with dual control: a proposal (a patch over the current version, optionally moving pools in) creates a
+  draft; a second system admin approves it (the proposer cannot), or it is rejected or withdrawn. Other system admins
+  are notified. Every change is audited (`zone.proposed`, `zone.approved`, `zone.rejected`, `zone.withdrawn`,
+  `zone.seeded`, `zone.endpoint.*`).
+- Validation of the whole set on proposal and again on approval: references, peer links for zone-to-zone rules,
+  egress accepted by its target, overlapping CIDRs, one zone per service; the external zone exists in the schema,
+  stays empty and is capped at internal; in the air-gapped posture (`ZONES_AIR_GAPPED`) no zone has internet ingress or
+  egress. Lowering a ceiling is refused while pools, placements, profiles or connections above it are in the zone, and
+  the problem lists them ("Ceiling too low").
+- Zone ceilings are enforced: the gateway never routes data above a pool's zone ceiling (the policy zone step,
+  `zoneAdmits`, `403 step: zone`); pools cannot be created in or moved to a zone whose ceiling is below theirs, to the
+  external zone, or to an undefined zone once zones exist; placements and profile publication use the effective ceiling.
+- Rendered configuration per zone and for the whole set, with line diffs between versions and downloads: Kubernetes
+  Namespace and default-deny NetworkPolicy, Compose networks and service networks (matching
+  `deploy/docker/compose.yml`), and nftables tables for bare-metal hosts.
+- Endpoint health: pool instances from the gateway poller, registered static endpoints checked by the `zones.health`
+  job (HTTP GET or TCP connect, unhealthy after `ZONE_HEALTH_FAILURES` failures), connections and MCP servers from
+  their own checks. Unhealthy members are marked on the map and in the table; instances and endpoints can be drained.
+- The default zone set (edge, app, data, directory, inference, sandbox, training, external) is offered by a "Seed
+  default zones" action, not applied by a migration: seeding only creates missing zones and raises a default ceiling
+  to what a zone already holds, so it never refuses a request that worked before.
+- The Zones console screen is live: map, table, inspector, ceiling change with refusal list, peers, pools, endpoint
+  health with drain, definition, propose (field change or new zone), rendered diff with approve, reject or withdraw,
+  downloads.
+
+**Done when:** a zone change is proposed, diffed and approved by a second system admin; lowering a ceiling below what a
+zone holds is refused with the list of blockers; the gateway refuses data above a zone ceiling (`zones.test.ts`).
+
+### Platform
+
+Delivered in `server/src/ops` (`bundles.ts`, `mirrors.ts`, `certs.ts`, `acme.ts`, `backups.ts`, `der.ts`, `tar.ts`),
+`server/src/routes/admin/platform.ts`, the CLI and the live console screen `platform.js`.
+
+- **Signed import bundles.** A bundle is a tar with `manifest.json` (files with sha256 and size, target mirror,
+  CycloneDX SBOM) and `manifest.sig` (detached Ed25519 or ECDSA P-256 signature) first, then `files/…`. System
+  admins register and revoke the offline signer keys (audited). Uploading a transfer queues a verification job with
+  seven recorded steps: transfer received, signature against the registered keys (a failure rejects the bundle
+  before anything past the signature is read, showing the expected and actual signer), digests against the
+  manifest (missing, extra and altered files), SBOM and vulnerability scan (Trivy when `PLATFORM_TRIVY_BIN` is set,
+  failing at `PLATFORM_SCAN_FAIL_SEVERITY`; otherwise the step shows "not configured"), licence check against
+  `PLATFORM_LICENCE_ALLOW` (SPDX expressions), staging deploy (an internal hook at `PLATFORM_STAGING_URL`, or "not
+  configured"), and promotion. Promotion is a separate admin action that checks digest and signature again and
+  writes each file content-addressed into the mirror store. Expedited imports (security ticket required) skip the
+  cadence, not the checks. Rejections notify system admins; quarantined bundles can be deleted with the rejection
+  and both fingerprints kept in the audit chain.
+- **Mirrors.** A registry of internal mirrors (images and charts, npm, PyPI wheels, Trivy DB, model weights, OS
+  packages, OpenTofu providers) with store, URL, consumer and a freshness policy (7 days by default; model weights
+  never go stale). Freshness comes from the last promotion; URLs must resolve to internal addresses, and a probe job
+  (`PLATFORM_MIRROR_CHECK_MINUTES`) re-checks the address at connect time. A stale Trivy mirror is called out with
+  the verified bundle that would refresh it.
+- **ACME certificates.** An RFC 8555 client in `server/src/ops/acme.ts` (directory, nonces, ES256 JWS with
+  `node:crypto`, account, order, http-01 answered by this server at `/.well-known/acme-challenge/<token>`, finalize
+  with a PKCS#10 request built by a small DER writer, chain download, revocation). Each issue uses a fresh ECDSA
+  P-256 key sealed with the platform data key; the account key is sealed too. A sweep renews certificates
+  `ACME_RENEW_DAYS` before expiry and notifies system admins about expiring ones; certificates issued elsewhere can
+  be tracked for expiry. Private keys are exported only through an audited POST.
+- **Backups and restore drills.** A backup job dumps every table (repeatable read on PostgreSQL and MySQL) into a
+  gzipped archive encrypted with a KMS-wrapped key, with a KMS-signed manifest of tables, row counts and digest, on
+  a schedule (`PLATFORM_BACKUP_MINUTES`) with retention (`PLATFORM_BACKUP_RETAIN`). A drill restores a backup into a
+  scratch SQLite file, never the live database, and verifies the signature, digest, schema version, row counts and
+  every tenant's audit chain and checkpoints, recording measured RPO and RTO against the targets. Weekly drills by
+  default; a missed RPO raises a platform alert that admins acknowledge. CLI: `backup:create`,
+  `backup:restore-drill`.
+- **Secrets health.** KMS and blob store health, data keys per scope with rotation (audited), which secrets are
+  mounted as files, clock skew against the database server.
+- Screen made live: **Platform** (`web/js/screens/platform.js`, `live: true`).
+
+**Done when:** a correctly signed bundle passes the seven steps and is promoted, while one signed by an unknown key is
+rejected before it is unpacked; a certificate is issued, renewed and revoked against an ACME directory; a backup is
+restored in a drill that verifies row counts and the audit chain (`platform-ops.test.ts`).
+
+### Identity (federation)
+
+Delivered in `server/src/federation`, `server/src/identity/providers/federated.ts`, `server/src/routes/admin/federation.ts`,
+`server/src/routes/federation-public.ts` and the live console screen `identity.js` (flows in
+[docs/identity.md](docs/identity.md)).
+
+- **OIDC provider**: per-tenant issuer (`FEDERATION_ISSUER` or `PUBLIC_URL` for the default tenant, `<issuer>/t/<slug>`
+  for the others); discovery and JWKS; ES256 signing keys generated with node:crypto and sealed with the platform data
+  key, rotated on a schedule (`OIDC_KEY_ROTATION_DAYS`) or by hand, the next key published `OIDC_KEY_OVERLAP_DAYS`
+  before it signs and the old one kept for the overlap; authorization code with PKCE (S256, exact redirect URIs),
+  refresh tokens rotated on every use with family revocation on reuse, client credentials for service accounts, device
+  authorization (RFC 8628) with an approval page, token exchange (RFC 8693), userinfo and revocation (RFC 7009).
+- **Clients**: confidential (BFF), public, service account and third party; secrets shown once and stored as HMAC
+  digests; rotate and disable (revokes the grants); consent policy per tenant (first party pre-consented, third party
+  asked, remembered 90 days); scopes are permissions intersected with the user's roles, re-checked at every refresh;
+  `groups` gives groups, roles and clearance claims.
+- **SAML IdP**: metadata with a self-signed RSA certificate (DER written with node:crypto), SP registration from
+  pasted metadata, SP-initiated SSO over HTTP-Redirect and HTTP-POST (signed requests verified when required), signed
+  assertions (enveloped XML-DSig, exclusive C14N, RSA-SHA256) with groups, roles and clearance attributes, posted by a
+  CSP-clean page.
+- **Upstream federation**: OIDC (PKCE, nonce, state, ID token verified against the upstream JWKS, RS256 or ES256) and
+  SAML (signed assertion, audience, recipient, `InResponseTo`) providers as `oidc`/`saml` user stores in the chain;
+  internal hosts only (the air gap) unless `FEDERATION_ALLOWED_HOSTS` names them; claims feed the group mappings and
+  JIT provisioning; offered on the sign-in screen.
+- The console API accepts the provider's access tokens (audience `<issuer>/api`) as bearer credentials, narrowed to
+  their scopes like API keys.
+- **Kerberos SPNEGO**: `/auth/negotiate` with `s.kerberos` (optional `kerberos` module, `KERBEROS_SERVICE`,
+  `KERBEROS_KEYTAB`; a fake in tests), realm allow-list per tenant, principal mapped through the user stores.
+- Federated and Kerberos sign-ins are a first factor: admin roles still complete or enrol a second factor.
+- Protocol pages that need the console session survive the Strict session cookie on cross-site redirects through a
+  continue page (`web/js/federation.js`) and a resume step in the sign-in screen.
+- The Identity screen is live: clients, SAML service providers, scopes and consent, keys and JWKS, upstream
+  providers with reachability checks, sessions and grants, and "Test a login".
+- Tests: `federation.test.ts` (discovery and JWKS, code + PKCE with ID token verification, redirect and PKCE refusals,
+  refresh rotation and reuse, key rotation overlap, device flow, secrets shown once, SAML metadata and a signed
+  response verified with node:crypto alone, upstream OIDC and SAML sign-in against in-process fakes with group
+  mapping, Kerberos with a fake verifier, permission checks); `fake-idp.ts`.
+
+**Done when:** a relying party signs a user in with code + PKCE and verifies the ID token against the JWKS through a
+key rotation; a device is approved from the console; a SAML SP receives a signed assertion; an upstream OIDC user is
+provisioned by group mapping; Kerberos signs a user in with the fake verifier (`federation.test.ts`).
+
+## Sprint 10: Hardening and release (in progress)
 
 OWASP ASVS level 2 review; dependency scanning and SBOM; load test of the streaming path; Helm chart and
 NetworkPolicies; backup, restore and incident runbooks; accessibility (AA and AAA modes); a Playwright suite across
 every screen; the 1.0 release.
+
+**Progress (infrastructure).** A Helm chart (`deploy/helm/exprsn-ai`, 1.0.0-rc.1) runs the server as a hardened
+Deployment (UID 1000, read-only root filesystem, no capabilities, `RuntimeDefault` seccomp, no service-account token,
+startup and liveness probes on `/healthz`, readiness on `/readyz`) with a Service, an Ingress with WebSocket-friendly
+timeouts, a PodDisruptionBudget, an optional HorizontalPodAutoscaler and ServiceMonitor, and a ConfigMap. Every secret
+comes from an existing Kubernetes Secret, mounted as a file and read through `<NAME>_FILE`. Migrations run in an init
+container or a pre-upgrade hook Job (`node server/dist/cli.js migrate`). The chart refuses to render several replicas
+without Redis, SQLite, or a plain `http://` address in production. NetworkPolicies mirror the zones: default deny in and
+out, ingress from the ingress controller (and Prometheus), and egress groups for DNS, the data zone (database, Redis,
+S3), OpenBao, the directory (LDAP, KDC), the inference zone (Ollama), the sandbox, mail and SIEM, each configured in
+values; nothing allows the internet. CI gains a production `npm audit` (high and above), a CycloneDX SBOM of the npm
+workspace and of the image, a Trivy scan of the image that fails on fixed critical and high findings, a Helm lint,
+render and kubeconform job, and an in-process streaming load test; Dependabot watches npm, GitHub Actions, Docker and
+Compose. `server/loadtest/stream.ts` measures the streaming path (time to first token, tokens per second, p50, p95 and
+p99, errors) in-process on the fake Ollama or against a running stack, with the 1.0 targets in `docs/loadtest.md`.
+Runbooks for backup and restore, incident response and upgrades are in `docs/runbooks/`, and `docs/deploy.md` has a
+Kubernetes section. Remaining for Sprint 10: the OWASP ASVS level 2 review, accessibility (AA and AAA modes), the
+Playwright suite across every screen, and the 1.0 release.

@@ -11,6 +11,8 @@ Each tenant has an ordered chain of user stores. A store is one of:
 | `sql` + `dialect: mysql` | a user table in MySQL / MariaDB | Same adapter |
 | `sql` + `dialect: sqlite` | a user table in a SQLite file | Opened read-only |
 | `local` | the application database | Bootstrap and break-glass accounts, created with `exprsn-ai admin:create` or in the console |
+| `oidc` | an upstream OpenID Connect provider (we are the relying party) | Sign-in by redirect; no passwords, no directory sync. See [Upstream federation](#upstream-federation) |
+| `saml` | an upstream SAML 2.0 identity provider (we are the service provider) | Same; signed assertions only |
 
 SQL stores accept **argon2** and **bcrypt** hashes. Rows with any other format (plain text, unsalted digests) never
 authenticate. Give the store a database account with `SELECT` on the user and group tables only.
@@ -100,6 +102,156 @@ The full permission lists are in [`server/src/authz/permissions.ts`](../server/s
    revoked (by the user, an admin, or disabling the account). Revocation closes the session's live connections.
 
 Five failed attempts lock the account for `LOCKOUT_DURATION_MINUTES`; the client address has a higher limit.
+
+## Federation (Sprint 9)
+
+The server is an OpenID Connect provider and a SAML 2.0 IdP for applications, a relying party or service provider to
+on-prem identity providers, and accepts Kerberos SPNEGO. Everything is configured per tenant on the **Identity**
+screen (permission `identity:manage`; admin roles need an MFA-verified session) and every change is audited.
+
+### Issuers and endpoints
+
+The default tenant's issuer is `FEDERATION_ISSUER` (default `PUBLIC_URL`); every other tenant's is
+`<issuer>/t/<tenant slug>`, and its endpoints live under that prefix. The default tenant is served at the root only, so
+each tenant has exactly one issuer. Each tenant has its own signing keys, clients, SAML service providers and upstream
+providers; tokens carry `tenant` (slug) and `tid` claims, and a session in one tenant never authorizes another
+tenant's client.
+
+| Path (under the issuer) | What it is |
+| --- | --- |
+| `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and the key set (CORS open, cached 5 minutes) |
+| `/oauth/authorize` | Authorization code flow with the console session; consent page when needed |
+| `/oauth/token` | `authorization_code`, `refresh_token`, `client_credentials`, device code, token exchange (60 requests a minute per address) |
+| `/oauth/userinfo`, `/oauth/revoke`, `/oauth/device_authorization`, `/device` | Userinfo, RFC 7009 revocation, RFC 8628 device authorization and its verification page |
+| `/saml/metadata`, `/saml/sso`, `/saml/continue` | IdP metadata, SSO (HTTP-Redirect and HTTP-POST bindings), and the response page |
+| `/federation/oidc/start`, `/federation/oidc/callback` | Upstream OIDC sign-in |
+| `/federation/saml/start`, `/federation/saml/acs`, `/federation/saml/<provider id>` | Upstream SAML sign-in, the ACS, and our SP metadata (its URL is our entity ID) |
+| `/auth/negotiate` | Kerberos SPNEGO sign-in |
+
+These paths sit outside `/api`: they parse their own form bodies and are not CSRF-checked by header; forms that change
+state (the consent page) carry a token bound to the session and are refused cross-origin.
+
+### Signing keys
+
+OIDC tokens are signed with ES256 (P-256). Private keys are generated with node:crypto, stored as PKCS#8 sealed with
+the platform data key (bound to the key id), and never leave the server. A key moves through `next` (published in
+the JWKS, not signing) → `signing` → `verify only` (still published for `OIDC_KEY_OVERLAP_DAYS`, default 14, so tokens
+it signed keep verifying) → removed. A scheduled job publishes the next key `OIDC_KEY_OVERLAP_DAYS` before the signing
+key reaches `OIDC_KEY_ROTATION_DAYS` (default 90) and switches over when it is due. "Rotate signing key" does the same
+now; the API's `immediate: true` (a suspected compromise) makes the new key sign at once.
+
+The SAML IdP signs with a separate RSA-2048 key and a self-signed certificate (valid three years), because SAML
+service providers widely support RSA-SHA256 and not ECDSA.
+
+### Clients
+
+| Type | Secret | Grants | Consent |
+| --- | --- | --- | --- |
+| confidential, BFF (`first_party`) | yes | authorization code, refresh, device, token exchange | pre-consented when the tenant allows it |
+| public | none | authorization code with PKCE, device, refresh | asked |
+| service account (`service`) | yes | client credentials, token exchange | not applicable |
+| third party | yes | authorization code, refresh, device, token exchange | asked on first use, remembered 90 days |
+
+- Redirect URIs match exactly: https, http on a loopback address, or a private-use scheme; wildcards and fragments are
+  refused. A wrong redirect URI or unknown client shows an error page and never redirects.
+- PKCE with S256 is required for public clients and, by default, for every client (`plain` is refused).
+- Client secrets (`xs_live_…`) are shown once, at creation or rotation, and stored as an HMAC digest. Rotation stops
+  the old secret at once. Disabling a client revokes its refresh tokens and makes its access tokens fail.
+- A service-account client gets a user (`svc-<name>`, role `member`, no password); its tokens carry that user as the
+  subject, and their scopes narrow the user's roles. Grant it more roles in User stores if it needs them.
+
+**Scopes** are the identity scopes (`openid profile email groups offline_access`), every permission
+(`chat:read`, `models:manage`, …), `resource:*` on a client's allow-list, and `inference:invoke:<profile>`. The
+grant is requested ∩ the client's allow-list ∩ the user's current permissions, so scopes never widen a role; it is
+re-intersected at every refresh. **Claims**: `profile` gives `name` and `preferred_username`; `email` gives `email`;
+`groups` gives `groups` (from the user's store), `roles` and `clearance`.
+
+**Tokens.** Access tokens are JWTs (`typ: at+jwt`, ES256, `kid`), 5, 10 or 30 minutes per client, with `aud`
+(`<issuer>/api` unless `audience`/`resource` is given), `scope`, `client_id`, `tenant`, `tid`, `sid` (the grant),
+`models` (the client's allowed models) and, after token exchange, `act`. ID tokens add `nonce`, `auth_time`, `amr`
+(`pwd`, `otp`, `hwk`, `kerberos`, `fed`, `mfa`) and `at_hash`. Refresh tokens are opaque, stored as digests, and
+rotated on every use; a family lives 8 hours (24 hours for clients with the device grant) from its first token.
+Presenting a rotated refresh token again revokes the whole family and is audited (`oidc.refresh.reused`). A replayed
+authorization code revokes what it produced. Revoking the console session behind a grant, or the user being disabled,
+ends it at the next refresh.
+
+**Token exchange** (RFC 8693) takes an access token from this issuer as `subject_token` and returns a narrower one for
+the calling confidential client, with `act: {sub: <client id>}`.
+
+### Signing in through the console
+
+`/oauth/authorize` and `/saml/continue` use the console session cookie. That cookie is `SameSite=Strict`, so it is
+not sent on a redirect from another site: those requests get a small page whose script (`web/js/federation.js`, no
+inline scripts) re-checks the session from our origin and resumes, or keeps the address in `sessionStorage` and opens
+the console sign-in, which resumes it when sign-in (including the second factor) finishes. Resume addresses are
+limited to our own `/oauth/authorize`, `/saml/continue` and `/device` paths.
+
+### Device flow (RFC 8628)
+
+`POST /oauth/device_authorization` gives a device code, a user code (`XXXX-XXXX`, consonants only) and the
+verification URI `<issuer>/device`. Codes live `DEVICE_CODE_MINUTES` (15); the device polls the token endpoint no more
+than every `DEVICE_POLL_SECONDS` (5) and gets `authorization_pending`, `slow_down` (interval +5 s), `access_denied` or
+`expired_token`. The user approves on the verification page as the user signed in to the browser
+(`GET/POST /api/auth/device`); the scopes are intersected with that user's permissions.
+
+### SAML IdP
+
+Service providers are registered from pasted metadata (nothing is fetched): entity ID, HTTP-POST ACS URLs, signing
+certificate, NameID format and `AuthnRequestsSigned`. SP-initiated SSO over HTTP-Redirect (DEFLATE) or HTTP-POST; the
+request must name a registered SP and a registered ACS URL, and is signature-checked when the SP asked for signed
+requests. The response is a `samlp:Response` whose assertion carries an enveloped XML-DSig signature (RSA-SHA256,
+exclusive C14N, SHA-256), `InResponseTo`, `Recipient`, the SP as audience, a validity of `SAML_ASSERTION_MINUTES` (5)
+and attributes `uid`, `email`, `displayName`, `groups`, `roles` and `clearance` (renamed per SP with an attribute
+map). NameID: email, a pairwise persistent id (HMAC of the SP and user), the username, or transient. The response is
+posted by a form (auto-submitted by `web/js/federation.js`); the page's CSP allows that one ACS origin. An SP whose
+certificate has expired can be enabled only with signed requests off.
+
+The XML code (`server/src/federation/xml.ts`) is deliberately strict: no DOCTYPE or entity declarations, no processing
+instructions, no unbound prefixes, comments dropped and adjacent text merged.
+
+### Upstream federation
+
+An upstream provider is a user store of kind `oidc` or `saml` in the tenant's chain, added from the Identity screen
+("Add upstream provider") or YAML/API like other stores. Its hosts must resolve to internal addresses (the air gap)
+unless `FEDERATION_ALLOWED_HOSTS` names them; every connection is re-checked at dial time. It appears on the sign-in
+screen as "Sign in with <name>".
+
+- **OIDC**: authorization code with PKCE (S256), `nonce` and `state`. The ID token is verified against the provider's
+  JWKS (RS256 or ES256; refetched once on an unknown `kid`): signature, issuer, audience, `azp`, expiry and nonce. The
+  client secret is a secret reference (`env:` or `file:`). Register `<issuer>/federation/oidc/callback` at the provider.
+- **SAML**: an AuthnRequest over HTTP-Redirect; the response posted to `<issuer>/federation/saml/acs` must answer that
+  request (`InResponseTo`), name our ACS as recipient and our entity ID as audience, be inside its validity window
+  (2 minutes skew), and carry exactly one assertion, signed (itself, or inside a signed response) by a certificate
+  from the IdP metadata. Encrypted and unsolicited (IdP-initiated) assertions are refused.
+- The browser round trip carries a single-use handle (`state` / `RelayState`) bound to a short-lived cookie in the
+  browser that started it, so a copied response cannot be completed elsewhere.
+- Claims or attributes become the store account: the subject (or NameID) is the external id, the username claim
+  (`preferred_username` by default) or attribute the username, and the groups claim or attribute feeds the tenant's
+  group mappings, exactly as for LDAP. Upstream users are never disabled by directory sync.
+
+### Kerberos SPNEGO
+
+`GET /auth/negotiate` answers `401 WWW-Authenticate: Negotiate`; a browser with a domain sign-in and this site in its
+intranet zone retries with a ticket. The ticket is verified by `s.kerberos` (`server/src/federation/kerberos.ts`),
+which uses the optional `kerberos` npm module with the keytab in `KERBEROS_KEYTAB` and the service
+`KERBEROS_SERVICE` (`HTTP@ai.example.internal`); without both, Kerberos reports itself unavailable and the sign-in
+screen does not offer it. The principal (`alice@CORP.EXAMPLE`) must be in an accepted realm (tenant setting; empty
+accepts any) and its user part is looked up in the tenant's user stores in order; the store that knows it supplies the
+groups, and provisioning continues as for a password sign-in. A mutual-authentication token is returned when the
+library gives one.
+
+### Second factors after federated sign-in
+
+Upstream and Kerberos sign-ins count as the first factor only. A user who has a second factor, or whose roles require
+one, lands in the `mfa` or `enroll` stage exactly as after a password, and finishes it in the console. Tokens issued
+from a session record the factors in `amr`.
+
+### Test a login
+
+The Identity screen's "Test a login" runs the real pieces without creating a session: Kerberos availability and realm
+policy, the store lookup, group mappings, second factors, and a token signed with the current key and verified
+against the published JWKS with a test audience. "Device code" issues a real device code for a client that allows the
+grant.
 
 ## API keys
 

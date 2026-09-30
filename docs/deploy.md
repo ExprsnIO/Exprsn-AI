@@ -151,3 +151,36 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   lockout counters and Redis can be lost safely; the audit chain and users cannot.
 - **Several instances:** set `REDIS_URL` on every instance. Chat streams are served by the instance that runs them;
   stop requests, session revocations and notifications reach every instance through Redis.
+
+## Platform operations
+
+### Backups and restore drills
+
+- The app backs up its own database into the blob store every `PLATFORM_BACKUP_MINUTES` (default a day; 0 turns it
+  off), keeps the newest `PLATFORM_BACKUP_RETAIN` (14), and runs a restore drill every `PLATFORM_DRILL_MINUTES`
+  (default a week) into a scratch SQLite file under `PLATFORM_DRILL_DIR` (default the OS temp dir; give it room for a
+  copy of the database). Targets: `PLATFORM_BACKUP_RPO_MINUTES` (1 day) and `PLATFORM_BACKUP_RTO_MINUTES` (4 h).
+- Each backup is encrypted with a key wrapped by the KMS key `<OPENBAO_KEY_PREFIX>platform-backups` and signed by
+  it: keep `DATA_KEY` (local KMS) or the OpenBao transit keys backed up separately, and back up the blob store
+  (`BLOB_DIR` or the S3 bucket) with the host's or the bucket's own replication. The Platform screen lists both as
+  "not covered" and "external" so this stays visible.
+- By hand: `exprsn-ai backup:create`, then `exprsn-ai backup:restore-drill [--backup <id>]` (exit code 2 on failure),
+  for example from a systemd timer or before an upgrade.
+
+### ACME certificates
+
+- Set `ACME_DIRECTORY_URL` to the internal CA's ACME directory (https in production; `ACME_CA_FILE` for a private
+  root), and optionally `ACME_CONTACT`. The CA validates http-01 by fetching
+  `http://<name>/.well-known/acme-challenge/<token>` on port 80, so route port 80 for each certificate name to the
+  app (the reverse proxy must pass `/.well-known/acme-challenge/` through without redirecting it to HTTPS or
+  requiring authentication).
+- Renewal runs every `ACME_CHECK_MINUTES` (6 h) and renews `ACME_RENEW_DAYS` (30) before expiry. Install renewed
+  certificates with the deploy tooling: `GET /api/admin/platform/certificates/:id/chain` and the audited
+  `POST …/key`.
+
+### Import bundles
+
+- `PLATFORM_TRIVY_BIN` (and `PLATFORM_TRIVY_CACHE_DIR` holding the offline vulnerability database) enables the scan;
+  `PLATFORM_STAGING_URL` is an internal service that receives `{bundle, digest, contents, files}` and answers
+  `{ok, detail}`. Mirror URLs, the staging hook and probes must resolve to internal addresses; `PLATFORM_ALLOWED_HOSTS`
+  adds exceptions.
