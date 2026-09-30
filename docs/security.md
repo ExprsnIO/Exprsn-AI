@@ -135,8 +135,8 @@ filter, private `/tmp`, only the state directory writable.
   `context` checkpoint (`meta.via: tool-result`) before the model sees them: a block withholds the result (the call
   itself has already run), a redaction replaces it. Agent runs read agent
   memories but do not write them yet.
-- Workflows: the HTTP step may call any private address (narrowed by `WORKFLOW_HTTP_HOSTS` when set; there is no
-  per-tenant host list yet). Run events go live only to the person who started the run; approvers see pending
+- Workflows: the HTTP step may call any private address (narrowed by `WORKFLOW_HTTP_HOSTS` and by the tenant's
+  allowed hosts when they are set). Run events go live only to the person who started the run; approvers see pending
   approvals through `GET /api/workflow-approvals` and the notification. A workflow published as a tool is pinned to one
   version, cannot be called from another workflow, and when it pauses for an approval its caller gets an error while
   the run continues on its own; a tool step's own approval pause has a fixed 24-hour timeout.
@@ -195,6 +195,25 @@ filter, private `/tmp`, only the state directory writable.
   the client or the user (ASVS 3.5.1).
 - Failed bearer-token and API-key attempts are refused before the `/api` rate limiter, so they are not throttled
   (keys are 256-bit random).
+- OpenAI-compatible API (`/v1`): requests are stateless, so the knowledge and memory context providers of chat are not
+  applied and nothing is stored as a conversation; the profile's own tools (calculate, registry and MCP tools) are not
+  offered, only the tools the client sends, and their calls are returned to the client rather than run. The
+  `inference:invoke:<profile>` form of an OAuth scope is accepted as plain `inference:invoke`: the token is not bound to
+  that one profile. With `OPENAI_STREAM_MODE=live` tokens are sent before the output guardrail has run, so a later block
+  can only end the stream with `finish_reason: content_filter`; the default `checked` mode sends the answer after the
+  check, at the cost of time to first token.
+- Webhooks: a delivery carries the audit event's target and detail (within the webhook's label ceiling) to the
+  endpoint, so the endpoint must be trusted with them. Deliveries to one endpoint are not ordered, and receivers should
+  de-duplicate by the event id (a replay reuses it). The signing secret is sealed at rest but is a shared secret, not a
+  key pair. Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
+  against the operator's rules and the tenant's list, as for MCP servers.
+- Conversation sharing: link shares need a signed-in user of the same tenant (there are no anonymous links). Readers see
+  stored answers only, not an answer while it streams.
+- Billing: price books are platform-wide; there is no currency conversion, tax or proration, and a pushed Stripe invoice
+  is not reconciled back (no inbound Stripe webhook). Statements are computed from `usage_records`, so usage deleted
+  with a tenant's data is gone from later recomputations; push a finished month to keep it.
+- Prompt templates are not screened by guardrails when they are written; the filled text passes the chat
+  `user-input` checkpoint when it is sent.
 - Pool instance, zone endpoint, connection and image backend URLs are chosen by operators and are not checked against
   internal or link-local addresses. Git sources refuse link-local hosts, but git's own DNS lookup is not pinned to the
   checked address.

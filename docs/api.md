@@ -918,3 +918,100 @@ Audit actions: `oidc.authorized`, `oidc.consent.granted`/`denied`, `oidc.token.i
 `federation.test_login`, and `auth.login*` with `target.kind` `oidc`, `saml` or `kerberos`.
 
 Access tokens whose audience is `<issuer>/api` are also accepted by the console API as `Authorization: Bearer <jwt>`, like API keys: the token's scopes narrow the user's roles, the client, grant, user and tenant must still be active, and an admin-role user's token must carry a second factor in `amr`.
+
+## Sprint 13: Integrations
+
+### OpenAI-compatible API (`/v1`, outside `/api`)
+
+Bearer credentials only: an API key or an OAuth access token (`Authorization: Bearer …`). The session cookie is not
+read, so no CSRF token is needed. Every route needs `inference:invoke`. Errors use OpenAI's shape
+`{error: {message, type, code, param}}` (`invalid_request_error`, `authentication_error`, `permission_error`,
+`rate_limit_error`, `api_error`) instead of problem+json; a quota refusal is `429` with `code: insufficient_quota` and
+`Retry-After`, and a guardrail refusal is `400` with `code: content_filter`. `X-Data-Label` (default `internal`) is
+the request's data label, checked against the caller's clearance, the workspace ceiling (`X-Workspace` picks the
+workspace) and the profile's label, as in chat. Usage is metered as kind `api` (chat) or `embed`, with the API key.
+
+| Route | Notes |
+| --- | --- |
+| `GET /v1/models`, `GET /v1/models/:id` | Published profiles and aliases the caller is cleared for (`id` is the profile name), plus approved embedding models: `{object: 'list', data: [{id, object: 'model', created, owned_by, meta}]}` |
+| `POST /v1/chat/completions` `{model, messages, tools?, tool_choice?, temperature?, top_p?, max_tokens? \| max_completion_tokens?, stop?, seed?, presence_penalty?, frequency_penalty?, reasoning_effort?, stream?, stream_options?: {include_usage}}` | Roles `system`, `developer`, `user`, `assistant` (with `tool_calls`), `tool` (`tool_call_id`); images only as `data:` URLs for vision models. Every non-assistant message passes the `user-input` checkpoint (a redaction is what the model sees) and the answer the `model-output` checkpoint (a block replaces it with a notice and `finish_reason: content_filter`). The profile's system prompt goes first. Tool calls are returned to the client (`finish_reason: tool_calls`), never run on the server. Non-streaming: a `chat.completion`. Streaming: server-sent events of `chat.completion.chunk` objects (role, content, indexed `tool_calls`, the finish reason, then `usage` when asked) ending with `data: [DONE]`; with `OPENAI_STREAM_MODE=checked` (default) the content arrives after the output check, with `live` token by token. Nothing is sent before generation, so refusals are ordinary HTTP errors; an error after the stream started is a `data: {error}` event |
+| `POST /v1/embeddings` `{model, input: string \| string[] (≤ 256), encoding_format?: float \| base64}` | An approved catalogue model with the `embedding` capability, through the gateway; inputs pass the `user-input` checkpoint. `dimensions` is refused |
+
+### Outbound webhooks (`webhooks:manage`) and allowed hosts (`tenant:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/integrations/hosts` | The tenant's outbound allow-list `{hosts, updatedAt, operator: {webhooks, workflows}}` |
+| `PUT /admin/integrations/hosts` `{hosts}` | Hostnames, `*.domain`, addresses or CIDR networks. When not empty, workflow HTTP steps and webhooks may only reach hosts on it (on top of the internal-address rules). Audited `tenant.hosts.updated` |
+| `GET /admin/webhooks` | `{webhooks: [{id, name, url, events, maxLabel, state, breaker, failures, openedAt, retryAt, lastDeliveryAt, lastStatus}], events: [{pattern, description}], settings}` |
+| `POST /admin/webhooks` `{name, url, events, maxLabel?}` | `events` are audit action names, prefixes ending in `.*`, or `*`. Besides audit actions: `job.succeeded`/`failed`/`cancelled`, `flag.<action>` and `approval.requested`. The endpoint is checked (internal only unless `WEBHOOK_ALLOWED_HOSTS`, never link-local, and the tenant's list): `422` otherwise. Returns the webhook and its `secret`, once |
+| `PATCH /admin/webhooks/:id` `{name?, url?, events?, maxLabel?, state?: active \| disabled}` | Re-enabling or a new URL closes the breaker |
+| `POST /admin/webhooks/:id/secret` | Rotates the signing secret: `{secret}`, once |
+| `DELETE /admin/webhooks/:id` | With its delivery log |
+| `POST /admin/webhooks/:id/test` | Queues a `webhook.ping` delivery: `202` |
+| `GET /admin/webhooks/:id/deliveries?state=&limit=` | `{deliveries: [{id, event, eventId, label, state: pending \| succeeded \| failed, attempts, statusCode, error, nextAttemptAt, durationMs, replayOf, createdAt, deliveredAt}], withheld}`; deliveries above the caller's clearance are counted, not listed |
+| `POST /admin/webhooks/:id/deliveries/:did/replay` | The same body again, as a new delivery: `202` |
+
+A delivery is a `webhook.deliver` job: `POST` of `{id, type, tenant, label, createdAt, data}` with headers
+`X-Exprsn-Event`, `X-Exprsn-Timestamp` (Unix seconds), `X-Exprsn-Delivery-Id` and
+`X-Exprsn-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>.<body>" with the secret>`. Any `2xx` is success; other
+answers and network errors are retried with exponential backoff (`WEBHOOK_RETRY_BASE_MS`, doubling) up to
+`WEBHOOK_MAX_ATTEMPTS`; a refused host fails at once. `WEBHOOK_BREAKER_THRESHOLD` consecutive failures open the
+endpoint's breaker: deliveries wait `WEBHOOK_BREAKER_COOLDOWN_MS`, then one trial closes or reopens it. Events above a
+webhook's `maxLabel` are never queued; each event is delivered once per webhook (the event id is the dedupe key).
+Audit actions: `webhook.created`/`updated`/`enabled`/`disabled`/`deleted`/`tested`, `webhook.secret.rotated`,
+`webhook.delivery.replayed`, `webhook.breaker.opened`/`closed`.
+
+### Prompt library (`chat:read` to use; `prompts:manage` to write)
+
+| Route | Notes |
+| --- | --- |
+| `GET /prompts?retired=` | `{canManage, templates: [{id, name, description, workspaceId, workspace, scope, label, state, version, publishedVersion}]}`: tenant-wide and the caller's workspaces, up to their clearance; readers see published and deprecated templates only |
+| `GET /prompts/:id` | The template and `versions: [{version, body, variables: [{name, description, default}], notes, createdBy, createdAt}]` (readers: the published version only) |
+| `POST /prompts` `{name, description?, workspaceId?, label?, body, variables?, notes?}` | A draft, version 1. `{{name}}` marks a variable; described variables must appear in the body |
+| `PATCH /prompts/:id` `{name?, description?, label?}` | |
+| `POST /prompts/:id/versions` `{body, variables?, notes?}` | A new version; chat keeps using the published one until it is published |
+| `POST /prompts/:id/state` `{state: published \| deprecated \| retired, version?}` | Lifecycle `draft → published → deprecated → retired`; publishing names the version (default the latest) |
+| `POST /prompts/:id/render` `{variables, version?}` | `{text, template: {id, name, version, label, state}}`; missing variables are a `400` listing `missing`. Values are inserted literally in one pass |
+
+Audit actions: `prompt.created`, `prompt.updated`, `prompt.version.added`, `prompt.published`/`deprecated`/`retired`.
+
+### Conversation sharing and export
+
+| Route | Notes |
+| --- | --- |
+| `GET /conversations/:id/shares` (`chat:read`, owner) | `[{id, kind: user \| workspace \| link, userName, workspaceName, expiresAt, state: active \| revoked \| expired, lastViewedAt}]` |
+| `GET /conversations/:id/share-targets?q=` (`chat:read`, owner) | People and workspaces of the tenant, each with `cleared` for the conversation's label |
+| `POST /conversations/:id/shares` (`chat:write`, owner) `{kind: user, userId}` \| `{kind: workspace, workspaceId}` \| `{kind: link, expiresInHours (1–720)}` | A person must be cleared for the label and a workspace's ceiling must hold it (`403`). A link returns `token` and `url` once; only its HMAC is stored. Audited `conversation.shared` |
+| `DELETE /conversations/:id/shares/:shareId` | Revokes at once. Audited `conversation.share.revoked` |
+| `GET /shared-conversations` (`chat:read`) | What is shared with the caller: `[{conversationId, shareId, kind, title, label, owner, sharedAt, updatedAt}]` |
+| `GET /shared-conversations/:id` | The active branch, read only: `{id, title, label, owner, messages: [{id, role, content, state, profile, model, label, citations, tools, createdAt}], readOnly: true}`. Checked on every read: a live share and clearance for the label as it is now |
+| `POST /shared-links/open` `{token}` | The same view through a link, for a signed-in user of the same tenant (another tenant's link is `404`). Audited `conversation.share.opened` |
+| `POST /conversations/:id/exports` `{format: markdown \| json}` (`chat:read`) | For the owner or a reader, within their clearance: a `conversation.export` job (`202`). Audited `conversation.export.requested` |
+| `GET /conversation-exports?conversation=`, `GET /conversation-exports/:id` | The caller's own exports: `{id, conversationId, format, label, state, file, bytes, error, jobId, createdAt}` |
+| `GET /conversation-exports/:id/download` | The file, if the caller can still read the conversation at its label. Audited `conversation.export.downloaded` |
+
+An export holds the active branch with its sources (citations above the requester's clearance are left out), passes
+the `export` guardrail checkpoint (a block fails it, a redaction is what is written) and is sealed with the tenant key
+in the blob store. Answers that are not complete or stopped (streaming, failed, held) are never shown to readers or
+exported. Audit action on completion: `conversation.export.ready`.
+
+### Billing (`billing:read` to read; `billing:manage` to change)
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/billing/price-books` | `{books: [{id, name, currency, isDefault, state, items}], meters, provider}` |
+| `POST /admin/billing/price-books` `{name, currency?, isDefault?, items}` | Items: `{match: model \| profile \| any, value, usage: <kind> \| *, meter: prompt_tokens \| output_tokens \| thinking_tokens \| gpu_seconds \| requests \| calc_calls, perUnits, unitPriceMicros}` (millionths of the currency unit per `perUnits`). The most specific item wins: profile, then model, then any; a named usage kind beats `*` |
+| `PATCH /admin/billing/price-books/:id` `{name?, currency?, isDefault?, items?, state?: active \| retired}` | The default book cannot be retired |
+| `GET /admin/billing/settings?tenant=` | `{tenantId, priceBookId, effectiveBook, billingCustomer, provider}` |
+| `PUT /admin/billing/tenants/:tenantId` `{priceBookId?, billingCustomer?}` | The tenant's book (none: the default) and its billing customer id |
+| `GET /admin/billing/statements?tenant=` | Stored statements and a preview of the current month: `{current, provider, statements: [{month, state: preview \| open \| closed \| pushed \| push failed, currency, totalMicros, total, totals, lineCount, …}]}` |
+| `GET /admin/billing/statements/:month` (`YYYY-MM`) | The stored statement or a preview: `{month, state, book, currency, totalMicros, totals: {promptTokens, outputTokens, thinkingTokens, gpuSeconds, requests, calcCalls}, lines: [{kind, model, profile, meter, quantity, perUnits, unitPriceMicros, amountMicros, priced}], providerRef, pushError}` |
+| `POST /admin/billing/statements/:month/compute` | Stores (or recomputes) it; a finished month is `closed`. A pushed statement is final (`409`) |
+| `POST /admin/billing/statements/:month/push` | With `BILLING_PROVIDER=stripe`: one Stripe invoice (invoice items per priced line, idempotency keys per statement and line) for the tenant's billing customer. Only a finished month; `409` without a customer; `502` when Stripe refuses |
+| `GET /admin/billing/statements/:month/export?format=csv\|json` | The statement as a file. Audited `billing.statement.exported` |
+
+`?tenant=` names another tenant for system admins. Statements group the month's usage records by kind, model and
+profile, so their totals equal the usage report for the month; usage without a price is kept as zero-amount lines.
+The `billing.close` schedule closes last month's statements. Audit actions: `billing.price-book.created`/`updated`,
+`billing.tenant.updated`, `billing.statement.computed`/`pushed`/`push-failed`/`exported`.
