@@ -38,7 +38,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `CLAMD_HOST`, `CLAMD_PORT` | —, `3310` | ClamAV daemon for attachment scanning; without it attachments get the type check and classifier only |
 | `MCP_ALLOWED_HOSTS` | — | MCP servers must resolve to internal addresses; this comma-separated list of hostnames (`*.example.com`) and CIDR networks allows others |
 | `IDENTITY_ALLOWED_HOSTS` | — | The same for LDAP directories and SQL user-store databases, checked before every connection |
-| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, OpenSearch); PostgreSQL dials the checked address, OpenSearch never follows redirects |
+| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, MySQL, OpenSearch); PostgreSQL and MySQL dial the checked address, OpenSearch never follows redirects |
 | `SECRET_REF_ENV` | — | Environment variables user stores and upstream IdPs may reference as `env:NAME`: names or `PREFIX*` patterns, comma-separated. Empty means none. The server's own settings (and their `_FILE` forms) are refused whatever this says |
 | `SECRET_REF_DIRS` | `/run/secrets,/run/credentials,/etc/exprsn-ai/credentials` | Directories `file:` references must resolve inside (symlinks followed); the server's own secret files are refused |
 | `MCP_TIMEOUT_MS`, `MCP_POLL_MINUTES` | `15000`, `15` | MCP request timeout; how often every server's tools are re-listed and re-hashed (0 turns off) |
@@ -56,6 +56,16 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `IDENTITY_CONFIG` | — | Path to the identity YAML ([identity.md](identity.md)) |
 | `METRICS_TOKEN` (`_FILE`) | — | Bearer token for `/metrics`; without it `/metrics` is off in production |
 | `LOG_LEVEL` | `info` | pino level |
+| `DATA_KEY_PREVIOUS` (`_FILE`), `KMS_PREVIOUS_PROVIDER` | — | Sprint 15: the previous key-encryption key while `kms:rewrap` runs (below). Reads fall back to it; nothing new is wrapped with it |
+| `NTP_SERVER`, `NTP_TIMEOUT_MS` | —, `2000` | Sprint 15: SNTP server (`host` or `host:port`) for the clock-skew check on the Platform screen |
+| `MEDIA_ORIGIN`, `MEDIA_URL_TTL_SECONDS` | —, `300` | Sprint 15: a second host name for this deployment that serves media and images through signed short-lived URLs (point it at the same instances; it answers `/media-content/*` only) |
+| `OPENBAO_DATABASE_MOUNT` | `database` | Sprint 15: OpenBao database secrets engine for dynamic data-connection credentials (uses `OPENBAO_ADDR` and `OPENBAO_TOKEN`; the token needs read on `<mount>/creds/<role>` and update on `sys/leases/renew` and `sys/leases/revoke`) |
+| `PLATFORM_BUNDLE_REQUIRE_CHECKS` | `false` | Sprint 15: refuse to promote a bundle whose vulnerability scan or staging deploy did not run |
+| `PLATFORM_BACKUP_BLOBS` | `true` | Sprint 15: backups also archive the blob store |
+| `ACME_CHALLENGE`, `ACME_DNS_PROVIDER`, `ACME_DNS_WAIT_SECONDS` | `http-01`, `none`, `5` | Sprint 15: `dns-01` publishes TXT records through `webhook` or `rfc2136` |
+| `ACME_DNS_WEBHOOK_URL`, `ACME_DNS_WEBHOOK_SECRET` (`_FILE`) | — | The signed DNS hook (below) |
+| `ACME_DNS_RFC2136_SERVER`, `ACME_DNS_RFC2136_ZONE`, `ACME_DNS_TSIG_NAME`, `ACME_DNS_TSIG_SECRET` (`_FILE`), `ACME_DNS_TSIG_ALGORITHM` | —, —, —, —, `hmac-sha256` | RFC 2136 dynamic update: the zone's primary, the zone, and the TSIG key (secret in base64, as in a BIND key file) |
+| `ACME_CERT_DIR` | — | Sprint 15: every instance writes issued and renewed certificates here as `<name>/fullchain.pem`, `cert.pem`, `chain.pem`, `privkey.pem` |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -150,6 +160,17 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   either is broken. Checkpoints are also written to the blob store under `audit-checkpoints/`.
 - **Keys:** `exprsn-ai kms:rotate --tenant <slug>` starts a new data-key version; older values stay readable.
   Offboarding a tenant destroys its keys (crypto-shredding) and cannot be undone.
+- **Changing the key-encryption key (Sprint 15):** to replace `DATA_KEY`, set the new value as `DATA_KEY` and the
+  old one as `DATA_KEY_PREVIOUS` on every instance and restart them (reads fall back to the old key, new keys use the
+  new one); then run `exprsn-ai kms:rewrap`. It re-wraps every data key, re-signs audit checkpoints and rewrites each
+  backup's archive key and manifest, verifies that everything opens with the new key alone, and exits 2 if not; it is
+  safe to run again. When it reports verified, remove `DATA_KEY_PREVIOUS`. To move from the local KMS to OpenBao, set
+  `KMS_PROVIDER=openbao` with `KMS_PREVIOUS_PROVIDER=local` (the old `DATA_KEY` stays set, or goes in
+  `DATA_KEY_PREVIOUS`); from OpenBao to local, `KMS_PROVIDER=local`, the new `DATA_KEY` and
+  `KMS_PREVIOUS_PROVIDER=openbao` with `OPENBAO_ADDR` and `OPENBAO_TOKEN` still set.
+- **Rate limits (Sprint 15):** with `REDIS_URL` set, the API limits, the failed-credential throttle and the denial
+  cap are shared by all instances (one atomic Lua script per hit); if Redis stops answering they fall back to
+  per-instance memory counters rather than letting requests through.
 - **Backups:** back up the application database and the blob store together, and the KMS (OpenBao) or `DATA_KEY`
   separately from both: without the key, sealed conversations, attachments and exports cannot be read. Sessions,
   lockout counters and Redis can be lost safely; the audit chain and users cannot.
@@ -165,9 +186,16 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   (default a week) into a scratch SQLite file under `PLATFORM_DRILL_DIR` (default the OS temp dir; give it room for a
   copy of the database). Targets: `PLATFORM_BACKUP_RPO_MINUTES` (1 day) and `PLATFORM_BACKUP_RTO_MINUTES` (4 h).
 - Each backup is encrypted with a key wrapped by the KMS key `<OPENBAO_KEY_PREFIX>platform-backups` and signed by
-  it: keep `DATA_KEY` (local KMS) or the OpenBao transit keys backed up separately, and back up the blob store
-  (`BLOB_DIR` or the S3 bucket) with the host's or the bucket's own replication. The Platform screen lists both as
-  "not covered" and "external" so this stays visible.
+  it: keep `DATA_KEY` (local KMS) or the OpenBao transit keys backed up separately. Since Sprint 15 the dump is
+  streamed and each backup also archives the blob store (`PLATFORM_BACKUP_BLOBS`); the archives live in the blob
+  store under `platform/backups/`, so copy that prefix somewhere else (another bucket, offline media) to survive the
+  loss of the store itself.
+- Restore (Sprint 15): stop every instance, point the configuration at an empty database (and blob store), then run
+  `exprsn-ai backup:restore --backup <id>`, adding `--from <dir>` when the backup files are in a copy of the blob store
+  rather than the configured one (a directory holding `platform/backups/<id>.*`). It migrates the schema, checks the
+  manifest signature, authenticates both archives in a first pass, restores every row in one transaction (foreign
+  keys checked at commit), then writes the blob objects. A database that already has tenants, users or audit events is
+  refused; `--force --confirm "replace all data"` empties it first. Start the instances afterwards.
 - By hand: `exprsn-ai backup:create`, then `exprsn-ai backup:restore-drill [--backup <id>]` (exit code 2 on failure),
   for example from a systemd timer or before an upgrade.
 
@@ -180,10 +208,16 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   requiring authentication).
 - Renewal runs every `ACME_CHECK_MINUTES` (6 h) and renews `ACME_RENEW_DAYS` (30) before expiry. Install renewed
   certificates with the deploy tooling: `GET /api/admin/platform/certificates/:id/chain` and the audited
-  `POST …/key`.
+  `POST …/key`, or set `ACME_CERT_DIR` and let the reverse proxy read and reload the files each instance writes there.
+- dns-01 (Sprint 15), for wildcards or names the CA cannot reach on port 80: `ACME_CHALLENGE=dns-01` and either
+  `ACME_DNS_PROVIDER=rfc2136` (a TSIG key allowed to update `_acme-challenge` TXT records in the zone, for example BIND
+  `update-policy { grant acme-update. wildcard *.corp.internal. TXT; };`) or `ACME_DNS_PROVIDER=webhook` (an internal
+  hook that verifies `X-Exprsn-Signature` and updates your DNS; see `docs/api.md`).
 
 ### Import bundles
 
+- `PLATFORM_BUNDLE_REQUIRE_CHECKS=true` makes the scan and the staging deploy mandatory. Signer keys are under dual
+  control: after the first, a second platform admin approves every added or revoked key on the Platform screen.
 - `PLATFORM_TRIVY_BIN` (and `PLATFORM_TRIVY_CACHE_DIR` holding the offline vulnerability database) enables the scan;
   `PLATFORM_STAGING_URL` is an internal service that receives `{bundle, digest, contents, files}` and answers
   `{ok, detail}`. Mirror URLs, the staging hook and probes must resolve to internal addresses; `PLATFORM_ALLOWED_HOSTS`
