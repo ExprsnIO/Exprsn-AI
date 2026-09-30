@@ -168,7 +168,7 @@ describe('data connections', () => {
     expect(suppliers.columns.filter((c: { pii: boolean }) => c.pii).map((c: { name: string }) => c.name)).toEqual(['iban', 'contact_email', 'note']);
     await a.patch(`/api/admin/connections/${conn.id}`, { ops: 'write' }).expect(409);
     expect((await a.patch(`/api/admin/connections/${conn.id}`, { rowLimit: 200, timeoutS: 5 }).expect(200)).body).toMatchObject({ rowLimit: 200, timeoutS: 5, version: 4 });
-    await a.post('/api/admin/connections', { name: 'm', engine: 'mysql', endpoint: 'x:3306' }).expect(409);
+    await a.post('/api/admin/connections', { name: 'm', engine: 'mssql', endpoint: 'x:1433' }).expect(409);
   });
 
   it('runs reads masked and capped, refuses writes, DDL and objects outside the allow-list, and audits all of it', async () => {

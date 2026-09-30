@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -152,7 +152,7 @@ const base = z.object({
 
     // --- Sprint 9: platform operations (edit only inside this block) ---
     /** Import bundles: size cap, Trivy for the SBOM scan (unset: reported as not configured), licence allow-list, staging hook. */
-    PLATFORM_BUNDLE_MAX_BYTES: z.coerce.number().int().min(1024).max(2 * 1024 ** 3 - 1).default(1024 ** 3),
+    PLATFORM_BUNDLE_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 ** 4).default(1024 ** 3),
     PLATFORM_TRIVY_BIN: z.string().optional(),
     PLATFORM_TRIVY_CACHE_DIR: z.string().optional(),
     PLATFORM_SCAN_FAIL_SEVERITY: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).default('HIGH'),
@@ -237,6 +237,41 @@ const base = z.object({
     /** How often the scheduler checks that last month's statements are closed (0 turns it off). */
     BILLING_CLOSE_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(6 * 60),
     // --- end integrations ---
+    // --- Sprint 15: operations (edit only inside this block) ---
+    /** The previous key-encryption key, for `kms:rewrap` and for reads until it finishes: a local DATA_KEY, or OpenBao. */
+    DATA_KEY_PREVIOUS: z
+      .string()
+      .refine((v) => Buffer.from(v, 'base64').length === 32, 'DATA_KEY_PREVIOUS must be 32 bytes, base64-encoded')
+      .optional(),
+    KMS_PREVIOUS_PROVIDER: z.enum(['local', 'openbao']).optional(),
+    /** Import bundles: refuse to promote a bundle whose scan or staging step did not run. */
+    PLATFORM_BUNDLE_REQUIRE_CHECKS: bool.default(false),
+    /** Backups also archive the blob store (attachments, exports, media, checkpoints). */
+    PLATFORM_BACKUP_BLOBS: bool.default(true),
+    /** ACME challenge type; dns-01 publishes TXT records through ACME_DNS_PROVIDER. */
+    ACME_CHALLENGE: z.enum(['http-01', 'dns-01']).default('http-01'),
+    ACME_DNS_PROVIDER: z.enum(['none', 'webhook', 'rfc2136']).default('none'),
+    ACME_DNS_WEBHOOK_URL: z.url().optional(),
+    ACME_DNS_WEBHOOK_SECRET: z.string().min(16).optional(),
+    /** RFC 2136 dynamic update: the primary server (host or host:port), the zone and the TSIG key. */
+    ACME_DNS_RFC2136_SERVER: z.string().optional(),
+    ACME_DNS_RFC2136_ZONE: z.string().regex(/^[A-Za-z0-9.-]+\.?$/).optional(),
+    ACME_DNS_TSIG_NAME: z.string().regex(/^[A-Za-z0-9.-]+\.?$/).optional(),
+    ACME_DNS_TSIG_SECRET: z.string().optional(),
+    ACME_DNS_TSIG_ALGORITHM: z.enum(['hmac-sha256', 'hmac-sha512']).default('hmac-sha256'),
+    /** Seconds to wait after publishing a TXT record before asking the CA to validate (secondary propagation). */
+    ACME_DNS_WAIT_SECONDS: z.coerce.number().int().min(0).max(3600).default(5),
+    /** Certificate file sink: every instance writes issued and renewed PEMs here for the reverse proxy. */
+    ACME_CERT_DIR: z.string().optional(),
+    /** Media previews and downloads from a separate origin through signed, short-lived URLs. */
+    MEDIA_ORIGIN: z.url().optional(),
+    MEDIA_URL_TTL_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+    /** SNTP server (host or host:port) for the clock-skew check; unset: the database server only. */
+    NTP_SERVER: z.string().optional(),
+    NTP_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
+    /** OpenBao database secrets engine mount for dynamic data-connection credentials. */
+    OPENBAO_DATABASE_MOUNT: z.string().regex(/^[a-z0-9_/-]+$/).default('database'),
+    // --- end operations ---
 
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
@@ -305,6 +340,21 @@ const schema = base
     }
     if (c.BILLING_PROVIDER === 'stripe' && !c.STRIPE_SECRET_KEY) {
       ctx.addIssue({ code: 'custom', path: ['STRIPE_SECRET_KEY'], message: 'STRIPE_SECRET_KEY is required when BILLING_PROVIDER=stripe' });
+    }
+    if (c.KMS_PREVIOUS_PROVIDER === 'openbao' && (!c.OPENBAO_ADDR || !c.OPENBAO_TOKEN)) {
+      ctx.addIssue({ code: 'custom', path: ['KMS_PREVIOUS_PROVIDER'], message: 'KMS_PREVIOUS_PROVIDER=openbao needs OPENBAO_ADDR and OPENBAO_TOKEN' });
+    }
+    if (c.KMS_PREVIOUS_PROVIDER === 'local' && !c.DATA_KEY_PREVIOUS && (c.KMS_PROVIDER === 'local' || !c.DATA_KEY)) {
+      ctx.addIssue({ code: 'custom', path: ['DATA_KEY_PREVIOUS'], message: 'KMS_PREVIOUS_PROVIDER=local needs DATA_KEY_PREVIOUS (the old DATA_KEY)' });
+    }
+    if (c.ACME_CHALLENGE === 'dns-01' && c.ACME_DNS_PROVIDER === 'none') {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_PROVIDER'], message: 'ACME_CHALLENGE=dns-01 needs ACME_DNS_PROVIDER (webhook or rfc2136)' });
+    }
+    if (c.ACME_DNS_PROVIDER === 'webhook' && (!c.ACME_DNS_WEBHOOK_URL || !c.ACME_DNS_WEBHOOK_SECRET)) {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_WEBHOOK_URL'], message: 'ACME_DNS_PROVIDER=webhook needs ACME_DNS_WEBHOOK_URL and ACME_DNS_WEBHOOK_SECRET' });
+    }
+    if (c.ACME_DNS_PROVIDER === 'rfc2136' && (!c.ACME_DNS_RFC2136_SERVER || !c.ACME_DNS_RFC2136_ZONE || !c.ACME_DNS_TSIG_NAME || !c.ACME_DNS_TSIG_SECRET)) {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_RFC2136_SERVER'], message: 'ACME_DNS_PROVIDER=rfc2136 needs ACME_DNS_RFC2136_SERVER, ACME_DNS_RFC2136_ZONE, ACME_DNS_TSIG_NAME and ACME_DNS_TSIG_SECRET' });
     }
     if (c.NODE_ENV === 'production' && !c.COOKIE_SECURE) {
       ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'Production requires HTTPS (PUBLIC_URL https://) or COOKIE_SECURE=true behind a TLS proxy' });

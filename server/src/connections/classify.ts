@@ -269,3 +269,94 @@ export function classifyOpenSearch(text: string, object: string | null): Classif
   if (!target) return { kind: 'denied', verb: endpoint, objects: [], denied: '_all', reason: 'Name an index or index pattern; searching every index is refused.' };
   return { kind: 'read', verb: endpoint, objects: [target], request: { method, path: `/${encodeURIComponent(target).replace(/%2C/g, ',').replace(/%2A/g, '*')}/${endpoint}`, body, target, endpoint } };
 }
+
+/** MySQL functions that read files, sleep, take locks or reach the server's host: never sent. */
+const MYSQL_DANGEROUS_FN = /^(load_file|sleep|benchmark|get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock|master_pos_wait|source_pos_wait|wait_for_executed_gtid_set|sys_exec|sys_eval|uuid_short|connection_id|found_rows|last_insert_id)$/i;
+
+/**
+ * SQL for MySQL (B-416). MySQL lexes differently from PostgreSQL: backslashes escape inside strings, double quotes
+ * delimit strings, backticks delimit identifiers, `#` starts a comment, `--` is a comment only before a space, and
+ * `/*! … *\/` is executed rather than ignored. The text is first rewritten into the PostgreSQL form the parser reads
+ * (every string becomes an empty literal, every backtick identifier a double-quoted one), refusing what cannot be
+ * rewritten safely, so the parser sees exactly the tokens MySQL would run.
+ */
+export function classifyMysql(sql: string): Classification {
+  let out = '';
+  let i = 0;
+  const s = sql;
+  while (i < s.length) {
+    const c = s[i]!;
+    if (c === '/' && s[i + 1] === '*') {
+      if (s[i + 2] === '!' || s[i + 2] === '+') return { kind: 'denied', verb: null, objects: [], denied: s[i + 2] === '!' ? '/*!' : '/*+', reason: 'MySQL executable comments and optimizer hints are not allowed.' };
+      const end = s.indexOf('*/', i + 2);
+      if (end < 0) return { kind: 'unparsed', verb: null, objects: [], reason: 'The query has an unterminated comment.' };
+      out += ' ';
+      i = end + 2;
+    } else if (c === '#') {
+      const nl = s.indexOf('\n', i);
+      out += ' ';
+      i = nl < 0 ? s.length : nl;
+    } else if (c === '-' && s[i + 1] === '-') {
+      // A comment only when followed by whitespace or the end; otherwise it is two minus signs.
+      if (i + 2 < s.length && !/\s/.test(s[i + 2]!)) return { kind: 'unparsed', verb: null, objects: [], reason: '"--" without a following space is not a comment in MySQL. Add a space, or write the minus signs apart.' };
+      const nl = s.indexOf('\n', i);
+      out += ' ';
+      i = nl < 0 ? s.length : nl;
+    } else if (c === "'" || c === '"') {
+      let j = i + 1;
+      let closed = false;
+      while (j < s.length) {
+        if (s[j] === '\\') j += 2;
+        else if (s[j] === c && s[j + 1] === c) j += 2;
+        else if (s[j] === c) {
+          closed = true;
+          j++;
+          break;
+        } else j++;
+      }
+      if (!closed) return { kind: 'unparsed', verb: null, objects: [], reason: 'The query has an unterminated string.' };
+      out += "''";
+      i = j;
+    } else if (c === '`') {
+      let j = i + 1;
+      let v = '';
+      let closed = false;
+      while (j < s.length) {
+        if (s[j] === '`' && s[j + 1] === '`') {
+          v += '`';
+          j += 2;
+        } else if (s[j] === '`') {
+          closed = true;
+          j++;
+          break;
+        } else v += s[j++];
+      }
+      if (!closed) return { kind: 'unparsed', verb: null, objects: [], reason: 'The query has an unterminated identifier.' };
+      out += '"' + v.replace(/"/g, '""') + '"';
+      i = j;
+    } else if (c === '$') {
+      // Not quoting in MySQL: keep it from being read as a PostgreSQL dollar quote.
+      out += ' ';
+      i++;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  const fn = /([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  for (const m of out.matchAll(fn)) if (MYSQL_DANGEROUS_FN.test(m[1]!)) return { kind: 'denied', verb: null, objects: [], denied: `${m[1]!.toLowerCase()}()`, reason: `The function ${m[1]!.toLowerCase()} is not allowed.` };
+  if (/\bLOCK\s+IN\s+SHARE\s+MODE\b/i.test(out)) return { kind: 'write', verb: 'SELECT LOCK IN SHARE MODE', objects: [], reason: 'The statement takes row locks.' };
+  if (/\bINTO\s+(OUTFILE|DUMPFILE)\b/i.test(out)) return { kind: 'write', verb: 'SELECT INTO OUTFILE', objects: [], reason: 'INTO OUTFILE writes a file on the database server.' };
+  if (/\b(HANDLER|SHOW|DESCRIBE|DESC|USE|KILL|FLUSH|INSTALL|UNINSTALL|SHUTDOWN|REPLACE)\b/i.test(out.trim().split(/\s+/)[0] ?? '')) {
+    const verb = (out.trim().split(/\s+/)[0] ?? '').toUpperCase();
+    return verb === 'REPLACE' ? { kind: 'write', verb, objects: [], reason: 'The statement writes data.' } : { kind: 'unparsed', verb, objects: [], reason: `The parser does not run ${verb} statements.` };
+  }
+  return classifySql(out);
+}
+
+/** MySQL: unqualified names resolve to the connection's database. */
+export function allowedMysql(object: string, allow: string[], database: string | null): boolean {
+  const list = allow.map((a) => a.toLowerCase());
+  const o = object.toLowerCase();
+  return list.includes(o) || (!!database && !o.includes('.') && list.includes(`${database.toLowerCase()}.${o}`)) || (!!database && o.startsWith(`${database.toLowerCase()}.`) && list.includes(o.slice(database.length + 1)));
+}

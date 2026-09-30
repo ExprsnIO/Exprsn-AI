@@ -26,7 +26,9 @@ the maintainers rather than in issues.
 - API keys are HMAC'd at rest, shown once, and never widen their owner's permissions.
 - Helmet headers: strict CSP (`default-src 'self'`, no inline script, `frame-ancestors 'none'`), HSTS behind HTTPS,
   `no-referrer`, `nosniff`. JSON bodies are capped at 256 KB. Rate limits per user and per address, and per address
-  on the public sign-in, SAML, device and Kerberos endpoints.
+  on the public sign-in, SAML, device and Kerberos endpoints; shared across instances through one atomic Redis script
+  when `REDIS_URL` is set. 20 failed bearer credentials a minute from one address get 429 for every bearer request
+  from it until the window ends.
 - Every API answer is `Cache-Control: no-store`. Request logs redact authorization codes, state, PKCE verifiers,
   device codes, SAML messages and tokens from URLs, and the CSRF header. `/readyz` names a failing dependency
   without its error detail.
@@ -123,14 +125,19 @@ filter, private `/tmp`, only the state directory writable.
   carry the connection's label and the knowledge base's access. Database sources sync by watermark on a schedule (no
   logical replication). A citation's passage is chosen by word overlap with the answer (the best-matching sentences of
   the chunk), not by the model saying what it quoted.
-- Data connections: PostgreSQL and OpenSearch only; a username and password sealed with the tenant key (no OpenBao
-  dynamic credentials yet); writes through a connection are refused outright. Hosts must be internal unless
-  `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses.
+- Data connections: PostgreSQL, MySQL and OpenSearch; a username and password sealed with the tenant key, or (SQL
+  engines) OpenBao dynamic database credentials. Dynamic leases are held per instance and revoked when a connection
+  is removed, its credential changes, or the instance shuts down cleanly; an instance that dies leaves its lease to
+  expire at its TTL. Writes through a connection are refused outright. Hosts must be internal unless
+  `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. MySQL
+  tables are not a knowledge source yet, and the MySQL classifier refuses vendor syntax it cannot lex safely rather
+  than asking for confirmation.
 - SQL user stores: the database host is checked before connecting, but the driver resolves the name again when it
   dials (LDAP stores and data connections dial the checked address). The connection string comes from a reference the
   operator allowed, which narrows the window to someone who controls that DNS name.
-- The denial cap is counted per instance (the lockout is in the database, shared by all): a caller whose requests
-  are spread across N instances gets up to N times 20 full denial events per minute.
+- With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
+  Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
+  to N times each limit. The failed-bearer throttle is per address: clients behind one NAT share it.
 - Scripts need docker or podman on the host; with `SCRIPT_RUNNER=none`, or when no runtime answers, runs are refused.
   The sandbox relies on the container runtime's isolation (no gVisor or Firecracker).
 - Tools: in chat, profiles offer only read-only tools that need no confirmation; write and destructive tools need an
@@ -160,27 +167,33 @@ filter, private `/tmp`, only the state directory writable.
   worker's object store under its own keys, not the tenant's data keys. The draft model's GGUF is pulled by name from the registry the worker pushes to; the gateway does not import a
   GGUF file directly.
 - Zones: rendered NetworkPolicy, Compose and nftables files are downloaded and deployed by an operator; the platform
-  does not apply them itself (the Helm chart in Sprint 10 can consume them). MCP server and connection registration do
-  not yet consult zones (a member in the external or an undefined zone is reported on the Zones screen, not refused).
+  does not apply them itself (the Helm chart in Sprint 10 can consume them). MCP server and connection registration
+  are refused in an undefined or external zone, or above its ceiling, only once zones are defined; members registered
+  before that are reported on the Zones screen, not moved.
 - Zones: seeding the default set is a single system-admin action (it can only add zones and never lowers what a zone
   holds); every later change needs a second system admin.
-- Import bundles are held in memory while they are verified and promoted (the blob store API is buffer-based), so
-  `PLATFORM_BUNDLE_MAX_BYTES` is capped below 2 GiB; multi-gigabyte model bundles need a streaming blob path.
-  Promotion writes into the mirror store in the blob store; pushing into Harbor, Verdaccio, devpi or the Trivy
+- Import bundles stream through verification and promotion (a 3 GiB bundle verifies with flat memory); S3 uploads
+  use 16 MiB multipart parts, so one object is capped at about 160 GiB. Promotion writes into the mirror store in the blob store; pushing into Harbor, Verdaccio, devpi or the Trivy
   server is left to each mirror's own sync from `mirrors/<kind>/`.
 - Without `PLATFORM_TRIVY_BIN` or `PLATFORM_STAGING_URL` the scan and staging steps are recorded as "not
-  configured" and a bundle can still be promoted; there is no setting yet that makes them mandatory. Adding or
-  revoking a signer key is audited but not under dual control.
-- ACME: http-01 only (no dns-01), so every name must reach this server on port 80 from the CA; no ACME external
-  account binding. Renewed certificates are stored and can be exported, but nothing reloads a listener or pushes the
-  key to the services that use it.
-- Backups cover the application database only: blob store contents (attachments, exports, media, checkpoints) and
-  the KMS key material must be backed up with their own tooling, and a backup cannot be opened without the KMS key.
-  The dump is logical and held in memory (fine for single-node sizes; use native `pg_dump` or `mysqldump` at scale),
-  SQLite dumps are not taken inside one transaction, and there is no restore command into a live database yet: the
-  drill proves a backup is readable and complete, it does not restore production. Tables outside the portable
-  schema (`vectors_pg`) are listed as skipped in the drill and rebuilt by reindexing.
-- Clock skew is measured against the database server, not against NTP.
+  configured" and a bundle can still be promoted unless `PLATFORM_BUNDLE_REQUIRE_CHECKS` is set. Adding and revoking
+  signer keys is under dual control, except the very first key, which one platform admin registers (as with the
+  default zone set); revoking a compromised key therefore also waits for a second admin.
+- ACME: http-01, or dns-01 through a signed webhook or RFC 2136 (TSIG) dynamic update; no ACME external account
+  binding. RFC 2136 updates go over UDP to the primary only (no TCP fallback, no SOA lookup: the zone is configured).
+  Issued certificates are written to `ACME_CERT_DIR` on every instance and announced on the bus, but the reverse proxy
+  must watch the files (or be reloaded by the operator's tooling); services other than the proxy still take their key
+  through the export.
+- Backups cover the application database and the blob store; the KMS key material must be backed up with its own
+  tooling, and a backup cannot be opened without the KMS key. The blob archive is taken after the database dump, not
+  at the same instant: objects written in between may be in the archive without a row, or the other way round. The
+  dump is logical (streamed, a page at a time); SQLite dumps are not taken inside one transaction. `backup:restore`
+  restores into the configured database (tested on the engine the backup came from) with every instance stopped; it
+  refuses a database with tenants, users or audit events unless forced with the confirmation phrase, and blob objects
+  are written after the database commits. Tables outside the portable schema (`vectors_pg`) are skipped in the drill
+  and rebuilt by reindexing.
+- Clock skew is measured against the database server, and against NTP when `NTP_SERVER` is set: one unauthenticated
+  SNTP query (no NTS), so a spoofed answer on the path could hide skew; it is a check, not a time source.
 - Federation: the SAML IdP signs the assertion, not the whole response, with RSA-SHA256 only; SP metadata is pasted,
   never fetched. Upstream SAML accepts only exclusive C14N with RSA-SHA256 or ECDSA-SHA256 over SHA-256 digests and
   refuses IdP-initiated responses; upstream SAML's browser binding needs HTTPS (a `SameSite=None; Secure` cookie).
@@ -206,11 +219,13 @@ filter, private `/tmp`, only the state directory writable.
   SP decryption key for upstream encrypted assertions is always sealed locally, also with OpenBao (transit's RSA
   decryption does not offer the OAEP variants IdPs use). Turning on OpenBao replaces the signing keys at once: SAML
   service providers must re-import the IdP metadata for the new certificate.
-- Key-encryption keys cannot be re-wrapped: changing `DATA_KEY` or `KMS_PROVIDER` makes existing tenant data keys
-  unreadable. `kms:rotate` adds a data-key version under the same key-encryption key.
+- Key-encryption keys are re-wrapped with `kms:rewrap` (data keys, checkpoint signatures, backup archives and
+  manifests). What else the KMS signed directly is not re-signed: image provenance HMACs inside PNG files and training
+  model-card signatures made before the change stop verifying once the previous key is removed. OpenBao's own key
+  versions are rotated and re-wrapped in OpenBao (`transit/keys/<name>/rotate`, `transit/rewrap`).
 - Step-up (`STEPUP_WINDOW_SECONDS`) accepts the password only from accounts whose store checks passwords (local, LDAP,
   SQL); an account from an upstream OIDC or SAML provider with no second factor cannot step up and signs in again
-  instead. OAuth grant revocation, which also needs step-up, arrives with Sprint 14.
+  instead.
 - The breached-password check is off by default (`BREACHED_PASSWORDS=off`): the range API is on the internet, so an
   air-gapped site needs an internal mirror or the offline file. When a source cannot be reached the password is
   accepted (fail open) and `password.breach_check.unavailable` is audited. Directory passwords (LDAP, SQL) are never
@@ -219,10 +234,6 @@ filter, private `/tmp`, only the state directory writable.
   work (a token row and an email hand-off) when it does, so response time is not strictly constant. Reset and invite
   links need `SMTP_URL`. An admin password reset ends the account's sessions and OAuth grants but leaves its API keys,
   which are separate credentials (revoke them in the user's detail or by disabling the account).
-- Users cannot list or revoke the OAuth grants and consents they gave to applications; only admins can, by disabling
-  the client or the user (ASVS 3.5.1).
-- Failed bearer-token and API-key attempts are refused before the `/api` rate limiter, so they are not throttled
-  (keys are 256-bit random).
 - OpenAI-compatible API (`/v1`): requests are stateless, so the knowledge and memory context providers of chat are not
   applied and nothing is stored as a conversation; the profile's own tools (calculate, registry and MCP tools) are not
   offered, only the tools the client sends, and their calls are returned to the client rather than run. The
@@ -245,8 +256,9 @@ filter, private `/tmp`, only the state directory writable.
 - Pool instance, zone endpoint, connection and image backend URLs are chosen by operators and are not checked against
   internal or link-local addresses. Git sources refuse link-local hosts, but git's own DNS lookup is not pinned to the
   checked address.
-- Media and image previews are served inline from the console's origin with server-chosen content types; there is no
-  `CSP: sandbox` and no separate download domain.
+- Media and image files are served with `Content-Security-Policy: sandbox` and `nosniff`; without `MEDIA_ORIGIN`
+  they still come from the console's origin (sandboxed, so script in them cannot reach it). Signed media URLs are
+  bearer URLs for their lifetime (`MEDIA_URL_TTL_SECONDS`).
 - Security notices cover password, factor, recovery-code, API-key and session changes; a new sign-in does not send
   one. Email notices need `SMTP_URL` and an address on the account.
-- Rate limits are per instance (in memory); quotas are shared through the database.
+- Without `REDIS_URL`, rate limits are per instance (in memory); quotas are shared through the database.

@@ -14,7 +14,8 @@ import { checkUrl, guardedAgent, parseAllowList } from '../mcp/hosts.js';
 import type { Services } from '../services.js';
 import { audit, notifyAdmins, shortFingerprint, type OpsActor } from './common.js';
 import { KIND_NOUN, MIRROR_KINDS, type MirrorKind } from './mirrors.js';
-import { tarEntries, TarError, type TarEntry } from './tar.js';
+import { tarStream, TarError, type StreamEntry } from './tar.js';
+import type { ByteSource } from '../platform/blob.js';
 
 const run = promisify(execFile);
 
@@ -366,18 +367,52 @@ export class BundleService {
     return this.get(row.id);
   }
 
-  /** Stores the transferred file for a bundle and queues its verification. */
-  async receive(by: OpsActor, id: string, data: Buffer): Promise<BundleRow> {
+  /**
+   * Stores the transferred file for a bundle and queues its verification. The transfer is streamed into the blob
+   * store (never held in memory), hashed on the way, and refused past `maxBytes`.
+   */
+  async receive(by: OpsActor, id: string, source: ByteSource | Buffer, maxBytes = this.s().cfg.PLATFORM_BUNDLE_MAX_BYTES): Promise<BundleRow> {
     const b = await this.get(id);
     if (b.state !== 'awaiting transfer' && b.state !== 'rejected') throw conflict(`The bundle is ${b.state}; a transfer is only accepted while it is awaiting one or after a rejection.`);
-    const digest = 'sha256:' + createHash('sha256').update(data).digest('hex');
     const key = `platform/bundles/${b.id}/transfer.tar`;
-    await this.s().blobs.put(key, data, 'application/x-tar');
+    const hash = createHash('sha256');
+    let size = 0;
+    const tooBig = () => new HttpProblem(413, 'Payload too large', `The bundle is above the cap of ${(maxBytes / 1e6).toFixed(0)} MB (PLATFORM_BUNDLE_MAX_BYTES).`, { extensions: { cap: 'size', max: maxBytes } });
+    const input: ByteSource = Buffer.isBuffer(source) ? (async function* () { yield source; })() : source;
+    const hashed = async function* () {
+      for await (const c of input) {
+        size += c.length;
+        if (size > maxBytes) throw tooBig();
+        hash.update(c);
+        yield c;
+      }
+    };
+    await this.s().blobs.putStream(key, hashed(), 'application/x-tar');
+    if (!size) {
+      await this.s().blobs.delete(key);
+      throw badRequest('The transfer is empty.');
+    }
+    const digest = 'sha256:' + hash.digest('hex');
     const steps = freshSteps();
-    steps[0] = { state: 'passed', detail: `${data.length} bytes, ${digest.slice(0, 19)}…`, at: Date.now() };
-    await this.patch(id, { blob_key: key, size: data.length, digest, received_at: Date.now(), state: 'verifying', steps, error: null, report: null, signer_fingerprint: null, signer_key_id: null, manifest_id: null });
-    await audit(this.s(), by, 'platform.bundle.received', { bundle: id, name: b.name }, { size: data.length, digest, transfer: b.transfer }, 'admin');
+    steps[0] = { state: 'passed', detail: `${size} bytes, ${digest.slice(0, 19)}…`, at: Date.now() };
+    await this.patch(id, { blob_key: key, size, digest, received_at: Date.now(), state: 'verifying', steps, error: null, report: null, signer_fingerprint: null, signer_key_id: null, manifest_id: null });
+    await audit(this.s(), by, 'platform.bundle.received', { bundle: id, name: b.name }, { size, digest, transfer: b.transfer }, 'admin');
     return this.verify(by, id, true);
+  }
+
+  /** The stored transfer as a stream, hashed as it is read: `digest()` is valid once the stream is consumed. */
+  private async open(b: BundleRow): Promise<{ source: AsyncGenerator<Buffer>; digest: () => string; size: number }> {
+    const got = b.blob_key ? await this.s().blobs.getStream(b.blob_key) : null;
+    if (!got) throw new StepFailure('The transferred file is missing from the blob store.');
+    const hash = createHash('sha256');
+    const source = (async function* () {
+      for await (const c of got.stream as AsyncIterable<Buffer>) {
+        hash.update(c);
+        yield c;
+      }
+    })();
+    let d: string | null = null;
+    return { source, size: got.size, digest: () => (d ??= 'sha256:' + hash.digest('hex')) };
   }
 
   /** Queues the verification pipeline. */
@@ -395,18 +430,19 @@ export class BundleService {
     return this.get(id);
   }
 
-  private manifestParts(buf: Buffer): { manifest: Buffer; sig: Buffer; rest: Generator<TarEntry> } {
-    const it = tarEntries(buf);
-    const first: TarEntry[] = [];
+  /** The first two entries (manifest.json and manifest.sig), buffered; the rest of the archive is left in `rest`. */
+  private async manifestParts(source: AsyncIterable<Buffer>): Promise<{ manifest: Buffer; sig: Buffer; rest: AsyncGenerator<StreamEntry> }> {
+    const it = tarStream(source);
+    let manifest: Buffer | null = null;
+    let sig: Buffer | null = null;
     for (let i = 0; i < 2; i++) {
-      const n = it.next();
+      const n = await it.next();
       if (n.done) break;
-      first.push(n.value);
+      if (n.value.path === 'manifest.json') manifest = await n.value.buffer(256 * 1024 * 1024);
+      else if (n.value.path === 'manifest.sig') sig = await n.value.buffer(64 * 1024);
     }
-    const m = first.find((e) => e.path === 'manifest.json');
-    const g = first.find((e) => e.path === 'manifest.sig');
-    if (!m || !g) throw new StepFailure('The bundle must start with manifest.json and manifest.sig.');
-    return { manifest: buf.subarray(m.offset, m.offset + m.size), sig: buf.subarray(g.offset, g.offset + g.size), rest: it };
+    if (!manifest || !sig) throw new StepFailure('The bundle must start with manifest.json and manifest.sig.');
+    return { manifest, sig, rest: it };
   }
 
   /** Step 2: the detached signature against the registered offline keys. */
@@ -446,22 +482,26 @@ export class BundleService {
       steps[i] = { state, detail, at: Date.now() };
     };
     try {
-      // 1. Transfer received: the stored file is the one that arrived.
+      // 1. Transfer received: the stored file is the one that arrived (one streamed pass over it).
       await begin(0);
-      const buf = b.blob_key ? await s.blobs.get(b.blob_key) : null;
-      if (!buf) throw new StepFailure('The transferred file is missing from the blob store.');
-      const digest = 'sha256:' + createHash('sha256').update(buf).digest('hex');
+      const first = await this.open(b);
+      for await (const _ of first.source) {
+        void _;
+        if (signal.aborted) throw signal.reason as Error;
+      }
+      const digest = first.digest();
       if (b.digest && digest !== b.digest) throw new StepFailure(`The stored transfer changed since it was received (${digest.slice(0, 19)}… is not ${b.digest.slice(0, 19)}…).`);
-      pass(0, `${buf.length} bytes, ${digest.slice(0, 19)}…`);
+      pass(0, `${first.size} bytes, ${digest.slice(0, 19)}…`);
 
       // 2. Signature. Only the first two entries are read before this passes.
       await begin(1);
-      const parts = this.manifestParts(buf);
+      const second = await this.open(b);
+      const parts = await this.manifestParts(second.source);
       const sig = await this.checkSignature(parts.manifest, parts.sig);
       pass(1, sig.detail);
       await save({ signer_fingerprint: sig.fingerprint, signer_key_id: sig.key.id });
 
-      // 3. Digests: every file listed, none extra, every sha256 and size as the manifest says.
+      // 3. Digests: every file listed, none extra, every sha256 and size as the manifest says. Streamed entry by entry.
       await begin(2);
       let manifest: BundleManifest;
       try {
@@ -473,7 +513,7 @@ export class BundleService {
       if (expected.size !== manifest.files.length) throw new StepFailure('The manifest lists a path twice.');
       const problems: string[] = [];
       const seen = new Set<string>();
-      for (const e of parts.rest) {
+      for await (const e of parts.rest) {
         if (signal.aborted) throw signal.reason as Error;
         if (!e.path.startsWith('files/')) {
           problems.push(`unexpected entry ${e.path}`);
@@ -486,9 +526,12 @@ export class BundleService {
           continue;
         }
         seen.add(p);
-        const h = createHash('sha256').update(buf.subarray(e.offset, e.offset + e.size)).digest('hex');
+        const eh = createHash('sha256');
+        for await (const c of e.body()) eh.update(c);
+        const h = eh.digest('hex');
         if (h !== f.sha256 || e.size !== f.size) problems.push(`${p}: sha256 ${h.slice(0, 12)}… does not match ${f.sha256.slice(0, 12)}…`);
       }
+      if (second.digest() !== digest) throw new StepFailure('The stored transfer changed while it was being verified.');
       for (const p of expected.keys()) if (!seen.has(p)) problems.push(`${p} is missing`);
       if (problems.length) throw new StepFailure(`${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}: ${problems.slice(0, 5).join('; ')}${problems.length > 5 ? '; …' : ''}`);
       const byMirror: Partial<Record<MirrorKind, number>> = {};
@@ -511,6 +554,8 @@ export class BundleService {
         report.blocking = blocking.length;
         if (blocking.length) throw new StepFailure(`${blocking.length} ${s.cfg.PLATFORM_SCAN_FAIL_SEVERITY} or worse: ${blocking.slice(0, 5).map((f) => `${f.id} in ${f.package}`).join(', ')}`);
         pass(3, `${components.length} components, ${findings.length} findings below ${s.cfg.PLATFORM_SCAN_FAIL_SEVERITY} (${this.scanner.name})`);
+      } else if (s.cfg.PLATFORM_BUNDLE_REQUIRE_CHECKS) {
+        throw new StepFailure('A vulnerability scan is required (PLATFORM_BUNDLE_REQUIRE_CHECKS) but no scanner is configured (PLATFORM_TRIVY_BIN).');
       } else {
         pass(3, `No scanner is configured (PLATFORM_TRIVY_BIN), so no vulnerability scan ran. The SBOM lists ${components.length} components.`, 'skipped');
       }
@@ -541,6 +586,9 @@ export class BundleService {
         report.staging = r.detail;
         if (!r.ok) throw new StepFailure(r.detail);
         pass(5, r.detail);
+      } else if (s.cfg.PLATFORM_BUNDLE_REQUIRE_CHECKS) {
+        report.staging = null;
+        throw new StepFailure('A staging deploy is required (PLATFORM_BUNDLE_REQUIRE_CHECKS) but no staging hook is configured (PLATFORM_STAGING_URL).');
       } else {
         report.staging = null;
         pass(5, 'No staging hook is configured (PLATFORM_STAGING_URL), so no staging deploy ran.', 'skipped');
@@ -564,6 +612,7 @@ export class BundleService {
   async promote(by: OpsActor, id: string): Promise<BundleRow> {
     const b = await this.get(id);
     if (b.state !== 'ready to promote') throw conflict(`Only a verified bundle can be promoted; this one is ${b.state}.`);
+    this.assertChecksRan(b);
     const job = await this.s().jobs.enqueue({ tenantId: by.tenantId, type: 'ops.bundle.promote', payload: { bundleId: id }, createdBy: by.userId, maxAttempts: 1 });
     const steps = b.steps.slice();
     steps[6] = { state: 'running', detail: null, at: Date.now() };
@@ -572,29 +621,50 @@ export class BundleService {
     return this.get(id);
   }
 
+  /** With PLATFORM_BUNDLE_REQUIRE_CHECKS, a bundle verified while the scan or staging step was skipped cannot be promoted. */
+  private assertChecksRan(b: BundleRow): void {
+    if (!this.s().cfg.PLATFORM_BUNDLE_REQUIRE_CHECKS) return;
+    const skipped = [3, 5].filter((i) => b.steps[i]?.state !== 'passed').map((i) => STEP_TITLES[i]);
+    if (skipped.length) throw conflict(`The scan and staging steps are required (PLATFORM_BUNDLE_REQUIRE_CHECKS), and this bundle did not pass: ${skipped.join(', ')}. Verify it again once they are configured.`);
+  }
+
   /** The promotion job: checks the digest and signature again, then writes each file into its mirror's store. */
   async runPromote(bundleId: string, by: OpsActor, progress: (pct: number, msg: string) => Promise<void>): Promise<{ promotedTo: string[] }> {
     const s = this.s();
     const b = await this.get(bundleId);
     const steps = b.steps.slice();
     try {
-      const buf = b.blob_key ? await s.blobs.get(b.blob_key) : null;
-      if (!buf) throw new StepFailure('The transferred file is missing from the blob store.');
-      if ('sha256:' + createHash('sha256').update(buf).digest('hex') !== b.digest) throw new StepFailure('The stored transfer changed after verification.');
-      const parts = this.manifestParts(buf);
+      this.assertChecksRan(b);
+      // One streamed pass: the signature is checked on the first two entries, each file is written to its mirror's
+      // store while its sha256 is computed, and the whole transfer's digest is compared at the end.
+      const src = await this.open(b);
+      const parts = await this.manifestParts(src.source);
       await this.checkSignature(parts.manifest, parts.sig);
       const manifest = manifestSchema.parse(JSON.parse(parts.manifest.toString('utf8')));
       const byPath = new Map(manifest.files.map((f) => [f.path, f]));
       const index = new Map<MirrorKind, { path: string; sha256: string; size: number }[]>();
       let n = 0;
-      for (const e of parts.rest) {
+      for await (const e of parts.rest) {
         const f = byPath.get(e.path.slice('files/'.length));
         if (!f) continue;
         // Content-addressed: the same artifact from two bundles is stored once.
-        await s.blobs.put(`mirrors/${f.mirror}/sha256/${f.sha256}`, buf.subarray(e.offset, e.offset + e.size));
+        const key = `mirrors/${f.mirror}/sha256/${f.sha256}`;
+        const eh = createHash('sha256');
+        const body = e.body();
+        await s.blobs.putStream(key, (async function* () {
+          for await (const c of body) {
+            eh.update(c);
+            yield c;
+          }
+        })());
+        if (eh.digest('hex') !== f.sha256) {
+          await s.blobs.delete(key).catch(() => undefined);
+          throw new StepFailure(`${f.path} changed after verification.`);
+        }
         index.set(f.mirror, [...(index.get(f.mirror) ?? []), { path: f.path, sha256: f.sha256, size: f.size }]);
         if (++n % 50 === 0) await progress(Math.round((n * 90) / manifest.files.length), `${n} of ${manifest.files.length} files written`);
       }
+      if (src.digest() !== b.digest) throw new StepFailure('The stored transfer changed after verification.');
       const at = Date.now();
       const promotedTo: string[] = [];
       const without: MirrorKind[] = [];

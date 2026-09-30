@@ -490,7 +490,7 @@ workflowId, nodeId, state: running|passed|failed|skipped|waiting|blocked, error,
 | `GET /media/assets` | Assets in the workspace up to the caller's clearance |
 | `PUT /media/assets?name=&label=` (body: the file) | `202` asset in quarantine; an ingest job probes it, refuses it above a cap, strips metadata and draws previews (`media.asset` socket event); `413` above the size cap |
 | `GET /media/assets/:id` | `{id, name, kind: video\|audio\|image, format, size, durationMs, width, height, streams, previews, state: quarantined\|probing\|ready\|refused, label, reason, uploadedByName, jobs}` |
-| `GET /media/assets/:id/content` | The file (supports `Range`) |
+| `GET /media/assets/:id/content` | The file (supports `Range`). Sprint 15: media, previews, outputs and images are served with `Content-Security-Policy: sandbox`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Resource-Policy: same-site`; with `MEDIA_ORIGIN` set these reads answer `302` to a signed URL on that origin instead (below) |
 | `GET /media/assets/:id/previews/:i` | Frame-strip thumbnails (video), the waveform (audio) or a preview (image) |
 | `POST /media/assets/:id/jobs` `{preset, params}` | Queues a preset; parameters are validated against its schema and times against the media (`400`): `202` job |
 | `GET /media/jobs/:id` | `{id, assetId, preset, params, encoder: nvenc\|cpu, state, stage, progress, node, outputs: [{index, name, type, size}], result: {words?, frames?, withheld?, withheldAt?, masked?}, label, error}` |
@@ -503,6 +503,16 @@ Presets: `clip-720p` `{start, end, height: 720|480|1080, crop}`, `transcribe-srt
 `frames-1fps` `{start, end, fps: 1|0.5|2, maxFrames: 48|96|200}` (frames pass the image-safety classifier) and
 `normalise-audio` `{loudness, truePeak}`. Transcripts pass the `media` guardrail checkpoint. Socket event:
 `media.job {id, assetId, preset, state, stage, progress, encoder, error, result}`.
+
+#### Media origin (Sprint 15)
+
+With `MEDIA_ORIGIN` set (a separate host name for the same deployment), `GET /media/assets/:id/content`,
+`/media/assets/:id/previews/:i`, `/media/jobs/:id/outputs/:i` and `/images/:id/image` and `/images/:id/download`
+authorise the caller as before (and audit downloads), then redirect to `GET <MEDIA_ORIGIN>/media-content/<token>`
+(outside `/api`, no session). The token is an HMAC-signed `{resource, tenant, user, workspace, exp}` valid for
+`MEDIA_URL_TTL_SECONDS`; the principal is rebuilt from it and the same clearance and workspace checks run again. The
+media host answers only `/media-content/*` and the health checks (404 for everything else). The console's CSP allows
+that origin for `img-src` and `media-src` only.
 
 ### Images (`images:generate`)
 
@@ -604,10 +614,10 @@ recency. Expired memories are purged hourly from every backend.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/connections` | `[connection]` |
-| `POST /admin/connections` `{name, engine: postgres\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?}` | Registers; the credential is sealed with the tenant key and never returned. Other engines are refused |
+| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
 | `GET /admin/connections/:id` | One connection |
-| `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused |
-| `PUT /admin/connections/:id/credential` `{username, password}` | Replaces the credential |
+| `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused; a new zone or label is checked against the zones as on registration |
+| `PUT /admin/connections/:id/credential` `{username, password}` or `{baoRole}` | Replaces the credential with a sealed account, or switches to OpenBao dynamic credentials for that role; any OpenBao lease this instance holds for the connection is revoked |
 | `DELETE /admin/connections/:id` | Refused (`409`) while a knowledge source reads from it |
 | `POST /admin/connections/:id/test` | `{ok, ms, version, readOnly, detail, health}`; an account with write grants is `degraded` |
 | `POST /admin/connections/:id/schema` | Introspects: `{objects, allowed, outside, connection}` |
@@ -617,10 +627,16 @@ recency. Expired memories are purged hourly from every backend.
 | `POST /admin/connections/:id/sync` | `202 {jobs}`: syncs every knowledge source reading from the connection |
 
 A connection: `{id, name, engine, endpoint, database, zone, label, ops, rowLimit, timeoutS, account, hasCredential,
-tls, allowList, piiColumns, schema: [{name, kind, allowed, columns: [{name, type, pii}]}], schemaAt, health,
+credentialSource: static | openbao, baoRole, lease: {username, expiresAt, renewable} | null, tls, allowList, piiColumns, schema: [{name, kind, allowed, columns: [{name, type, pii}]}], schemaAt, health,
 healthDetail, checkedAt, version, syncs: [{kbId, kb, sourceId, object, lastSyncAt, state, docs}]}`. PII columns (by
 name, or marked) and values the classifier recognises (emails, IBANs, cards, national identifiers, phone numbers)
 are masked in every result as `••••` plus the last four characters.
+
+MySQL (Sprint 15): queries are lexed as MySQL does before classification (backslash escapes, double-quoted strings,
+backtick identifiers, `#` comments); `/*! */` executable comments, `--` without a following space, `LOAD_FILE`,
+`SLEEP`, `BENCHMARK`, lock functions, `INTO OUTFILE`, `LOCK IN SHARE MODE` and `REPLACE` are refused. Reads run in
+`START TRANSACTION READ ONLY` with `MAX_EXECUTION_TIME`; unqualified names resolve to the connection's database for
+the allow-list. MySQL tables are not a knowledge source yet (PostgreSQL only).
 
 
 ## Sprint 9: Training
@@ -739,15 +755,19 @@ default tenant's chain with `actor.service = "platform-ops"`.
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /platform/summary` | `{kms: {kind, ok, detail}, blobs, clock: {skewMs, against}, secretsFromFiles: [{name, file}], scanner, staging, licenceAllow, scanFailSeverity, bundleMaxBytes, acme: {directoryUrl, registered, kid, contact, renewDays, checkMinutes}, backup: {everyMinutes, retain, rpoMinutes, rtoMinutes, drillEveryMinutes, dbClient, alert}, keyRotationDays, bundles: {total, ready, rejected, expedited}, certificates: {total, expiring, nextExpiry}, mirrors: {total, stale}}`. `clock.skewMs` is the difference between this server's clock and the database server's |
+| `GET /platform/summary` | `{kms: {kind, ok, detail}, blobs, clock: {skewMs, against}, secretsFromFiles: [{name, file}], scanner, staging, licenceAllow, scanFailSeverity, bundleMaxBytes, acme: {directoryUrl, registered, kid, contact, renewDays, checkMinutes}, backup: {everyMinutes, retain, rpoMinutes, rtoMinutes, drillEveryMinutes, dbClient, alert}, keyRotationDays, bundles: {total, ready, rejected, expedited}, certificates: {total, expiring, nextExpiry}, mirrors: {total, stale}}`. `clock.skewMs` is the difference between this server's clock and the database server's. Sprint 15 adds `clock.ntp: {server, skewMs, offsetMs, delayMs, stratum, error} \| null` (one SNTP query to `NTP_SERVER`; `offsetMs` is positive when this server is behind), `acme.challenge`, `acme.dnsProvider`, `acme.certDir`, `bundleRequireChecks`, `signerProposals` (pending), `mediaOrigin` and `rateLimits: memory \| redis` |
 
 ### Import signer keys
 
 | Method and path | What it does |
 | --- | --- |
 | `GET /platform/signers` | `[{id, name, algorithm, fingerprint, short, publicKeyPem, state, createdAt, revokedAt, revokeReason}]`; `fingerprint` is the sha256 of the SPKI DER (hex), `short` its first three bytes (`3f:9a:c1`) |
-| `POST /platform/signers` `{name, publicKeyPem}` | Registers the public half of an offline signing key (Ed25519 or ECDSA P-256); 201. 400 for any other key type, 409 when already registered |
-| `POST /platform/signers/:id/revoke` `{reason}` | Revokes it; bundles signed by it fail step 2 from then on, including verified bundles not yet promoted |
+| `POST /platform/signers` `{name, publicKeyPem}` | Registers the public half of an offline signing key (Ed25519 or ECDSA P-256). Sprint 15: under dual control. The first key (none registered) is added at once, 201 with the key; after that it is a proposal, `202 {proposal}`, applied when another platform admin approves. 400 for any other key type, 409 when already registered or already proposed |
+| `POST /platform/signers/:id/revoke` `{reason}` | Proposes revoking it: `202 {proposal}`. Once approved by another platform admin, bundles signed by it fail step 2, including verified bundles not yet promoted |
+| `GET /platform/signers/proposals` | `[{id, action: add \| revoke, keyId, name, algorithm, fingerprint, short, reason, state: pending \| approved \| rejected \| withdrawn, proposedBy, proposedByName, proposedAt, decidedBy, decidedByName, decidedAt, note, mine}]`, newest first |
+| `POST /platform/signers/proposals/:id/approve` `{note?}` | Applies the change: `{proposal, key}`. 403 `step: dual-control` for the proposer; 409 once decided |
+| `POST /platform/signers/proposals/:id/reject` `{note?}` | Another admin declines it (the proposer withdraws instead) |
+| `POST /platform/signers/proposals/:id/withdraw` | The proposer withdraws it (403 for anyone else) |
 
 ### Import bundles
 
@@ -777,7 +797,7 @@ findings, blocking, licences, licenceProblems, staging, promotedTo, kindsWithout
 | `GET /platform/bundles` | Newest first, up to 500 |
 | `GET /platform/bundles/:id` | One bundle |
 | `POST /platform/bundles` `{name, transfer: diode \| removable media \| upload, contents?, expedited?, ticket?}` | Opens an import that waits for its transfer; 201. `name` is lower-case letters, digits, `.`, `-`, `_`. An expedited import needs its security ticket (400 without). 409 for a duplicate name |
-| `PUT /platform/bundles/:id/transfer` | The bundle file as the raw body (`Content-Type: application/octet-stream` or `application/x-tar`, never JSON), capped at `PLATFORM_BUNDLE_MAX_BYTES` (413). Stores it in the blob store at `platform/bundles/<id>/transfer.tar`, records its sha256 and queues verification (`ops.bundle.verify`); 202. Accepted while awaiting a transfer or after a rejection |
+| `PUT /platform/bundles/:id/transfer` | The bundle file as the raw body (`Content-Type: application/octet-stream` or `application/x-tar`, never JSON), capped at `PLATFORM_BUNDLE_MAX_BYTES` (413). Streamed (Sprint 15) into the blob store at `platform/bundles/<id>/transfer.tar` (S3: multipart), hashed on the way; queues verification (`ops.bundle.verify`); 202. Verification and promotion stream the archive too, so memory stays flat whatever the size. Accepted while awaiting a transfer or after a rejection. With `PLATFORM_BUNDLE_REQUIRE_CHECKS`, a missing scanner or staging hook fails steps 4 and 6 instead of skipping them, and `POST …/promote` answers 409 for a bundle whose scan or staging did not pass |
 | `POST /platform/bundles/:id/verify` | Runs the pipeline again (for example after a signer key was added); 202. 409 while promoting, in production or already verifying |
 | `POST /platform/bundles/:id/promote` | Only for `ready to promote`; 202 and an `ops.bundle.promote` job that checks the digest and signature again, writes each file to `mirrors/<kind>/sha256/<digest>` with an index at `mirrors/<kind>/index/<bundle>.json`, and records the promotion on every mirror of that kind |
 | `DELETE /platform/bundles/:id` | Deletes a rejected (quarantined) bundle, or one still awaiting its transfer, and its file; 204. The audit event keeps the reason and both the actual and expected signer fingerprints |
@@ -807,7 +827,7 @@ Views: `{id, name, domains, issuedTo, use, method: acme | tracked, state, status
 | Method and path | What it does |
 | --- | --- |
 | `GET /platform/certificates` | By expiry |
-| `POST /platform/certificates` `{domains, issuedTo?, use?: TLS \| mTLS \| LDAPS \| other, autoRenew?}` | Orders from `ACME_DIRECTORY_URL` (409 when unset) with a fresh ECDSA P-256 key and an http-01 challenge; 202 and an `ops.cert.issue` job. The account is registered on first use (ES256 JWS, key sealed with the platform data key) |
+| `POST /platform/certificates` `{domains, issuedTo?, use?: TLS \| mTLS \| LDAPS \| other, autoRenew?}` | Orders from `ACME_DIRECTORY_URL` (409 when unset) with a fresh ECDSA P-256 key and an http-01 challenge, or dns-01 with `ACME_CHALLENGE=dns-01` (wildcards such as `*.apps.internal` need dns-01; 400 otherwise); 202 and an `ops.cert.issue` job. The account is registered on first use (ES256 JWS, key sealed with the platform data key) |
 | `POST /platform/certificates/track` `{pem, issuedTo?, use?}` | Tracks a certificate issued elsewhere (the CA's own, for example) for expiry; refuses PEM that contains a private key |
 | `PATCH /platform/certificates/:id` `{issuedTo?, use?, autoRenew?}` | Edits the description and renewal |
 | `POST /platform/certificates/:id/renew` | ACME only; a new order with a new key. A failed renewal keeps the certificate in place and notifies system admins |
@@ -820,6 +840,20 @@ The sweep (`ops.cert.sweep`, every `ACME_CHECK_MINUTES`) renews ACME certificate
 system admins (socket and email) once a day about certificates that expire within it without renewal, or within 7
 days despite it. The http-01 answer is public: `GET /.well-known/acme-challenge/:token` (outside `/api`, no session)
 returns the key authorization of an order in flight as `text/plain`, 404 otherwise.
+
+dns-01 (Sprint 15): the TXT record `_acme-challenge.<name>` holds base64url(sha256(key authorization)); it is
+published before the CA is asked to validate and removed afterwards, through `ACME_DNS_PROVIDER`:
+
+- `webhook`: `POST ACME_DNS_WEBHOOK_URL` with `{action: present | cleanup, domain, fqdn, value}` and
+  `X-Exprsn-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" with ACME_DNS_WEBHOOK_SECRET>`; any 2xx
+  means done. The URL must be internal unless `PLATFORM_ALLOWED_HOSTS` names it.
+- `rfc2136`: a DNS UPDATE (RFC 2136) over UDP to `ACME_DNS_RFC2136_SERVER` for the zone `ACME_DNS_RFC2136_ZONE`,
+  signed with the TSIG key `ACME_DNS_TSIG_NAME`/`ACME_DNS_TSIG_SECRET` (HMAC-SHA256 or SHA512); the server's answer
+  must carry a valid TSIG too.
+
+After every issue or renewal the bus event `platform.cert.issued` `{certificate, name, serial, notAfter, renewal}`
+goes to every instance; with `ACME_CERT_DIR` set, each writes `<dir>/<name>/fullchain.pem`, `cert.pem`, `chain.pem`
+and `privkey.pem` (0600) atomically (a wildcard's directory is `_wildcard.<name>`) for its reverse proxy to reload.
 
 ### Data keys
 
@@ -834,6 +868,10 @@ A backup is a logical dump of every table of the application database (one repea
 PostgreSQL and MySQL), gzipped, encrypted with a fresh AES-256-GCM key wrapped by the KMS
 (`<OPENBAO_KEY_PREFIX>platform-backups`), and stored with a KMS-signed manifest (tables, row counts, migrations,
 archive digest, wrapped key) at `platform/backups/<id>.bin` and `.manifest.json`. Opening one needs only the KMS.
+Sprint 15: the dump is read a page at a time and streamed through gzip and the cipher into the blob store (S3:
+multipart), never held in memory; with `PLATFORM_BACKUP_BLOBS` (default on) the blob store (everything but
+`platform/backups/`) is archived too, as a tar sealed under its own key at `platform/backups/<id>.blobs.bin`, listed in
+the manifest as `blobs: {objects, bytes, sha256, …}`. Drills authenticate both archives.
 
 | Method and path | What it does |
 | --- | --- |
@@ -844,7 +882,10 @@ archive digest, wrapped key) at `platform/backups/<id>.bin` and `.manifest.json`
 | `POST /platform/backups/alert/acknowledge` | Acknowledges the "backup target missed" alert (raised by `ops.backup.watch` when the newest backup is older than `PLATFORM_BACKUP_RPO_MINUTES`; cleared by the next backup) |
 
 CLI: `exprsn-ai backup:create` and `exprsn-ai backup:restore-drill [--backup <id>]` do the same without the queue
-(the drill exits 2 when it fails).
+(the drill exits 2 when it fails). Sprint 15: `exprsn-ai backup:restore --backup <id> [--from <dir>] [--no-blobs]
+[--force --confirm "replace all data"]` restores into the configured database and blob store (see
+`docs/deploy.md`), and `exprsn-ai kms:rewrap` moves every data key, checkpoint signature and backup to a new
+key-encryption key.
 
 ## Sprint 9: Federation (Identity screen)
 
@@ -1192,3 +1233,16 @@ exported. Audit action on completion: `conversation.export.ready`.
 profile, so their totals equal the usage report for the month; usage without a price is kept as zero-amount lines.
 The `billing.close` schedule closes last month's statements. Audit actions: `billing.price-book.created`/`updated`,
 `billing.tenant.updated`, `billing.statement.computed`/`pushed`/`push-failed`/`exported`.
+
+## Sprint 15: Operations
+
+- Rate limits (600 requests a minute per user or address, 30 credential attempts a minute on `/api/auth`) and the
+  authorisation denial cap (20 full `authz.denied` entries a minute per principal) are counted in Redis when
+  `REDIS_URL` is set, with one atomic Lua script per hit, so every instance shares one limit; without Redis, or while
+  it is unreachable, they are counted in memory per instance (the limit still applies).
+- Failed bearer credentials: 20 invalid API keys, access tokens or malformed `Authorization` headers a minute from one
+  address, then `429` with `Retry-After` for every bearer request from that address (a valid key included) until
+  the window ends.
+- Media is sandboxed; see "Media origin" above. Platform routes for signer proposals, dns-01 and backups are under
+  "Sprint 9: Platform operations". Data connections gained MySQL and OpenBao dynamic credentials; MCP server
+  registration and tool approval check zones (`422`/`403 step: zone`, the refusal audited as `mcp.register.refused`).

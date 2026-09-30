@@ -51,6 +51,7 @@ import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
 import { ConnectionService } from './connections/service.js';
 import { createDrivers, type DriverFactory } from './connections/drivers.js';
+import { createDynamicCredentials, type DynamicCredentials } from './connections/dynamic.js';
 import { KnowledgeService } from './knowledge/service.js';
 import { CliGit, type GitFetcher } from './knowledge/sources.js';
 import { MemoryService } from './memory/service.js';
@@ -69,6 +70,8 @@ import { ConversationSharing } from './chat/sharing.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
+import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
+import { createPreviousKms, withPrevious } from './platform/rewrap.js';
 
 export interface Services {
   cfg: Config;
@@ -150,6 +153,8 @@ export interface Services {
   billing: BillingService;
   /** Sprint 13: the OpenAI-compatible API behind /v1. */
   openai: OpenAiService;
+  /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
+  counters: CounterStore;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -162,7 +167,9 @@ export interface ServiceOverrides {
   imageSafety?: ImageSafety;
   vectors?: VectorStore;
   /** Data connection drivers by engine (tests use in-process fakes). */
-  drivers?: Partial<Record<'postgres' | 'opensearch', DriverFactory>>;
+  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql', DriverFactory>>;
+  /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
+  dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
   trainer?: TrainerBackend;
   acme?: AcmeClient;
@@ -175,14 +182,16 @@ export interface ServiceOverrides {
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
   const bus = new Bus(log, cfg.REDIS_URL);
-  const kms = overrides.kms ?? createKms(cfg);
+  // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
+  const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
   const keys = new DataKeys(db, kms, cfg.OPENBAO_KEY_PREFIX, cfg.DATA_KEY, bus);
   const blobs = overrides.blobs ?? createBlobStore(cfg);
   const mode = cfg.JOB_QUEUE === 'auto' ? (cfg.REDIS_URL ? 'bullmq' : 'db') : cfg.JOB_QUEUE;
   const jobs = new JobQueue(db, log, bus, { mode, redisUrl: cfg.REDIS_URL, pollMs: cfg.JOB_POLL_MS, concurrency: cfg.JOB_CONCURRENCY });
   const scheduler = new Scheduler(jobs, log);
   const audit = new AuditLog(db);
-  const denials = new DenialAudit(audit);
+  const counters = createCounterStore(cfg.REDIS_URL, log);
+  const denials = new DenialAudit(audit, 20, 60_000, counters);
   const providers = new ProviderRepo(db);
   const users = new UserRepo(db);
   const tenants = new TenantRepo(db);
@@ -241,7 +250,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
-  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers });
+  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers }, overrides.dynamicCredentials !== undefined ? overrides.dynamicCredentials : createDynamicCredentials(cfg));
   const knowledge = new KnowledgeService(
     { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id) },
     {
@@ -323,6 +332,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
     ),
     openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
+    counters,
     close: async () => {
       scheduler.stop();
       s.webhooks.close();
@@ -336,6 +346,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await chain.close();
       await mcp.close();
       await bus.close();
+      await counters.close();
+      await connections.close().catch(() => undefined);
     }
   };
   registerPlatformJobs(s);
