@@ -369,7 +369,7 @@ export class ChatService {
     const snap = await this.gateway.snapshot();
     const loaded = new Set(snap.flatMap((x) => x.instances.flatMap((i) => i.loaded.map((l) => l.name))));
     const out = [];
-    for (const row of rows.filter((x) => x.status === 'published')) {
+    for (const row of rows.filter((x) => x.status === 'published' && (!p.profiles || p.profiles.includes(x.name)))) {
       let target: ProfileRow | undefined = row;
       for (let i = 0; target?.alias_of && i < 5; i++) target = rows.find((x) => x.id === target!.alias_of);
       if (!target || target.alias_of || target.status !== 'published') continue;
@@ -410,7 +410,7 @@ export class ChatService {
       throw new HttpProblem(409, 'Profile unavailable', `Profile ${r.profile.name} routes to ${r.model.name}, which is ${r.model.state}.`, { extensions: { profile } });
     }
     if (!clears(p.clearance, r.profile.label)) throw forbidden(`Profile ${r.profile.name} needs ${r.profile.label} clearance.`, { step: 'clearance' });
-    const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label });
+    const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label, profiles: [profile, r.profile.name] });
     if (!d.allow) throw forbidden(d.step === 'zone' ? `This conversation is ${label}; profile ${r.profile.name} only handles data up to ${r.profile.label}.` : d.reason, { step: d.step, action: 'inference:invoke' });
     return r;
   }

@@ -93,6 +93,9 @@ describe('Sprint 9: federation', () => {
     expect(tok.status, JSON.stringify(tok.body)).toBe(200);
     expect(tok.body.scope.split(' ').sort()).toEqual(['chat:read', 'inference:invoke:analyst']);
     expect(tok.body.refresh_token).toBeUndefined();
+    // The `inference:invoke:analyst` scope binds the token to that profile only.
+    const bound = await h.s.federation.principalFromAccessToken(tok.body.access_token);
+    expect(bound?.profiles).toEqual(['analyst']);
     const bad = await request(h.app).post('/oauth/token').set('authorization', basic(client.clientId, 'nope')).type('form').send({ grant_type: 'client_credentials' });
     expect(bad.status).toBe(401);
     expect(bad.body.error).toBe('invalid_client');

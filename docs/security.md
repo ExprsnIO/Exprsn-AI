@@ -236,9 +236,9 @@ filter, private `/tmp`, only the state directory writable.
   which are separate credentials (revoke them in the user's detail or by disabling the account).
 - OpenAI-compatible API (`/v1`): requests are stateless, so the knowledge and memory context providers of chat are not
   applied and nothing is stored as a conversation; the profile's own tools (calculate, registry and MCP tools) are not
-  offered, only the tools the client sends, and their calls are returned to the client rather than run. The
-  `inference:invoke:<profile>` form of an OAuth scope is accepted as plain `inference:invoke`: the token is not bound to
-  that one profile. With `OPENAI_STREAM_MODE=live` tokens are sent before the output guardrail has run, so a later block
+  offered, only the tools the client sends, and their calls are returned to the client rather than run. An OAuth
+  token whose only inference scopes are `inference:invoke:<profile>` is bound to those profiles (by name or alias) in
+  chat, agent runs and `/v1`; embeddings are not profiles and stay open to it. With `OPENAI_STREAM_MODE=live` tokens are sent before the output guardrail has run, so a later block
   can only end the stream with `finish_reason: content_filter`; the default `checked` mode sends the answer after the
   check, at the cost of time to first token.
 - Webhooks: a delivery carries the audit event's target and detail (within the webhook's label ceiling) to the

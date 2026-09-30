@@ -153,7 +153,7 @@ export class OpenAiService {
     }
     if (r.model.state !== 'approved' && r.model.state !== 'deprecated') throw new HttpProblem(409, 'Profile unavailable', `Model ${r.profile.name} routes to ${r.model.name}, which is ${r.model.state}.`);
     if (!clears(p.clearance, r.profile.label)) throw apiProblem(404, `The model ${name} does not exist or you do not have access to it.`, 'model_not_found', 'model');
-    const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label });
+    const d = authorize(p, 'inference:invoke', { tenantId: p.tenantId, label, zoneCeiling: r.profile.label, profiles: [name, r.profile.name] });
     if (!d.allow) throw forbidden(d.step === 'zone' ? `The request is ${label}; model ${r.profile.name} only handles data up to ${r.profile.label}.` : d.reason, { step: d.step, action: 'inference:invoke' });
     return r;
   }

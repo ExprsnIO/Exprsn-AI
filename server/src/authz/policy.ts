@@ -19,6 +19,8 @@ export interface Principal {
   mfa: boolean;
   /** The workspace the request acts in (the session's current one, or X-Workspace for API keys). */
   workspaceId?: string | null;
+  /** Profiles an OAuth token is bound to (`inference:invoke:<profile>` scopes); absent or null means any profile. */
+  profiles?: string[] | null;
 }
 
 export interface Resource {
@@ -26,6 +28,8 @@ export interface Resource {
   label?: Label;
   /** Label ceiling of the zone the request would be routed to. */
   zoneCeiling?: Label;
+  /** For `inference:invoke`: the profile names the request resolves to (the name asked for and the profile it resolved to). */
+  profiles?: string[];
 }
 
 export type DecisionStep = 'role' | 'scope' | 'tenant' | 'clearance' | 'zone';
@@ -55,6 +59,9 @@ export function authorize(p: Principal, action: Permission, resource: Resource =
 
   if (!permissionsFor(p.roles).has(action)) return deny('role', `No role held grants ${action}`);
   if (p.scopes && !p.scopes.includes(action)) return deny('scope', `Credential scopes do not include ${action}`);
+  if (action === 'inference:invoke' && p.profiles && resource.profiles && !resource.profiles.some((x) => p.profiles!.includes(x))) {
+    return deny('scope', `Credential scopes allow only the profiles ${p.profiles.join(', ')}`);
+  }
   if (resource.tenantId && resource.tenantId !== p.tenantId && !p.roles.includes('system-admin')) {
     return deny('tenant', 'Resource belongs to another tenant');
   }

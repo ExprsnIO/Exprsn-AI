@@ -123,7 +123,11 @@ export class FederationService {
     // Admin roles need a second factor: a token from a sign-in without one is not accepted for such a user.
     if (!mfa && rolesRequireMfa(roles)) return null;
     const perms = permissionsFor(roles);
-    const scopes = String(claims.scope ?? '').split(' ').map((x) => (x.startsWith('inference:invoke:') ? 'inference:invoke' : x)).filter((x): x is Permission => perms.has(x as Permission));
+    const granted = String(claims.scope ?? '').split(' ');
+    const scopes = granted.map((x) => (x.startsWith('inference:invoke:') ? 'inference:invoke' : x)).filter((x): x is Permission => perms.has(x as Permission));
+    // `inference:invoke:<profile>` binds the token to those profiles, unless it also carries plain `inference:invoke`.
+    const bound = granted.filter((x) => x.startsWith('inference:invoke:')).map((x) => x.slice('inference:invoke:'.length));
+    const profiles = bound.length && !granted.includes('inference:invoke') ? bound : null;
     return {
       kind: 'api_key',
       userId: user.id,
@@ -136,7 +140,8 @@ export class FederationService {
       scopes,
       sessionId: null,
       apiKeyId: null,
-      mfa
+      mfa,
+      profiles
     };
   }
 

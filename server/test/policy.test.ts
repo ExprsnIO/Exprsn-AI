@@ -88,3 +88,16 @@ describe('authorize', () => {
     expect(authorize(principal({ clearance: 'restricted' }), 'chat:read', { label: 'restricted', zoneCeiling: 'confidential' })).toMatchObject({ allow: false, step: 'zone' });
   });
 });
+
+describe('profile-bound credentials', () => {
+  it('lets an inference:invoke:<profile> token use only that profile, by name or alias', () => {
+    const p = principal({ roles: ['member'], scopes: ['inference:invoke', 'chat:read'], profiles: ['analyst'] });
+    expect(authorize(p, 'inference:invoke', { profiles: ['analyst', 'analyst'] }).allow).toBe(true);
+    expect(authorize(p, 'inference:invoke', { profiles: ['fast', 'analyst'] }).allow).toBe(true);
+    const other = authorize(p, 'inference:invoke', { profiles: ['general', 'general'] });
+    expect(other).toMatchObject({ allow: false, step: 'scope' });
+    // Unbound credentials and requests without a profile are unaffected.
+    expect(authorize(principal({ roles: ['member'] }), 'inference:invoke', { profiles: ['general'] }).allow).toBe(true);
+    expect(authorize(p, 'chat:read').allow).toBe(true);
+  });
+});
