@@ -232,6 +232,36 @@ export class GuardrailEngine implements Guardrails {
     };
   }
 
+  /**
+   * The model half of the streaming screen (Sprint 16): the enforced rules the deterministic screen leaves out (guard
+   * model, classifiers), resolved once. The returned function runs them together on the text so far and records
+   * nothing. A rule that cannot run holds when it fails closed (or the turn is sensitive), as in `check`.
+   */
+  async streamModelScreen(input: Omit<GuardInput, 'text'>): Promise<((text: string) => Promise<GuardDecision>) | null> {
+    const agent = typeof input.meta?.agent === 'string' ? input.meta.agent : null;
+    const active = (await this.sets.forCheck(input.tenantId, input.workspaceId, agent)).filter((a) => a.rule.enabled && a.rule.stage === 'enforce' && a.rule.checkpoint === input.checkpoint && !GuardrailEngine.DETERMINISTIC.has(a.rule.mechanism.kind));
+    if (!active.length) return null;
+    const sensitive = labelRank(input.label) >= labelRank('confidential') || input.checkpoint === 'tool-call' || input.meta?.tools === true;
+    return async (text: string) => {
+      const results = await Promise.all(active.map(async (a) => ({ a, r: await this.evaluate(a.rule, { ...input, text }) })));
+      const findings: Recorded[] = [];
+      for (const { a, r } of results) {
+        const base = { ruleId: a.rule.id, ruleName: a.rule.name, setId: a.set.id, version: a.version, pending: a.pending, stage: 'enforce' as const };
+        if (r.error) {
+          if (a.rule.onError === 'closed' || sensitive) findings.push({ ...base, action: 'require-approval', detail: `unavailable: ${r.error}`, error: 'closed' });
+          continue;
+        }
+        if (!r.hit) continue;
+        const extra = { ...(r.score != null ? { score: r.score } : {}), ...(r.detail ? { detail: r.detail } : {}) };
+        if (!r.spans.length) findings.push({ ...base, action: a.rule.action, ...extra });
+        for (const span of r.spans.slice(0, MAX_SPANS_PER_RULE)) findings.push({ ...base, action: a.rule.action, span, ...extra });
+      }
+      const action = findings.reduce<GuardAction>((acc, f) => (actionRank(f.action) > actionRank(acc) ? f.action : acc), 'allow');
+      const reason = this.reason(action, findings);
+      return { action, text: action === 'redact' ? redact(text, findings.filter((f) => f.action === 'redact')) : text, findings: findings.map(publicFinding), ...(reason ? { reason } : {}) };
+    };
+  }
+
   private reason(action: GuardAction, enforced: Recorded[]): string | undefined {
     if (action !== 'block' && action !== 'require-approval' && action !== 'redact') return undefined;
     const f = enforced.find((x) => x.action === action)!;

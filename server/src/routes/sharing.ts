@@ -14,7 +14,7 @@ const id26 = z.string().length(26);
  */
 export function sharingRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/conversations/:id/shares', '/conversations/:id/share-targets', '/conversations/:id/exports', '/shared-conversations', '/shared-links', '/conversation-exports'], noStore, requireAuth());
+  r.use(['/conversations/:id/shares', '/conversations/:id/share-targets', '/shared-conversations/:id/messages', '/conversations/:id/exports', '/shared-conversations', '/shared-links', '/conversation-exports'], noStore, requireAuth());
   const read = requirePermission(s, 'chat:read');
   const write = requirePermission(s, 'chat:write');
   const sh = s.sharing;
@@ -57,14 +57,16 @@ export function sharingRoutes(s: Services): Router {
       z.discriminatedUnion('kind', [
         z.object({ kind: z.literal('user'), userId: id26 }).strict(),
         z.object({ kind: z.literal('workspace'), workspaceId: id26 }).strict(),
-        z.object({ kind: z.literal('link'), expiresInHours: z.number().int().min(1).max(30 * 24).default(7 * 24) }).strict()
+        z.object({ kind: z.literal('link'), expiresInHours: z.number().int().min(1).max(30 * 24).default(7 * 24), anonymous: z.boolean().default(false) }).strict()
       ]),
       req.body
     );
     const { share, token } = await sh.create(p, parseBody(id26, req.params.id), body);
     const c = await s.chat.conversation(p, share.conversation_id);
-    await audit(req, 'conversation.shared', { conversation: c.id, share: share.id }, c.label, { kind: share.kind, user: share.user_id, workspace: share.workspace_id, expiresAt: share.expires_at });
-    res.status(201).json({ ...(await describe(p.tenantId, share)), ...(token ? { token, url: `${s.cfg.PUBLIC_URL.replace(/\/$/, '')}/#/chat?shared=${encodeURIComponent(token)}` } : {}) });
+    await audit(req, 'conversation.shared', { conversation: c.id, share: share.id }, c.label, { kind: share.kind, user: share.user_id, workspace: share.workspace_id, expiresAt: share.expires_at, ...(share.anonymous ? { anonymous: true } : {}) });
+    const base = s.cfg.PUBLIC_URL.replace(/\/$/, '');
+    // An anonymous link opens the signed-out read-only page; the token stays in the fragment, never sent to a server.
+    res.status(201).json({ ...(await describe(p.tenantId, share)), ...(token ? { token, url: share.anonymous ? `${base}/#/shared?t=${encodeURIComponent(token)}` : `${base}/#/chat?shared=${encodeURIComponent(token)}` } : {}) });
   });
 
   r.delete('/conversations/:id/shares/:shareId', write, async (req, res) => {
@@ -81,6 +83,14 @@ export function sharingRoutes(s: Services): Router {
 
   r.get('/shared-conversations/:id', read, async (req, res) => {
     res.json({ ...(await sh.openShared(principalOf(req), parseBody(id26, req.params.id))), readOnly: true });
+  });
+
+  /** Catch-up for a reader watching a shared answer stream (Sprint 16, B-705): screened answer text only. */
+  r.get('/shared-conversations/:id/messages/:mid/stream', read, async (req, res) => {
+    const p = principalOf(req);
+    const { c } = await sh.readable(p, parseBody(id26, req.params.id));
+    const q = parseBody(z.object({ after: z.coerce.number().int().min(0).default(0) }), req.query);
+    res.json(await s.chat.resumeShared(p, c, parseBody(id26, req.params.mid), q.after));
   });
 
   // The token travels in the body, never in a URL that proxies or logs could keep.

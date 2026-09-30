@@ -71,6 +71,7 @@ import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
+import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
 
 export interface Services {
@@ -219,7 +220,14 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     store: cfg.REDIS_URL ? new RedisStreamStore(cfg.REDIS_URL, keys, log) : new DbStreamStore(db, keys),
     flags: guard.flags,
     notifications,
-    leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000
+    leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000,
+    // Sprint 16: a prompt a reviewer approved is answered for its owner; the guard model screens streamed answers.
+    principalFor: async (tenantId, userId, workspaceId) => {
+      const p = await loadPrincipal(s, tenantId, userId, {});
+      if (p) p.workspaceId = workspaceId;
+      return p;
+    },
+    streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
   guard.flags.heldAnswer = (tenantId, messageId) => chat.heldText(tenantId, messageId);
   const registry = new RegistryService(db);

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { ulid } from 'ulid';
 import type { Logger } from 'pino';
+import type { Knex } from 'knex';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
 import { authorize, type Principal } from '../authz/policy.js';
@@ -17,7 +18,7 @@ import type { AttachmentRow, AttachmentService } from './attachments.js';
 import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
 import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
 import { formatContext, passageSpan, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
-import { StreamGuard, type Release } from '../guardrails/stream.js';
+import { StreamGuard, type CheckLimiter, type Release, type Screen } from '../guardrails/stream.js';
 import type { FlagService } from '../guardrails/flags.js';
 import type { Notifications } from '../platform/notifications.js';
 import { DbStreamStore, type Chunk, type StreamStore } from './streams.js';
@@ -26,9 +27,11 @@ export type { Chunk } from './streams.js';
 
 /**
  * `held`: waiting on a reviewer (invisible to the user); `withdrawn`: rejected by the reviewer; `interrupted`: the
- * instance generating it stopped, and the stored part can be continued.
+ * instance generating it stopped, and the stored part can be continued. Since Sprint 16 a user message can be `held`
+ * too (a `require-approval` rule at `user-input`): its answer is `awaiting` until a reviewer approves the prompt, and
+ * both are `withdrawn` when the reviewer rejects it.
  */
-export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted';
+export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted' | 'awaiting';
 
 export interface ConversationRow {
   id: string;
@@ -111,6 +114,10 @@ interface Stream {
   held: boolean;
   /** The streaming screen could not load: nothing is released until the full check has passed the answer. */
   deferred: boolean;
+  /** A background guard-model verdict blocked the answer (Sprint 16): the generation is being stopped. */
+  modelHalt: boolean;
+  /** The screens, for tool results shown in chat (Sprint 16). */
+  screens: { det: Screen | null; model: Screen | null };
   /** Retrieved material of the turn, for the passages stored with the citations. */
   context: { items: ContextItem[]; citations: Record<string, unknown>[] } | null;
   /** Store writes and snapshots, one at a time. */
@@ -138,6 +145,10 @@ export interface ChatOptions {
   notifications?: Notifications;
   /** A streaming answer whose generator has not been heard from for this long is interrupted. */
   leaseMs?: number;
+  /** The owner as a principal, to generate an answer whose held prompt a reviewer approved (Sprint 16). */
+  principalFor?: (tenantId: string, userId: string, workspaceId: string | null) => Promise<Principal | null>;
+  /** The streaming guard model (Sprint 16): hold-back in sentence windows and the per-instance check limiter. */
+  streamModel?: { holdback: number; limiter: CheckLimiter };
 }
 
 const LIVE: MessageState[] = ['queued', 'streaming'];
@@ -277,6 +288,7 @@ export class ChatService {
       upd.head_id = await this.leafOf(c.id, m.id);
     }
     await this.db('conversations').where({ id: c.id }).update(upd);
+    if (patch.label !== undefined && patch.label !== c.label) this.bus.publish(TOPICS.shareAccess, { tenantId: c.tenant_id, conversationId: c.id, label: patch.label });
   }
 
   async deleteConversation(p: Principal, id: string): Promise<void> {
@@ -331,7 +343,7 @@ export class ChatService {
    */
   private async messageView(m: MessageRow, p?: Principal) {
     const live = this.streams.get(m.id);
-    const held = m.state === 'held' && !live;
+    const held = m.role === 'assistant' && m.state === 'held' && !live;
     const tools = held ? [] : live ? live.tools : json<Chunk['tool'][]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
     const citations = held ? [] : json<Record<string, unknown>[]>(await this.open(m.tenant_id, m.id, 'citations', m.citations ?? null), []).map((c) => (c.passage != null && (!p || !clears(p.clearance, c.label as Label)) ? { ...c, passage: null, span: null, restricted: true } : c));
     return {
@@ -452,13 +464,17 @@ export class ChatService {
       const parent = await this.message(c, parentId);
       if (parent.role !== 'assistant') throw conflict('A new message follows an answer.');
     }
-    const content = await this.guardInput(p, c.workspace_id, input.content, label, c.id);
+    const { text: content, hold } = await this.guardInput(p, c.workspace_id, input.content, label, c.id, true);
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: parentId ?? null, role: 'user', content, label, attachments: atts.map((a) => a.id), created_at: t });
+    const user = await this.insertMessage(c, { parent_id: parentId ?? null, role: 'user', content, label, attachments: atts.map((a) => a.id), created_at: t, ...(hold ? { state: 'held' as const } : {}) });
     const think = this.thinkLevel(r.profile, input.think);
-    const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label, profile: r, think, created_at: t + 1 });
+    const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label, profile: r, think, created_at: t + 1, ...(hold ? { state: 'awaiting' as const } : {}) });
     const title = c.title ? undefined : await this.seal(c.tenant_id, c.id, 'title', content.replace(/\s+/g, ' ').trim().slice(0, 80));
     await this.db('conversations').where({ id: c.id }).update({ head_id: assistant.id, label, profile_id: r.profile.id, updated_at: Date.now(), ...(title ? { title } : {}) });
+    if (hold) {
+      await this.fileHeldPrompt(p, { ...c, label }, user, content, hold);
+      return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label, state: 'awaiting' as const, reason: hold.reason ?? 'Held for review.' };
+    }
     this.start(p, { ...c, label }, assistant, r, think, 'chat');
     return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label };
   }
@@ -468,6 +484,8 @@ export class ChatService {
     const c = await this.conversation(p, conversationId);
     const old = await this.message(c, messageId);
     if (old.role !== 'assistant' || !old.parent_id) throw conflict('Only answers can be regenerated.');
+    const question = await this.message(c, old.parent_id);
+    if (question.state === 'held' || question.state === 'withdrawn') throw conflict(question.state === 'held' ? 'This question is waiting for review; its answer starts when a reviewer approves it.' : 'A reviewer rejected this question; ask again instead.');
     const r = await this.resolveFor(p, input.profile ?? old.profile_id ?? old.profile_name ?? '', c.label);
     await this.admit(p, c.workspace_id);
     const think = this.thinkLevel(r.profile, input.think ?? old.think ?? undefined);
@@ -486,12 +504,16 @@ export class ChatService {
     const prevAnswer = (await this.db('messages').where({ conversation_id: c.id, parent_id: old.id }).orderBy('created_at', 'desc').first()) as MessageRow | undefined;
     const r = await this.resolveFor(p, input.profile ?? prevAnswer?.profile_id ?? c.profile_id ?? '', c.label);
     await this.admit(p, c.workspace_id);
-    const content = await this.guardInput(p, c.workspace_id, input.content, c.label, c.id);
+    const { text: content, hold } = await this.guardInput(p, c.workspace_id, input.content, c.label, c.id, true);
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: old.parent_id, role: 'user', content, label: c.label, attachments: json<string[]>(old.attachments, []), created_at: t });
+    const user = await this.insertMessage(c, { parent_id: old.parent_id, role: 'user', content, label: c.label, attachments: json<string[]>(old.attachments, []), created_at: t, ...(hold ? { state: 'held' as const } : {}) });
     const think = this.thinkLevel(r.profile, input.think);
-    const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label: c.label, profile: r, think, created_at: t + 1 });
+    const assistant = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label: c.label, profile: r, think, created_at: t + 1, ...(hold ? { state: 'awaiting' as const } : {}) });
     await this.db('conversations').where({ id: c.id }).update({ head_id: assistant.id, updated_at: Date.now() });
+    if (hold) {
+      await this.fileHeldPrompt(p, c, user, content, hold);
+      return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, state: 'awaiting' as const, reason: hold.reason ?? 'Held for review.' };
+    }
     this.start(p, c, assistant, r, think, 'chat');
     return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think };
   }
@@ -502,7 +524,7 @@ export class ChatService {
     const resolved: ResolvedProfile[] = [];
     for (const name of input.profiles) resolved.push(await this.resolveFor(p, name, label));
     await this.admit(p, p.workspaceId ?? null);
-    const prompt = await this.guardInput(p, p.workspaceId ?? null, input.prompt, label, null);
+    const { text: prompt } = await this.guardInput(p, p.workspaceId ?? null, input.prompt, label, null, false);
     const c = await this.createConversation(p, { title: prompt.replace(/\s+/g, ' ').trim().slice(0, 80), label, kind: 'compare' });
     const t = Date.now();
     const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: prompt, label, created_at: t });
@@ -517,7 +539,7 @@ export class ChatService {
     return { conversationId: c.id, userMessageId: user.id, columns };
   }
 
-  private async insertMessage(c: ConversationRow, m: { parent_id: string | null; role: 'user' | 'assistant'; content: string; label: Label; attachments?: string[]; profile?: ResolvedProfile; think?: ThinkLevel; compare_slot?: number | null; created_at: number }): Promise<MessageRow> {
+  private async insertMessage(c: ConversationRow, m: { parent_id: string | null; role: 'user' | 'assistant'; content: string; label: Label; attachments?: string[]; profile?: ResolvedProfile; think?: ThinkLevel; compare_slot?: number | null; created_at: number; state?: MessageState }): Promise<MessageRow> {
     const id = ulid();
     const row: MessageRow = {
       id,
@@ -528,7 +550,7 @@ export class ChatService {
       content: await this.seal(c.tenant_id, id, 'content', m.content),
       thinking: null,
       tools: null,
-      state: m.role === 'user' ? 'complete' : 'queued',
+      state: m.state ?? (m.role === 'user' ? 'complete' : 'queued'),
       profile_id: m.profile?.profile.id ?? null,
       profile_name: m.profile?.profile.name ?? null,
       model: m.profile?.model.name ?? null,
@@ -548,7 +570,7 @@ export class ChatService {
       canary: m.profile?.canary ?? false,
       created_at: m.created_at,
       completed_at: m.role === 'user' ? m.created_at : null,
-      ...(m.role === 'assistant' ? { generator: this.instance, heartbeat_at: Date.now() } : {})
+      ...(m.role === 'assistant' && m.state !== 'awaiting' ? { generator: this.instance, heartbeat_at: Date.now() } : {})
     };
     await this.db('messages').insert(row);
     return row;
@@ -579,7 +601,22 @@ export class ChatService {
    */
   async resume(p: Principal, conversationId: string, messageId: string, after: number) {
     const c = await this.conversation(p, conversationId);
-    // The message must belong to the caller's conversation before the process-wide stream map is consulted.
+    return this.resumeIn(c, messageId, after, p);
+  }
+
+  /**
+   * Catch-up for a reader of a shared conversation (B-705): the caller has already checked the share. Thinking is
+   * left out (readers see answers, as in the transcript), and so is an answer held for review.
+   */
+  async resumeShared(reader: Principal, c: ConversationRow, messageId: string, after: number) {
+    const r = await this.resumeIn(c, messageId, after, reader);
+    if (r.state === 'held') return { state: r.state, seq: r.seq, content: '', thinking: null, tools: [], usage: null, error: null };
+    if ('chunks' in r && r.chunks) return { ...r, chunks: r.chunks.filter((x) => x.delta || x.tool).map((x) => ({ seq: x.seq, ...(x.delta ? { delta: x.delta } : {}), ...(x.tool ? { tool: x.tool } : {}) })) };
+    return { ...r, thinking: null };
+  }
+
+  private async resumeIn(c: ConversationRow, messageId: string, after: number, p: Principal) {
+    // The message must belong to the conversation before the process-wide stream map is consulted.
     let m = await this.message(c, messageId);
     const st = this.streams.get(m.id);
     if (st && st.conversationId === c.id && st.state !== 'held') {
@@ -654,7 +691,7 @@ export class ChatService {
     await this.store.drop([m.id]).catch(() => undefined);
     const c = (await this.db('conversations').where({ id: m.conversation_id }).first('user_id', 'label')) as { user_id: string; label: Label } | undefined;
     if (c) {
-      this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, event: 'chat.done', data: { conversationId: m.conversation_id, messageId: m.id, state: 'interrupted', seq: Number(m.seq) } });
+      this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: m.tenant_id, event: 'chat.done', data: { conversationId: m.conversation_id, messageId: m.id, state: 'interrupted', seq: Number(m.seq) } });
       await this.audit.append({ tenantId: m.tenant_id, action: 'chat.interrupted', kind: 'system', actor: { service: 'chat', user: c.user_id }, target: { conversation: m.conversation_id, message: m.id }, label: c.label, detail: { generator: m.generator ?? null, seq: Number(m.seq) } });
     }
     return true;
@@ -698,10 +735,11 @@ export class ChatService {
   async resolveHold(reviewer: Principal, messageId: string, decision: 'approved' | 'rejected'): Promise<{ conversationId: string; state: MessageState; label: Label }> {
     const m = (await this.db('messages').where({ tenant_id: reviewer.tenantId, id: messageId }).first()) as MessageRow | undefined;
     if (!m) throw notFound('Message');
-    if (m.state !== 'held') throw conflict(`This answer is ${m.state}, not held for review.`);
+    if (m.state !== 'held') throw conflict(`This ${m.role === 'user' ? 'question' : 'answer'} is ${m.state}, not held for review.`);
     const c = (await this.db('conversations').where({ id: m.conversation_id }).first()) as ConversationRow | undefined;
     if (!c) throw notFound('Conversation');
-    if (c.user_id === reviewer.userId) throw forbidden('This answer was held in your own conversation; another reviewer decides on it.', { step: 'dual-control' });
+    if (c.user_id === reviewer.userId) throw forbidden(`This ${m.role === 'user' ? 'question' : 'answer'} was held in your own conversation; another reviewer decides on it.`, { step: 'dual-control' });
+    if (m.role === 'user') return this.resolvePromptHold(reviewer, { ...c, created_at: Number(c.created_at), updated_at: Number(c.updated_at) }, m, decision);
     const state: MessageState = decision === 'approved' ? 'complete' : 'withdrawn';
     const seq = Number(m.seq) + 1;
     const guard = { ...json<Record<string, unknown>>(m.guard ?? null, {}), review: { decision, by: reviewer.displayName, at: Date.now() } };
@@ -709,9 +747,54 @@ export class ChatService {
     if (decision === 'rejected') Object.assign(upd, { content: await this.seal(m.tenant_id, m.id, 'content', 'This answer was withdrawn after review.'), thinking: null, tools: null, citations: null });
     const n = await this.db('messages').where({ id: m.id, state: 'held' }).update(upd);
     if (!n) throw conflict('Another reviewer decided on this answer first.');
-    this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, event: 'chat.released', data: { conversationId: c.id, messageId: m.id, state, seq } });
+    this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: m.tenant_id, event: 'chat.released', data: { conversationId: c.id, messageId: m.id, state, seq } });
     await this.opts.notifications?.notify({ tenantId: m.tenant_id, userIds: [c.user_id], kind: 'chat', title: decision === 'approved' ? 'An answer held for review is now available' : 'An answer held for review was withdrawn', body: decision === 'approved' ? 'A reviewer approved it.' : 'A reviewer rejected it.', route: `chat?id=${c.id}`, label: m.label });
     return { conversationId: c.id, state, label: m.label };
+  }
+
+  /**
+   * A reviewer's decision on a held prompt (B-704). Approved: the question is sent and its answer is generated for the
+   * owner now, as if they had just sent it (their clearance, profile access and quota are checked again). Rejected:
+   * the question and its answer are withdrawn, and the answer says so. The owner is told either way.
+   */
+  private async resolvePromptHold(reviewer: Principal, c: ConversationRow, m: MessageRow, decision: 'approved' | 'rejected'): Promise<{ conversationId: string; state: MessageState; label: Label }> {
+    const a = (await this.db('messages').where({ conversation_id: c.id, parent_id: m.id, state: 'awaiting' }).orderBy('created_at', 'desc').first()) as MessageRow | undefined;
+    const guard = JSON.stringify({ review: { decision, by: reviewer.displayName, at: Date.now(), checkpoint: 'user-input' } });
+    const n = await this.db('messages').where({ id: m.id, state: 'held' }).update({ state: decision === 'approved' ? 'complete' : 'withdrawn', guard });
+    if (!n) throw conflict('Another reviewer decided on this question first.');
+    const notify = (title: string, body: string) => this.opts.notifications?.notify({ tenantId: c.tenant_id, userIds: [c.user_id], kind: 'chat', title, body, route: `chat?id=${c.id}`, label: m.label });
+    if (decision === 'rejected') {
+      if (a) {
+        await this.db('messages').where({ id: a.id }).update({ state: 'withdrawn', content: await this.seal(a.tenant_id, a.id, 'content', 'Your question was not sent to the model: a reviewer rejected it.'), completed_at: Date.now(), seq: Number(a.seq) + 1, guard });
+        this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.released', data: { conversationId: c.id, messageId: a.id, state: 'withdrawn', seq: Number(a.seq) + 1 } });
+      }
+      await notify('A question held for review was rejected', 'A reviewer rejected it; it was not sent to the model.');
+      return { conversationId: c.id, state: 'withdrawn', label: m.label };
+    }
+    await notify('A question held for review was approved', 'A reviewer approved it; the answer is being generated.');
+    if (!a) return { conversationId: c.id, state: 'complete', label: m.label };
+    const fail = async (error: string) => {
+      await this.db('messages').where({ id: a.id }).update({ state: 'failed', error: error.slice(0, 500), completed_at: Date.now() });
+      this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.done', data: { conversationId: c.id, messageId: a.id, state: 'failed', seq: Number(a.seq), error } });
+    };
+    const owner = this.opts.principalFor ? await this.opts.principalFor(c.tenant_id, c.user_id, c.workspace_id) : null;
+    if (!owner) {
+      await fail('The owner of this conversation can no longer use chat.');
+      return { conversationId: c.id, state: 'failed', label: m.label };
+    }
+    let r: ResolvedProfile;
+    try {
+      r = await this.resolveFor(owner, a.profile_id ?? a.profile_name ?? '', c.label);
+      await this.admit(owner, c.workspace_id);
+    } catch (err) {
+      await fail(err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message);
+      return { conversationId: c.id, state: 'failed', label: m.label };
+    }
+    const claimed = await this.db('messages').where({ id: a.id, state: 'awaiting' }).update({ state: 'queued', generator: this.instance, heartbeat_at: Date.now(), profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, canary: r.canary });
+    if (!claimed) return { conversationId: c.id, state: 'complete', label: m.label };
+    this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.released', data: { conversationId: c.id, messageId: m.id, answerId: a.id, state: 'queued', seq: Number(a.seq) } });
+    this.start(owner, c, { ...a, state: 'queued' }, r, a.think ?? 'off', 'chat');
+    return { conversationId: c.id, state: 'complete', label: m.label };
   }
 
   /** The held answer's text for a reviewer cleared for it (the flag detail shows it in full). */
@@ -724,21 +807,28 @@ export class ChatService {
   // ---------- retention ----------
 
   /**
-   * The tenant's retention policy (ASVS 8.3.4): conversations not updated for more than N days are deleted with
-   * their messages, catch-up buffers and the attachments no remaining message uses. Answers still generating are left
-   * for the next run. The purge is audited with its counts.
+   * The retention policy (ASVS 8.3.4; per workspace and per user since Sprint 16): conversations not updated for more
+   * than N days are deleted with their messages, catch-up buffers and the attachments no remaining message uses. N is
+   * the shortest period that applies to the conversation: the tenant's, its workspace's and its owner's. Answers still
+   * generating, and prompts waiting for review, are left for the next run. The purge is audited with its counts.
    */
-  async purgeExpired(tenantId: string): Promise<{ days: number | null; conversations: number; messages: number; attachments: number }> {
+  async purgeExpired(tenantId: string): Promise<{ days: number | null; conversations: number; messages: number; attachments: number; scopes: number }> {
     const policy = (await this.db('chat_retention').where({ tenant_id: tenantId }).first()) as { conversation_days: number | null } | undefined;
     const days = policy?.conversation_days == null ? null : Number(policy.conversation_days);
-    if (!days) return { days: null, conversations: 0, messages: 0, attachments: 0 };
-    const cutoff = Date.now() - days * 86_400_000;
-    const busy = this.db('messages').where({ tenant_id: tenantId }).whereIn('state', LIVE).select('conversation_id');
+    const scoped = ((await this.db('chat_retention_scopes').where({ tenant_id: tenantId }).select('scope', 'scope_id', 'conversation_days')) as { scope: 'workspace' | 'user'; scope_id: string; conversation_days: number }[]).map((r) => ({ scope: r.scope, id: r.scope_id, days: Number(r.conversation_days) }));
+    if (!days && !scoped.length) return { days: null, conversations: 0, messages: 0, attachments: 0, scopes: 0 };
+    const now = Date.now();
+    const busy = this.db('messages').where({ tenant_id: tenantId }).whereIn('state', [...LIVE, 'awaiting']).select('conversation_id');
+    // A conversation is past its shortest period exactly when it is past any one of the periods that apply to it.
+    const expired = (w: Knex.QueryBuilder) => {
+      if (days) w.orWhere('updated_at', '<', now - days * 86_400_000);
+      for (const x of scoped) w.orWhere((q) => q.where(x.scope === 'workspace' ? 'workspace_id' : 'user_id', x.id).andWhere('updated_at', '<', now - x.days * 86_400_000));
+    };
     let conversations = 0;
     let messages = 0;
     let attachments = 0;
     for (;;) {
-      const ids = ((await this.db('conversations').where({ tenant_id: tenantId }).andWhere('updated_at', '<', cutoff).whereNotIn('id', busy.clone()).limit(500).select('id')) as { id: string }[]).map((x) => x.id);
+      const ids = ((await this.db('conversations').where({ tenant_id: tenantId }).andWhere((w) => expired(w)).whereNotIn('id', busy.clone()).limit(500).select('id')) as { id: string }[]).map((x) => x.id);
       if (!ids.length) break;
       const used = new Set<string>();
       for (const r of (await this.db('messages').whereIn('conversation_id', ids).whereNotNull('attachments').select('attachments')) as { attachments: string }[]) for (const a of json<string[]>(r.attachments, [])) used.add(a);
@@ -750,15 +840,17 @@ export class ChatService {
       }
       if (ids.length < 500) break;
     }
-    await this.db('chat_retention').where({ tenant_id: tenantId }).update({ last_run_at: Date.now(), last_purged: conversations });
-    if (conversations) await this.audit.append({ tenantId, action: 'chat.retention.purged', kind: 'system', actor: { service: 'chat.retention' }, target: { tenant: tenantId }, detail: { days, before: cutoff, conversations, messages, attachments } });
-    return { days, conversations, messages, attachments };
+    const tenantRow = { last_run_at: Date.now(), last_purged: conversations };
+    if (!(await this.db('chat_retention').where({ tenant_id: tenantId }).update(tenantRow))) await this.db('chat_retention').insert({ tenant_id: tenantId, conversation_days: null, updated_by: null, updated_at: Date.now(), ...tenantRow });
+    if (conversations) await this.audit.append({ tenantId, action: 'chat.retention.purged', kind: 'system', actor: { service: 'chat.retention' }, target: { tenant: tenantId }, detail: { days, scopes: scoped.map((x) => `${x.scope}:${x.id}=${x.days}`).slice(0, 50), conversations, messages, attachments } });
+    return { days, conversations, messages, attachments, scopes: scoped.length };
   }
 
   // ---------- generation ----------
 
-  private emit(st: Pick<Stream, 'userId'>, event: string, data: Record<string, unknown>): void {
-    this.bus.publish(TOPICS.chatEvent, { userId: st.userId, event, data });
+  /** To the owner's sockets and, since Sprint 16, to readers watching the shared conversation (the socket layer decides). */
+  private emit(st: Pick<Stream, 'userId' | 'tenantId'>, event: string, data: Record<string, unknown>): void {
+    this.bus.publish(TOPICS.chatEvent, { userId: st.userId, tenantId: st.tenantId, event, data });
   }
 
   private start(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', from?: Continuation): void {
@@ -784,6 +876,8 @@ export class ChatService {
       thinkGuard: null,
       held: false,
       deferred: false,
+      modelHalt: false,
+      screens: { det: null, model: null },
       context: null,
       io: Promise.resolve(),
       timer: null
@@ -875,7 +969,8 @@ export class ChatService {
     for (let cur = byId.get(parentId); cur; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) path.unshift(cur);
     const out: ChatMessage[] = [];
     for (const m of path) {
-      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn'].includes(m.state)) continue;
+      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn', 'awaiting'].includes(m.state)) continue;
+      if (m.role === 'user' && (m.state === 'held' || m.state === 'withdrawn')) continue;
       let content = (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '';
       const images: string[] = [];
       for (const aid of json<string[]>(m.attachments, [])) {
@@ -922,6 +1017,7 @@ export class ChatService {
     if (label !== c.label) {
       await this.db('conversations').where({ id: c.id }).update({ label });
       c.label = label;
+      this.bus.publish(TOPICS.shareAccess, { tenantId: c.tenant_id, conversationId: c.id, label });
     }
     this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'context', label, citations: citations.length });
   }
@@ -943,21 +1039,34 @@ export class ChatService {
     return this.seal(st.tenantId, st.messageId, 'citations', JSON.stringify(out));
   }
 
-  /** The streaming screen for this answer: the deterministic `model-output` rules, loaded once. */
-  private async startGuards(p: Principal, c: ConversationRow, r: ResolvedProfile, st: Stream, from?: Continuation): Promise<void> {
+  /**
+   * The streaming screen for this answer: the deterministic `model-output` rules, loaded once, and since Sprint 16
+   * the guard-model and classifier rules, which check the text so far in the background (B-703).
+   */
+  private async startGuards(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream, from?: Continuation): Promise<void> {
     if (!this.guardrails.streamScreen) return;
     let screen: Awaited<ReturnType<NonNullable<Guardrails['streamScreen']>>>;
+    let modelScreen: Awaited<ReturnType<NonNullable<Guardrails['streamModelScreen']>>> = null;
+    const input = { tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output' as const, label: c.label, principal: p, source: { kind: 'message', id: st.messageId }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, via: 'chat' } };
     try {
-      screen = await this.guardrails.streamScreen({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', label: c.label, principal: p, source: { kind: 'message', id: st.messageId }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, via: 'chat' } });
+      screen = await this.guardrails.streamScreen(input);
+      if (this.opts.streamModel && this.guardrails.streamModelScreen) {
+        const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
+        const prompt = q?.content ? await this.open(c.tenant_id, m.parent_id!, 'content', q.content) : null;
+        modelScreen = await this.guardrails.streamModelScreen({ ...input, meta: { ...input.meta, ...(prompt ? { prompt } : {}) } });
+      }
     } catch (err) {
       // Without the screen nothing is released until the finished answer has passed the full check.
       this.log.warn({ err, message: st.messageId }, 'streaming screen unavailable; the answer is sent once checked');
       st.deferred = true;
       return;
     }
-    if (!screen) return;
-    st.guard = new StreamGuard(screen);
-    st.thinkGuard = new StreamGuard(screen);
+    if (!screen && !modelScreen) return;
+    const det: Screen = screen ?? (async (text) => ({ action: 'allow', text, findings: [] }));
+    st.screens = { det: screen, model: modelScreen };
+    const model = (kind: 'delta' | 'thinking') => (modelScreen && this.opts.streamModel ? { screen: modelScreen, holdback: this.opts.streamModel.holdback, limiter: this.opts.streamModel.limiter, onRelease: (out: Release) => this.releasedLater(st, kind, out) } : null);
+    st.guard = new StreamGuard(det, undefined, model('delta'));
+    st.thinkGuard = new StreamGuard(det, undefined, model('thinking'));
     if (from) {
       st.guard.preload(from.content);
       st.thinkGuard.preload(from.thinking);
@@ -982,6 +1091,47 @@ export class ChatService {
       st.held = true;
       this.emit(st, 'chat.status', { conversationId: st.conversationId, messageId: st.messageId, state: 'held' });
     }
+  }
+
+  /** A release decided by a background verdict, outside the token loop: a block stops the generation from here. */
+  private releasedLater(st: Stream, kind: 'delta' | 'thinking', out: Release): void {
+    if (!LIVE.includes(st.state)) return;
+    if (out.text && !st.held) this.push(st, { [kind]: out.text });
+    if (out.held && !st.held) {
+      st.held = true;
+      this.emit(st, 'chat.status', { conversationId: st.conversationId, messageId: st.messageId, state: 'held' });
+    }
+    if (out.halted && !st.modelHalt) {
+      st.modelHalt = true;
+      st.ac.abort(new GuardHalt(out.decision?.reason ?? 'Blocked by a guardrail.'));
+    }
+  }
+
+  /**
+   * A tool result shown in chat passes the stream screen first (B-703): what a rule would block or hold is not shown
+   * (the model still gets the result, checked at the `context` checkpoint by the dispatcher); a redaction is shown
+   * redacted. What is shown is also what is stored.
+   */
+  private async screenTool(st: Stream, tool: NonNullable<Chunk['tool']>): Promise<NonNullable<Chunk['tool']>> {
+    const { det, model } = st.screens;
+    if (!det && !model) return tool;
+    const payload = tool.result ?? tool.output ?? tool.error ?? null;
+    const text = `${tool.expression}\n${typeof payload === 'string' ? payload : JSON.stringify(payload)}`;
+    let d: GuardDecision | null;
+    try {
+      d = det ? await det(text) : null;
+      if ((!d || (d.action !== 'block' && d.action !== 'require-approval')) && model) {
+        const md = await (this.opts.streamModel?.limiter.run(async () => model(text)) ?? model(text));
+        if (!d || md.action === 'block' || md.action === 'require-approval' || (md.action === 'redact' && d.action !== 'redact')) d = md;
+      }
+    } catch (err) {
+      this.log.warn({ err, message: st.messageId }, 'tool result screen failed; the result is not shown');
+      return { name: tool.name, expression: '', error: 'This tool result was not shown: the guardrail check could not run.' };
+    }
+    if (!d) return tool;
+    if (d.action === 'block' || d.action === 'require-approval') return { name: tool.name, expression: '', error: `This tool result was withheld. ${d.reason ?? ''}`.trim() };
+    if (d.action === 'redact') return { name: tool.name, expression: '[redacted]', output: { redacted: d.text } };
+    return tool;
   }
 
   /** The end of the answer, screened like the rest (a block here is decided by the full check that follows). */
@@ -1035,7 +1185,7 @@ export class ChatService {
       await this.addContext(p, c, m, r, lease, messages, st);
       // A continued answer: the stored text is the start of the model's turn, which it carries on.
       if (from?.content) messages.push({ role: 'assistant', content: from.content });
-      await this.startGuards(p, c, r, st, from);
+      await this.startGuards(p, c, m, r, st, from);
       promptChars = messages.reduce((a, x) => a + x.content.length, 0);
       const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
       // Beyond calculate: published registry and MCP tools, read-only in chat (write and destructive calls need an
@@ -1098,14 +1248,15 @@ export class ChatService {
               tool = { name: 'calculate', expression, error: (err as Error).message };
             }
           }
-          st.tools.push(tool);
-          if (!st.held) this.push(st, { tool });
           messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(tool.result ?? tool.output ?? { error: tool.error }) });
+          const shown = await this.screenTool(st, tool);
+          st.tools.push(shown);
+          if (!st.held) this.push(st, { tool: shown });
         }
       }
       st.state = 'complete';
     } catch (err) {
-      if (err instanceof GuardHalt) {
+      if (err instanceof GuardHalt || st.modelHalt) {
         // The streaming screen blocked: stop the model; the full check below withholds the answer.
         st.state = 'complete';
         st.ac.abort(err);
@@ -1122,6 +1273,8 @@ export class ChatService {
       lease?.release(usage.firstTokenMs);
     }
     if (st.state === 'complete' || st.state === 'stopped') await this.finishGuards(st);
+    st.guard?.close();
+    st.thinkGuard?.close();
     if (st.state === 'failed' || st.state === 'interrupted') {
       // Only what passed the screen is kept: an unscreened tail never reaches storage.
       st.content = st.shown;
@@ -1134,6 +1287,13 @@ export class ChatService {
     if (st.deferred && !guard?.replaced && !guard?.held && (st.state === 'complete' || st.state === 'stopped')) {
       if (st.thinking) this.push(st, { thinking: st.thinking });
       if (st.content) this.push(st, { delta: st.content });
+    } else if (!guard?.replaced && !guard?.held && !st.held && (st.state === 'complete' || st.state === 'stopped')) {
+      // Windows still waiting for a background verdict when the answer ended: the full check has now passed them.
+      for (const [g, kind] of [[st.thinkGuard, 'thinking'], [st.guard, 'delta']] as const) {
+        if (!g?.unreleased) continue;
+        this.push(st, { [kind]: g.unreleased });
+        g.markReleased();
+      }
     }
 
     // Metering happens once, on the final chunk; a stopped stream is estimated from what was produced.
@@ -1209,14 +1369,46 @@ export class ChatService {
 
   // ---------- guardrails ----------
 
-  /** The user-input checkpoint. A block or hold refuses the send with the reason; a redaction is what is stored and sent. */
-  private async guardInput(p: Principal, workspaceId: string | null, text: string, label: Label, conversationId: string | null): Promise<string> {
+  /**
+   * The user-input checkpoint. A block refuses the send with the reason; a redaction is what is stored and sent. A hold
+   * (`require-approval`) refuses too, unless `holdable` and a review queue exists (Sprint 16): then the prompt is kept
+   * and waits in the Flags queue, and the answer starts only when a reviewer approves it.
+   */
+  private async guardInput(p: Principal, workspaceId: string | null, text: string, label: Label, conversationId: string | null, holdable: boolean): Promise<{ text: string; hold: GuardDecision | null }> {
     const d = await this.guardrails.check({ tenantId: p.tenantId, workspaceId, checkpoint: 'user-input', text, label, principal: p, ...(conversationId ? { source: { kind: 'conversation', id: conversationId } } : {}), meta: { tokens: Math.ceil(text.length / 4), via: 'chat', ...(conversationId ? { conversationId } : {}) } });
+    // A hold that comes from a check that could not run is not a reviewer's decision to make: it stays a refusal.
+    const reviewable = d.action === 'require-approval' && holdable && !!this.opts.flags && d.findings.some((f) => f.stage === 'enforce' && f.action === 'require-approval' && !f.detail?.startsWith('unavailable:'));
+    if (reviewable) return { text: d.text, hold: d };
     if (d.action === 'block' || d.action === 'require-approval') {
       const rules = [...new Set(d.findings.filter((f) => f.stage === 'enforce' && f.action === d.action).map((f) => f.ruleName))];
       throw new HttpProblem(422, d.action === 'block' ? 'Blocked by guardrail' : 'Held by guardrail', d.reason ?? 'A guardrail refused this message.', { extensions: { step: 'guardrail', action: d.action, rules } });
     }
-    return d.text;
+    return { text: d.text, hold: null };
+  }
+
+  /** Files a held prompt in the flag queue (B-704); the answer waits, `awaiting`, until a reviewer decides. */
+  private async fileHeldPrompt(p: Principal, c: ConversationRow, user: MessageRow, text: string, d: GuardDecision): Promise<void> {
+    const f = d.findings.find((x) => x.stage === 'enforce' && x.action === 'require-approval');
+    const flag = await this.opts.flags!.create({
+      tenantId: c.tenant_id,
+      workspaceId: c.workspace_id,
+      kind: 'hold',
+      checkpoint: 'user-input',
+      ruleId: f?.ruleId ?? null,
+      ruleName: f?.ruleName ?? 'Held for review',
+      setId: f?.setId ?? null,
+      stage: 'enforce',
+      action: 'require-approval',
+      severity: 'medium',
+      label: c.label,
+      text,
+      span: f?.span ?? null,
+      note: d.reason ?? 'A guardrail held this question for review before it reaches the model.',
+      actor: { user: p.userId, name: p.displayName, via: 'chat' },
+      source: { kind: 'message', id: user.id },
+      conversationId: c.id
+    });
+    await this.audit.append({ tenantId: c.tenant_id, action: 'chat.prompt.held', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: user.id, flag: `F-${flag.number}` }, label: c.label, detail: { rule: f?.ruleName ?? null, reason: d.reason ?? null } });
   }
 
   /**
