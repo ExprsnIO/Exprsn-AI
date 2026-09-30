@@ -6,10 +6,13 @@ import { provision } from '../identity/provisioning.js';
 import { isFederatedKind } from '../identity/providers/types.js';
 import type { SessionRow } from '../identity/sessions.js';
 import { rolesRequireMfa } from '../authz/permissions.js';
+import { effectivePermissions } from '../authz/policy.js';
+import { estimateStrength, passwordRules } from '../identity/passwords.js';
 import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
 import { forbidden, HttpProblem, tooManyRequests, unauthorized } from '../http/problem.js';
 import type { Services } from '../services.js';
 import { securityAlert } from '../identity/security-alerts.js';
+import { signedOutPage } from './federation-public.js';
 
 const loginSchema = z.object({
   tenant: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
@@ -155,6 +158,8 @@ export function authRoutes(s: Services): Router {
       userAgent: req.header('user-agent') ?? null
     });
     setSessionCookie(res, s, token, session.expires_at);
+    // B-801: a sign-in from a new browser or network notifies the owner (the password was right, whatever comes next).
+    await s.account.signIns.check(req, res, { tenantId: tenant.id, userId: prov.user.id, method: session.method, ip: ip(req) });
     await s.audit.append({
       tenantId: tenant.id,
       action: stage === 'active' ? 'auth.login' : stage === 'password' ? 'auth.login.pending_password' : 'auth.login.pending_mfa',
@@ -242,6 +247,38 @@ export function authRoutes(s: Services): Router {
     res.status(202).json({ accepted: true, detail: `If an account with a password kept here matches, a reset link is on its way to its email address. The link works once, for ${s.cfg.PASSWORD_RESET_MINUTES} minutes.` });
   });
 
+  /**
+   * B-802: the strength meter behind every password form: an entropy estimate, the policy's rules one by one and,
+   * when BREACHED_PASSWORDS is on, whether the password is in a breach corpus (only a hash prefix leaves). Needs a
+   * session (change, forced change, admin set) or a live reset, invite or enrolment link, and is throttled.
+   */
+  r.post('/password/check', async (req, res) => {
+    const body = parseBody(z.object({ password: z.string().max(1024), token: z.string().max(200).optional(), username: z.string().trim().max(190).optional(), breach: z.boolean().default(true) }), req.body);
+    let username: string;
+    let key: string;
+    if (req.authSession) {
+      const user = await s.users.get(req.authSession.tenant_id, req.authSession.user_id);
+      // An identity admin setting someone else's password checks it against that user's name.
+      username = body.username && req.principal && effectivePermissions(req.principal).has('identity:manage') ? body.username : (user?.username ?? '');
+      key = `pwcheck:s:${req.authSession.id}`;
+    } else {
+      const found = body.token ? await s.account.findToken(body.token) : null;
+      const user = found ? await s.users.get(found.tenant_id, found.user_id) : undefined;
+      if (!found || !user) throw unauthorized('Sign in, or open a valid password link, to check a password.');
+      username = user.username;
+      key = `pwcheck:t:${found.id}`;
+    }
+    if (!(await s.account.hit(key, 600, 3600_000))) throw tooManyRequests('Too many password checks. Try again later.', 600);
+    const strength = estimateStrength(body.password, username);
+    const rules = passwordRules(body.password, username);
+    let breached: { mode: string; checked: boolean; found: boolean | null; unavailable: boolean } = { mode: s.cfg.BREACHED_PASSWORDS, checked: false, found: null, unavailable: false };
+    if (s.cfg.BREACHED_PASSWORDS !== 'off' && body.breach && body.password.length >= 8) {
+      const r2 = await s.account.breached.check(body.password);
+      breached = { mode: s.cfg.BREACHED_PASSWORDS, checked: true, found: r2.breached, unavailable: !!r2.unavailable?.length };
+    }
+    res.json({ ...strength, rules, acceptable: rules.every((x) => x.ok) && breached.found !== true, breached });
+  });
+
   /** Sets a new password with a reset, admin or invite link. Ends every session and OAuth grant of the account. */
   r.post('/password/reset', async (req, res) => {
     const body = parseBody(z.object({ token: z.string().min(1).max(200), password: z.string().min(1).max(1024) }), req.body);
@@ -257,9 +294,18 @@ export function authRoutes(s: Services): Router {
     const grants = await s.account.revokeGrants(user.tenant_id, user.id);
     // A reset lifts a lockout on the account.
     await s.throttle.succeed(LoginThrottle.keys(user.tenant_id, user.username, null).account);
-    await s.audit.append({ tenantId: user.tenant_id, action: row.kind === 'invite' ? 'password.invite.accepted' : 'password.reset.completed', kind: 'auth', actor: { user: user.id, username: user.username, ip: ip(req) }, target: { user: user.id, username: user.username }, detail: { link: row.kind, sessionsRevoked: sessions, grantsRevoked: grants }, traceId: req.traceId });
-    if (row.kind !== 'invite') await securityAlert(s, { tenantId: user.tenant_id, userId: user.id, event: 'password.reset', detail: 'The password was set with a reset link and every session was signed out.', ip: ip(req) });
+    await s.audit.append({ tenantId: user.tenant_id, action: row.kind === 'invite' ? 'password.invite.accepted' : row.kind === 'enrol' ? 'password.enrol.accepted' : 'password.reset.completed', kind: 'auth', actor: { user: user.id, username: user.username, ip: ip(req) }, target: { user: user.id, username: user.username }, detail: { link: row.kind, sessionsRevoked: sessions, grantsRevoked: grants }, traceId: req.traceId });
+    if (row.kind !== 'invite' && row.kind !== 'enrol') await securityAlert(s, { tenantId: user.tenant_id, userId: user.id, event: 'password.reset', detail: 'The password was set with a reset link and every session was signed out.', ip: ip(req) });
     const tenant = await s.tenants.byId(user.tenant_id);
+    // B-810: an enrolment link signs the new admin straight into factor enrolment; no password-only session exists.
+    if (row.kind === 'enrol' && !(await s.mfa.methods(user.id)).length) {
+      if (req.authSession) await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
+      const local = (await s.providers.list(user.tenant_id)).find((x) => x.kind === 'local');
+      const { token, session } = await s.sessions.create({ userId: user.id, tenantId: user.tenant_id, stage: 'enroll', method: 'Enrolment link', providerId: local?.id ?? null, ip: ip(req), userAgent: req.header('user-agent') ?? null });
+      setSessionCookie(res, s, token, session.expires_at);
+      await s.audit.append({ tenantId: user.tenant_id, action: 'auth.login.pending_mfa', kind: 'auth', actor: { user: user.id, username: user.username, session: session.id, ip: ip(req) }, target: { provider: local?.name ?? 'local', kind: 'local' }, detail: { stage: 'enroll', via: 'enrol_link' }, traceId: req.traceId });
+      return void res.json({ reset: true, username: user.username, tenant: tenant?.slug ?? null, session: await sessionBody(session) });
+    }
     res.json({ reset: true, username: user.username, tenant: tenant?.slug ?? null });
   });
 
@@ -306,12 +352,20 @@ export function authRoutes(s: Services): Router {
   });
 
   r.post('/logout', async (req, res) => {
+    let next: string | null = null;
     if (req.authSession) {
+      // B-808: front-channel logout too. The frame URLs are collected before the session (and its records) end, and
+      // the console opens the signed-out page that loads them; back-channel logout follows the revocation as before.
+      next = await signedOutPage(s, req.authSession.tenant_id, req.authSession.id).catch((err: unknown) => {
+        s.log.warn({ err, trace_id: req.traceId }, 'front-channel logout could not be prepared');
+        return null;
+      });
       await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
       const p = req.principal ?? (await loadPrincipal(s, req.authSession.tenant_id, req.authSession.user_id, { session: req.authSession }));
-      await s.audit.append({ tenantId: req.authSession.tenant_id, action: 'auth.logout', kind: 'auth', actor: actorFrom(p, ip(req)), traceId: req.traceId });
+      await s.audit.append({ tenantId: req.authSession.tenant_id, action: 'auth.logout', kind: 'auth', actor: actorFrom(p, ip(req)), ...(next ? { detail: { frontChannel: true } } : {}), traceId: req.traceId });
     }
     clearSessionCookie(res, s);
+    if (next) return void res.json({ signedOut: true, next });
     res.status(204).end();
   });
 

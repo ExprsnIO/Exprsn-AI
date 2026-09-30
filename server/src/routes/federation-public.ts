@@ -8,10 +8,10 @@ import { isFederatedKind, type ExternalUser } from '../identity/providers/types.
 import type { ProviderRow } from '../repos/providers.js';
 import { clearSessionCookie, loadPrincipal, sessionTokenFrom, setSessionCookie } from '../http/middleware.js';
 import { splitPrincipal } from '../federation/kerberos.js';
-import { AuthorizeError, OAuthError, type AuthzRequest, type DpopInput, type SignedInUser, type TenantCtx } from '../federation/oidc.js';
+import { AuthorizeError, DpopNonceError, OAuthError, type AuthzRequest, type DpopInput, type SignedInUser, type TenantCtx } from '../federation/oidc.js';
 import { SamlError } from '../federation/saml.js';
 import { JwtError } from '../federation/jose.js';
-import { UpstreamError, type SamlSubject } from '../federation/upstream.js';
+import { UpstreamError, type SamlSubject, type StepUpBinding } from '../federation/upstream.js';
 import { CONSENT_REMEMBER_DAYS } from '../federation/service.js';
 import type { SessionRow } from '../identity/sessions.js';
 import { securityAlert } from '../identity/security-alerts.js';
@@ -32,6 +32,25 @@ export const safeReturn = (v: unknown): string | null =>
 const FED_COOKIE = 'exai_fed';
 
 /**
+ * B-808: before a console sign-out revokes its session, collects the front-channel logout URLs of the applications
+ * that session signed in to (OIDC clients and SAML SPs) and keeps them behind a single-use handle for ten minutes.
+ * Returns the signed-out page's address (under the tenant's issuer path), or null when there is nothing to tell.
+ */
+export async function signedOutPage(s: Services, tenantId: string, sessionId: string): Promise<string | null> {
+  const t = await s.federation.tenantById(tenantId);
+  if (!t) return null;
+  const frames = [...new Set([...(await s.federation.oidc.frontChannelUrls(t, sessionId)), ...(await s.federation.saml.logoutRequestUrls(t, [sessionId], null))])].slice(0, 20);
+  if (!frames.length) return null;
+  const handle = randomToken(24);
+  await s.db('federation_pending').insert({ id: hmac(s.cfg.SESSION_SECRET, `federation-pending:${handle}`), tenant_id: t.id, kind: 'signedout', data: JSON.stringify({ frames }), expires_at: Date.now() + 10 * 60_000 });
+  return `${t.slug === s.cfg.DEFAULT_TENANT ? '' : `/t/${t.slug}`}/oauth/logged-out?handle=${handle}`;
+}
+
+/** The cookie that binds an upstream sign-in (or step-up) to the browser that started it. */
+export const setFedCookie = (res: Response, s: Services, value: string, sameSite: 'lax' | 'none'): void =>
+  void res.cookie(FED_COOKIE, value, { httpOnly: true, secure: s.cfg.COOKIE_SECURE, sameSite: sameSite === 'none' && s.cfg.COOKIE_SECURE ? 'none' : 'lax', path: '/', maxAge: 10 * 60_000 });
+
+/**
  * What a public page may say about a failed upstream sign-in: our own checks (state, nonce, signature, issuer) are
  * named, while anything else (network errors, refused internal addresses, driver errors) gets `fallback` and goes
  * to the log only.
@@ -40,7 +59,7 @@ export const publicReason = (err: unknown, fallback: string): string => (err ins
 
 /** Browser sign-in endpoints and userinfo: requests per client address per minute (token endpoints have their own). */
 export const SIGN_IN_POINTS = 120;
-const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/auth/negotiate', '/oauth/logout', '/saml/slo', '/federation/saml/slo'];
+const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/auth/negotiate', '/oauth/logout', '/saml/slo', '/federation/saml/slo', '/oauth/logged-out'];
 
 /** First value of each string field; repeated OAuth parameters are refused (RFC 6749 3.1). */
 function formOf(body: unknown): Record<string, string> {
@@ -159,6 +178,8 @@ export function federationPublicRoutes(s: Services): Router {
     const { token, session } = await s.sessions.create({ userId: prov.user.id, tenantId: t.id, stage, method, providerId: row.id, ip: req.ip ?? null, userAgent: req.header('user-agent') ?? null });
     setSessionCookie(res, s, token, session.expires_at);
     if (afterSession) await afterSession(session.id);
+    // B-801: new-device and new-network notices, as for password sign-ins.
+    await s.account.signIns.check(req, res, { tenantId: t.id, userId: prov.user.id, method, ip: req.ip ?? null });
     await s.audit.append({
       tenantId: t.id,
       action: stage === 'active' ? 'auth.login' : 'auth.login.pending_mfa',
@@ -342,6 +363,8 @@ export function federationPublicRoutes(s: Services): Router {
     if (await limited(req, res)) return;
     const t = await tenantOf(req);
     if (!t) return void res.status(404).json({ error: 'invalid_request', error_description: 'Unknown tenant.' });
+    // B-805: with DPOP_NONCES every token response carries the current nonce for the client's next proof.
+    if (s.cfg.DPOP_NONCES) res.setHeader('DPoP-Nonce', fed().oidc.dpopNonce());
     try {
       const out = await fed().oidc.token(t, formOf(req.body), req.header('authorization'), { proof: req.header('dpop'), method: 'POST', url: `${t.issuer}/oauth/token` });
       await s.audit.append({ tenantId: t.id, action: 'oidc.token.issued', kind: 'auth', actor: { user: out.userId, service: out.client.client_id, ip: req.ip ?? null }, target: { client: out.client.client_id, name: out.client.name }, detail: { grant: out.grant, scope: out.response.scope, refresh: !!out.response.refresh_token, type: out.response.token_type }, traceId: req.traceId });
@@ -368,6 +391,10 @@ export function federationPublicRoutes(s: Services): Router {
       const dpop: DpopInput = { proof: req.header('dpop'), method: req.method, url: `${t.issuer}/oauth/userinfo` };
       res.json(await fed().oidc.userinfo(t, token, { scheme, dpop }));
     } catch (err) {
+      if (err instanceof DpopNonceError) {
+        res.setHeader('DPoP-Nonce', fed().oidc.dpopNonce());
+        return void res.status(401).setHeader('WWW-Authenticate', 'DPoP error="use_dpop_nonce", error_description="Resource server requires nonce in DPoP proof"').json({ error: 'use_dpop_nonce', error_description: err.message });
+      }
       if (!(err instanceof JwtError)) s.log.warn({ err, trace_id: req.traceId }, 'userinfo failed');
       const why = err instanceof JwtError ? err.message.replace(/["\\\r\n]/g, "'") : 'The access token could not be verified.';
       res.status(401).setHeader('WWW-Authenticate', `Bearer error="invalid_token", error_description="${why}"`).json({ error: 'invalid_token', error_description: why });
@@ -522,6 +549,20 @@ export function federationPublicRoutes(s: Services): Router {
     logoutPage(res, frames, next, null, frames.length ? 'You are signed out. The applications you used in this session are being told.' : 'You are signed out.');
   });
 
+  /**
+   * B-808: the signed-out page after a console sign-out, loading each front-channel logout URL in a frame (the
+   * session is already revoked and back-channel logout already queued). The handle works once.
+   */
+  r.get('/oauth/logged-out', async (req, res) => {
+    const t = await tenantOf(req);
+    const handle = typeof req.query.handle === 'string' ? req.query.handle : '';
+    const id = /^[A-Za-z0-9_-]{32}$/.test(handle) ? pendingId(handle) : null;
+    const row = t && id ? ((await s.db('federation_pending').where({ id, tenant_id: t.id, kind: 'signedout' }).first()) as { data: string; expires_at: number } | undefined) : undefined;
+    if (!row || !id || Number(row.expires_at) < Date.now() || !(await s.db('federation_pending').where({ id }).delete())) return page(res, 200, 'Signed out', `<p class="fg2" style="margin:0">You are signed out.</p><div><a class="btn" href="/#/signin">Sign in again</a></div>`);
+    const frames = parseJson<{ frames: string[] }>(row.data, { frames: [] }).frames.filter((u) => /^https?:\/\//.test(u));
+    logoutPage(res, frames, '/#/signin', null, frames.length ? 'You are signed out. The applications you used in this session are being told.' : 'You are signed out.');
+  });
+
   r.post('/oauth/device_authorization', smallForm, async (req, res) => {
     if (await limited(req, res)) return;
     const t = await tenantOf(req);
@@ -654,8 +695,7 @@ export function federationPublicRoutes(s: Services): Router {
 
   // ---------- upstream federation ----------
 
-  const fedCookie = (res: Response, value: string, sameSite: 'lax' | 'none') =>
-    res.cookie(FED_COOKIE, value, { httpOnly: true, secure: s.cfg.COOKIE_SECURE, sameSite: sameSite === 'none' && s.cfg.COOKIE_SECURE ? 'none' : 'lax', path: '/', maxAge: 10 * 60_000 });
+  const fedCookie = (res: Response, value: string, sameSite: 'lax' | 'none') => setFedCookie(res, s, value, sameSite);
   const fedCookieOf = (req: Request): string | undefined => {
     const m = new RegExp(`(?:^|;\\s*)${FED_COOKIE}=([^;]+)`).exec(req.headers.cookie ?? '');
     return m?.[1] ? decodeURIComponent(m[1]) : undefined;
@@ -678,10 +718,22 @@ export function federationPublicRoutes(s: Services): Router {
   r.get('/federation/oidc/start', start('oidc'));
   r.get('/federation/saml/start', start('saml'));
 
-  const upstreamDone = async (req: Request, res: Response, t: TenantCtx, fn: () => Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject?: SamlSubject }>) => {
+  const upstreamDone = async (req: Request, res: Response, t: TenantCtx, fn: () => Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject?: SamlSubject; stepUp?: StepUpBinding }>) => {
     res.clearCookie(FED_COOKIE, { path: '/' });
     try {
       const out = await fn();
+      // B-803: a step-up re-authentication. It must be the same upstream account as the session's user; the console
+      // then redeems the handle from its own origin, where the session cookie proves it is the same session.
+      if (out.stepUp) {
+        const linked = await s.users.identity(out.row.id, out.user.externalId);
+        if (linked?.user_id !== out.stepUp.userId) {
+          await s.audit.append({ tenantId: t.id, action: 'auth.step_up.failed', kind: 'auth', actor: { user: out.stepUp.userId, ip: req.ip ?? null }, target: { provider: out.row.name, kind: out.row.kind }, detail: { method: 'upstream', reason: 'another upstream account' }, traceId: req.traceId });
+          return errorPage(res, 403, 'Not confirmed', 'You signed in at the identity provider as someone else. Sign in there as yourself to confirm.', req);
+        }
+        const handle = await fed().upstream.saveStepUp(t.id, out.stepUp, out.row.id, `${out.row.kind === 'oidc' ? 'OIDC' : 'SAML'} (${out.row.name})`);
+        res.setHeader('Cache-Control', 'no-store');
+        return void res.redirect(302, `/#/settings?stepup=${handle}`);
+      }
       // Upstream SAML sessions are remembered with their NameID and SessionIndex for single logout.
       const after = out.subject ? (sessionId: string) => fed().upstream.recordSamlSession(t.id, sessionId, out.row.id, out.subject!) : undefined;
       await completeSignIn(req, res, t, out.row, out.user, `${out.row.kind === 'oidc' ? 'OIDC' : 'SAML'} (${out.row.name})`, out.row.kind, out.returnTo, {}, after);

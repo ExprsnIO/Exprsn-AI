@@ -217,6 +217,18 @@ const base = z.object({
     /** Invitations to set a first password (local accounts created with an email instead of a password). */
     PASSWORD_INVITE_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(72),
     // --- end account ---
+    // --- Sprint 17: identity and security (edit only inside this block) ---
+    /** Notify the account owner of a sign-in from a new browser (device cookie) or a new network (/24, /48). */
+    SIGNIN_NOTICES: bool.default(true),
+    /** Require server-issued DPoP nonces (RFC 9449 section 8): a proof without the current nonce gets use_dpop_nonce. */
+    DPOP_NONCES: bool.default(false),
+    /** How long one DPoP nonce is accepted (the previous one stays valid for one more period). */
+    DPOP_NONCE_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
+    /** The public base of the API when a reverse proxy serves it under another origin or path prefix (DPoP `htu`). */
+    API_PUBLIC_URL: z.url().optional(),
+    /** How often fetched SAML metadata (service providers and upstream identity providers) is refreshed. */
+    FEDERATION_METADATA_REFRESH_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
+    // --- end Sprint 17 ---
     // --- Sprint 13: integrations (edit only inside this block) ---
     /** The OpenAI-compatible API at /v1: `checked` streams the answer after the output guardrail; `live` streams tokens as generated. */
     OPENAI_STREAM_MODE: z.enum(['checked', 'live']).default('checked'),

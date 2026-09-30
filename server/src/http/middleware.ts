@@ -12,6 +12,7 @@ import type { ApiKeyRow } from '../identity/apikeys.js';
 import type { Services } from '../services.js';
 import { badRequest, forbidden, HttpProblem, tooManyRequests, unauthorized } from './problem.js';
 import { Limiter } from '../platform/ratelimit.js';
+import { DpopNonceError } from '../federation/oidc.js';
 
 /** Failed bearer tokens and API keys allowed per address per minute before the address gets 429 (B-111). */
 export const BAD_BEARER_PER_MINUTE = 20;
@@ -91,7 +92,7 @@ export function authenticate(s: Services): RequestHandler {
     if (!r.allowed) throw tooManyRequests('Too many failed credentials from this address. Wait before trying again.', r.resetMs / 1000);
     throw problem;
   };
-  return async (req, _res, next) => {
+  return async (req, res, next) => {
     const auth = req.headers.authorization;
     if (auth) {
       // An address over its limit is refused before the credential is even checked, so guessing stops paying off.
@@ -105,7 +106,14 @@ export function authenticate(s: Services): RequestHandler {
       if (scheme === 'dpop' && !m[1].startsWith('eyJ')) return refuse(req, unauthorized('The DPoP scheme is only for OAuth access tokens.'));
       // OAuth access tokens from the OIDC provider (JWTs), narrowed to their scopes like API keys.
       if (m[1].startsWith('eyJ')) {
-        const p = await s.federation.principalFromAccessToken(m[1], { scheme, dpop: { proof: req.header('dpop'), method: req.method, url: `${new URL(s.cfg.PUBLIC_URL).origin}${req.originalUrl}` } });
+        // Sprint 17 (B-805): the proof's htu is checked against API_PUBLIC_URL when a proxy serves the API elsewhere,
+        // and with DPOP_NONCES every DPoP response carries the current nonce.
+        const apiBase = s.cfg.API_PUBLIC_URL ? s.cfg.API_PUBLIC_URL.replace(/\/+$/, '') : new URL(s.cfg.PUBLIC_URL).origin;
+        if (scheme === 'dpop' && s.cfg.DPOP_NONCES) res.setHeader('DPoP-Nonce', s.federation.oidc.dpopNonce());
+        const p = await s.federation.principalFromAccessToken(m[1], { scheme, dpop: { proof: req.header('dpop'), method: req.method, url: `${apiBase}${req.originalUrl}` } }).catch((err: unknown) => {
+          if (err instanceof DpopNonceError) throw new HttpProblem(401, 'Unauthorized', err.message, { extensions: { error: 'use_dpop_nonce' }, headers: { 'WWW-Authenticate': 'DPoP error="use_dpop_nonce", error_description="Resource server requires nonce in DPoP proof"', 'DPoP-Nonce': s.federation.oidc.dpopNonce() } });
+          throw err;
+        });
         if (!p) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
         req.principal = p;
         p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
