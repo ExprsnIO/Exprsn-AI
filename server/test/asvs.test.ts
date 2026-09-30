@@ -97,6 +97,14 @@ describe('ASVS L2 review', () => {
       // Discovery and keys are not sign-in endpoints and stay available.
       expect((await request(h.app).get('/.well-known/openid-configuration').set('x-forwarded-for', '198.51.100.99')).status).toBe(200);
     });
+
+    it('keeps the strict sign-in limit for credential attempts, not for the session check each page load makes', async () => {
+      const agent = (await login(h, 'asvsmember')).agent;
+      for (let i = 0; i < 40; i++) expect((await agent.get('/api/auth/session')).status).toBe(200);
+      const tries = [];
+      for (let i = 0; i < 31; i++) tries.push((await request(h.app).post('/api/auth/login').set('x-forwarded-for', '198.51.100.77').send({ username: 'nobody-here', password: 'x' })).status);
+      expect(tries).toContain(429);
+    });
   });
 
   describe('V7.1.1 credentials and one-time codes stay out of the logs', () => {

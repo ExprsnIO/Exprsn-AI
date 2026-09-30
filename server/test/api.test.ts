@@ -234,6 +234,8 @@ describe('HTTP API', () => {
       await localUser(h, 'carol', ['member']);
       const tl = await post('/api/admin/test-login', { username: 'carol', password: PASSWORD }).expect(200);
       expect(tl.body).toMatchObject({ result: 'ok', provider: { kind: 'local' } });
+      // Directly granted roles count, as they do at sign-in.
+      expect(tl.body.mapping).toMatchObject({ roles: ['member'], clearance: 'internal' });
       expect(tl.body.steps.some((st: { title: string }) => st.title.includes('OpenLDAP'))).toBe(true);
       expect(await h.s.sessions.listForUser((await h.s.users.byUsername(h.tenantId, 'carol'))!.id)).toHaveLength(0);
 

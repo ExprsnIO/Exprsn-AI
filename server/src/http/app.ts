@@ -121,8 +121,11 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
     }
   };
 
-  api.use('/auth', limit(authLimiter), authRoutes(s));
-  api.use(limit(general));
+  // Credential attempts share the strict limiter; reads (the session check every page load makes) the general one.
+  const authLimit = limit(authLimiter);
+  const generalLimit = limit(general);
+  api.use('/auth', (req, res, next) => (req.method === 'GET' ? generalLimit(req, res, next) : authLimit(req, res, next)), authRoutes(s));
+  api.use(generalLimit);
   api.use('/me', meRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
   api.use('/admin', userAdminRoutes(s));
