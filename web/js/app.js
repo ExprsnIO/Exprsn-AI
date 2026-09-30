@@ -165,7 +165,9 @@
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));
   // Screens outside the sidebar that everyone signed in may open.
-  const OPEN_ROUTES = { signin: true, settings: true, components: true, 'not-found': true };
+  const OPEN_ROUTES = { signin: true, settings: true, components: true, 'not-found': true, shared: true };
+  // Sprint 16: pages that also open signed-out, without the shell (an anonymous share link).
+  const PUBLIC_ROUTES = { shared: true };
 
   // ---------- App ----------
   const screens = {};
@@ -315,7 +317,8 @@
         state.pendingSession = s.stage ? s : null;
       } catch (e) { /* offline: sign-in shows the error */ }
       state.booted = true;
-      const r = App.parse().route; if (r !== 'signin') { state.afterSignIn = r; state.afterSignInHash = location.hash || null; }
+      const r = App.parse().route; if (PUBLIC_ROUTES[r]) { App.render(); return; }
+      if (r !== 'signin') { state.afterSignIn = r; state.afterSignInHash = location.hash || null; }
       App.navigate('signin'); App.render();
     },
     /** Sets the accessibility mode: 'aa', 'aaa' or null to follow the system. */
@@ -540,11 +543,12 @@
       if (entering && state.screenState[r.route]) state.screenState[r.route].loaded = false;
       if (App.fileMode) {
         if (!screens[state.route] && state.route !== 'not-found') { location.replace(App.hrefFor(state.route) + (location.hash.split('?')[1] ? '?' + location.hash.split('?')[1] : '')); return; }
-      } else if (!state.signedIn && state.route !== 'signin') { if (state.booted) state.afterSignIn = state.route; state.route = 'signin'; }
+      } else if (!state.signedIn && state.route !== 'signin' && !PUBLIC_ROUTES[state.route]) { if (state.booted) state.afterSignIn = state.route; state.route = 'signin'; }
       else if (state.signedIn && state.route === 'signin') { state.route = App.firstRoute(); }
       let s = screens[state.route] || screens['not-found'];
       if (state.signedIn && !App.canOpen(state.route)) s = screens.forbidden;
-      const app = $('#app'); app.classList.toggle('signed-out', state.route === 'signin'); app.classList.remove('nav-open'); state.navOpen = false;
+      const bare = state.route === 'signin' || (!state.signedIn && !!PUBLIC_ROUTES[state.route]);
+      const app = $('#app'); app.classList.toggle('signed-out', bare); app.classList.remove('nav-open'); state.navOpen = false;
       App.closeOverlay();
       // A fresh element each render: listeners a screen attached through ctx.on (or directly on root) go with the old one,
       // so a re-render or a route change never leaves a previous render's handlers running.
@@ -558,7 +562,7 @@
       const main = document.createElement('main'); main.id = 'main'; main.className = 'main'; main.setAttribute('tabindex', '-1'); main.setAttribute('aria-label', s.title || 'Exprsn-AI');
       old.replaceWith(main);
       document.title = (s.title || 'Exprsn-AI') + ' · Exprsn-AI';
-      if (state.route !== 'signin') { App.renderSidebar(); App.renderHeader(); }
+      if (!bare) { App.renderSidebar(); App.renderHeader(); }
       if (state.signedIn && !App.isLive(s.id) && s.id !== 'forbidden') {
         const it = NAV_BY_ID[s.id];
         const banner = document.createElement('div'); banner.className = 'notice warn'; banner.setAttribute('role', 'note');

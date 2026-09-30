@@ -114,13 +114,14 @@
     const guard = (fn) => (d) => { if (!visible()) { detach(); return; } fn(S(), d || {}); };
     live.handlers = {
       'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone), 'chat.released': guard(onReleased),
-      'attachment.state': guard(onAttachment), connect: guard(onReconnect)
+      'attachment.state': guard(onAttachment), connect: guard(onReconnect), 'shared.revoked': guard(onSharedRevoked)
     };
     Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
   }
   window.addEventListener('hashchange', () => { if (App.parse().route !== 'chat') detach(); });
 
   function onStatus(st, d) {
+    if (isShared(st, d)) { if (!sharedMsg(st, d.messageId)) sharedRefresh(st); return; }
     st.status = st.status || {};
     st.status[d.messageId] = Object.assign({}, st.status[d.messageId] || {}, d);
     if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model }; }
@@ -143,6 +144,7 @@
     return true;
   }
   function onChunk(st, d) {
+    if (isShared(st, d)) { sharedChunk(st, d); return; }
     if (!st.conv || d.conversationId !== st.conv.id) return;
     const m = byId(st, d.messageId);
     if (!m) return; // the conversation view that is loading includes it, and the next gap check catches up
@@ -158,6 +160,7 @@
     if (d.seq > m.seq) catchUp(m.id, false);
   }
   function onDone(st, d) {
+    if (isShared(st, d)) { sharedRefresh(st); return; }
     if (!st.conv || d.conversationId !== st.conv.id) { if (d.conversationId === st.convId) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; } return; }
     const m = byId(st, d.messageId);
     if (!m) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; return; }
@@ -168,10 +171,14 @@
     refreshProfiles();
     schedule();
   }
-  /** A reviewer approved or rejected a held answer: read the conversation again. */
+  /** A reviewer approved or rejected a held answer (or, since Sprint 16, a held question): read the conversation again. */
   function onReleased(st, d) {
+    if (isShared(st, d)) { sharedRefresh(st); return; }
     if (!st.conv || d.conversationId !== st.conv.id) return;
+    const m = byId(st, d.messageId);
+    const question = !!d.answerId || (m && (m.role === 'user' || m.state === 'awaiting'));
     loadConv(false).then(schedule);
+    if (question) { App.toast(d.state === 'withdrawn' ? 'A reviewer rejected your question. It was not sent to the model.' : 'A reviewer approved your question. The answer is being generated.', d.state === 'withdrawn' ? 'warn' : 'ok'); return; }
     App.toast(d.state === 'complete' ? 'An answer held for review was approved and is shown now.' : 'An answer held for review was withdrawn by the reviewer.', d.state === 'complete' ? 'ok' : 'warn');
   }
   function onAttachment(st, d) {
@@ -182,6 +189,7 @@
     schedule();
   }
   function onReconnect(st) {
+    if (st.sharedView && st.sharedLive) watchShared(st.sharedView.id);
     if (!st.conv) return;
     st.conv.messages.filter(active).forEach((m) => catchUp(m.id, true));
   }
@@ -228,6 +236,7 @@
     const scroller = main.querySelector('.ch-scroll');
     const near = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90 : false;
     const set = (region, html) => { const el = main.querySelector('[data-region="' + region + '"]'); if (el && el.innerHTML !== html) el.innerHTML = html; };
+    if (st.sharedView) set('sharedthread', sharedThreadHtml(st));
     set('thread', threadHtml(st));
     set('atts', attsHtml(st));
     set('actions', actionsHtml(st));
@@ -314,6 +323,8 @@
         + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
     }
     h += toolsHtml(m);
+    // A question held for review (Sprint 16): its answer waits, and says so; a rejection says it was not sent.
+    if (m.state === 'awaiting') h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Waiting for review.</b> <span class="muted">A guardrail asked a reviewer to check your question before it goes to the model. The answer starts here once it is approved.</span></div>';
     const held = m.state === 'held' || (streaming && m.heldLive);
     if (held) h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Held for review.</b> <span class="muted">A guardrail asked a reviewer to check this answer. It appears here once approved' + (streaming ? '; the model is still finishing it.' : '.') + '</span></div>';
     if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
@@ -322,17 +333,20 @@
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
     if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
     if (m.state === 'interrupted') h += '<div class="ch-final">' + UI.pill('interrupted', 'warn') + ' <span class="muted">The server generating this answer stopped. What was produced is kept; continue it to generate the rest.</span></div>';
-    if (m.state === 'withdrawn') h += '<div class="ch-final">' + UI.pill('withdrawn', 'danger') + ' <span class="muted">A reviewer rejected this answer.</span></div>';
+    if (m.state === 'withdrawn') h += '<div class="ch-final">' + UI.pill('withdrawn', 'danger') + ' <span class="muted">' + (/^Your question was not sent/.test(m.content || '') ? 'A reviewer rejected the question.' : 'A reviewer rejected this answer.') + '</span></div>';
     if (m.state === 'failed') h += UI.notice('<b>The answer failed.</b> ' + esc(m.error || 'No detail was recorded.'), 'danger');
     if (m.state === 'complete' && !m.content && !(m.tools || []).length) h += '<div class="ch-final muted">The model returned an empty answer.</div>';
     h += '<div class="ch-mactions">';
     if (streaming) h += UI.btn('Stop', { kind: 'ghost', size: 'xs', icon: 'stop', attrs: 'data-stop="' + esc(m.id) + '"' });
+    else if (m.state === 'awaiting') h += '';
     else h += (m.state === 'held' ? '' : UI.iconbtn('copy', 'Copy answer', { cls: 'sm', attrs: 'data-cp="' + esc(m.id) + '"' })) + (App.can('chat:write') && App.can('inference:invoke') ? ((m.state === 'interrupted' || m.state === 'stopped') ? UI.btn('Continue', { kind: 'ghost', size: 'xs', icon: 'play', attrs: 'data-continue="' + esc(m.id) + '"' }) : '') + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + esc(m.id) + '"' }) : '');
     h += branchSwitch(conv, m) + '<span class="right muted">' + usageLine(m) + '</span></div>';
     return h + '</div>';
   }
   function userHtml(st, conv, m) {
+    const review = m.state === 'held' ? ' ' + UI.pill('waiting for review', 'warn') : m.state === 'withdrawn' ? ' ' + UI.pill('rejected', 'danger') : '';
     return '<div class="ch-msg ch-user" data-mid="' + esc(m.id) + '"><div class="ch-bubble">' + esc(m.content).replace(/\n/g, '<br>') + msgAttachments(m.attachments) + '</div>'
+      + (review ? '<div class="ch-uact">' + review + '</div>' : '')
       + '<div class="ch-uact">' + branchSwitch(conv, m) + (App.can('chat:write') && App.can('inference:invoke') ? UI.iconbtn('edit', 'Edit as a new branch', { cls: 'sm ghost', attrs: 'data-edit="' + esc(m.id) + '"' }) : '') + UI.iconbtn('copy', 'Copy', { cls: 'sm ghost', attrs: 'data-cp="' + esc(m.id) + '"' }) + '</div></div>';
   }
   function threadHtml(st) {
@@ -502,6 +516,7 @@
     if (st.sending) return;
     st.sending = true; paint();
     const body = { content: text, profile: p.name, think: st.think, attachments: (st.pending || []).map((a) => a.id) };
+    let sent = null;
     try {
       const kbIds = st.newKbs || [];
       if (!st.convId && kbIds.length && App.can('context:write')) {
@@ -509,15 +524,16 @@
         const c = await App.post('/api/conversations', {});
         try {
           await App.api('PUT', cUrl(c.id) + '/knowledge', { kbIds });
-          await App.post(cUrl(c.id) + '/messages', body);
+          sent = await App.post(cUrl(c.id) + '/messages', body);
         } catch (err) { await App.del(cUrl(c.id)).catch(() => undefined); throw err; }
         st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(st.convId);
       } else if (!st.convId) {
-        const r = await App.post('/api/chat', body);
+        const r = await App.post('/api/chat', body); sent = r;
         st.convId = r.conversationId; st.bound = []; syncUrl(st.convId);
       } else {
-        await App.post(cUrl(st.convId) + '/messages', body);
+        sent = await App.post(cUrl(st.convId) + '/messages', body);
       }
+      if (sent && sent.state === 'awaiting') App.toast('<b>Your question is waiting for review.</b> ' + esc(sent.reason || '') + ' The answer starts when a reviewer approves it.', 'warn', 8000);
       st.draft = ''; if (ta) ta.value = '';
       st.pending = []; st.notice = null;
       await Promise.all([loadConv(false), loadList()]);
@@ -639,9 +655,57 @@
     if (!list.length) return '';
     return '<div class="eyebrow" style="padding:10px 8px 4px">Shared with you</div>' + list.map((c) => UI.listItem(esc(c.title || 'Untitled conversation'), esc('from ' + (c.owner || 'someone') + ', ' + ago(c.sharedAt)), { active: st.sharedView && st.sharedView.id === c.conversationId, attrs: 'data-sharedconv="' + esc(c.conversationId) + '"', right: UI.label(c.label, { sm: true }) })).join('');
   }
+  // Live reading (Sprint 16): a reader asks the server to watch a conversation shared with them; the server checks the
+  // share and decides the room. Answers stream in as the owner sees them (screened text, no thinking); revoking ends it.
+  const isShared = (st, d) => !!(st.sharedView && st.sharedLive && d.conversationId === st.sharedView.id);
+  const sharedMsg = (st, mid) => (st.sharedView ? st.sharedView.messages.find((m) => m.id === mid) : null);
+  function watchShared(id) {
+    const st = S();
+    if (!App.socket) return;
+    App.socket.emit('shared.watch', { conversationId: id }, (r) => { if (st.sharedView && st.sharedView.id === id) { st.sharedLive = !!(r && r.ok && !r.owner); schedule(); } });
+  }
+  function unwatchShared(st) {
+    if (st.sharedView && st.sharedLive && App.socket) App.socket.emit('shared.unwatch', { conversationId: st.sharedView.id });
+    st.sharedLive = false;
+  }
+  function sharedChunk(st, d) {
+    const m = sharedMsg(st, d.messageId);
+    if (!m) { sharedRefresh(st); return; }
+    if (m.liveSeq == null || d.seq > m.liveSeq + 1) { sharedCatchUp(st, m); return; }
+    if (d.seq <= m.liveSeq) return;
+    if (d.delta) m.content = (m.content || '') + d.delta;
+    if (d.tool) m.tools = (m.tools || []).concat([d.tool]);
+    m.liveSeq = d.seq; m.state = 'streaming';
+    schedule();
+  }
+  async function sharedCatchUp(st, m) {
+    if (m.catching) return;
+    m.catching = true;
+    try {
+      const r = await App.get('/api/shared-conversations/' + enc(st.sharedView.id) + '/messages/' + enc(m.id) + '/stream?after=' + (m.liveSeq || 0));
+      if (r.chunks) r.chunks.forEach((c) => { if (m.liveSeq == null || c.seq === m.liveSeq + 1) { if (c.delta) m.content = (m.content || '') + c.delta; m.liveSeq = c.seq; } });
+      else { m.content = r.content || ''; m.liveSeq = r.seq; }
+      m.state = r.state || m.state;
+    } catch (err) { /* the next event retries */ }
+    m.catching = false;
+    schedule();
+  }
+  function sharedRefresh(st) {
+    if (st.sharedRefreshing || !st.sharedView) return;
+    st.sharedRefreshing = true;
+    const id = st.sharedView.id;
+    App.get('/api/shared-conversations/' + enc(id)).then((v) => { if (st.sharedView && st.sharedView.id === id) st.sharedView = v; }).catch(() => undefined).finally(() => { st.sharedRefreshing = false; schedule(); });
+  }
+  function onSharedRevoked(st, d) {
+    if (!st.sharedView || d.conversationId !== st.sharedView.id) return;
+    st.sharedLive = false; st.sharedView = null;
+    App.toast('The owner stopped sharing that conversation with you.', 'warn');
+    loadSharedList(); rerender();
+  }
   async function openShared(id) {
     const st = S();
-    try { st.sharedView = await App.get('/api/shared-conversations/' + enc(id)); st.sharedError = null; } catch (err) { st.sharedView = null; st.sharedError = err; if (err.status === 404) { App.toast('That conversation is no longer shared with you.', 'warn'); loadSharedList(); } else App.fail(err, 'Could not open the shared conversation'); }
+    unwatchShared(st);
+    try { st.sharedView = await App.get('/api/shared-conversations/' + enc(id)); st.sharedError = null; watchShared(id); } catch (err) { st.sharedView = null; st.sharedError = err; if (err.status === 404) { App.toast('That conversation is no longer shared with you.', 'warn'); loadSharedList(); } else App.fail(err, 'Could not open the shared conversation'); }
     rerender();
   }
   async function openLink(token) {
@@ -649,26 +713,36 @@
     try { st.sharedView = await App.post('/api/shared-links/open', { token }); st.sharedError = null; } catch (err) { st.sharedView = null; st.sharedError = err; }
     rerender();
   }
+  function sharedMsgsHtml(st, v) {
+    return v.messages.map((m) => (m.role === 'user'
+      ? '<div class="ch-msg ch-user"><div class="ch-bubble">' + esc(m.content).replace(/\n/g, '<br>') + '</div></div>'
+      : '<div class="ch-msg ch-ai">' + (m.state === 'complete' || m.state === 'stopped' ? '<div class="ch-answer serif">' + richText(m.content, m) + '</div>'
+        : st.sharedLive && (m.state === 'streaming' || m.state === 'queued') ? '<div class="ch-answer serif">' + (m.content ? richText(m.content, m) : '') + '<span class="blink ch-caret">▍</span></div><div class="ch-status">Answering live</div>'
+          : '<div class="ch-final muted">This answer is ' + esc(m.state) + ' and is not shown.</div>')
+        + ((m.citations || []).length ? '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + (m.citations || []).map((c) => { const t = citeText(c); return '<div class="ch-src"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span></span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</div>'; }).join('') + '</div>' : '')
+        + '<div class="ch-mactions"><span class="right muted">' + esc([m.profile, m.model].filter(Boolean).join(', ')) + '</span></div></div>')).join('');
+  }
   function sharedPageHtml(st) {
     const v = st.sharedView;
     const head = '<div class="ch-head"><span class="t grow">' + esc(v.title || 'Untitled conversation') + '</span>' + UI.pill('read only', 'outline') + UI.label(v.label, { sm: true })
       + UI.btn('Export', { kind: 'ghost', size: 'sm', icon: 'download', attrs: 'data-export="' + esc(v.id) + '"' }) + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-closeshared' }) + '</div>';
-    const msgs = v.messages.map((m) => (m.role === 'user'
-      ? '<div class="ch-msg ch-user"><div class="ch-bubble">' + esc(m.content).replace(/\n/g, '<br>') + '</div></div>'
-      : '<div class="ch-msg ch-ai">' + (m.state === 'complete' || m.state === 'stopped' ? '<div class="ch-answer serif">' + richText(m.content, m) + '</div>' : '<div class="ch-final muted">This answer is ' + esc(m.state) + ' and is not shown.</div>')
-        + ((m.citations || []).length ? '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + (m.citations || []).map((c) => { const t = citeText(c); return '<div class="ch-src"><span class="n">' + esc(c.n) + '</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="muted s">' + esc(t.sub) + '</span></span>' + (c.label ? UI.label(c.label, { sm: true }) : '') + '</div>'; }).join('') + '</div>' : '')
-        + '<div class="ch-mactions"><span class="right muted">' + esc([m.profile, m.model].filter(Boolean).join(', ')) + '</span></div></div>')).join('');
-    return '<div class="page tight ch-page">' + head + '<div class="ch-scroll"><div class="ch-thread">'
-      + UI.notice('Shared by ' + esc(v.owner && v.owner.name ? v.owner.name : 'its owner') + '. You can read this conversation but not add to it. Access ends when the owner revokes it or its label rises above your clearance.', 'info')
-      + (msgs || UI.empty('No messages', 'The conversation has no messages yet.')) + '</div></div></div>';
+    return '<div class="page tight ch-page">' + head + '<div class="ch-scroll"><div class="ch-thread" data-region="sharedthread">' + sharedThreadHtml(st) + '</div></div></div>';
+  }
+  function sharedThreadHtml(st) {
+    const v = st.sharedView; if (!v) return '';
+    const msgs = sharedMsgsHtml(st, v);
+    return UI.notice('Shared by ' + esc(v.owner && v.owner.name ? v.owner.name : 'its owner') + '. You can read this conversation but not add to it' + (st.sharedLive ? '; new answers appear here as they are written' : '') + '. Access ends when the owner revokes it or its label rises above your clearance.', 'info')
+      + (msgs || UI.empty('No messages', 'The conversation has no messages yet.'));
   }
 
   function shareModal(ctx) {
     const st = S(); const conv = st.conv; if (!conv) return;
     const local = { kind: 'user', q: '', targets: null, shares: null };
-    const shareRows = () => (local.shares || []).map((x) => '<tr><td>' + esc(x.kind === 'user' ? x.userName || 'a person' : x.kind === 'workspace' ? x.workspaceName || 'a workspace' : 'Link') + '</td><td>' + esc(x.kind) + '</td><td>' + UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline') + '</td><td>' + esc(x.expiresAt ? new Date(x.expiresAt).toLocaleString() : 'no expiry') + '</td><td>' + (x.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-srevoke="' + esc(x.id) + '"' }) : '') + '</td></tr>').join('');
+    const shareRows = () => (local.shares || []).map((x) => '<tr><td>' + esc(x.kind === 'user' ? x.userName || 'a person' : x.kind === 'workspace' ? x.workspaceName || 'a workspace' : x.anonymous ? 'Link, no sign-in' : 'Link') + '</td><td>' + esc(x.kind) + '</td><td>' + UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline') + '</td><td>' + esc(x.expiresAt ? new Date(x.expiresAt).toLocaleString() : 'no expiry') + '</td><td>' + (x.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-srevoke="' + esc(x.id) + '"' }) : '') + '</td></tr>').join('');
     const pickHtml = () => {
-      if (local.kind === 'link') return UI.field('Link expires after', UI.select([{ value: '24', label: '1 day' }, { value: '168', label: '7 days' }, { value: '720', label: '30 days' }], '168', 'data-sexp')) + '<div class="muted" style="font-size:12px">Anyone signed in to this tenant with the link and clearance for ' + esc(conv.label) + ' can read it. The link is shown once.</div>';
+      if (local.kind === 'link') return UI.field('Link expires after', UI.select([{ value: '24', label: '1 day' }, { value: '72', label: '3 days' }, { value: '168', label: '7 days' }, { value: '720', label: '30 days' }], '168', 'data-sexp'))
+        + (conv.label === 'public' ? '<label class="ch-pickrow"><input type="checkbox" data-sanon> <span class="grow">Anyone with the link, without signing in<span class="muted" style="display:block;font-size:11px">Only while the conversation stays public, and only if your tenant allows anonymous links. Every opening is recorded.</span></span></label>' : '')
+        + '<div class="muted" style="font-size:12px">Anyone signed in to this tenant with the link and clearance for ' + esc(conv.label) + ' can read it. The link is shown once.</div>';
       const t = local.targets; if (!t) return '<div class="muted" style="font-size:12px">Loading…</div>';
       const list = local.kind === 'user' ? t.users : t.workspaces;
       return UI.search(local.kind === 'user' ? 'Search people' : 'Search workspaces', 'data-sq', local.q) + '<div class="ch-pick">' + (list.length ? list.map((x) => '<label class="ch-pickrow"><input type="radio" name="ch-target" value="' + esc(x.id) + '"' + (x.cleared ? '' : ' disabled') + '><span class="grow">' + esc(x.name) + (x.username ? ' <span class="mono muted">' + esc(x.username) + '</span>' : '') + '</span>' + (x.cleared ? '' : '<span class="muted" style="font-size:11px">' + (local.kind === 'user' ? 'below ' : 'ceiling below ') + esc(conv.label) + '</span>') + '</label>').join('') : '<div class="muted" style="padding:8px;font-size:12px">Nobody matches.</div>') + '</div>';
@@ -694,7 +768,7 @@
         el.querySelector('[data-sgo]').addEventListener('click', async (e) => {
           const box = el.querySelector('[data-serr]'); box.innerHTML = '';
           let body;
-          if (local.kind === 'link') body = { kind: 'link', expiresInHours: Number(el.querySelector('[data-sexp]').value) };
+          if (local.kind === 'link') { const anon = el.querySelector('[data-sanon]'); body = { kind: 'link', expiresInHours: Number(el.querySelector('[data-sexp]').value), anonymous: !!(anon && anon.checked) }; }
           else {
             const picked = el.querySelector('input[name=ch-target]:checked');
             if (!picked) { box.innerHTML = UI.notice('Pick ' + (local.kind === 'user' ? 'a person' : 'a workspace') + ' first.', 'warn'); return; }
@@ -935,7 +1009,7 @@
       ctx.on('click', '[data-export]', (e, t) => exportModal(ctx, t.dataset.export));
       ctx.on('click', '[data-prompts]', () => promptPicker(ctx));
       ctx.on('click', '[data-sharedconv]', (e, t) => { st.showList = false; openShared(t.dataset.sharedconv); });
-      ctx.on('click', '[data-closeshared]', () => { st.sharedView = null; st.sharedError = null; if (st.sharedToken) { st.sharedToken = null; syncUrl(st.convId); } rerender(); });
+      ctx.on('click', '[data-closeshared]', () => { unwatchShared(st); st.sharedView = null; st.sharedError = null; if (st.sharedToken) { st.sharedToken = null; syncUrl(st.convId); } rerender(); });
       ctx.on('click', '[data-archive]', async () => {
         const c = st.conv; if (!c) return;
         const to = !c.archived;

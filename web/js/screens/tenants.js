@@ -281,7 +281,7 @@
         const done = (data) => { if (st.node === key) { st.nodeData = data; st.nodeKey = key; } };
         const p = node.type === 'workspace'
           ? Promise.all([App.get(wUrl(tenant.id, node.ws.id) + '/members'), App.get(wUrl(tenant.id, node.ws.id) + '/quota')]).then(([members, quota]) => done({ members, quota }))
-          : Promise.all([Promise.all(tenant.workspaces.map((w) => App.get(wUrl(tenant.id, w.id) + '/quota').then((q) => [w.id, q]))), App.get(tUrl(tenant.id) + '/retention').catch(() => null)]).then(([list, retention]) => { const quotas = {}; list.forEach((x) => { quotas[x[0]] = x[1]; }); done({ quotas, retention }); });
+          : Promise.all([Promise.all(tenant.workspaces.map((w) => App.get(wUrl(tenant.id, w.id) + '/quota').then((q) => [w.id, q]))), App.get(tUrl(tenant.id) + '/retention').catch(() => null), App.get(tUrl(tenant.id) + '/sharing').catch(() => null)]).then(([list, retention, sharing]) => { const quotas = {}; list.forEach((x) => { quotas[x[0]] = x[1]; }); done({ quotas, retention, sharing }); });
         p.catch((err) => { if (st.node === key) { st.nodeData = { error: err }; st.nodeKey = key; } })
           .finally(() => { if (st.nodeLoading === key) st.nodeLoading = null; if (App.state.route === 'tenants') ctx.rerender(); });
       };
@@ -369,7 +369,7 @@
             ['Workspaces', num(wss.filter((w) => w.state === 'active').length) + (wss.some((w) => w.state !== 'active') ? ', ' + num(wss.filter((w) => w.state !== 'active').length) + ' archived' : '')]
           ], 2), { actions: (canMap && t.state === 'active' && (st.providers || []).some((p) => p.kind !== 'local' && p.enabled) ? UI.btn('Sync now', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-sync' }) : '') + (own && App.can('identity:manage') ? UI.btn('Open user stores', { size: 'sm', kind: 'ghost', attrs: 'data-go="directories"' }) : '') })
           + UI.panel('Quota, tenant total', LIMITS.map((L) => meterFor(t.quota, L)).join('') + '<div class="muted" style="font-size:12px">Workspace limits nest under the tenant limit. Raised by a system admin.</div>', { actions: isSys() ? UI.btn('Raise limits', { size: 'sm', kind: 'ghost', attrs: 'data-traise' }) : '' }) + '</div>'
-          + retentionPanel(nd && nd.retention)
+          + retentionPanel(nd && nd.retention) + sharingPanel(nd && nd.sharing)
           + '<div class="eyebrow">Workspaces</div>' + UI.table(['Workspace', { label: 'Members', right: true }, 'Label ceiling', 'Visibility', { label: 'Mappings', right: true }, 'Tokens today'], wss.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>' + (w.state !== 'active' ? ' ' + UI.pill(w.state, 'outline') : ''), '<span class="num">' + num(w.members) + '</span>', UI.label(w.label, { sm: true }), w.visibility === 'tenant' ? 'whole tenant' : 'members only', own && st.mappings ? '<span class="num">' + num(wsMappings(w.id).length) + '</span>' : '<span class="muted">n/a</span>', esc(qTokens(w))], attrs: 'data-node="w:' + esc(w.id) + '"' })), { minWidth: '560px', emptyTitle: 'No workspaces', emptyText: 'Create one to give a directory group a place to work.' });
         // Sprint 13: the tenant's own integrations, as tabs beside the overview.
         const canHooks = own && App.can('webhooks:manage'), canHosts = own && App.can('tenant:manage');
@@ -590,8 +590,79 @@
         if (!r) return '';
         const keep = r.conversationDays == null ? 'until their owners delete them' : 'deleted after ' + num(r.conversationDays) + ' days without activity';
         const last = r.lastRunAt ? new Date(r.lastRunAt).toLocaleString() + ', ' + num(r.lastPurged || 0) + ' deleted' : 'not run yet';
-        return UI.panel('Conversation retention', UI.kv([['Conversations', esc(keep)], ['Checked', 'every ' + num(r.sweepMinutes) + ' min'], ['Last run', esc(last)]], 3) + '<div class="muted" style="font-size:12px">Each purge is written to the audit chain with its counts. Messages, their catch-up buffers and attachments no remaining message uses are deleted with the conversation.</div>',
-          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-retention' }) + (r.conversationDays != null ? UI.btn('Run now', { size: 'sm', kind: 'ghost', attrs: 'data-retrun' }) : '') });
+        // Sprint 16: shorter periods for a workspace or a user; the shortest period that applies wins.
+        const scopes = r.scopes || [];
+        const rows = scopes.length ? '<div class="tablewrap"><table class="dt"><thead><tr><th>Applies to</th><th>Kind</th><th class="r">Days</th><th></th></tr></thead><tbody>' + scopes.map((x) => '<tr><td>' + esc(x.name || x.scopeId) + '</td><td>' + esc(x.scope) + '</td><td class="r num">' + num(x.conversationDays) + '</td><td>' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-rscopedel="' + esc(x.scope + ':' + x.scopeId) + '" aria-label="Remove the period for ' + esc(x.name || x.scopeId) + '"' }) + '</td></tr>').join('') + '</tbody></table></div>' : '<div class="muted" style="font-size:12px">No workspace or user has a shorter period.</div>';
+        return UI.panel('Conversation retention', UI.kv([['Conversations', esc(keep)], ['Checked', 'every ' + num(r.sweepMinutes) + ' min'], ['Last run', esc(last)]], 3)
+          + '<div class="eyebrow">Shorter periods</div>' + rows
+          + '<div class="muted" style="font-size:12px">A conversation is deleted after the shortest period that applies to it: the tenant\'s, its workspace\'s or its owner\'s. Each purge is written to the audit chain with its counts. Messages, their catch-up buffers and attachments no remaining message uses are deleted with the conversation.</div>',
+          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-retention' }) + UI.btn('Add a shorter period', { size: 'sm', kind: 'ghost', attrs: 'data-rscope' }) + (r.conversationDays != null || scopes.length ? UI.btn('Run now', { size: 'sm', kind: 'ghost', attrs: 'data-retrun' }) : '') });
+      }
+
+      function retentionScopeModal() {
+        const r = nd && nd.retention; if (!r) return;
+        const wsOpts = (tenant.workspaces || []).filter((w) => w.state === 'active').map((w) => ({ value: w.id, label: w.name }));
+        const local = { scope: wsOpts.length ? 'workspace' : 'user', userId: null };
+        ctx.modal({
+          title: 'Shorter retention period, ' + esc(tenant.name),
+          body: '<div class="formgrid">' + UI.field('Applies to', UI.select([{ value: 'workspace', label: 'A workspace' }, { value: 'user', label: 'A user' }], local.scope, 'data-rsk')) + '<div data-rspick></div>'
+            + UI.field('Delete their conversations idle for more than (days)', UI.input('', { attrs: 'data-rsdays inputmode="numeric"', placeholder: 'for example 30' }), 'Between 1 and 3650. It only shortens what applies: the tenant\'s period still applies when it is shorter.') + '</div>'
+            + UI.notice('Deletion cannot be undone. It applies from the next scheduled run.', 'warn') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-rssave' }),
+          onMount(m) {
+            const pick = m.querySelector('[data-rspick]');
+            const paint = () => {
+              if (local.scope === 'workspace') { pick.innerHTML = UI.field('Workspace', UI.select(wsOpts.length ? wsOpts : [{ value: '', label: 'No active workspace' }], wsOpts[0] ? wsOpts[0].value : '', 'data-rsws')); return; }
+              pick.innerHTML = UI.search('Search users by name or username', 'data-rsq') + '<div data-rsusers class="tn-pick"></div>';
+              const q = pick.querySelector('[data-rsq]'), list = pick.querySelector('[data-rsusers]');
+              let timer = null;
+              const search = async () => {
+                let users; try { users = await App.get('/api/admin/users?limit=20' + (q.value.trim() ? '&q=' + enc(q.value.trim()) : '')); } catch (err) { errorBox(m, err); return; }
+                list.innerHTML = users.length ? users.map((u) => '<label class="tn-pickrow"><input type="radio" name="tn-rsuser" value="' + esc(u.id) + '"' + (local.userId === u.id ? ' checked' : '') + '> <span class="grow"><b>' + esc(u.displayName) + '</b> <span class="mono muted">' + esc(u.username) + '</span></span></label>').join('') : '<div class="muted" style="padding:8px">No users match.</div>';
+              };
+              q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+              list.addEventListener('change', (e) => { if (e.target && e.target.name === 'tn-rsuser') local.userId = e.target.value; });
+              search();
+            };
+            m.querySelector('[data-rsk]').addEventListener('change', (e) => { local.scope = e.target.value; paint(); });
+            paint();
+            submit(m, '[data-rssave]', () => {
+              const days = Number(String(m.querySelector('[data-rsdays]').value || '').trim());
+              if (!(Number.isInteger(days) && days >= 1 && days <= 3650)) { errorBox(m, new Error('Enter whole days between 1 and 3650.')); return false; }
+              const scopeId = local.scope === 'workspace' ? (m.querySelector('[data-rsws]') || {}).value : local.userId;
+              if (!scopeId) { errorBox(m, new Error(local.scope === 'workspace' ? 'Pick a workspace.' : 'Pick a user.')); return false; }
+              st.nodeKey = null;
+              return App.api('PUT', tUrl(tenant.id) + '/retention/scopes', { scope: local.scope, scopeId, conversationDays: days });
+            }, 'Shorter period saved. It applies from the next run.');
+          }
+        });
+      }
+
+      /** Conversation sharing (Sprint 16): anonymous links, off until a tenant admin turns them on. */
+      function sharingPanel(sh) {
+        if (!sh) return '';
+        return UI.panel('Conversation sharing', UI.kv([['Links without sign-in', sh.anonymousLinks ? UI.pill('allowed', 'warn') : UI.pill('off', 'outline')], ['Longest such link', num(sh.anonymousMaxHours) + ' hours']], 2)
+          + '<div class="muted" style="font-size:12px">When allowed, owners can share a public conversation through a link anyone can open without signing in. It stops working when the conversation is no longer public, when it expires, or when this is turned off. Every opening is written to the audit chain with the address.</div>',
+          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-sharingset' }) });
+      }
+
+      function sharingModal() {
+        const sh = nd && nd.sharing; if (!sh) return;
+        ctx.modal({
+          title: 'Conversation sharing, ' + esc(tenant.name),
+          body: '<div class="formgrid"><label class="tn-pickrow"><input type="checkbox" data-shanon' + (sh.anonymousLinks ? ' checked' : '') + '> <span class="grow">Allow links that open without signing in<span class="muted" style="display:block;font-size:11px">Only for conversations labelled public.</span></span></label>'
+            + UI.field('Longest such link (hours)', UI.input(String(sh.anonymousMaxHours), { attrs: 'data-shhours inputmode="numeric"' }), 'Between 1 and 720.') + '</div>'
+            + UI.notice('Turning this off ends every such link at once.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-shsave' }),
+          onMount(m) {
+            submit(m, '[data-shsave]', () => {
+              const hours = Number(String(m.querySelector('[data-shhours]').value || '').trim());
+              if (!(Number.isInteger(hours) && hours >= 1 && hours <= 720)) { errorBox(m, new Error('Enter whole hours between 1 and 720.')); return false; }
+              st.nodeKey = null;
+              return App.api('PUT', tUrl(tenant.id) + '/sharing', { anonymousLinks: !!m.querySelector('[data-shanon]').checked, anonymousMaxHours: hours });
+            }, (x) => (x.anonymousLinks ? 'Links without sign-in are allowed for public conversations.' : 'Links without sign-in are off.'));
+          }
+        });
       }
 
       function retentionModal() {
@@ -687,9 +758,18 @@
       ctx.on('click', '[data-raise]', () => limitsModal('workspace'));
       ctx.on('click', '[data-traise]', () => limitsModal('tenant'));
       ctx.on('click', '[data-retention]', () => retentionModal());
+      ctx.on('click', '[data-rscope]', () => retentionScopeModal());
+      ctx.on('click', '[data-sharingset]', () => sharingModal());
+      ctx.on('click', '[data-rscopedel]', async (e, t) => {
+        const parts = t.dataset.rscopedel.split(':');
+        const ok = await ctx.confirm({ title: 'Remove this shorter period?', body: '<div class="fg2">Their conversations follow the tenant\'s period again.</div>', ok: 'Remove' });
+        if (!ok) return;
+        st.nodeKey = null;
+        await act(() => App.api('PUT', tUrl(tenant.id) + '/retention/scopes', { scope: parts[0], scopeId: parts[1], conversationDays: null }), 'Shorter period removed.');
+      });
       ctx.on('click', '[data-retrun]', async () => {
         const r = nd && nd.retention; if (!r) return;
-        const ok = await ctx.confirm({ title: 'Apply the retention policy now?', tone: 'danger', body: 'Conversations idle for more than ' + num(r.conversationDays) + ' days are deleted now, as the schedule would. This cannot be undone.', ok: 'Run now' });
+        const ok = await ctx.confirm({ title: 'Apply the retention policy now?', tone: 'danger', body: 'Conversations idle for longer than the shortest period that applies to them' + (r.conversationDays != null ? ' (at most ' + num(r.conversationDays) + ' days)' : '') + ' are deleted now, as the schedule would. This cannot be undone.', ok: 'Run now' });
         if (!ok) return;
         st.nodeKey = null;
         await act(() => App.post(tUrl(tenant.id) + '/retention/run', {}), 'Retention run queued. The result shows here when it finishes.');
