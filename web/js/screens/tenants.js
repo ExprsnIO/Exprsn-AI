@@ -68,6 +68,146 @@
     return n.tenant.workspaces.find((w) => w.state === 'active') || (own && own.workspaces.find((w) => w.state === 'active')) || null;
   };
 
+  // ---------- Sprint 13: webhooks and the outbound host allow-list (own tenant only) ----------
+  // Webhooks: /api/admin/webhooks (webhooks:manage). Allowed hosts: /api/admin/integrations/hosts (tenant:manage).
+  const WH_TONE = { succeeded: 'ok', failed: 'danger', pending: 'info' };
+  function integLoad(st, ctx) {
+    const ig = st.integ = st.integ || {};
+    if (ig.loading || ig.loaded) return;
+    ig.loading = true;
+    Promise.all([App.can('webhooks:manage') ? App.get('/api/admin/webhooks') : null, App.can('tenant:manage') ? App.get('/api/admin/integrations/hosts') : null])
+      .then(([hooks, hosts]) => { Object.assign(ig, { hooks, hosts, loaded: true, error: null }); if (hooks && !hooks.webhooks.some((w) => w.id === ig.sel)) ig.sel = hooks.webhooks.length ? hooks.webhooks[0].id : null; })
+      .catch((err) => { ig.error = err; ig.loaded = true; })
+      .finally(() => { ig.loading = false; if (App.state.route === 'tenants') ctx.rerender(); });
+  }
+  function integDeliveries(st, ctx, id) {
+    const ig = st.integ; if (!id || ig.delLoading === id) return;
+    ig.delLoading = id;
+    App.get('/api/admin/webhooks/' + encodeURIComponent(id) + '/deliveries?limit=50')
+      .then((r) => { ig.deliveries = ig.deliveries || {}; ig.deliveries[id] = r; })
+      .catch((err) => { ig.deliveries = ig.deliveries || {}; ig.deliveries[id] = { error: err }; })
+      .finally(() => { ig.delLoading = null; if (App.state.route === 'tenants') ctx.rerender(); });
+  }
+  const whWhen = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  function webhooksHtml(st, ctx) {
+    const ig = st.integ || {};
+    if (!ig.loaded) return UI.notice('Loading…', 'info');
+    if (ig.error) return UI.problem('Webhooks could not be loaded', ig.error.message, ig.error.problem && ig.error.problem.trace_id);
+    const list = ig.hooks.webhooks;
+    const sel = list.find((w) => w.id === ig.sel) || null;
+    if (sel && !(ig.deliveries && ig.deliveries[sel.id]) && ig.delLoading !== sel.id) integDeliveries(st, ctx, sel.id);
+    const dl = sel && ig.deliveries ? ig.deliveries[sel.id] : null;
+    const s = ig.hooks.settings;
+    let h = '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Events from this tenant are posted to your endpoints as signed JSON. <span class="mono">X-Exprsn-Signature</span> is <span class="mono">sha256=</span> HMAC-SHA256 of <span class="mono">&lt;X-Exprsn-Timestamp&gt;.&lt;body&gt;</span> with the webhook\'s secret. Failed deliveries are retried ' + esc(s.maxAttempts - 1) + ' times with growing gaps; ' + esc(s.breakerThreshold) + ' failures in a row pause the endpoint for ' + esc(Math.round(s.breakerCooldownMs / 60000)) + ' min.</span>'
+      + UI.btn('New webhook', { kind: 'primary', icon: 'plus', attrs: 'data-whnew' }) + '</div>';
+    h += UI.table(['Name', 'Endpoint', 'Events', 'Up to', 'State', 'Breaker', 'Last delivery'], list.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(w.url) + '</span>', esc(w.events.join(', ')), UI.label(w.maxLabel, { sm: true }), UI.pill(w.state, w.state === 'active' ? 'ok' : 'outline'), w.breaker === 'open' ? UI.pill('open', 'danger') : UI.pill('closed', 'ok'), esc(w.lastDeliveryAt ? whWhen(w.lastDeliveryAt) + ', ' + (w.lastStatus || '') : 'never')], attrs: 'data-whsel="' + esc(w.id) + '"', selected: sel && sel.id === w.id })), { minWidth: '760px', emptyTitle: 'No webhooks', emptyText: 'Add one to post audit actions, job states, flags and approvals to an internal endpoint.' });
+    if (sel) {
+      h += (sel.breaker === 'open' ? UI.notice('<b>Paused after ' + esc(sel.failures) + ' failed attempts.</b> Deliveries wait until ' + esc(whWhen(sel.retryAt)) + '; the first one after that is a trial that closes the breaker when it succeeds.', 'warn') : '')
+        + UI.panel(esc(sel.name), UI.kv([['Endpoint', '<span class="mono">' + esc(sel.url) + '</span>'], ['Events', esc(sel.events.join(', '))], ['Carries events up to', UI.label(sel.maxLabel, { sm: true })], ['Consecutive failures', esc(sel.failures)], ['Created', esc(whWhen(sel.createdAt))]], 2), {
+          actions: UI.btn('Send test', { size: 'sm', attrs: 'data-whtest' }) + UI.btn('Edit', { size: 'sm', kind: 'ghost', attrs: 'data-whedit' }) + UI.btn('Rotate secret', { size: 'sm', kind: 'ghost', attrs: 'data-whrotate' })
+            + UI.btn(sel.state === 'active' ? 'Disable' : 'Enable', { size: 'sm', kind: 'ghost', attrs: 'data-whtoggle' }) + UI.btn('Delete', { size: 'sm', kind: 'danger', attrs: 'data-whdel' }) })
+        + '<div class="hstack"><span class="eyebrow grow">Delivery log</span>' + UI.btn('Refresh', { size: 'xs', kind: 'ghost', icon: 'refresh', attrs: 'data-whrefresh' }) + '</div>'
+        + (!dl ? UI.notice('Loading…', 'info') : dl.error ? UI.problem('Deliveries could not be loaded', dl.error.message, dl.error.problem && dl.error.problem.trace_id)
+          : UI.table(['Event', 'State', 'Attempts', 'Answer', 'Next attempt', 'Created', ''], dl.deliveries.map((d) => [esc(d.event) + (d.replayOf ? ' <span class="muted">replay</span>' : ''), UI.pill(d.state, WH_TONE[d.state] || ''), esc(d.attempts), esc(d.statusCode != null ? d.statusCode : '') + (d.error ? ' <span class="muted">' + esc(d.error) + '</span>' : ''), esc(d.state === 'pending' ? whWhen(d.nextAttemptAt) : ''), esc(whWhen(d.createdAt)), UI.btn('Replay', { size: 'xs', kind: 'ghost', attrs: 'data-whreplay="' + esc(d.id) + '"' })]), { minWidth: '720px', emptyTitle: 'No deliveries yet', emptyText: 'Send a test, or wait for a subscribed event.' })
+            + (dl.withheld ? '<div class="muted" style="font-size:12px">' + esc(dl.withheld) + ' deliveries above your clearance are not listed.</div>' : ''));
+    }
+    return h;
+  }
+  function hostsHtml(st) {
+    const ig = st.integ || {};
+    if (!ig.loaded) return UI.notice('Loading…', 'info');
+    if (ig.error) return UI.problem('The allow-list could not be loaded', ig.error.message, ig.error.problem && ig.error.problem.trace_id);
+    const x = ig.hosts;
+    const op = (l) => (l.length ? '<span class="mono">' + esc(l.join(', ')) + '</span>' : 'none: internal addresses only');
+    return UI.notice('Workflow HTTP steps and webhooks only reach internal addresses, and link-local addresses never. When this list has entries, a host must also be on it: a hostname, <span class="mono">*.domain</span>, an address or a CIDR network (every address the name resolves to must be inside). An empty list adds no restriction.', 'info')
+      + UI.field('Allowed hosts, one per line', UI.textarea((x.hosts || []).join('\n'), { rows: 8, attrs: 'data-hostlist spellcheck="false"', placeholder: 'hooks.corp.internal\n*.svc.cluster.local\n10.20.0.0/16' }), x.updatedAt ? 'Changed ' + esc(whWhen(x.updatedAt)) + '.' : 'Not set.')
+      + '<div class="hstack">' + UI.btn('Save allow-list', { kind: 'primary', attrs: 'data-hostsave' }) + '</div>'
+      + UI.panel('Operator settings', UI.kv([['Webhooks may also reach', op(x.operator.webhooks)], ['Workflow HTTP steps are limited to', x.operator.workflows.length ? '<span class="mono">' + esc(x.operator.workflows.join(', ')) + '</span>' : 'any internal host']], 1));
+  }
+  function webhookModal(st, ctx, existing, reload) {
+    const ig = st.integ;
+    const groups = ig.hooks.events;
+    const chosen = existing ? existing.events.slice() : ['job.*'];
+    const custom = chosen.filter((e) => !groups.some((g) => g.pattern === e));
+    const labels = ['public', 'internal', 'confidential', 'restricted'].filter((l) => ['public', 'internal', 'confidential', 'restricted'].indexOf(l) <= ['public', 'internal', 'confidential', 'restricted'].indexOf(App.me.user.clearance));
+    ctx.modal({
+      title: existing ? 'Edit webhook' : 'New webhook', cls: 'wide',
+      body: '<div class="formgrid">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-whname maxlength="100"' })) + UI.field('Endpoint URL', UI.input(existing ? existing.url : '', { attrs: 'data-whurl maxlength="2000"', placeholder: 'https://hooks.corp.internal/exprsn' }), 'Checked now and at every delivery against the internal-address rules and this tenant\'s allowed hosts.')
+        + UI.field('Carry events up to', UI.select(labels, existing ? existing.maxLabel : 'internal', 'data-whlabel'), 'Events labelled above this are not sent.') + '</div>'
+        + '<div class="field" role="group" aria-label="Events"><span class="fl">Events</span><div class="tn-pick">' + groups.map((g) => '<label class="tn-pickrow"><input type="checkbox" data-whev value="' + esc(g.pattern) + '"' + (chosen.indexOf(g.pattern) >= 0 ? ' checked' : '') + '><span class="mono">' + esc(g.pattern) + '</span><span class="muted" style="font-size:12px">' + esc(g.description) + '</span></label>').join('') + '</div></div>'
+        + UI.field('Other events, comma separated', UI.input(custom.join(', '), { attrs: 'data-whcustom', placeholder: 'prompt.published, tenant.hosts.updated' }), 'Any audit action name, or a prefix ending in .*')
+        + '<div data-err></div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(existing ? 'Save webhook' : 'Create webhook', { kind: 'primary', attrs: 'data-whsave' }),
+      onMount(m) {
+        m.querySelector('[data-whsave]').addEventListener('click', async (e) => {
+          const events = Array.prototype.slice.call(m.querySelectorAll('[data-whev]:checked')).map((i) => i.value).concat(m.querySelector('[data-whcustom]').value.split(',').map((x) => x.trim()).filter(Boolean));
+          const body = { name: m.querySelector('[data-whname]').value.trim(), url: m.querySelector('[data-whurl]').value.trim(), events, maxLabel: m.querySelector('[data-whlabel]').value };
+          m.querySelector('[data-err]').innerHTML = '';
+          if (!body.name || !body.url || !events.length) { m.querySelector('[data-err]').innerHTML = UI.notice('A name, an endpoint and at least one event are needed.', 'warn'); return; }
+          e.target.disabled = true;
+          try {
+            const r = existing ? await App.patch('/api/admin/webhooks/' + encodeURIComponent(existing.id), body) : await App.post('/api/admin/webhooks', body);
+            App.closeOverlay(); ig.sel = r.id; reload();
+            if (r.secret) secretModal(ctx, r.name, r.secret); else ctx.toast('Webhook saved. Audit entry written.', 'ok');
+          } catch (err) { e.target.disabled = false; const p = err.problem || {}; m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>', 'danger'); }
+        });
+      }
+    });
+  }
+  function secretModal(ctx, name, secret) {
+    ctx.modal({
+      title: 'Signing secret for ' + esc(name),
+      body: UI.notice('<b>Copy the secret now; it is not shown again.</b> Your endpoint uses it to verify <span class="mono">X-Exprsn-Signature</span>. Rotate it to get a new one.', 'warn') + UI.code(secret),
+      actions: UI.btn('Copy', { attrs: 'data-cpsecret' }) + UI.btn('Done', { kind: 'primary', attrs: 'data-close' }),
+      onMount(m) { m.querySelector('[data-cpsecret]').addEventListener('click', () => { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(secret).then(() => ctx.toast('Secret copied.'), () => ctx.toast('The browser refused clipboard access.', 'warn')); }); }
+    });
+  }
+  function integWire(st, ctx) {
+    const ig = st.integ || {};
+    const reload = () => { ig.loaded = false; ig.deliveries = {}; ctx.rerender(); };
+    const sel = () => ig.hooks && ig.hooks.webhooks.find((w) => w.id === ig.sel);
+    const wUrl = () => '/api/admin/webhooks/' + encodeURIComponent(ig.sel);
+    ctx.on('click', '[data-ttab]', (e, t) => { st.ttab = t.dataset.ttab; ctx.rerender(); });
+    ctx.on('click', '[data-whsel]', (e, t) => { ig.sel = t.dataset.whsel; ctx.rerender(); });
+    ctx.on('click', '[data-whnew]', () => webhookModal(st, ctx, null, reload));
+    ctx.on('click', '[data-whedit]', () => { const w = sel(); if (w) webhookModal(st, ctx, w, reload); });
+    ctx.on('click', '[data-whrefresh]', reload);
+    ctx.on('click', '[data-whtest]', async () => {
+      try { await App.post(wUrl() + '/test', {}); ctx.toast('Test delivery queued. It shows in the delivery log when it has run.', 'ok'); setTimeout(() => { if (App.state.route === 'tenants' && !document.getElementById('overlay')) reload(); }, 1500); } catch (err) { App.fail(err, 'Could not send a test'); }
+    });
+    ctx.on('click', '[data-whreplay]', async (e, t) => {
+      const ok = await ctx.confirm({ title: 'Replay this delivery?', body: 'The same body is sent again as a new delivery, with a fresh timestamp and signature. Receivers should treat the event id as the idempotency key.', ok: 'Replay' });
+      if (!ok) return;
+      try { await App.post(wUrl() + '/deliveries/' + encodeURIComponent(t.dataset.whreplay) + '/replay', {}); ctx.toast('Replay queued. Audit entry written.', 'ok'); if (ig.deliveries) delete ig.deliveries[ig.sel]; ctx.rerender(); } catch (err) { App.fail(err, 'Could not replay'); }
+    });
+    ctx.on('click', '[data-whrotate]', async () => {
+      const w = sel(); if (!w) return;
+      const ok = await ctx.confirm({ title: 'Rotate the signing secret?', tone: 'danger', body: 'Deliveries from now on are signed with the new secret. Update the receiver before the next event, or it will refuse them.', ok: 'Rotate secret' });
+      if (!ok) return;
+      try { const r = await App.post(wUrl() + '/secret', {}); secretModal(ctx, w.name, r.secret); } catch (err) { App.fail(err, 'Could not rotate the secret'); }
+    });
+    ctx.on('click', '[data-whtoggle]', async () => {
+      const w = sel(); if (!w) return;
+      const to = w.state === 'active' ? 'disabled' : 'active';
+      const ok = await ctx.confirm({ title: (to === 'active' ? 'Enable ' : 'Disable ') + w.name + '?', body: to === 'active' ? 'Deliveries resume and the breaker starts closed.' : 'New events are not queued for it, and pending deliveries are closed as failed when they come up.', ok: to === 'active' ? 'Enable' : 'Disable' });
+      if (!ok) return;
+      try { await App.patch(wUrl(), { state: to }); ctx.toast(to === 'active' ? 'Enabled.' : 'Disabled.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not change the webhook'); }
+    });
+    ctx.on('click', '[data-whdel]', async () => {
+      const w = sel(); if (!w) return;
+      const ok = await ctx.confirm({ title: 'Delete ' + w.name + '?', tone: 'danger', body: 'The webhook and its delivery log are deleted. This cannot be undone.', kv: [['Endpoint', '<span class="mono">' + esc(w.url) + '</span>']], ok: 'Delete' });
+      if (!ok) return;
+      try { await App.del(wUrl()); ig.sel = null; ctx.toast('Webhook deleted. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not delete'); }
+    });
+    ctx.on('click', '[data-hostsave]', async () => {
+      const ta = ctx.$('[data-hostlist]'); if (!ta) return;
+      const hosts = ta.value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+      const ok = await ctx.confirm({ title: 'Save the allowed hosts?', body: hosts.length ? 'Workflow HTTP steps and webhooks may then only reach these hosts, within the internal-address rules.' : 'An empty list removes this tenant\'s restriction; the internal-address rules still apply.', kv: [['Entries', esc(String(hosts.length))]], ok: 'Save' });
+      if (!ok) return;
+      try { const r = await App.api('PUT', '/api/admin/integrations/hosts', { hosts }); ig.hosts = Object.assign({}, ig.hosts, r); ctx.toast('Allowed hosts saved. Audit entry written.', 'ok'); ctx.rerender(); } catch (err) { App.fail(err, 'Could not save the allow-list'); }
+    });
+  }
+
   App.register({
     id: 'tenants', title: 'Tenants', section: 'admin', live: true,
     summary: 'Tenants, workspaces, directory group mappings, members, sessions, quotas',
@@ -105,6 +245,7 @@
       st.tab = st.tab || 'mappings';
       if (ctx.params.workspace && !st.paramsUsed) { st.node = 'w:' + ctx.params.workspace; st.paramsUsed = true; }
       if (ctx.params.tab) st.tab = ctx.params.tab;
+      if (ctx.params.ttab && st.ttabParam !== ctx.params.ttab) { st.ttabParam = ctx.params.ttab; st.ttab = ctx.params.ttab; if (ownTid()) st.node = 't:' + ownTid(); }
 
       // ---------- loading ----------
       const load = () => {
@@ -229,6 +370,14 @@
           ], 2), { actions: (canMap && t.state === 'active' && (st.providers || []).some((p) => p.kind !== 'local' && p.enabled) ? UI.btn('Sync now', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-sync' }) : '') + (own && App.can('identity:manage') ? UI.btn('Open user stores', { size: 'sm', kind: 'ghost', attrs: 'data-go="directories"' }) : '') })
           + UI.panel('Quota, tenant total', LIMITS.map((L) => meterFor(t.quota, L)).join('') + '<div class="muted" style="font-size:12px">Workspace limits nest under the tenant limit. Raised by a system admin.</div>', { actions: isSys() ? UI.btn('Raise limits', { size: 'sm', kind: 'ghost', attrs: 'data-traise' }) : '' }) + '</div>'
           + '<div class="eyebrow">Workspaces</div>' + UI.table(['Workspace', { label: 'Members', right: true }, 'Label ceiling', 'Visibility', { label: 'Mappings', right: true }, 'Tokens today'], wss.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>' + (w.state !== 'active' ? ' ' + UI.pill(w.state, 'outline') : ''), '<span class="num">' + num(w.members) + '</span>', UI.label(w.label, { sm: true }), w.visibility === 'tenant' ? 'whole tenant' : 'members only', own && st.mappings ? '<span class="num">' + num(wsMappings(w.id).length) + '</span>' : '<span class="muted">n/a</span>', esc(qTokens(w))], attrs: 'data-node="w:' + esc(w.id) + '"' })), { minWidth: '560px', emptyTitle: 'No workspaces', emptyText: 'Create one to give a directory group a place to work.' });
+        // Sprint 13: the tenant's own integrations, as tabs beside the overview.
+        const canHooks = own && App.can('webhooks:manage'), canHosts = own && App.can('tenant:manage');
+        if (canHooks || canHosts) {
+          if (!st.ttab || (st.ttab === 'webhooks' && !canHooks) || (st.ttab === 'hosts' && !canHosts)) st.ttab = 'overview';
+          const ttabs = '<nav class="tabs" aria-label="Tenant sections">' + [['overview', 'Overview'], canHooks ? ['webhooks', 'Webhooks'] : null, canHosts ? ['hosts', 'Allowed hosts'] : null].filter(Boolean).map((x) => '<button type="button" data-ttab="' + x[0] + '" class="' + (st.ttab === x[0] ? 'active' : '') + '"' + (st.ttab === x[0] ? ' aria-current="true"' : '') + '>' + x[1] + '</button>').join('') + '</nav>';
+          if (st.ttab !== 'overview') integLoad(st, ctx);
+          body = ttabs + (st.ttab === 'webhooks' ? webhooksHtml(st, ctx) : st.ttab === 'hosts' ? hostsHtml(st) : body);
+        }
       } else {
         const w = node.ws;
         const members = nd && nd.members ? nd.members : null;
@@ -536,6 +685,7 @@
       });
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
+      integWire(st, ctx);
 
       const style = document.createElement('style');
       style.textContent = '.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.tn-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;max-height:260px;overflow:auto;padding:4px 0}.tn-role{display:flex;gap:8px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px}.tn-role:hover{background:var(--sel)}.tn-role input{margin:3px 0 0;accent-color:var(--accent)}.tn-pick{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin:8px 0}.tn-pickrow{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line)}.tn-pickrow:last-child{border-bottom:0}';

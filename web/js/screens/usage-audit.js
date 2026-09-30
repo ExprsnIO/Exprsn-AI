@@ -66,6 +66,127 @@
       + (hov == null && last && last.tokens > 0 ? '<text x="' + cx(days.length - 1) + '" y="' + Math.max(12, y(last.tokens) - 6) + '" text-anchor="middle" fill="var(--fg)" font-weight="600">' + compact(last.tokens) + '</text>' : '') + '</g>' + tip + '</svg>';
   }
 
+  // ---------- Sprint 13: statements and price books (billing:read to see, billing:manage to change) ----------
+  const METER_LABEL = { prompt_tokens: 'Prompt tokens', output_tokens: 'Output tokens', thinking_tokens: 'Thinking tokens', gpu_seconds: 'GPU-seconds', requests: 'Requests', calc_calls: 'Calculator calls' };
+  const money = (micros, cur) => (Number(micros || 0) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + ' ' + (cur || '');
+  function billingLoad(st, refresh) {
+    const b = st.bill = st.bill || {};
+    if (b.loading || b.loaded) return;
+    b.loading = true;
+    Promise.all([App.get('/api/admin/billing/statements'), App.get('/api/admin/billing/price-books'), App.get('/api/admin/billing/settings')])
+      .then(([list, books, settings]) => { Object.assign(b, { list, books, settings, loaded: true, error: null }); if (!b.month || !list.statements.some((x) => x.month === b.month)) b.month = list.statements.length ? list.statements[0].month : list.current; b.detail = null; })
+      .catch((err) => { b.error = err; b.loaded = true; })
+      .finally(() => { b.loading = false; refresh(); });
+  }
+  function billingDetail(st, refresh) {
+    const b = st.bill; if (!b.month || (b.detail && b.detail.month === b.month) || b.detailLoading === b.month) return;
+    b.detailLoading = b.month;
+    App.get('/api/admin/billing/statements/' + encodeURIComponent(b.month))
+      .then((d) => { if (b.month === d.month) b.detail = d; })
+      .catch((err) => { b.detail = { month: b.month, error: err }; })
+      .finally(() => { b.detailLoading = null; refresh(); });
+  }
+  function billingHtml(st, refresh) {
+    const b = st.bill || {};
+    if (!b.loaded) return UI.notice('Loading…', 'info');
+    if (b.error) return UI.problem('Statements could not be loaded', b.error.message, b.error.problem && b.error.problem.trace_id);
+    billingDetail(st, refresh);
+    const d = b.detail && b.detail.month === b.month ? b.detail : null;
+    const manage = App.can('billing:manage');
+    const list = b.list.statements;
+    const book = b.settings.effectiveBook;
+    let h = '<div class="hstack wrap"><div class="eyebrow">Statements from the usage meter</div>'
+      + UI.select(list.map((x) => ({ value: x.month, label: x.month + ', ' + x.state + ', ' + money(x.totalMicros, x.currency) })), b.month, 'data-bmonth aria-label="Month" style="width:260px"')
+      + '<span class="right hstack gap6">'
+      + (d && !d.error ? '<a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/export?format=csv" download>CSV</a><a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/export?format=json" download>JSON</a>' : '')
+      + (manage && d && !d.error && d.state !== 'pushed' ? UI.btn(d.state === 'preview' ? 'Save statement' : 'Recompute', { size: 'sm', attrs: 'data-bcompute' }) : '')
+      + (manage && b.settings.provider && d && !d.error && d.state !== 'pushed' && b.month < b.list.current ? UI.btn('Send to ' + b.settings.provider, { size: 'sm', kind: 'primary', attrs: 'data-bpush' }) : '')
+      + '</span></div>';
+    if (!book) h += UI.notice('<b>No price book applies to this tenant.</b> Statements list the usage with no amounts until ' + (manage ? 'you set a default price book below.' : 'a system admin sets a default price book.'), 'warn');
+    if (!d) h += UI.notice('Loading…', 'info');
+    else if (d.error) h += UI.problem('The statement could not be loaded', d.error.message, d.error.problem && d.error.problem.trace_id);
+    else {
+      const t = d.totals;
+      h += (d.state === 'push failed' ? UI.notice('<b>Sending failed.</b> ' + esc(d.pushError || ''), 'danger') : '')
+        + (d.state === 'pushed' ? UI.notice('Sent to ' + esc(b.settings.provider || 'the billing provider') + ' as ' + esc(d.providerRef || '') + ' on ' + esc(when(d.pushedAt)) + '. The statement is final.', 'ok') : '')
+        + '<div class="grid4">' + UI.stat(esc(money(d.totalMicros, d.currency)), 'Total, ' + d.month, esc(d.state === 'preview' ? 'preview, not saved' : d.state)) + UI.stat(fmt(t.promptTokens + t.outputTokens), 'Tokens', fmt(t.promptTokens) + ' in, ' + fmt(t.outputTokens) + ' out') + UI.stat(fmt(Math.round(t.gpuSeconds)), 'GPU-seconds', '') + UI.stat(fmt(t.requests), 'Requests', d.book ? 'price book ' + esc(d.book.name) : 'no price book') + '</div>'
+        + UI.table(['Kind', 'Model', 'Profile', 'Meter', { label: 'Quantity', right: true }, { label: 'Price', right: true }, { label: 'Amount', right: true }], d.lines.map((l) => [esc(l.kind), '<span class="mono">' + esc(l.model || '') + '</span>', esc(l.profile || ''), esc(METER_LABEL[l.meter] || l.meter), fmt(l.quantity), l.priced ? esc(money(l.unitPriceMicros, '')) + ' <span class="muted">per ' + fmt(l.perUnits) + '</span>' : '<span class="muted">not priced</span>', esc(money(l.amountMicros, d.currency))]), { clickable: false, minWidth: '720px', emptyTitle: 'No usage this month', emptyText: 'Lines appear as models are used.' })
+        + '<div class="muted" style="font-size:12px">Totals come from the same usage records as the Usage tab, so they match its report for the month. Usage without a price is listed at zero.' + (d.computedAt ? ' Computed ' + esc(when(d.computedAt)) + '.' : '') + '</div>';
+    }
+    h += '<div class="hstack"><div class="eyebrow grow">Price books</div>' + (manage ? UI.btn('New price book', { size: 'sm', icon: 'plus', attrs: 'data-bnewbook' }) : '') + '</div>'
+      + UI.table(['Name', 'Currency', 'Items', 'State', ''], b.books.books.map((x) => ['<b>' + esc(x.name) + '</b>' + (x.isDefault ? ' ' + UI.pill('default', 'accent') : '') + (book && book.id === x.id ? ' <span class="muted">used for this tenant</span>' : ''), esc(x.currency), fmt(x.items.length), UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline'), manage ? UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-beditbook="' + esc(x.id) + '"' }) : '']), { clickable: false, minWidth: '520px', emptyTitle: 'No price books', emptyText: manage ? 'Create one to price the usage meter.' : 'A system admin keeps the price books.' });
+    if (manage) h += '<div class="hstack wrap gap6"><span class="muted" style="font-size:12px">This tenant uses</span>' + UI.select([{ value: '', label: 'The default price book' }].concat(b.books.books.filter((x) => x.state === 'active').map((x) => ({ value: x.id, label: x.name }))), b.settings.priceBookId || '', 'data-bbook aria-label="Price book for this tenant" style="width:220px"')
+      + (b.settings.provider ? UI.input(b.settings.billingCustomer || '', { attrs: 'data-bcustomer aria-label="Billing customer" style="width:200px"', placeholder: 'Stripe customer, cus_...' }) : '') + UI.btn('Save', { size: 'sm', attrs: 'data-bsettings' }) + '</div>';
+    return h;
+  }
+  function priceBookModal(ctx, st, existing, reload) {
+    const meters = Object.keys(METER_LABEL);
+    const items = existing ? existing.items.slice() : [{ match: 'any', value: null, usage: '*', meter: 'prompt_tokens', perUnits: 1000000, unitPriceMicros: 0 }];
+    const row = (it, i) => '<tr data-bitem="' + i + '"><td>' + UI.select([{ value: 'any', label: 'Anything' }, { value: 'model', label: 'Model' }, { value: 'profile', label: 'Profile' }], it.match, 'data-bf="match" aria-label="Applies to"') + '</td>'
+      + '<td>' + UI.input(it.value || '', { attrs: 'data-bf="value" aria-label="Model or profile name"', placeholder: 'name' }) + '</td>'
+      + '<td>' + UI.input(it.usage, { attrs: 'data-bf="usage" aria-label="Usage kind" style="width:80px"', placeholder: '*' }) + '</td>'
+      + '<td>' + UI.select(meters.map((m) => ({ value: m, label: METER_LABEL[m] })), it.meter, 'data-bf="meter" aria-label="Meter"') + '</td>'
+      + '<td>' + UI.input(String(it.unitPriceMicros / 1e6), { attrs: 'data-bf="price" aria-label="Price" style="width:90px"' }) + '</td>'
+      + '<td>' + UI.input(String(it.perUnits), { attrs: 'data-bf="per" aria-label="Per units" style="width:100px"' }) + '</td>'
+      + '<td>' + UI.iconbtn('x', 'Remove item', { cls: 'sm ghost', attrs: 'data-bdel="' + i + '"' }) + '</td></tr>';
+    ctx.modal({
+      title: existing ? 'Edit ' + esc(existing.name) : 'New price book', cls: 'wide',
+      body: '<div class="formgrid">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-bname maxlength="100"' })) + UI.field('Currency', UI.input(existing ? existing.currency : 'USD', { attrs: 'data-bcur maxlength="3"' }))
+        + UI.field('State', UI.select(['active', 'retired'], existing ? existing.state : 'active', 'data-bstate')) + '</div>'
+        + UI.check('Default for tenants without their own', existing ? existing.isDefault : false, 'data-bdefault')
+        + '<div class="fg2" style="font-size:12px">Each item prices one meter. The most specific item wins: a profile, then a model, then anything; a named usage kind (chat, api, embed, agent, workflow…) beats *.</div>'
+        + '<div class="tablewrap"><table class="dt"><thead><tr><th>Applies to</th><th>Name</th><th>Usage</th><th>Meter</th><th>Price</th><th>Per</th><th></th></tr></thead><tbody data-bitems></tbody></table></div>'
+        + UI.btn('Add item', { size: 'sm', icon: 'plus', attrs: 'data-badd' }) + '<div data-err></div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(existing ? 'Save price book' : 'Create price book', { kind: 'primary', attrs: 'data-bsave' }),
+      onMount(m) {
+        const tbody = m.querySelector('[data-bitems]');
+        const read = () => Array.prototype.slice.call(tbody.querySelectorAll('tr')).map((tr) => { const g = (k) => tr.querySelector('[data-bf="' + k + '"]').value.trim(); return { match: g('match'), value: g('match') === 'any' ? null : g('value') || null, usage: g('usage') || '*', meter: g('meter'), perUnits: Number(g('per')), unitPriceMicros: Math.round(Number(g('price')) * 1e6) }; });
+        const paint = () => { tbody.innerHTML = items.map(row).join(''); };
+        paint();
+        m.querySelector('[data-badd]').addEventListener('click', () => { items.splice(0, items.length, ...read()); items.push({ match: 'model', value: '', usage: '*', meter: 'output_tokens', perUnits: 1000000, unitPriceMicros: 0 }); paint(); });
+        tbody.addEventListener('click', (e) => { const x = e.target.closest('[data-bdel]'); if (!x) return; items.splice(0, items.length, ...read()); items.splice(+x.dataset.bdel, 1); paint(); });
+        m.querySelector('[data-bsave]').addEventListener('click', async (e) => {
+          const list = read();
+          const bad = list.find((it) => !(it.perUnits >= 1) || !(it.unitPriceMicros >= 0) || (it.match !== 'any' && !it.value));
+          const box = m.querySelector('[data-err]'); box.innerHTML = '';
+          if (bad) { box.innerHTML = UI.notice('Each item needs a price of zero or more, a per-unit count of one or more, and a name when it applies to a model or profile.', 'warn'); return; }
+          const def = m.querySelector('[data-bdefault]');
+          const body = { name: m.querySelector('[data-bname]').value.trim(), currency: m.querySelector('[data-bcur]').value.trim().toUpperCase(), isDefault: !!(def && def.checked), items: list };
+          if (existing) body.state = m.querySelector('[data-bstate]').value;
+          e.target.disabled = true;
+          try {
+            if (existing) await App.patch('/api/admin/billing/price-books/' + encodeURIComponent(existing.id), body); else await App.post('/api/admin/billing/price-books', body);
+            App.closeOverlay(); ctx.toast('Price book saved. Audit entry written.', 'ok'); reload();
+          } catch (err) { e.target.disabled = false; const p = err.problem || {}; box.innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>', 'danger'); }
+        });
+      }
+    });
+  }
+  function billingWire(st, ctx, refresh) {
+    const b = st.bill || {};
+    const reload = () => { b.loaded = false; b.detail = null; refresh(); };
+    ctx.on('change', '[data-bmonth]', (e, t) => { b.month = t.value; b.detail = null; ctx.rerender(); });
+    ctx.on('click', '[data-bcompute]', async () => {
+      const ok = await ctx.confirm({ title: 'Save the ' + b.month + ' statement?', body: 'The statement is computed again from the usage meter and stored. A finished month is saved as closed.', ok: 'Save' });
+      if (!ok) return;
+      try { await App.post('/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/compute', {}); ctx.toast('Statement saved. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not save the statement'); }
+    });
+    ctx.on('click', '[data-bpush]', async () => {
+      const d = b.detail;
+      const ok = await ctx.confirm({ title: 'Send ' + b.month + ' to ' + b.settings.provider + '?', tone: 'danger', body: 'An invoice is created for the tenant\'s billing customer with a line per priced item. After that the statement is final.', kv: [['Total', esc(money(d.totalMicros, d.currency))], ['Customer', esc(b.settings.billingCustomer || 'not set')]], ok: 'Send invoice' });
+      if (!ok) return;
+      try { const r = await App.post('/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/push', {}); ctx.toast('Invoice ' + esc(r.providerRef || '') + ' created. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not send the invoice'); reload(); }
+    });
+    ctx.on('click', '[data-bnewbook]', () => priceBookModal(ctx, st, null, reload));
+    ctx.on('click', '[data-beditbook]', (e, t) => { const x = b.books.books.find((y) => y.id === t.dataset.beditbook); if (x) priceBookModal(ctx, st, x, reload); });
+    ctx.on('click', '[data-bsettings]', async () => {
+      const sel = ctx.$('[data-bbook]'); const cus = ctx.$('[data-bcustomer]');
+      const body = { priceBookId: sel && sel.value ? sel.value : null };
+      if (cus) body.billingCustomer = cus.value.trim() || null;
+      try { await App.api('PUT', '/api/admin/billing/tenants/' + encodeURIComponent(b.settings.tenantId), body); ctx.toast('Billing settings saved. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not save the billing settings'); }
+    });
+  }
+
   App.register({
     id: 'usage-audit', title: 'Usage and audit', section: 'admin', crumb: ['Admin', 'Usage and audit'], live: true,
     summary: 'Metering per tenant, user and model, quotas, hash-chained audit log, exports',
@@ -208,8 +329,9 @@
         { actions: UI.btn(st.chartTable ? 'View as chart' : 'View as table', { size: 'sm', kind: 'ghost', attrs: 'data-charttable' }) });
 
       // ----- tabs -----
-      const tabItems = (canUsage ? [{ id: 'usage', label: 'Usage' }, { id: 'quotas', label: 'Quotas' }] : []).concat([{ id: 'audit', label: 'Audit log', count: events.length + (st.eventsEnd ? '' : '+') }, { id: 'exports', label: 'Exports', count: exportsList.length }]);
+      const tabItems = (canUsage ? [{ id: 'usage', label: 'Usage' }, { id: 'quotas', label: 'Quotas' }] : []).concat([{ id: 'audit', label: 'Audit log', count: events.length + (st.eventsEnd ? '' : '+') }, { id: 'exports', label: 'Exports', count: exportsList.length }]).concat(App.can('billing:read') ? [{ id: 'billing', label: 'Statements' }] : []);
       if (!canUsage && (st.tab === 'usage' || st.tab === 'quotas')) st.tab = 'audit';
+      if (st.tab === 'billing' && !App.can('billing:read')) st.tab = 'audit';
 
       let body = '';
       if (st.loadError) body = UI.problem('Usage and audit could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-reload' }) + '</div>';
@@ -255,6 +377,9 @@
           }), { minWidth: '760px', emptyTitle: 'No events match', emptyText: 'Clear the search or pick another kind.' })
           + (st.eventsEnd ? '' : '<div>' + UI.btn(st.olderBusy ? 'Loading…' : 'Load older', { size: 'sm', attrs: 'data-older' + (st.olderBusy ? ' disabled' : '') }) + '</div>')
           + '<div class="muted" style="font-size:12px">Append-only. Each hash covers the previous row. Corrections are new rows; nothing is edited or deleted. Rows above your ' + esc(clearance) + ' clearance keep their place in the chain but their content is withheld.</div>';
+      } else if (st.tab === 'billing') {
+        billingLoad(st, refresh);
+        body = billingHtml(st, refresh);
       } else {
         const rows = exportsList.map((x) => {
           const prog = (x.state === 'queued' || x.state === 'running') && st.progress && x.jobId && st.progress[x.jobId] != null ? ' ' + st.progress[x.jobId] + '%' : '';
@@ -497,6 +622,7 @@
       ctx.on('click', '[data-openws]', (e, t) => ctx.navigate('tenants', { workspace: t.dataset.openws }));
       ctx.on('click', '[data-editquota]', (e, t) => (t.dataset.editquota ? ctx.navigate('tenants', { workspace: t.dataset.editquota, tab: 'quotas' }) : ctx.navigate('tenants', { tab: 'quotas' })));
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
+      billingWire(st, ctx, refresh);
     }
   });
 })();

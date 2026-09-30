@@ -352,7 +352,7 @@ export class WebhookService {
     await s.audit.append({ tenantId: w.tenant_id, action, kind: 'system', actor: { service: 'webhooks' }, target: { webhook: w.id, name: w.name }, detail });
     if (action === 'webhook.breaker.opened') {
       const admins = await s.notifications.usersWithRoles(w.tenant_id, ['tenant-admin']);
-      await s.notifications.notify({ tenantId: w.tenant_id, userIds: admins, kind: 'webhook', title: `Webhook ${w.name} stopped delivering`, body: `${String(detail.failures)} failed attempts in a row; deliveries resume after the cool-down.`, route: 'platform?tab=webhooks', label: 'internal' }).catch(() => undefined);
+      await s.notifications.notify({ tenantId: w.tenant_id, userIds: admins, kind: 'webhook', title: `Webhook ${w.name} stopped delivering`, body: `${String(detail.failures)} failed attempts in a row; deliveries resume after the cool-down.`, route: 'tenants?ttab=webhooks', label: 'internal' }).catch(() => undefined);
     }
   }
 

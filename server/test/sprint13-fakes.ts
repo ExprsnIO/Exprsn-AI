@@ -1,8 +1,12 @@
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+/**
+ * Listens on the wildcard address: a server bound to 127.0.0.1 can take a port another test process's supertest
+ * server holds on the wildcard address and answer its requests (different binds may share a port number).
+ */
 async function listen(server: Server): Promise<string> {
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(0, r));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 

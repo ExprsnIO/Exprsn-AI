@@ -31,7 +31,8 @@ async function until<T>(fn: () => Promise<T | null | undefined | false>, ms = 30
 
 async function listen(h: Harness): Promise<{ server: Server; url: string }> {
   const server = createServer(h.app);
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  // The wildcard address, as supertest uses, so this port cannot also be bound by another test process (see sprint13-fakes.ts).
+  await new Promise<void>((r) => server.listen(0, r));
   return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
 
