@@ -141,6 +141,8 @@ export const samlConfigSchema = z
     ...common,
     entityId: z.string().trim().min(1).max(1000),
     ssoUrl: z.url(),
+    /** Sprint 14: the IdP's HTTP-Redirect single logout endpoint, from its metadata, when it has one. */
+    sloUrl: z.url().optional(),
     /** Base64 DER signing certificates from the IdP metadata; assertions must be signed by one of them. */
     certificates: z.array(z.string().regex(/^[A-Za-z0-9+/=]+$/, 'Base64 DER certificate')).min(1).max(4),
     /** Empty means the NameID. */

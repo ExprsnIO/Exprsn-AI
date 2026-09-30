@@ -8,11 +8,11 @@ import { isFederatedKind, parseProviderConfig, secretRef, type OidcUpstreamConfi
 import type { ProviderRow } from '../../repos/providers.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { badRequest, conflict, forbidden, notFound } from '../../http/problem.js';
-import { CLIENT_TYPES, DEVICE_GRANT, EXCHANGE_GRANT, OAuthError, isConfidential, type ClientRow, type Grant, type TenantCtx } from '../../federation/oidc.js';
+import { CLIENT_TYPES, clientJwks, DEVICE_GRANT, EXCHANGE_GRANT, OAuthError, isConfidential, type ClientRow, type Grant, type TenantCtx } from '../../federation/oidc.js';
 import { certInfo, NAMEID_FORMATS, parseSpMetadata, type SpRow } from '../../federation/saml.js';
 import { isKnownScope, SCOPE_GROUPS } from '../../federation/scopes.js';
 import type { parseIdpMetadata } from '../../federation/upstream.js';
-import { signJwt, verifyJwt } from '../../federation/jose.js';
+import { signJwtWith, verifyJwt } from '../../federation/jose.js';
 import type { KeyRow } from '../../federation/keys.js';
 import { XmlError } from '../../federation/xml.js';
 import type { Services } from '../../services.js';
@@ -37,6 +37,41 @@ const redirectUri = z
     }
   }, 'Use an exact https URL, http on a loopback address, or a private-use scheme. Wildcards are refused.');
 
+/** Logout URIs (front- and back-channel): https, or http on a loopback address; no fragment. */
+const logoutUri = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((u) => {
+    if (u.includes('#')) return false;
+    try {
+      const x = new URL(u);
+      return x.protocol === 'https:' || (x.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(x.hostname));
+    } catch {
+      return false;
+    }
+  }, 'Use an https URL (http only on a loopback address).');
+
+/** A client's public key set for signed request objects (RFC 9101). */
+const jwksInput = z.unknown().transform((v, ctx) => {
+  if (v === null) return null;
+  try {
+    return clientJwks(v);
+  } catch (err) {
+    ctx.addIssue({ code: 'custom', message: (err as Error).message });
+    return z.NEVER;
+  }
+});
+
+const clientExtras = {
+  postLogoutRedirectUris: z.array(redirectUri).max(20).optional(),
+  frontchannelLogoutUri: logoutUri.nullable().optional(),
+  backchannelLogoutUri: logoutUri.nullable().optional(),
+  jwks: jwksInput.optional(),
+  parRequired: z.boolean().optional(),
+  dpopRequired: z.boolean().optional()
+};
+
 const scopeList = z.array(z.string().trim().refine(isKnownScope, 'Unknown scope')).max(50);
 const grantList = z.array(z.string().refine((g) => g in GRANT_ALIASES, 'Unknown grant type')).max(6).transform((gs) => [...new Set(gs.map((g) => GRANT_ALIASES[g]!))]);
 const typeSchema = z.union([z.enum(CLIENT_TYPES), z.enum(['confidential, BFF', 'service account', 'third party'])]).transform((t) => (({ 'confidential, BFF': 'first_party', 'service account': 'service', 'third party': 'third_party' }) as Record<string, ClientRow['type']>)[t] ?? (t as ClientRow['type']));
@@ -50,7 +85,8 @@ const clientCreate = z.object({
   grants: grantList,
   pkceRequired: z.boolean().default(true),
   accessTtl: ttl.default(600),
-  models: z.string().trim().max(500).nullable().default(null)
+  models: z.string().trim().max(500).nullable().default(null),
+  ...clientExtras
 });
 
 const clientPatch = z.object({
@@ -59,7 +95,8 @@ const clientPatch = z.object({
   scopes: scopeList.min(1).optional(),
   pkceRequired: z.boolean().optional(),
   accessTtl: ttl.optional(),
-  models: z.string().trim().max(500).nullable().optional()
+  models: z.string().trim().max(500).nullable().optional(),
+  ...clientExtras
 });
 
 const keyView = (k: KeyRow, rotatesAt: number | null) => ({
@@ -82,6 +119,10 @@ const spView = (sp: SpRow) => ({
   cert: certInfo(sp.certificate),
   signedRequests: sp.signed_requests,
   attributeMap: sp.attribute_map,
+  sloUrl: sp.slo_url,
+  sloBinding: sp.slo_binding,
+  encryptionCert: certInfo(sp.encryption_certificate),
+  encryptAssertions: sp.encrypt_assertions,
   status: sp.status,
   lastUsedAt: sp.last_used_at,
   createdAt: sp.created_at
@@ -119,6 +160,12 @@ export function federationAdminRoutes(s: Services): Router {
       accessTtl: c.access_ttl,
       refreshTtl: c.grants.includes('refresh_token') ? c.refresh_ttl : null,
       models: c.models,
+      postLogoutRedirectUris: c.post_logout_redirect_uris,
+      frontchannelLogoutUri: c.frontchannel_logout_uri,
+      backchannelLogoutUri: c.backchannel_logout_uri,
+      jwks: c.jwks.map((k) => ({ kid: k.kid ?? null, kty: k.kty })),
+      parRequired: c.par_required,
+      dpopRequired: c.dpop_required,
       confidential: isConfidential(c),
       secretCreatedAt: c.secret_created_at,
       serviceUserId: c.service_user_id,
@@ -145,9 +192,10 @@ export function federationAdminRoutes(s: Services): Router {
       jwksUrl: `${t.issuer}/.well-known/jwks.json`,
       rotation: { days: s.cfg.OIDC_KEY_ROTATION_DAYS, overlapDays: s.cfg.OIDC_KEY_OVERLAP_DAYS, rotatesAt },
       keyStore: s.kms.kind === 'openbao' ? 'OpenBao transit' : 'local KMS',
+      signingInKms: typeof s.kms.sign === 'function',
       keys: keys.map((k) => keyView(k, rotatesAt)),
-      idp: { entityId: fed().saml.entityId(t), metadataUrl: `${t.issuer}/saml/metadata`, ssoUrl: `${t.issuer}/saml/sso`, assertionMinutes: s.cfg.SAML_ASSERTION_MINUTES, certificate: { kid: idpCert.kid, ...certInfo(idpCert.certificate) } },
-      upstream: { redirectUri: fed().upstream.redirectUri(t), acsUrl: fed().upstream.acsUrl(t), allowList: s.cfg.FEDERATION_ALLOWED_HOSTS || null },
+      idp: { entityId: fed().saml.entityId(t), metadataUrl: `${t.issuer}/saml/metadata`, ssoUrl: `${t.issuer}/saml/sso`, sloUrl: `${t.issuer}/saml/slo`, assertionMinutes: s.cfg.SAML_ASSERTION_MINUTES, certificate: { kid: idpCert.kid, ...certInfo(idpCert.certificate) } },
+      upstream: { redirectUri: fed().upstream.redirectUri(t), acsUrl: fed().upstream.acsUrl(t), sloUrl: fed().upstream.sloUrl(t), allowList: s.cfg.FEDERATION_ALLOWED_HOSTS || null },
       device: { verificationUri: `${t.issuer}/device`, minutes: s.cfg.DEVICE_CODE_MINUTES, interval: s.cfg.DEVICE_POLL_SECONDS },
       kerberos: { ...kerberos, enabled: settings.kerberos.enabled, realms: settings.kerberos.realms },
       settings
@@ -226,8 +274,8 @@ export function federationAdminRoutes(s: Services): Router {
       await audit(req, 'user.created', { user: user.id, username }, { serviceAccount: true, roles: ['member'] });
     }
     try {
-      const { client, secret } = await fed().oidc.createClient(p.tenantId, { name: body.name, type: body.type, redirectUris: body.redirectUris, grants, scopes: body.scopes, pkceRequired: body.pkceRequired, accessTtl: body.accessTtl, refreshTtl: grants.includes(DEVICE_GRANT) ? 24 * 3600 : 8 * 3600, models: body.models, serviceUserId }, p.userId);
-      await audit(req, 'federation.client.created', { client: client.client_id, name: client.name, type: client.type }, { grants, scopes: body.scopes, redirectUris: body.redirectUris });
+      const { client, secret } = await fed().oidc.createClient(p.tenantId, { name: body.name, type: body.type, redirectUris: body.redirectUris, grants, scopes: body.scopes, pkceRequired: body.pkceRequired, accessTtl: body.accessTtl, refreshTtl: grants.includes(DEVICE_GRANT) ? 24 * 3600 : 8 * 3600, models: body.models, serviceUserId, postLogoutRedirectUris: body.postLogoutRedirectUris, frontchannelLogoutUri: body.frontchannelLogoutUri, backchannelLogoutUri: body.backchannelLogoutUri, jwks: body.jwks, parRequired: body.parRequired, dpopRequired: body.dpopRequired }, p.userId);
+      await audit(req, 'federation.client.created', { client: client.client_id, name: client.name, type: client.type }, { grants, scopes: body.scopes, redirectUris: body.redirectUris, postLogoutRedirectUris: body.postLogoutRedirectUris ?? [], frontchannelLogoutUri: body.frontchannelLogoutUri ?? null, backchannelLogoutUri: body.backchannelLogoutUri ?? null, jwksKeys: body.jwks?.length ?? 0, parRequired: !!body.parRequired, dpopRequired: !!body.dpopRequired });
       // The secret is returned once, here; only its digest is stored.
       res.status(201).json({ client: await clientView(client), secret });
     } catch (err) {
@@ -242,7 +290,7 @@ export function federationAdminRoutes(s: Services): Router {
     if (body.pkceRequired === false && c.type === 'public') throw conflict('Public clients always require PKCE.');
     if (body.redirectUris && !body.redirectUris.length && c.grants.includes('authorization_code')) throw badRequest('The authorization code grant needs at least one redirect URI.');
     const row = await fed().oidc.updateClient(c.tenant_id, c.id, body);
-    await audit(req, 'federation.client.updated', { client: c.client_id, name: c.name }, { before: { scopes: c.scopes, redirectUris: c.redirect_uris, pkceRequired: c.pkce_required, accessTtl: c.access_ttl, models: c.models }, after: body });
+    await audit(req, 'federation.client.updated', { client: c.client_id, name: c.name }, { before: { scopes: c.scopes, redirectUris: c.redirect_uris, pkceRequired: c.pkce_required, accessTtl: c.access_ttl, models: c.models, postLogoutRedirectUris: c.post_logout_redirect_uris, frontchannelLogoutUri: c.frontchannel_logout_uri, backchannelLogoutUri: c.backchannel_logout_uri, jwksKeys: c.jwks.length, parRequired: c.par_required, dpopRequired: c.dpop_required }, after: { ...body, jwks: body.jwks === undefined ? undefined : (body.jwks?.length ?? 0) } });
     res.json(await clientView(row!));
   });
 
@@ -295,7 +343,8 @@ export function federationAdminRoutes(s: Services): Router {
         name: z.string().trim().min(1).max(100),
         xml: z.string().min(1).max(512 * 1024),
         nameIdFormat: z.enum(Object.keys(NAMEID_FORMATS) as [keyof typeof NAMEID_FORMATS]).optional(),
-        attributeMap: z.record(z.enum(['username', 'email', 'displayName', 'groups', 'roles', 'clearance']), z.string().trim().max(300)).optional()
+        attributeMap: z.record(z.enum(['username', 'email', 'displayName', 'groups', 'roles', 'clearance']), z.string().trim().max(300)).optional(),
+        encryptAssertions: z.boolean().optional()
       }),
       req.body
     );
@@ -303,8 +352,11 @@ export function federationAdminRoutes(s: Services): Router {
     if (await fed().saml.byEntity(p.tenantId, meta.entityId)) throw conflict('A service provider with that entity ID is registered.');
     if (meta.signedRequests && !meta.certificate) throw badRequest('The metadata asks for signed requests but has no signing certificate.');
     try {
-      const sp = await fed().saml.create(p.tenantId, { name: body.name, entityId: meta.entityId, acsUrls: meta.acsUrls, nameIdFormat: body.nameIdFormat ?? meta.nameIdFormat, certificate: meta.certificate, signedRequests: meta.signedRequests && !meta.cert?.expired, attributeMap: body.attributeMap ?? {} });
-      await audit(req, 'federation.saml_sp.created', { sp: sp.id, name: sp.name, entity: sp.entity_id }, { acs: meta.acsUrls.map((a) => a.url), cert: meta.cert?.fingerprint ?? null });
+      // Assertions are encrypted for an SP that publishes an encryption certificate (still valid), unless turned off.
+      const encrypt = body.encryptAssertions ?? (!!meta.encryptionCertificate && !meta.encryptionCert?.expired);
+      if (encrypt && (!meta.encryptionCertificate || meta.encryptionCert?.expired)) throw badRequest('The metadata has no valid encryption certificate, so assertions cannot be encrypted for it.');
+      const sp = await fed().saml.create(p.tenantId, { name: body.name, entityId: meta.entityId, acsUrls: meta.acsUrls, nameIdFormat: body.nameIdFormat ?? meta.nameIdFormat, certificate: meta.certificate, signedRequests: meta.signedRequests && !meta.cert?.expired, attributeMap: body.attributeMap ?? {}, sloUrl: meta.sloUrl, sloBinding: meta.sloBinding, encryptionCertificate: meta.encryptionCertificate, encryptAssertions: encrypt });
+      await audit(req, 'federation.saml_sp.created', { sp: sp.id, name: sp.name, entity: sp.entity_id }, { acs: meta.acsUrls.map((a) => a.url), cert: meta.cert?.fingerprint ?? null, slo: meta.sloUrl, encryptionCert: meta.encryptionCert?.fingerprint ?? null, encryptAssertions: encrypt });
       res.status(201).json(spView(sp));
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A service provider with that name exists.');
@@ -316,13 +368,14 @@ export function federationAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const sp = await fed().saml.get(p.tenantId, String(req.params.id));
     if (!sp) throw notFound('Service provider');
-    const body = parseBody(z.object({ status: z.enum(['active', 'disabled']).optional(), signedRequests: z.boolean().optional(), nameIdFormat: z.enum(Object.keys(NAMEID_FORMATS) as [keyof typeof NAMEID_FORMATS]).optional() }).strict(), req.body);
+    const body = parseBody(z.object({ status: z.enum(['active', 'disabled']).optional(), signedRequests: z.boolean().optional(), nameIdFormat: z.enum(Object.keys(NAMEID_FORMATS) as [keyof typeof NAMEID_FORMATS]).optional(), encryptAssertions: z.boolean().optional() }).strict(), req.body);
+    if (body.encryptAssertions && (!sp.encryption_certificate || certInfo(sp.encryption_certificate)?.expired)) throw conflict('This service provider has no valid encryption certificate. Upload fresh metadata first.');
     const signed = body.signedRequests ?? sp.signed_requests;
     const expired = certInfo(sp.certificate)?.expired ?? true;
     if (body.status === 'active' && signed && expired) throw conflict('Its signing certificate has expired. Upload fresh metadata, or enable it with signed requests off.');
     if (body.signedRequests && !sp.certificate) throw conflict('This service provider has no certificate to verify signed requests.');
     const row = await fed().saml.update(p.tenantId, sp.id, body);
-    await audit(req, 'federation.saml_sp.updated', { sp: sp.id, name: sp.name }, { before: { status: sp.status, signedRequests: sp.signed_requests, nameIdFormat: sp.nameid_format }, after: body });
+    await audit(req, 'federation.saml_sp.updated', { sp: sp.id, name: sp.name }, { before: { status: sp.status, signedRequests: sp.signed_requests, nameIdFormat: sp.nameid_format, encryptAssertions: sp.encrypt_assertions }, after: body });
     res.json(spView(row!));
   });
 
@@ -388,7 +441,7 @@ export function federationAdminRoutes(s: Services): Router {
       const check = await fed().upstream.check('saml', body.source);
       if (!check.ok || !check.parsed) throw badRequest('The metadata could not be read, or its certificate has expired.', { steps: check.steps });
       const meta = check.parsed as ReturnType<typeof parseIdpMetadata>;
-      config = { entityId: meta.entityId, ssoUrl: meta.ssoUrl, certificates: meta.certificates };
+      config = { entityId: meta.entityId, ssoUrl: meta.ssoUrl, ...(meta.sloUrl ? { sloUrl: meta.sloUrl } : {}), certificates: meta.certificates };
     }
     try {
       parseProviderConfig(body.protocol, config);
@@ -524,11 +577,11 @@ export function federationAdminRoutes(s: Services): Router {
       await timed(
         'Test token signed and verified against the JWKS',
         async () => {
-          const { row, key } = await fed().keys.signer(t.id);
+          const signer = await fed().keys.signer(t.id);
           const now = Math.floor(Date.now() / 1000);
-          const token = signJwt({ iss: t.issuer, sub: existing?.id ?? 'test', aud: 'urn:exprsn:test-login', iat: now, exp: now + 60, scope: [...permissionsFor(roles)].slice(0, 5).join(' ') }, key, row.kid);
+          const token = await signJwtWith({ iss: t.issuer, sub: existing?.id ?? 'test', aud: 'urn:exprsn:test-login', iat: now, exp: now + 60, scope: [...permissionsFor(roles)].slice(0, 5).join(' ') }, signer);
           verifyJwt(token, (await fed().keys.jwks(t.id)).keys, { issuer: t.issuer, audience: 'urn:exprsn:test-login', algs: ['ES256'] });
-          return row.kid;
+          return `${signer.kid}${signer.remote ? ' in the KMS' : ''}`;
         },
         (kid) => `signed with ${kid}, test audience; no session was created`
       );

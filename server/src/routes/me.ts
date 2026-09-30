@@ -109,6 +109,33 @@ export function meRoutes(s: Services): Router {
     res.json({ revoked: n });
   });
 
+  // ---------- OAuth grants and consents (Sprint 14, B-107) ----------
+
+  /** The applications (OAuth clients) the user consented to or holds live tokens for. */
+  r.get('/grants', active, async (req, res) => {
+    const p = principalOf(req);
+    res.json(await s.federation.oidc.userGrants(p.tenantId, p.userId));
+  });
+
+  /**
+   * Revokes the user's grant to one application: its consent, refresh tokens and every access token issued so far
+   * stop working at once. The user is notified (a security notice), so a revocation they did not make is visible.
+   * A browser session only: an application's own token cannot remove other applications' access.
+   */
+  r.delete('/grants/:clientId', browser, async (req, res) => {
+    const p = principalOf(req);
+    const clientId = String(req.params.clientId);
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(clientId)) throw notFound('Grant');
+    const client = await s.federation.oidc.byClientId(p.tenantId, clientId);
+    const mine = (await s.federation.oidc.userGrants(p.tenantId, p.userId)).find((g) => g.clientId === clientId);
+    if (!client || !mine) throw notFound('Grant');
+    const out = await s.federation.oidc.revokeUserGrant(p.tenantId, p.userId, clientId);
+    await audit(req, 'oidc.grant.revoked_by_user', { client: clientId, name: client.name, consents: out.consents, refreshTokens: out.refreshTokens });
+    // Sprint 11 adds a security-notification helper; until it merges, the notice goes straight through notify.
+    await s.notifications.notify({ tenantId: p.tenantId, userIds: [p.userId], kind: 'security', title: `Access removed for ${client.name}`, body: `${client.name} can no longer act as you. Its tokens stopped working at once. If you did not do this, change your password and review your sessions.`, route: 'settings', email: true });
+    res.json({ revoked: true, clientId, ...out });
+  });
+
   // ---------- API keys ----------
 
   r.get('/api-keys', active, async (req, res) => {

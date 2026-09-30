@@ -8,11 +8,13 @@ import type { ProviderRow } from '../repos/providers.js';
 import type { ExternalUser, OidcUpstreamConfig, SamlUpstreamConfig, Step } from '../identity/providers/types.js';
 import { resolveSecret } from '../identity/secrets.js';
 import type { Services } from '../services.js';
+import { ulid } from 'ulid';
 import { pkceChallenge, verifyJwt, type Jwk } from './jose.js';
 import type { TenantCtx } from './oidc.js';
-import { certInfo } from './saml.js';
+import { certInfo, decodeMessage, SamlError } from './saml.js';
 import { normaliseCertificate } from './x509.js';
-import { attr, child, descendants, elements, escAttr, escText, NS, parseXml, textOf, verifyEnveloped, type XmlElement } from './xml.js';
+import { attr, child, descendants, elements, escAttr, escText, lookupNs, NS, parseXml, signedRedirectQuery, textOf, verifyEnveloped, verifyRedirectSignature, type XmlElement } from './xml.js';
+import { decryptAssertion, ENC, XmlEncError } from './xmlenc.js';
 
 export class UpstreamError extends Error {}
 
@@ -37,6 +39,13 @@ interface PendingUpstream {
   nonce?: string;
   verifier?: string;
   requestId?: string;
+}
+
+/** What an upstream SAML sign-in leaves for single logout: the subject and session as the IdP named them. */
+export interface SamlSubject {
+  nameId: string;
+  nameIdFormat: string | null;
+  sessionIndex: string | null;
 }
 
 const PENDING_MS = 10 * 60_000;
@@ -84,6 +93,19 @@ export class Upstream {
     } catch {
       throw new UpstreamError(`${url} did not return JSON.`);
     }
+  }
+
+  /**
+   * POSTs a form to a host that must pass the same checks as upstream providers (internal, or allow-listed; checked
+   * again at dial time; no redirects), for back-channel logout. Throws when it does not answer 200 or 204.
+   */
+  async postForm(url: string, form: Record<string, string>): Promise<number> {
+    const { agent, allow } = this.net();
+    await checkUrl(url, allow);
+    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams(form).toString(), dispatcher: agent, redirect: 'error', signal: AbortSignal.timeout(this.s().cfg.FEDERATION_TIMEOUT_MS) });
+    await res.body?.cancel().catch(() => undefined);
+    if (res.status !== 200 && res.status !== 204) throw new UpstreamError(`${new URL(url).origin} answered HTTP ${res.status}.`);
+    return res.status;
   }
 
   /** How an upstream host is reached: internal addresses, or a host the allow-list names. */
@@ -279,8 +301,21 @@ export class Upstream {
     return `${t.issuer}/federation/saml/acs`;
   }
 
-  spMetadata(t: TenantCtx, row: ProviderRow): string {
-    return `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="${NS.md}" entityID="${escAttr(this.spEntityId(t, row))}"><md:SPSSODescriptor AuthnRequestsSigned="false" WantAssertionsSigned="true" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${escAttr(this.acsUrl(t))}" index="0"/></md:SPSSODescriptor></md:EntityDescriptor>`;
+  sloUrl(t: TenantCtx): string {
+    return `${t.issuer}/federation/saml/slo`;
+  }
+
+  /**
+   * Our SP metadata for one upstream IdP: the ACS, the single logout endpoint, the tenant's SAML signing
+   * certificate (our logout messages are signed with it) and our encryption certificate for encrypted assertions.
+   */
+  async spMetadata(t: TenantCtx, row: ProviderRow): Promise<string> {
+    const keys = this.s().federation.keys;
+    const signing = (await keys.signer(t.id, 'saml')).row.certificate ?? '';
+    const enc = (await keys.advance(t.id, 'saml-enc')).certificate ?? '';
+    const kd = (use: string, cert: string, methods = '') => `<md:KeyDescriptor use="${use}"><ds:KeyInfo xmlns:ds="${NS.ds}"><ds:X509Data><ds:X509Certificate>${cert}</ds:X509Certificate></ds:X509Data></ds:KeyInfo>${methods}</md:KeyDescriptor>`;
+    const slo = this.sloUrl(t);
+    return `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="${NS.md}" entityID="${escAttr(this.spEntityId(t, row))}"><md:SPSSODescriptor AuthnRequestsSigned="false" WantAssertionsSigned="true" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">${kd('signing', signing)}${kd('encryption', enc, `<md:EncryptionMethod Algorithm="${ENC.aes256gcm}"/><md:EncryptionMethod Algorithm="${ENC.rsaOaep}"/>`)}<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${escAttr(slo)}"/><md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${escAttr(slo)}"/><md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${escAttr(this.acsUrl(t))}" index="0"/></md:SPSSODescriptor></md:EntityDescriptor>`;
   }
 
   /** Starts an upstream SAML sign-in with an AuthnRequest over the HTTP-Redirect binding. */
@@ -300,9 +335,10 @@ export class Upstream {
   /**
    * Completes an upstream SAML sign-in. The response must answer our request (InResponseTo), be addressed to our
    * ACS and audience, be in its validity window, and carry exactly one assertion signed (itself, or inside a signed
-   * response) by a registered certificate. Encrypted and unsolicited assertions are refused.
+   * response) by a registered certificate. An encrypted assertion is decrypted with our SP key first (AES-GCM with
+   * RSA-OAEP only); unsolicited assertions are refused.
    */
-  async finishSaml(t: TenantCtx, form: Record<string, string>, browser: string | undefined): Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null }> {
+  async finishSaml(t: TenantCtx, form: Record<string, string>, browser: string | undefined): Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject: SamlSubject }> {
     const pending = await this.takePending(t.id, form.RelayState, browser);
     const row = await this.provider(t.id, pending.providerId, 'saml');
     const cfg = row.config as unknown as SamlUpstreamConfig;
@@ -315,14 +351,38 @@ export class Upstream {
     if (root.ns !== NS.samlp || root.local !== 'Response') throw new UpstreamError('Expected a samlp:Response.');
     const status = attr(child(child(root, NS.samlp, 'Status'), NS.samlp, 'StatusCode'), 'Value');
     if (status !== 'urn:oasis:names:tc:SAML:2.0:status:Success') throw new UpstreamError(`The identity provider refused the sign-in (${status ?? 'no status'}).`);
-    if (descendants(root, NS.saml, 'EncryptedAssertion').length) throw new UpstreamError('Encrypted assertions are not supported.');
     const all = descendants(root, NS.saml, 'Assertion');
-    const assertions = elements(root, NS.saml, 'Assertion');
-    if (assertions.length !== 1 || all.length !== 1) throw new UpstreamError('The response must carry exactly one assertion.');
-    const assertion = assertions[0]!;
+    const plain = elements(root, NS.saml, 'Assertion');
+    const encryptedAll = descendants(root, NS.saml, 'EncryptedAssertion');
+    const encrypted = elements(root, NS.saml, 'EncryptedAssertion');
+    if (plain.length + encrypted.length !== 1 || all.length + encryptedAll.length !== 1) throw new UpstreamError('The response must carry exactly one assertion.');
     const certs = cfg.certificates.map(normaliseCertificate);
-    const signedAssertion = verifyEnveloped(root, assertion, certs);
+    let assertion: XmlElement;
+    // The document the assertion's signature is checked in (its ID must be unique there).
+    let assertionDoc: XmlElement = root;
+    if (encrypted.length) {
+      let xml: string;
+      try {
+        xml = decryptAssertion(encrypted[0]!, (await this.s().federation.keys.decrypter(t.id)).key);
+      } catch (err) {
+        if (err instanceof XmlEncError) throw new UpstreamError(`The encrypted assertion was refused: ${err.message}`);
+        throw err;
+      }
+      // Parsed on its own, strictly, inside the namespaces in scope where it was (it may use the response's prefixes).
+      const decls = ['saml', 'samlp', 'ds', 'xs', 'xsi'].map((p) => [p, lookupNs(encrypted[0]!, p)] as const).filter(([, v]) => v);
+      try {
+        assertionDoc = parseXml(`<w ${decls.map(([p, v]) => `xmlns:${p}="${escAttr(v!)}"`).join(' ')}>${xml}</w>`, 512 * 1024);
+      } catch (err) {
+        throw new UpstreamError(`The decrypted assertion is not valid XML: ${(err as Error).message}`);
+      }
+      const inner = elements(assertionDoc, NS.saml, 'Assertion');
+      if (inner.length !== 1 || assertionDoc.children.some((c) => c.type === 'element' && c !== inner[0])) throw new UpstreamError('The encrypted element must be exactly one assertion.');
+      assertion = inner[0]!;
+      if (descendants(assertion, NS.saml, 'Assertion').length || descendants(assertion, NS.saml, 'EncryptedAssertion').length) throw new UpstreamError('The assertion must not contain another assertion.');
+    } else assertion = plain[0]!;
+    const signedAssertion = verifyEnveloped(assertionDoc, assertion, certs);
     if (!signedAssertion.ok) {
+      // A signed response covers an encrypted assertion as it was sent.
       const signedResponse = verifyEnveloped(root, root, certs);
       if (!signedResponse.ok) throw new UpstreamError(`The assertion signature was refused: ${signedAssertion.reason ?? signedResponse.reason}`);
     }
@@ -344,7 +404,9 @@ export class Upstream {
       return attr(d, 'Recipient') === this.acsUrl(t) && attr(d, 'InResponseTo') === pending.requestId && !!until && Date.parse(until) + skew > now;
     });
     if (!ok) throw new UpstreamError('The assertion does not answer this sign-in (recipient, request or expiry).');
-    const nameId = textOf(child(subject, NS.saml, 'NameID')).trim();
+    const nameIdEl = child(subject, NS.saml, 'NameID');
+    const nameId = textOf(nameIdEl).trim();
+    const sessionIndex = attr(child(assertion, NS.saml, 'AuthnStatement'), 'SessionIndex') ?? null;
     const attrs = new Map<string, string[]>();
     for (const st of elements(assertion, NS.saml, 'AttributeStatement')) {
       for (const a of elements(st, NS.saml, 'Attribute')) attrs.set(attr(a, 'Name') ?? '', elements(a, NS.saml, 'AttributeValue').map((v) => textOf(v).trim()));
@@ -355,13 +417,91 @@ export class Upstream {
     return {
       row,
       returnTo: pending.returnTo,
-      user: { externalId: nameId, username, displayName: first(cfg.displayNameAttribute) ?? username, email: first(cfg.emailAttribute), groups: (attrs.get(cfg.groupsAttribute) ?? []).slice(0, 500) }
+      user: { externalId: nameId, username, displayName: first(cfg.displayNameAttribute) ?? username, email: first(cfg.emailAttribute), groups: (attrs.get(cfg.groupsAttribute) ?? []).slice(0, 500) },
+      subject: { nameId: nameId.slice(0, 500), nameIdFormat: attr(nameIdEl, 'Format')?.slice(0, 200) ?? null, sessionIndex: sessionIndex?.slice(0, 200) ?? null }
     };
+  }
+
+  /** Remembers an upstream SAML session (NameID, SessionIndex) against the console session it created. */
+  async recordSamlSession(tenantId: string, sessionId: string, providerId: string, subject: SamlSubject): Promise<void> {
+    await this.s().db('saml_sessions').insert({ id: ulid(), tenant_id: tenantId, session_id: sessionId, role: 'sp', peer_id: providerId, name_id: subject.nameId, name_id_format: subject.nameIdFormat, session_index: subject.sessionIndex, created_at: Date.now(), ended_at: null });
+  }
+
+  // ---------- SAML single logout (we are the SP) ----------
+
+  private async samlProviderByEntity(tenantId: string, entityId: string): Promise<ProviderRow | undefined> {
+    return (await this.s().providers.list(tenantId)).find((p) => p.kind === 'saml' && p.enabled && (p.config as unknown as SamlUpstreamConfig).entityId === entityId);
+  }
+
+  /**
+   * SP-initiated single logout: when a signed-out session came from an upstream SAML IdP with a logout endpoint, the
+   * browser goes there with our signed LogoutRequest; its LogoutResponse comes back to our SLO endpoint, which then
+   * continues to `next` (the relying party's post-logout address, or the signed-out page).
+   */
+  async startSamlLogout(t: TenantCtx, sessionId: string, next: string | null): Promise<string | null> {
+    const row = (await this.s().db('saml_sessions').where({ tenant_id: t.id, session_id: sessionId, role: 'sp' }).orderBy('created_at', 'desc').first()) as { peer_id: string; name_id: string; name_id_format: string | null; session_index: string | null } | undefined;
+    if (!row) return null;
+    const provider = await this.s().providers.get(t.id, row.peer_id);
+    const cfg = provider?.config as unknown as SamlUpstreamConfig | undefined;
+    if (!provider || !provider.enabled || !cfg?.sloUrl) return null;
+    const requestId = `_${randomBytes(20).toString('hex')}`;
+    const handle = randomToken(24);
+    await this.s().db('federation_pending').insert({ id: this.digest(handle), tenant_id: t.id, kind: 'saml_slo', data: JSON.stringify({ providerId: provider.id, requestId, next }), expires_at: Date.now() + PENDING_MS });
+    const xml = `<samlp:LogoutRequest xmlns:samlp="${NS.samlp}" xmlns:saml="${NS.saml}" ID="${requestId}" Version="2.0" IssueInstant="${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}" Destination="${escAttr(cfg.sloUrl)}"><saml:Issuer>${escText(this.spEntityId(t, provider))}</saml:Issuer><saml:NameID${row.name_id_format ? ` Format="${escAttr(row.name_id_format)}"` : ''}>${escText(row.name_id)}</saml:NameID>${row.session_index ? `<samlp:SessionIndex>${escText(row.session_index)}</samlp:SessionIndex>` : ''}</samlp:LogoutRequest>`;
+    const signer = await this.s().federation.keys.signer(t.id, 'saml');
+    const query = await signedRedirectQuery('SAMLRequest', deflateRawSync(Buffer.from(xml, 'utf8')).toString('base64'), handle, (d) => signer.sign(d));
+    return `${cfg.sloUrl}${cfg.sloUrl.includes('?') ? '&' : '?'}${query}`;
+  }
+
+  /**
+   * Our SLO endpoint as SP. A LogoutRequest from an upstream IdP (signed, from a registered provider) ends the
+   * sign-in sessions it names and is answered with a signed LogoutResponse; a LogoutResponse answers a logout we
+   * started and says where to continue.
+   */
+  async handleSlo(t: TenantCtx, binding: 'redirect' | 'post', params: Record<string, string>, rawQuery: string): Promise<{ kind: 'request'; sessionIds: string[]; provider: ProviderRow; responseUrl: string | null } | { kind: 'response'; next: string | null }> {
+    const isRequest = !!params.SAMLRequest;
+    const root = decodeMessage(binding, isRequest ? params.SAMLRequest! : (params.SAMLResponse ?? ''));
+    const issuer = textOf(child(root, NS.saml, 'Issuer')).trim();
+    const provider = await this.samlProviderByEntity(t.id, issuer);
+    if (!provider) throw new SamlError(`No enabled SAML identity provider is registered as ${issuer || '(no issuer)'}.`);
+    const cfg = provider.config as unknown as SamlUpstreamConfig;
+    const certs = cfg.certificates.map(normaliseCertificate);
+    const v = binding === 'redirect' ? verifyRedirectSignature(rawQuery, certs) : verifyEnveloped(root, root, certs);
+    if (!v.ok) throw new SamlError(v.reason ?? 'The logout message signature does not verify.');
+    if (!isRequest) {
+      if (root.ns !== NS.samlp || root.local !== 'LogoutResponse') throw new SamlError('Expected a samlp:LogoutResponse.');
+      const handle = params.RelayState ?? '';
+      const id = this.digest(handle);
+      const row = handle ? ((await this.s().db('federation_pending').where({ id, tenant_id: t.id, kind: 'saml_slo' }).first()) as { data: string; expires_at: number } | undefined) : undefined;
+      const data = json<{ providerId: string; requestId: string; next: string | null }>(row?.data, { providerId: '', requestId: '', next: null });
+      if (!row || Number(row.expires_at) < Date.now() || data.providerId !== provider.id || attr(root, 'InResponseTo') !== data.requestId) throw new SamlError('This logout response does not answer a logout started here.');
+      await this.s().db('federation_pending').where({ id }).delete();
+      return { kind: 'response', next: data.next };
+    }
+    if (root.ns !== NS.samlp || root.local !== 'LogoutRequest') throw new SamlError('Expected a samlp:LogoutRequest.');
+    const requestId = attr(root, 'ID');
+    const nameId = textOf(child(root, NS.saml, 'NameID')).trim();
+    if (!requestId || !nameId) throw new SamlError('The LogoutRequest has no ID or NameID.');
+    const until = attr(root, 'NotOnOrAfter');
+    if (until && Date.parse(until) + 120_000 <= Date.now()) throw new SamlError('The logout request has expired.');
+    const indexes = elements(root, NS.samlp, 'SessionIndex').map((e) => textOf(e).trim()).filter(Boolean);
+    const q = this.s().db('saml_sessions').where({ tenant_id: t.id, role: 'sp', peer_id: provider.id, name_id: nameId }).whereNull('ended_at');
+    if (indexes.length) q.whereIn('session_index', indexes);
+    const sessionIds = [...new Set(((await q.select('session_id')) as { session_id: string }[]).map((r) => r.session_id))];
+    let responseUrl: string | null = null;
+    if (cfg.sloUrl) {
+      const xml = `<samlp:LogoutResponse xmlns:samlp="${NS.samlp}" xmlns:saml="${NS.saml}" ID="_${randomBytes(20).toString('hex')}" Version="2.0" IssueInstant="${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}" Destination="${escAttr(cfg.sloUrl)}" InResponseTo="${escAttr(requestId)}"><saml:Issuer>${escText(this.spEntityId(t, provider))}</saml:Issuer><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status></samlp:LogoutResponse>`;
+      const signer = await this.s().federation.keys.signer(t.id, 'saml');
+      const query = await signedRedirectQuery('SAMLResponse', deflateRawSync(Buffer.from(xml, 'utf8')).toString('base64'), params.RelayState ?? null, (d) => signer.sign(d));
+      responseUrl = `${cfg.sloUrl}${cfg.sloUrl.includes('?') ? '&' : '?'}${query}`;
+    }
+    return { kind: 'request', sessionIds, provider, responseUrl };
   }
 }
 
+
 /** Reads IdP metadata: entity ID, the HTTP-Redirect SSO endpoint and signing certificates. */
-export function parseIdpMetadata(xml: string): { entityId: string; ssoUrl: string; certificates: string[] } {
+export function parseIdpMetadata(xml: string): { entityId: string; ssoUrl: string; sloUrl?: string; certificates: string[] } {
   const root = parseXml(xml, 512 * 1024);
   const ed = root.local === 'EntityDescriptor' && root.ns === NS.md ? root : descendants(root, NS.md, 'EntityDescriptor')[0];
   const idp = child(ed, NS.md, 'IDPSSODescriptor');
@@ -375,7 +515,8 @@ export function parseIdpMetadata(xml: string): { entityId: string; ssoUrl: strin
     .flatMap((k) => descendants(k, NS.ds, 'X509Certificate').map((c) => normaliseCertificate(textOf(c))))
     .filter(Boolean);
   if (!certificates.length) throw new UpstreamError('The metadata has no signing certificate.');
-  return { entityId, ssoUrl, certificates: [...new Set(certificates)].slice(0, 4) };
+  const slo = attr(elements(idp, NS.md, 'SingleLogoutService').find((e) => attr(e, 'Binding') === 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect'), 'Location');
+  return { entityId, ssoUrl, ...(slo && /^https?:\/\//.test(slo) ? { sloUrl: slo } : {}), certificates: [...new Set(certificates)].slice(0, 4) };
 }
 
 export { HostRefused };

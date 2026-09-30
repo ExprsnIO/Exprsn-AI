@@ -197,6 +197,11 @@ const base = z.object({
     KERBEROS_KEYTAB: z.string().optional(),
     // --- end federation ---
 
+    // --- Sprint 14: federation (edit only inside this block) ---
+    /** How old a DPoP proof may be (RFC 9449 iat window); its jti is remembered this long so it cannot be replayed. */
+    DPOP_PROOF_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
+    // --- end Sprint 14 federation ---
+
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
     SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
