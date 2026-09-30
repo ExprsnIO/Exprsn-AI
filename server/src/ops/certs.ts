@@ -1,4 +1,6 @@
 import { createPrivateKey, generateKeyPairSync, X509Certificate, type KeyObject } from 'node:crypto';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ulid } from 'ulid';
 import { json } from '../db/knex.js';
 import { PLATFORM_SCOPE } from '../platform/datakeys.js';
@@ -7,6 +9,44 @@ import type { Services } from '../services.js';
 import type { AcmeChallengeStore } from './acme.js';
 import { audit, notifyAdmins, type OpsActor } from './common.js';
 import { buildCsr, pemBlocks } from './der.js';
+import { createDnsProvider, type DnsProvider } from './dns.js';
+
+/** Published on the bus after every issue or renewal; every instance's file sink writes the new PEMs (B-409). */
+export const CERT_ISSUED = 'platform.cert.issued';
+export interface CertIssuedEvent {
+  certificate: string;
+  name: string;
+  serial: string;
+  notAfter: number;
+  renewal: boolean;
+}
+
+/** A directory name for a certificate: its first name, with a wildcard's `*` spelled out. */
+export const sinkName = (name: string): string => name.replace(/^\*\./, '_wildcard.').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 200) || 'certificate';
+
+/** Writes one file atomically: a temporary file in the same directory, then a rename over the old one. */
+async function atomicWrite(file: string, data: string, mode: number): Promise<void> {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, data, { mode });
+  await chmod(tmp, mode);
+  await rename(tmp, file);
+}
+
+/**
+ * The certificate file sink: `<dir>/<name>/fullchain.pem`, `cert.pem`, `chain.pem` and `privkey.pem` (0600), the
+ * layout reverse proxies (nginx, HAProxy, Caddy, Traefik file provider) read. The key is written last, so a proxy
+ * that reloads on the key file sees the matching certificate.
+ */
+export async function writeCertFiles(dir: string, name: string, chainPem: string, keyPem: string): Promise<string> {
+  const target = path.join(path.resolve(dir), sinkName(name));
+  await mkdir(target, { recursive: true, mode: 0o750 });
+  const blocks = chainPem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+  await atomicWrite(path.join(target, 'cert.pem'), (blocks[0] ?? '') + '\n', 0o644);
+  await atomicWrite(path.join(target, 'chain.pem'), blocks.slice(1).join('\n') + (blocks.length > 1 ? '\n' : ''), 0o644);
+  await atomicWrite(path.join(target, 'fullchain.pem'), blocks.join('\n') + '\n', 0o644);
+  await atomicWrite(path.join(target, 'privkey.pem'), keyPem, 0o600);
+  return target;
+}
 
 export const CERT_USES = ['TLS', 'mTLS', 'LDAPS', 'CA', 'other'] as const;
 export type CertUse = (typeof CERT_USES)[number];
@@ -74,6 +114,8 @@ export function certStatus(c: CertRow, renewDays: number, now = Date.now()): { d
 }
 
 const DOMAIN = /^(?=.{1,253}$)(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.)*(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+/** A wildcard name (`*.example.internal`): dns-01 only. */
+const WILDCARD = /^\*\.(?=.{1,251}$)(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.)+(?!-)[a-z0-9-]{1,63}(?<!-)$/;
 
 /**
  * Platform certificates. `acme` certificates are ordered from the internal CA over RFC 8555 with a fresh ECDSA
@@ -81,7 +123,20 @@ const DOMAIN = /^(?=.{1,253}$)(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.)*(?!-)[a-z0-9-]{1,
  * elsewhere) are only watched for expiry. http-01 challenges are kept in the database so any instance answers them.
  */
 export class CertificateService {
+  private dnsOverride: DnsProvider | null | undefined;
+
   constructor(private readonly s: () => Services) {}
+
+  /** The dns-01 provider when ACME_CHALLENGE=dns-01, else null (http-01). Replaceable (tests). */
+  get dns(): DnsProvider | null {
+    if (this.dnsOverride !== undefined) return this.dnsOverride;
+    const cfg = this.s().cfg;
+    return (this.dnsOverride = cfg.ACME_CHALLENGE === 'dns-01' ? createDnsProvider(cfg) : null);
+  }
+
+  set dns(v: DnsProvider | null) {
+    this.dnsOverride = v;
+  }
 
   async list(): Promise<CertRow[]> {
     return (await this.s().db('platform_certificates').orderBy('not_after', 'asc').orderBy('name')).map(fromRow);
@@ -104,7 +159,10 @@ export class CertificateService {
   async request(by: OpsActor, input: { domains: string[]; issuedTo?: string | null; use: CertUse; autoRenew: boolean }): Promise<CertRow> {
     if (!this.s().acme.directoryUrl) throw conflict('ACME is not configured. Set ACME_DIRECTORY_URL to the internal CA\'s directory.');
     const domains = [...new Set(input.domains.map((d) => d.trim().toLowerCase()))];
-    for (const d of domains) if (!DOMAIN.test(d)) throw badRequest(`${d} is not a DNS name.`, { field: 'domains' });
+    for (const d of domains) {
+      if (WILDCARD.test(d) && !this.dns) throw badRequest(`${d} is a wildcard: wildcards need dns-01 (ACME_CHALLENGE=dns-01 with a DNS provider).`, { field: 'domains' });
+      if (!DOMAIN.test(d) && !WILDCARD.test(d)) throw badRequest(`${d} is not a DNS name.`, { field: 'domains' });
+    }
     const t = Date.now();
     const row = { id: ulid(), name: domains[0]!, domains: JSON.stringify(domains), issued_to: input.issuedTo ?? null, use: input.use, method: 'acme', state: 'pending', auto_renew: input.autoRenew, created_by: by.userId, created_at: t, updated_at: t };
     await this.s().db('platform_certificates').insert(row);
@@ -178,6 +236,16 @@ export class CertificateService {
     return pem;
   }
 
+  /** Writes an issued certificate and its key into ACME_CERT_DIR (the sink). Returns the directory, or null. */
+  async sink(certId: string): Promise<string | null> {
+    const s = this.s();
+    if (!s.cfg.ACME_CERT_DIR) return null;
+    const c = await this.get(certId);
+    if (!c.chain_pem || !c.key_sealed || c.state === 'revoked') return null;
+    const key = await s.keys.open(PLATFORM_SCOPE, c.key_sealed, `platform-cert:${certId}`);
+    return writeCertFiles(s.cfg.ACME_CERT_DIR, c.name, c.chain_pem, key);
+  }
+
   /** The ACME account for the configured directory, created on first use; its key is sealed at rest. */
   async account(): Promise<{ key: KeyObject; kid: string }> {
     const s = this.s();
@@ -193,10 +261,11 @@ export class CertificateService {
     return { key: privateKey, kid };
   }
 
-  async accountView(): Promise<{ directoryUrl: string | null; registered: boolean; kid: string | null; contact: string | null; createdAt: number | null }> {
+  async accountView(): Promise<{ directoryUrl: string | null; registered: boolean; kid: string | null; contact: string | null; createdAt: number | null; challenge: 'http-01' | 'dns-01'; dnsProvider: string | null; certDir: string | null }> {
     const dir = this.s().acme.directoryUrl;
     const row = dir ? ((await this.s().db('platform_acme_accounts').where({ directory_url: dir }).first()) as { kid: string; contact: string | null; created_at: number } | undefined) : undefined;
-    return { directoryUrl: dir, registered: !!row, kid: row?.kid ?? null, contact: row?.contact ?? this.s().cfg.ACME_CONTACT ?? null, createdAt: row ? Number(row.created_at) : null };
+    const dns = this.dns;
+    return { directoryUrl: dir, registered: !!row, kid: row?.kid ?? null, contact: row?.contact ?? this.s().cfg.ACME_CONTACT ?? null, createdAt: row ? Number(row.created_at) : null, challenge: dns ? 'dns-01' : 'http-01', dnsProvider: dns?.name ?? null, certDir: this.s().cfg.ACME_CERT_DIR ?? null };
   }
 
   private get challengeStore(): AcmeChallengeStore {
@@ -230,11 +299,14 @@ export class CertificateService {
       await progress(10, 'Account ready');
       const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
       const csr = buildCsr(c.domains, privateKey);
-      const { chainPem, orderUrl } = await s.acme.issue({ key: acct.key, kid: acct.kid, domains: c.domains, csr, challenges: this.challengeStore, signal, progress });
+      const dns = this.dns;
+      const { chainPem, orderUrl } = await s.acme.issue({ key: acct.key, kid: acct.kid, domains: c.domains, csr, challenges: this.challengeStore, dns, dnsWaitMs: dns ? s.cfg.ACME_DNS_WAIT_SECONDS * 1000 : 0, signal, progress });
       const info = parseCertificate(chainPem);
       const keySealed = await s.keys.seal(PLATFORM_SCOPE, privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), `platform-cert:${certId}`);
       await this.patch(certId, { state: 'valid', issuer: info.issuer, serial: info.serial, fingerprint: info.fingerprint, not_before: info.notBefore, not_after: info.notAfter, chain_pem: chainPem, key_sealed: keySealed, order_url: orderUrl, renewed_at: Date.now(), notified_at: null, error: null });
-      await audit(s, by, renewal ? 'platform.cert.renewed' : 'platform.cert.issued', { certificate: certId, name: c.name }, { serial: info.serial, issuer: info.issuer, notAfter: info.notAfter, fingerprint: info.fingerprint, previousSerial: c.serial });
+      await audit(s, by, renewal ? 'platform.cert.renewed' : 'platform.cert.issued', { certificate: certId, name: c.name }, { serial: info.serial, issuer: info.issuer, notAfter: info.notAfter, fingerprint: info.fingerprint, previousSerial: c.serial, challenge: dns ? 'dns-01' : 'http-01' });
+      // Every instance hears this: their file sinks write the new PEMs, and anything else can reload on it.
+      s.bus.publish(CERT_ISSUED, { certificate: certId, name: c.name, serial: info.serial, notAfter: info.notAfter, renewal } satisfies CertIssuedEvent);
       return { serial: info.serial, notAfter: info.notAfter };
     } catch (err) {
       const reason = (err as Error).message.slice(0, 1000);

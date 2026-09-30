@@ -56,6 +56,13 @@ describe('platform operations', () => {
     return (await a.agent.get(`/api/admin/platform/bundles/${b.body.id}`).expect(200)).body;
   }
 
+  /** A second platform admin, for the dual-control approvals of signer keys (Sprint 15). */
+  async function approveAsSecond(proposalId: string) {
+    if (!(await h.s.users.byUsername(h.tenantId, 'root2'))) await localUser(h, 'root2', ['system-admin'], 'restricted');
+    const b = await loginAdmin(h, 'root2');
+    return (await b.agent.post(`/api/admin/platform/signers/proposals/${proposalId}/approve`).set('x-csrf-token', b.csrf).send({}).expect(200)).body;
+  }
+
   beforeEach(async () => {
     h = await harness();
     await localUser(h, 'root', ['system-admin'], 'restricted');
@@ -107,7 +114,8 @@ describe('platform operations', () => {
 
   it('reports honestly when no scanner or staging hook is configured, and accepts ECDSA P-256 signers', async () => {
     const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    await post('/api/admin/platform/signers', { name: 'cosign-import', publicKeyPem: ec.publicKey.export({ type: 'spki', format: 'pem' }).toString() }).expect(201);
+    const prop = await post('/api/admin/platform/signers', { name: 'cosign-import', publicKeyPem: ec.publicKey.export({ type: 'spki', format: 'pem' }).toString() }).expect(202);
+    await approveAsSecond(prop.body.proposal.id);
     const b = await importBundle('model-qwen', buildBundle({ id: 'model-qwen', files: [{ path: 'models/qwen.gguf', mirror: 'models', data: Buffer.from('weights') }], key: ec.privateKey, algorithm: 'ecdsa-p256-sha256', components: [{ name: 'qwen2.5-coder', licenses: [{ license: { id: 'Apache-2.0' } }] }] }));
     expect(b.state).toBe('ready to promote');
     expect(b.steps.map((x: { state: string }) => x.state)).toEqual(['passed', 'passed', 'passed', 'skipped', 'passed', 'skipped', 'waiting']);
@@ -143,7 +151,8 @@ describe('platform operations', () => {
     expect(b.steps[2].detail).toMatch(/requests-2\.32\.3.*does not match/);
 
     const keys = (await a.agent.get('/api/admin/platform/signers').expect(200)).body;
-    await post(`/api/admin/platform/signers/${keys[0].id}/revoke`, { reason: 'rotated to 2027 key' }).expect(200);
+    const prop = await post(`/api/admin/platform/signers/${keys[0].id}/revoke`, { reason: 'rotated to 2027 key' }).expect(202);
+    await approveAsSecond(prop.body.proposal.id);
     const r = await importBundle('after-revoke', buildBundle({ id: 'after-revoke', files: FILES, key: signer.privateKey }));
     expect(r.steps[1]).toMatchObject({ state: 'failed' });
     expect(r.steps[1].detail).toMatch(/revoked: rotated to 2027 key/);

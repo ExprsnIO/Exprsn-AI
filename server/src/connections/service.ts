@@ -8,11 +8,12 @@ import { classify as classifyText } from '../chat/attachments.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import type { DataKeys } from '../platform/datakeys.js';
 import type { Guardrails } from '../guardrails/types.js';
-import { allowedIndex, allowedSql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
+import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
+import type { DynamicCredentials } from './dynamic.js';
 import type { ConnectionSpec, DriverFactory, QueryResult, SchemaObject } from './drivers.js';
 
 export type Engine = ConnectionSpec['engine'];
-export const ENGINES: readonly Engine[] = ['postgres', 'opensearch'];
+export const ENGINES: readonly Engine[] = ['postgres', 'opensearch', 'mysql'];
 
 export interface ConnectionRow {
   id: string;
@@ -28,6 +29,9 @@ export interface ConnectionRow {
   timeout_s: number;
   credential: string | null;
   account: string | null;
+  /** Sprint 15: `openbao` takes a short-lived account from OpenBao's database engine for role `bao_role`. */
+  credential_source: 'static' | 'openbao';
+  bao_role: string | null;
   tls: boolean;
   allow_list: string[];
   pii_columns: string[];
@@ -45,6 +49,8 @@ export interface ConnectionRow {
 const n = (v: unknown) => (v == null ? null : Number(v));
 const fromRow = (r: Record<string, unknown>): ConnectionRow => ({
   ...(r as unknown as ConnectionRow),
+  credential_source: r.credential_source === 'openbao' ? 'openbao' : 'static',
+  bao_role: (r.bao_role as string | null | undefined) ?? null,
   tls: !!r.tls,
   row_limit: Number(r.row_limit),
   timeout_s: Number(r.timeout_s),
@@ -81,7 +87,9 @@ export const connectionView = (c: ConnectionRow, usedBy: { kbId: string; kb: str
     rowLimit: c.row_limit,
     timeoutS: c.timeout_s,
     account: c.account,
-    hasCredential: !!c.credential,
+    hasCredential: !!c.credential || c.credential_source === 'openbao',
+    credentialSource: c.credential_source,
+    baoRole: c.bao_role,
     tls: c.tls,
     allowList: c.allow_list,
     piiColumns: c.pii_columns,
@@ -98,7 +106,7 @@ export const connectionView = (c: ConnectionRow, usedBy: { kbId: string; kb: str
 };
 
 function allowed(c: ConnectionRow, object: string): boolean {
-  return c.engine === 'postgres' ? allowedSql(object, c.allow_list) : allowedIndex(object, c.allow_list);
+  return c.engine === 'postgres' ? allowedSql(object, c.allow_list) : c.engine === 'mysql' ? allowedMysql(object, c.allow_list, c.database) : allowedIndex(object, c.allow_list);
 }
 
 /** "object.column" (lower case) for every PII column: named by convention or marked by an admin. */
@@ -136,8 +144,20 @@ export class ConnectionService {
     private readonly keys: DataKeys,
     private readonly audit: AuditLog,
     private readonly guard: Guardrails,
-    private readonly drivers: Record<Engine, DriverFactory>
+    private readonly drivers: Partial<Record<Engine, DriverFactory>>,
+    /** OpenBao database engine (Sprint 15); null when OPENBAO_ADDR and OPENBAO_TOKEN are not set. */
+    private readonly dynamic: DynamicCredentials | null = null
   ) {}
+
+  /** Revokes the OpenBao leases this instance holds. */
+  async close(): Promise<void> {
+    await this.dynamic?.close();
+  }
+
+  /** The OpenBao lease this instance holds for a connection (for the view). */
+  lease(id: string) {
+    return this.dynamic?.lease(id) ?? null;
+  }
 
   async list(tenantId: string): Promise<ConnectionRow[]> {
     return ((await this.db('data_connections').where({ tenant_id: tenantId }).orderBy('name')) as Record<string, unknown>[]).map(fromRow);
@@ -164,8 +184,10 @@ export class ConnectionService {
     return out;
   }
 
-  async create(p: Principal, input: { name: string; engine: Engine; endpoint: string; database: string | null; zone: string; label: Label; rowLimit: number; timeoutS: number; tls: boolean; username: string | null; password: string | null }): Promise<ConnectionRow> {
+  async create(p: Principal, input: { name: string; engine: Engine; endpoint: string; database: string | null; zone: string; label: Label; rowLimit: number; timeoutS: number; tls: boolean; username: string | null; password: string | null; baoRole?: string | null }): Promise<ConnectionRow> {
     if (!clears(p.clearance, input.label)) throw forbidden(`Your clearance is ${p.clearance}; a ${input.label} connection is above it.`, { step: 'clearance' });
+    if (input.baoRole && !this.dynamic) throw conflict('OpenBao dynamic credentials need OPENBAO_ADDR and OPENBAO_TOKEN on the server.');
+    if (input.baoRole && input.engine === 'opensearch') throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections.');
     const id = ulid();
     const t = Date.now();
     const row = {
@@ -180,8 +202,10 @@ export class ConnectionService {
       ops: 'read',
       row_limit: input.rowLimit,
       timeout_s: input.timeoutS,
-      credential: input.username ? await this.sealCredential(p.tenantId, id, input.username, input.password ?? '') : null,
-      account: input.username,
+      credential: input.username && !input.baoRole ? await this.sealCredential(p.tenantId, id, input.username, input.password ?? '') : null,
+      account: input.baoRole ? null : input.username,
+      credential_source: input.baoRole ? 'openbao' : 'static',
+      bao_role: input.baoRole ?? null,
       tls: input.tls,
       allow_list: '[]',
       pii_columns: '[]',
@@ -222,7 +246,18 @@ export class ConnectionService {
 
   async setCredential(p: Principal, id: string, username: string, password: string): Promise<ConnectionRow> {
     const c = await this.get(p.tenantId, id);
-    await this.db('data_connections').where({ id: c.id }).update({ credential: await this.sealCredential(c.tenant_id, c.id, username, password), account: username, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
+    await this.db('data_connections').where({ id: c.id }).update({ credential: await this.sealCredential(c.tenant_id, c.id, username, password), account: username, credential_source: 'static', bao_role: null, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
+    await this.dynamic?.forget(c.id);
+    return this.get(p.tenantId, id);
+  }
+
+  /** Switches a connection to OpenBao dynamic credentials for `role`; the static credential is dropped. */
+  async setDynamicRole(p: Principal, id: string, role: string): Promise<ConnectionRow> {
+    const c = await this.get(p.tenantId, id);
+    if (!this.dynamic) throw conflict('OpenBao dynamic credentials need OPENBAO_ADDR and OPENBAO_TOKEN on the server.');
+    if (c.engine === 'opensearch') throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections.');
+    await this.db('data_connections').where({ id: c.id }).update({ credential: null, account: null, credential_source: 'openbao', bao_role: role, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
+    await this.dynamic.forget(c.id);
     return this.get(p.tenantId, id);
   }
 
@@ -240,9 +275,15 @@ export class ConnectionService {
     const used = (await this.usage(p.tenantId)).get(c.id) ?? [];
     if (used.length) throw conflict(`${[...new Set(used.map((u) => u.kb))].join(', ')} still sync${used.length === 1 ? 's' : ''} from ${c.name}. Remove the knowledge source first.`);
     await this.db('data_connections').where({ id: c.id }).delete();
+    await this.dynamic?.forget(c.id);
   }
 
   private async spec(c: ConnectionRow): Promise<ConnectionSpec> {
+    if (c.credential_source === 'openbao') {
+      if (!this.dynamic || !c.bao_role) throw conflict('This connection takes its credentials from OpenBao, which is not configured on this server (OPENBAO_ADDR, OPENBAO_TOKEN).');
+      const d = await this.dynamic.get(c.bao_role, c.id);
+      return { engine: c.engine, endpoint: c.endpoint, database: c.database, tls: c.tls, username: d.username, password: d.password };
+    }
     const cred = c.credential ? json<{ username: string; password: string }>(await this.keys.open(c.tenant_id, c.credential, `connection:${c.id}`), { username: '', password: '' }) : null;
     return { engine: c.engine, endpoint: c.endpoint, database: c.database, tls: c.tls, username: cred?.username ?? null, password: cred?.password ?? null };
   }
@@ -283,11 +324,11 @@ export class ConnectionService {
   }
 
   classify(c: ConnectionRow, input: QueryInput): Classification {
-    const cl = c.engine === 'postgres' ? classifySql(input.query) : classifyOpenSearch(input.query, input.object ?? null);
+    const cl = c.engine === 'postgres' ? classifySql(input.query) : c.engine === 'mysql' ? classifyMysql(input.query) : classifyOpenSearch(input.query, input.object ?? null);
     if (cl.kind === 'read' || cl.kind === 'unparsed') {
       const bad = cl.objects.find((o) => !allowed(c, o));
       if (bad) return { ...cl, kind: 'denied', denied: bad, reason: `${bad} is not on the schema allow-list for ${c.name}.` };
-      if (cl.kind === 'read' && !cl.objects.length && c.engine === 'postgres') return { ...cl, kind: 'unparsed', reason: 'The query reads no table or view the parser could find.' };
+      if (cl.kind === 'read' && !cl.objects.length && c.engine !== 'opensearch') return { ...cl, kind: 'unparsed', reason: 'The query reads no table or view the parser could find.' };
     }
     return cl;
   }

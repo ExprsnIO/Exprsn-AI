@@ -64,10 +64,11 @@ export interface FakeAcme {
 
 /**
  * An in-process RFC 8555 directory: nonces, JWS verification (ES256, jwk and kid), accounts, orders, http-01
- * validation through the `validate` callback (instead of dialling the domain), finalize with CSR checks, a PEM chain
- * signed by its own CA, and revocation.
+ * validation through the `validate` callback (instead of dialling the domain), dns-01 validation through the injected
+ * `resolveTxt` (the TXT records at `_acme-challenge.<name>` must include base64url(sha256(key authorization))),
+ * wildcard identifiers (dns-01 only), finalize with CSR checks, a PEM chain signed by its own CA, and revocation.
  */
-export async function startFakeAcme(validate: (domain: string, token: string) => Promise<string | null>): Promise<FakeAcme> {
+export async function startFakeAcme(validate: (domain: string, token: string) => Promise<string | null>, opts: { resolveTxt?: (name: string) => Promise<string[]> } = {}): Promise<FakeAcme> {
   const ca = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const caSpki = createPublicKey(ca.privateKey).export({ type: 'spki', format: 'der' });
   const caDer = certificate({ serial: randomBytes(8), issuer: 'Fake internal CA', subject: 'Fake internal CA', spki: caSpki, notBefore: Date.now() - 86_400_000, notAfter: Date.now() + 3650 * 86_400_000, ca: true, key: ca.privateKey });
@@ -75,7 +76,7 @@ export async function startFakeAcme(validate: (domain: string, token: string) =>
   const nonces = new Set<string>();
   const accounts = new Map<string, Record<string, string>>();
   const orders = new Map<string, { status: string; identifiers: { type: string; value: string }[]; authorizations: string[]; finalize: string; certificate?: string; pem?: string; account: string }>();
-  const authzs = new Map<string, { status: string; identifier: { type: string; value: string }; token: string; order: string; account: string; challengeStatus: string; error?: string }>();
+  const authzs = new Map<string, { status: string; identifier: { type: string; value: string }; wildcard: boolean; token: string; order: string; account: string; challengeStatus: string; dnsStatus: string; error?: string }>();
   let n = 0;
   let base = '';
   const fake: FakeAcme = { url: '', directory: '', caPem, issued: [], revoked: [], validityDays: 90, close: async () => undefined };
@@ -135,7 +136,8 @@ export async function startFakeAcme(validate: (domain: string, token: string) =>
           const identifiers = (payload?.identifiers ?? []) as { type: string; value: string }[];
           const auth = identifiers.map((idf) => {
             const aid = String(++n);
-            authzs.set(aid, { status: 'pending', identifier: idf, token: b64u(randomBytes(16)), order: oid2, account: account!, challengeStatus: 'pending' });
+            const wildcard = idf.value.startsWith('*.');
+            authzs.set(aid, { status: 'pending', identifier: { type: idf.type, value: idf.value.replace(/^\*\./, '') }, wildcard, token: b64u(randomBytes(16)), order: oid2, account: account!, challengeStatus: 'pending', dnsStatus: 'pending' });
             return `${base}/authz/${aid}`;
           });
           const o = { status: 'pending', identifiers, authorizations: auth, finalize: `${base}/finalize/${oid2}`, account: account! };
@@ -146,7 +148,23 @@ export async function startFakeAcme(validate: (domain: string, token: string) =>
         if (m) {
           const a = authzs.get(m[1]!);
           if (!a) return problem(404, 'malformed', 'no authz');
-          return send(200, { status: a.status, identifier: a.identifier, challenges: [{ type: 'dns-01', url: `${base}/chall-dns/${m[1]}`, token: a.token, status: 'pending' }, { type: 'http-01', url: `${base}/chall/${m[1]}`, token: a.token, status: a.challengeStatus, ...(a.error ? { error: { detail: a.error } } : {}) }] });
+          const err = a.error ? { error: { detail: a.error } } : {};
+          // A wildcard can only be proven with dns-01 (RFC 8555 section 7.1.3).
+          return send(200, { status: a.status, identifier: a.identifier, ...(a.wildcard ? { wildcard: true } : {}), challenges: [{ type: 'dns-01', url: `${base}/chall-dns/${m[1]}`, token: a.token, status: a.dnsStatus, ...(a.dnsStatus === 'invalid' ? err : {}) }, ...(a.wildcard ? [] : [{ type: 'http-01', url: `${base}/chall/${m[1]}`, token: a.token, status: a.challengeStatus, ...(a.challengeStatus === 'invalid' ? err : {}) }])] });
+        }
+        m = /^\/chall-dns\/(\d+)$/.exec(path);
+        if (m) {
+          const a = authzs.get(m[1]!)!;
+          const expected = b64u(createHash('sha256').update(`${a.token}.${thumb(accounts.get(a.account)!)}`).digest());
+          const records = opts.resolveTxt ? await opts.resolveTxt(`_acme-challenge.${a.identifier.value}`).catch(() => []) : [];
+          const ok = records.includes(expected);
+          a.status = a.dnsStatus = ok ? 'valid' : 'invalid';
+          if (!ok) a.error = `no TXT record ${expected} at _acme-challenge.${a.identifier.value} (found ${records.join(', ') || 'none'})`;
+          const o = orders.get(a.order)!;
+          const all = o.authorizations.map((u) => authzs.get(u.split('/').pop()!)!);
+          if (all.every((x) => x.status === 'valid')) o.status = 'ready';
+          else if (all.some((x) => x.status === 'invalid')) o.status = 'invalid';
+          return send(200, { type: 'dns-01', url: `${base}${path}`, token: a.token, status: a.dnsStatus });
         }
         m = /^\/chall\/(\d+)$/.exec(path);
         if (m) {

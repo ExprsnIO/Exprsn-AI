@@ -9,6 +9,11 @@ import { bootstrap } from './bootstrap.js';
 import { checkPasswordPolicy, hashPassword } from './identity/passwords.js';
 import { LABELS, type Label } from './authz/labels.js';
 import { isRole } from './authz/permissions.js';
+import { createKms } from './platform/kms.js';
+import { FsBlobStore } from './platform/blob.js';
+import { createPreviousKms, rewrapAll } from './platform/rewrap.js';
+
+const RESTORE_PHRASE = 'replace all data';
 
 const USAGE = `exprsn-ai <command>
 
@@ -25,10 +30,19 @@ Commands:
     at first sign-in.
   audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
   kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
+  kms:rewrap                   Re-wrap every data key (and re-sign checkpoints and backup manifests) from the
+                               previous key-encryption key to the current one, then verify. Set the new DATA_KEY (or
+                               KMS_PROVIDER) and the old one as DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER). Safe to
+                               repeat; once it reports verified, the previous key can be removed.
   backup:create                Back up the application database into the blob store (sealed, KMS-signed)
   backup:restore-drill [--backup id]
                                Restore a backup (default: the newest) into a scratch SQLite database and verify
                                its signature, digest, row counts and audit chains; the live database is not touched
+  backup:restore --backup <id> Restore a backup into the configured database (and its blob store into the configured
+      [--from <dir>]           blob store). Refuses a database that has tenants, users or audit events unless
+      [--no-blobs]             --force is given with --confirm "${RESTORE_PHRASE}" (or the phrase is typed at the
+      [--force]                prompt). --from reads the backup from a directory holding a copy of the blob store
+      [--confirm <phrase>]     (platform/backups/...) instead of the configured store. Stop every instance first.
 `;
 
 async function readPassword(prompt: string): Promise<string> {
@@ -94,6 +108,29 @@ async function adminCreate(s: Services, argv: string[]): Promise<void> {
   process.stdout.write(`Created ${username} in tenant ${tenant.slug} with ${roles.join(', ')}. A second factor is required at first sign-in.\n`);
 }
 
+async function readLine(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY) return '';
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  return new Promise((resolve) => rl.question(prompt, (a) => {
+    rl.close();
+    resolve(a);
+  }));
+}
+
+async function restore(s: Services, argv: string[]): Promise<void> {
+  const { values } = parseArgs({ args: argv, options: { backup: { type: 'string' }, from: { type: 'string' }, 'no-blobs': { type: 'boolean' }, force: { type: 'boolean' }, confirm: { type: 'string' } } });
+  if (!values.backup || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(values.backup)) throw new Error('--backup <id> is required (the backup id, a ULID).');
+  if (values.force) {
+    const phrase = values.confirm ?? (await readLine(`This replaces every row in the database. Type "${RESTORE_PHRASE}" to continue: `));
+    if (phrase.trim() !== RESTORE_PHRASE) throw new Error(`Not confirmed: --force needs --confirm "${RESTORE_PHRASE}".`);
+  }
+  const from = values.from ? new FsBlobStore(values.from) : s.blobs;
+  const r = await s.ops.backups.restoreInto({ target: s.db, client: s.cfg.DB_CLIENT, kms: s.kms, from, blobsTo: values['no-blobs'] ? null : s.blobs, backupId: values.backup, force: !!values.force, progress: (m) => void process.stderr.write(`${m}\n`) });
+  const tenant = await s.tenants.bySlug(s.cfg.DEFAULT_TENANT);
+  if (tenant) await s.audit.append({ tenantId: tenant.id, action: 'platform.backup.restored', kind: 'system', actor: { service: 'cli' }, target: { backup: values.backup }, detail: { rows: r.rows, tables: r.tables, skipped: r.skipped, blobs: r.blobs, replaced: r.wiped, store: values.from ? 'directory' : s.blobs.kind } });
+  process.stdout.write(`Restored backup ${values.backup}: ${r.rows} rows in ${r.tables} tables${r.blobs ? `, ${r.blobs.objects} blob store objects` : ''}.${r.skipped.length ? ` Not in this schema: ${r.skipped.join(', ')}.` : ''}\n`);
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === '--help' || cmd === '-h') {
@@ -111,6 +148,11 @@ async function main(): Promise<void> {
       return;
     }
     s = createServices(cfg, db, log);
+    // A restore runs before the first-start seeding, so a fresh database stays empty until the backup fills it.
+    if (cmd === 'backup:restore') {
+      await restore(s, rest);
+      return;
+    }
     await bootstrap(s);
     switch (cmd) {
       case 'admin:create':
@@ -132,6 +174,18 @@ async function main(): Promise<void> {
         const r = await s.keys.rotate(tenant.id);
         await s.audit.append({ tenantId: tenant.id, action: 'kms.key.rotated', kind: 'system', actor: { service: 'cli' }, target: { key: s.keys.kekName(tenant.id) }, detail: r });
         process.stdout.write(`Data key for ${tenant.slug} rotated to version ${r.version}\n`);
+        break;
+      }
+      case 'kms:rewrap': {
+        const previous = createPreviousKms(cfg);
+        if (!previous) throw new Error('No previous key-encryption key is configured: set DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER).');
+        const target = createKms(cfg);
+        const r = await rewrapAll({ db, blobs: s.blobs, target, previous, kekName: (scope) => s!.keys.kekName(scope), progress: (m) => void process.stderr.write(`${m}\n`) });
+        const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
+        if (tenant) await s.audit.append({ tenantId: tenant.id, action: 'kms.rewrapped', kind: 'system', actor: { service: 'cli' }, target: { kms: target.kind }, detail: { previous: previous.kind, dataKeys: { ...r.dataKeys, failed: r.dataKeys.failed.length }, checkpoints: { ...r.checkpoints, failed: r.checkpoints.failed.length }, backups: { ...r.backups, failed: r.backups.failed.length }, verified: r.verified } });
+        process.stdout.write(JSON.stringify(r, null, 2) + '\n');
+        process.stdout.write(r.verified ? 'Every data key opens with the new key-encryption key. The previous key can be removed.\n' : 'Not finished: fix the failures above and run kms:rewrap again. Keep the previous key until it reports verified.\n');
+        if (!r.verified) process.exitCode = 2;
         break;
       }
       case 'backup:create': {

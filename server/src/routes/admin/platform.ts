@@ -10,6 +10,7 @@ import { STEP_TITLES, type BundleRow, type SignerKeyRow } from '../../ops/bundle
 import { MIRROR_KINDS, mirrorView } from '../../ops/mirrors.js';
 import { CERT_USES, certStatus, type CertRow } from '../../ops/certs.js';
 import type { BackupRow, DrillRow } from '../../ops/backups.js';
+import type { SignerProposalRow } from '../../ops/signers.js';
 
 const keyView = (k: SignerKeyRow) => ({ id: k.id, name: k.name, algorithm: k.algorithm, fingerprint: k.fingerprint, short: shortFingerprint(k.fingerprint), publicKeyPem: k.public_key_pem, state: k.state, createdAt: k.created_at, revokedAt: k.revoked_at, revokeReason: k.revoke_reason });
 
@@ -52,6 +53,15 @@ export function platformAdminRoutes(s: Services): Router {
   r.use('/platform', noStore, requireAuth(), requirePermission(s, 'platform:manage'));
   const ops = s.ops;
 
+  const names = async (ids: (string | null)[]) => {
+    const list = ids.filter((x): x is string => !!x);
+    return new Map(((list.length ? await s.db('users').whereIn('id', list).select('id', 'display_name') : []) as { id: string; display_name: string }[]).map((u) => [u.id, u.display_name]));
+  };
+  const proposalView = async (p: SignerProposalRow) => {
+    const n = await names([p.proposed_by, p.decided_by]);
+    return { id: p.id, action: p.action, keyId: p.key_id, name: p.name, algorithm: p.algorithm, fingerprint: p.fingerprint, short: p.fingerprint ? shortFingerprint(p.fingerprint) : null, reason: p.reason, state: p.state, proposedBy: p.proposed_by, proposedByName: p.proposed_by ? (n.get(p.proposed_by) ?? null) : null, proposedAt: p.proposed_at, decidedBy: p.decided_by, decidedByName: p.decided_by ? (n.get(p.decided_by) ?? null) : null, decidedAt: p.decided_at, note: p.note };
+  };
+
   const by = (req: Request): OpsActor => {
     const p = principalOf(req);
     return { tenantId: p.tenantId, actor: actorFrom(p, ip(req)), userId: p.userId, traceId: req.traceId };
@@ -75,14 +85,38 @@ export function platformAdminRoutes(s: Services): Router {
     res.json((await ops.bundles.keys()).map(keyView));
   });
 
+  /** Adds a key: at once when none is registered yet, otherwise as a proposal a second platform admin approves (202). */
   r.post('/platform/signers', async (req, res) => {
     const body = parseBody(z.object({ name: z.string().trim().min(1).max(100), publicKeyPem: z.string().min(40).max(4000) }).strict(), req.body);
-    res.status(201).json(keyView(await ops.bundles.addKey(by(req), body)));
+    const out = await ops.signers.proposeAdd(by(req), body);
+    if (out.key) res.status(201).json(keyView(out.key));
+    else res.status(202).json({ proposal: await proposalView(out.proposal!) });
   });
 
+  /** Revoking a key is a proposal a second platform admin approves. */
   r.post('/platform/signers/:id/revoke', async (req, res) => {
     const body = parseBody(z.object({ reason: z.string().trim().min(3).max(500) }).strict(), req.body);
-    res.json(keyView(await ops.bundles.revokeKey(by(req), String(req.params.id), body.reason)));
+    res.status(202).json({ proposal: await proposalView(await ops.signers.proposeRevoke(by(req), String(req.params.id), body.reason)) });
+  });
+
+  r.get('/platform/signers/proposals', async (req, res) => {
+    const me = principalOf(req).userId;
+    res.json(await Promise.all((await ops.signers.list()).map(async (p) => ({ ...(await proposalView(p)), mine: p.proposed_by === me }))));
+  });
+
+  r.post('/platform/signers/proposals/:id/approve', async (req, res) => {
+    const body = parseBody(z.object({ note: z.string().trim().max(500).nullable().optional() }).strict(), req.body ?? {});
+    const out = await ops.signers.approve(by(req), String(req.params.id), body.note ?? null);
+    res.json({ proposal: await proposalView(out.proposal), key: keyView(out.key) });
+  });
+
+  r.post('/platform/signers/proposals/:id/reject', async (req, res) => {
+    const body = parseBody(z.object({ note: z.string().trim().max(500).nullable().optional() }).strict(), req.body ?? {});
+    res.json({ proposal: await proposalView(await ops.signers.reject(by(req), String(req.params.id), body.note ?? null)) });
+  });
+
+  r.post('/platform/signers/proposals/:id/withdraw', async (req, res) => {
+    res.json({ proposal: await proposalView(await ops.signers.withdraw(by(req), String(req.params.id))) });
   });
 
   // ---------- bundles ----------
@@ -102,22 +136,13 @@ export function platformAdminRoutes(s: Services): Router {
     res.status(201).json(bundleView(await ops.bundles.create(by(req), body), await ops.bundles.keys()));
   });
 
-  /** The transferred file, as the raw request body (application/octet-stream or application/x-tar). */
+  /** The transferred file, as the raw request body (application/octet-stream or application/x-tar), streamed to the blob store. */
   r.put('/platform/bundles/:id/transfer', async (req, res) => {
     const max = s.cfg.PLATFORM_BUNDLE_MAX_BYTES;
-    const tooBig = () => new HttpProblem(413, 'Payload too large', `The bundle is above the cap of ${(max / 1e6).toFixed(0)} MB (PLATFORM_BUNDLE_MAX_BYTES).`, { extensions: { cap: 'size', max } });
     const declared = Number(req.header('content-length') ?? NaN);
-    if (Number.isFinite(declared) && declared > max) throw tooBig();
+    if (Number.isFinite(declared) && declared > max) throw new HttpProblem(413, 'Payload too large', `The bundle is above the cap of ${(max / 1e6).toFixed(0)} MB (PLATFORM_BUNDLE_MAX_BYTES).`, { extensions: { cap: 'size', max } });
     if (/json/i.test(req.header('content-type') ?? '')) throw badRequest('Send the bundle as application/octet-stream or application/x-tar.');
-    const chunks: Buffer[] = [];
-    let size = 0;
-    for await (const c of req as AsyncIterable<Buffer>) {
-      size += c.length;
-      if (size > max) throw tooBig();
-      chunks.push(c);
-    }
-    if (!size) throw badRequest('The transfer is empty.');
-    res.status(202).json(bundleView(await ops.bundles.receive(by(req), String(req.params.id), Buffer.concat(chunks)), await ops.bundles.keys()));
+    res.status(202).json(bundleView(await ops.bundles.receive(by(req), String(req.params.id), req as AsyncIterable<Buffer>, max), await ops.bundles.keys()));
   });
 
   r.post('/platform/bundles/:id/verify', async (req, res) => {

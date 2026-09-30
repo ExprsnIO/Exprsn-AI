@@ -1,10 +1,13 @@
 import type { AuditInput, AuditLog } from './chain.js';
+import type { CounterStore } from '../platform/ratelimit.js';
 
 /**
  * Authorisation denials go to the audit chain, but a principal hammering a forbidden route must not be able to grow
  * the chain (one serialised transaction per entry) without bound. Each principal gets `perWindow` full entries per
  * window; further denials in that window are counted and written as one `authz.denied.suppressed` summary when the
- * window ends, with the count per action. Counts are per server instance, so the bound is per instance.
+ * window ends, with the count per action. With a shared counter store (Redis) the full entries are counted across
+ * every instance, so the bound holds for the whole deployment; the suppressed summary is written by each instance
+ * for what it suppressed.
  */
 export class DenialAudit {
   private readonly windows = new Map<string, { tenantId: string; actor: AuditInput['actor']; started: number; written: number; suppressed: Map<string, number>; timer: NodeJS.Timeout | null }>();
@@ -12,7 +15,8 @@ export class DenialAudit {
   constructor(
     private readonly audit: AuditLog,
     private readonly perWindow = 20,
-    private readonly windowMs = 60_000
+    private readonly windowMs = 60_000,
+    private readonly counters?: CounterStore
   ) {}
 
   async record(key: string, input: AuditInput & { target?: { method?: string; path?: string } }): Promise<void> {
@@ -26,7 +30,9 @@ export class DenialAudit {
       w = { tenantId: input.tenantId, actor: input.actor, started: now, written: 0, suppressed: new Map(), timer: null };
       this.windows.set(key, w);
     }
-    if (w.written < this.perWindow) {
+    // The shared count decides whether this denial is written in full; without a store, this instance's count does.
+    const count = this.counters ? (await this.counters.hit(`denial:${key}`, this.windowMs)).count : w.written + 1;
+    if (count <= this.perWindow) {
       w.written++;
       await this.audit.append(input);
       return;

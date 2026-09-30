@@ -1,12 +1,13 @@
 import { isIP } from 'node:net';
 import pg from 'pg';
+import mysql from 'mysql2/promise';
 import { fetch, type Dispatcher } from 'undici';
 import { addressProblem, checkHost, guardedAgent, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import type { Classification } from './classify.js';
 
 /** What the service hands a driver: the endpoint and the opened credential. */
 export interface ConnectionSpec {
-  engine: 'postgres' | 'opensearch';
+  engine: 'postgres' | 'opensearch' | 'mysql';
   endpoint: string;
   database: string | null;
   tls: boolean;
@@ -161,6 +162,106 @@ export class PostgresDriver implements DataDriver {
   }
 }
 
+export const quoteMysqlIdent = (name: string): string =>
+  name
+    .split('.')
+    .map((p) => '`' + p.replace(/`/g, '``') + '`')
+    .join('.');
+
+const WRITE_GRANT = /\b(ALL PRIVILEGES|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|EXECUTE|FILE|SUPER|GRANT OPTION|TRIGGER|EVENT|CREATE ROUTINE|ALTER ROUTINE|LOCK TABLES|RELOAD|SHUTDOWN|PROCESS|REFERENCES|CREATE USER)\b/i;
+
+/**
+ * MySQL (and MariaDB) through mysql2 (B-416). As with PostgreSQL: the host is checked and the checked address is
+ * dialled (TLS still verifies the name), and every read runs in `START TRANSACTION READ ONLY` with
+ * MAX_EXECUTION_TIME, so the server refuses a write even if the parser missed one.
+ */
+export class MysqlDriver implements DataDriver {
+  constructor(
+    private readonly spec: ConnectionSpec,
+    private readonly allow: AllowList = parseAllowList('')
+  ) {}
+
+  private async client<T>(timeoutMs: number, fn: (c: mysql.Connection) => Promise<T>): Promise<T> {
+    const { host, port } = hostPort(this.spec.endpoint, 3306);
+    const { addresses } = await checkHost(host, this.allow);
+    const c = await mysql.createConnection({
+      host: addresses[0],
+      port,
+      database: this.spec.database ?? undefined,
+      user: this.spec.username ?? undefined,
+      password: this.spec.password ?? undefined,
+      ssl: this.spec.tls ? { rejectUnauthorized: true, ...(isIP(host) ? {} : { servername: host }) } : undefined,
+      connectTimeout: Math.min(timeoutMs, 10_000),
+      multipleStatements: false,
+      supportBigNumbers: true,
+      dateStrings: true,
+      charset: 'utf8mb4'
+    });
+    try {
+      return await fn(c);
+    } finally {
+      await c.end().catch(() => undefined);
+    }
+  }
+
+  private async readOnly<T>(c: mysql.Connection, timeoutMs: number, fn: () => Promise<T>): Promise<T> {
+    await c.query(`SET SESSION MAX_EXECUTION_TIME = ${Math.max(1, Math.floor(timeoutMs))}`).catch(() => undefined); // MariaDB has max_statement_time instead
+    await c.query('START TRANSACTION READ ONLY');
+    try {
+      return await fn();
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+    }
+  }
+
+  async test(timeoutMs: number): Promise<TestResult> {
+    return this.client(timeoutMs, async (c) => {
+      const [rows] = (await c.query('SELECT VERSION() AS version, CURRENT_USER() AS user')) as unknown as [{ version: string; user: string }[]];
+      const [grants] = (await c.query('SHOW GRANTS FOR CURRENT_USER()')) as unknown as [Record<string, string>[]];
+      const lines = grants.map((g) => Object.values(g)[0] ?? '');
+      // USAGE and SELECT (and SHOW VIEW) only: anything else can change data or the server.
+      const writes = lines.filter((l) => WRITE_GRANT.test(l.replace(/^GRANT\s+/i, '').split(/\s+ON\s+/i)[0] ?? ''));
+      const row = rows[0]!;
+      const readOnly = writes.length === 0;
+      return { version: `MySQL ${row.version}`, readOnly, health: 'healthy', detail: readOnly ? `Account ${row.user} is read-only; no write grants.` : `Account ${row.user} holds ${writes.length} grant${writes.length === 1 ? '' : 's'} beyond SELECT. Reads still run in a read-only transaction; use a read-only account.` };
+    });
+  }
+
+  async introspect(timeoutMs: number): Promise<SchemaObject[]> {
+    return this.client(timeoutMs, async (c) => {
+      const where = this.spec.database ? 'table_schema = ?' : "table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')";
+      const args = this.spec.database ? [this.spec.database] : [];
+      const [t] = (await c.query(`SELECT table_schema AS s, table_name AS n, table_type AS k FROM information_schema.tables WHERE ${where} ORDER BY 1, 2 LIMIT 2000`, args)) as unknown as [{ s: string; n: string; k: string }[]];
+      const [cols] = (await c.query(`SELECT table_schema AS s, table_name AS n, column_name AS c, data_type AS t FROM information_schema.columns WHERE ${where} ORDER BY table_schema, table_name, ordinal_position`, args)) as unknown as [{ s: string; n: string; c: string; t: string }[]];
+      const byName = new Map<string, SchemaObject>();
+      for (const r of t) byName.set(`${r.s}.${r.n}`, { name: `${r.s}.${r.n}`, kind: r.k === 'VIEW' ? 'view' : 'table', columns: [] });
+      for (const r of cols) byName.get(`${r.s}.${r.n}`)?.columns.push({ name: r.c, type: r.t });
+      return [...byName.values()];
+    });
+  }
+
+  async query(_c: Classification, text: string, opts: { limit: number; timeoutMs: number }): Promise<QueryResult> {
+    const inner = text.trim().replace(/;\s*$/, '');
+    return this.client(opts.timeoutMs, (c) =>
+      this.readOnly(c, opts.timeoutMs, async () => {
+        const [rows, fields] = (await c.query({ sql: `SELECT * FROM (${inner}\n) AS exprsn_q LIMIT ${opts.limit + 1}`, rowsAsArray: true, timeout: opts.timeoutMs + 2000 })) as unknown as [unknown[][], { name: string }[]];
+        return { columns: fields.map((f) => f.name), rows: rows.slice(0, opts.limit), capped: rows.length > opts.limit, estimate: null };
+      })
+    );
+  }
+
+  async rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number }): Promise<QueryResult> {
+    return this.client(opts.timeoutMs, (c) =>
+      this.readOnly(c, opts.timeoutMs, async () => {
+        const wm = opts.watermarkColumn ? quoteMysqlIdent(opts.watermarkColumn) : null;
+        const sql = `SELECT * FROM ${quoteMysqlIdent(object)}${wm && opts.after != null ? ` WHERE ${wm} > ?` : ''}${wm ? ` ORDER BY ${wm}` : ''} LIMIT ${opts.limit + 1}`;
+        const [rows, fields] = (await c.query({ sql, rowsAsArray: true, timeout: opts.timeoutMs + 2000, values: wm && opts.after != null ? [opts.after] : [] })) as unknown as [unknown[][], { name: string }[]];
+        return { columns: fields.map((f) => f.name), rows: rows.slice(0, opts.limit), capped: rows.length > opts.limit, estimate: null };
+      })
+    );
+  }
+}
+
 /** OpenSearch over its REST API with basic authentication. */
 export class OpenSearchDriver implements DataDriver {
   private readonly base: string;
@@ -251,7 +352,8 @@ export class OpenSearchDriver implements DataDriver {
 /** The real drivers, confined to internal hosts plus `allow` (CONNECTIONS_ALLOWED_HOSTS). */
 export const createDrivers = (allow: AllowList): Record<ConnectionSpec['engine'], DriverFactory> => ({
   postgres: (spec) => new PostgresDriver(spec, allow),
-  opensearch: (spec) => new OpenSearchDriver(spec, allow)
+  opensearch: (spec) => new OpenSearchDriver(spec, allow),
+  mysql: (spec) => new MysqlDriver(spec, allow)
 });
 
 export const defaultDrivers = createDrivers(parseAllowList(''));

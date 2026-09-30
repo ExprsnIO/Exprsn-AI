@@ -1,9 +1,9 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { actorFrom } from '../../audit/chain.js';
-import { LABELS } from '../../authz/labels.js';
+import { labelRank, LABELS } from '../../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
-import { conflict, notFound } from '../../http/problem.js';
+import { conflict, forbidden, notFound } from '../../http/problem.js';
 import { serverView, toolView, type ServerRow } from '../../mcp/service.js';
 import { SIDE_EFFECTS } from '../../registry/service.js';
 import type { ProfileRow } from '../../gateway/repo.js';
@@ -56,6 +56,7 @@ export function mcpAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const b = parseBody(z.object({ name: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens'), description: z.string().trim().max(500).nullable().default(null), url: urlSchema, zone: z.string().trim().regex(/^[a-z0-9-]{1,63}$/).default('app-internal'), auth: z.enum(['none', 'service', 'user']).default('none'), credential: z.string().min(8).max(4096).nullable().default(null) }), req.body);
     try {
+      await s.zones.assertMemberFits('MCP server', b.zone, null);
       const out = await mcp.register(p, b);
       await audit(req, 'mcp.registered', out.server, { url: b.url, zone: b.zone, auth: b.auth, health: out.server.health });
       res.status(201).json({ ...serverView(out.server), report: out.report });
@@ -78,6 +79,9 @@ export function mcpAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const srv = await load(req);
     const b = parseBody(z.object({ sideEffect: z.enum(SIDE_EFFECTS), confirm: z.enum(['always', 'never']), label: z.enum(LABELS).default('internal') }), req.body);
+    // A tool cannot be cleared for data above its server's zone ceiling.
+    const ceiling = await s.zones.ceilingOf(srv.zone);
+    if (ceiling && labelRank(b.label) > labelRank(ceiling)) throw forbidden(`${srv.name} is in the ${srv.zone} zone, whose ceiling is ${ceiling}; its tools cannot be approved for ${b.label} data.`, { step: 'zone', zoneCeiling: ceiling });
     const t = await mcp.approveTool(p, srv, String(req.params.tool), b);
     await audit(req, 'mcp.tool.approved', srv, { tool: t.name, hash: t.hash, sideEffect: b.sideEffect, confirm: b.confirm, label: b.label });
     res.json(toolView(t));

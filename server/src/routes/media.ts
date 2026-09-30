@@ -14,11 +14,16 @@ import { badRequest, conflict, HttpProblem } from '../http/problem.js';
 import { docView } from '../knowledge/service.js';
 import { assetView, mediaJobView, transcriptText } from '../media/service.js';
 import type { Services } from '../services.js';
+import { redirectToMedia, sandboxHeaders } from '../media/origin.js';
 
 const safeName = (n: string) => n.replace(/[^\w.() -]+/g, '_').slice(0, 120) || 'media';
 
-/** Sends a buffer, honouring a single `Range: bytes=a-b` so video and audio elements can seek. */
+/**
+ * Sends a buffer, honouring a single `Range: bytes=a-b` so video and audio elements can seek. The response is
+ * sandboxed (CSP `sandbox`, `nosniff`): a stored file can never run script with the console's origin.
+ */
 export function sendBytes(req: Request, res: Response, data: Buffer, type: string, disposition: string): void {
+  sandboxHeaders(res);
   res.setHeader('Content-Type', type);
   res.setHeader('Content-Disposition', disposition);
   res.setHeader('Accept-Ranges', 'bytes');
@@ -107,11 +112,13 @@ export function mediaRoutes(s: Services): Router {
 
   r.get('/media/assets/:id/content', read, async (req, res) => {
     const a = await m.asset(principalOf(req), String(req.params.id));
+    if (redirectToMedia(s, req, res, { kind: 'asset', id: a.id })) return;
     sendBytes(req, res, await m.content(a), m.typeOf(a), `inline; filename="${safeName(a.name)}"`);
   });
 
   r.get('/media/assets/:id/previews/:i', read, async (req, res) => {
     const a = await m.asset(principalOf(req), String(req.params.id));
+    if (redirectToMedia(s, req, res, { kind: 'preview', id: a.id, i: Number(req.params.i) })) return;
     const pv = await m.preview(a, Number(req.params.i));
     sendBytes(req, res, pv.data, pv.type, 'inline');
   });
@@ -137,6 +144,7 @@ export function mediaRoutes(s: Services): Router {
     const q = parseBody(z.object({ download: z.enum(['1', 'true']).optional() }), req.query);
     const out = await m.output(principalOf(req), String(req.params.id), Number(req.params.i));
     if (q.download) await audit(req, 'media.output.downloaded', { asset: out.job.asset_id, job: out.job.id, output: out.name }, out.job.label);
+    if (redirectToMedia(s, req, res, { kind: 'output', id: out.job.id, i: Number(req.params.i), download: !!q.download })) return;
     sendBytes(req, res, out.data, out.type, `${q.download ? 'attachment' : 'inline'}; filename="${safeName(out.name)}"`);
   });
 

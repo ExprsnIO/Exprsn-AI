@@ -6,6 +6,7 @@ import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } f
 import { attachmentView } from '../chat/attachments.js';
 import { sendBytes } from './media.js';
 import type { Services } from '../services.js';
+import { redirectToMedia } from '../media/origin.js';
 
 const dim = z.number().int().min(256).max(2048).refine((v) => v % 8 === 0, 'A multiple of 8');
 
@@ -64,6 +65,7 @@ export function imageRoutes(s: Services): Router {
 
   r.get('/images/:id/image', gen, async (req, res) => {
     const out = await im.image(principalOf(req), String(req.params.id));
+    if (redirectToMedia(s, req, res, { kind: 'image', id: out.row.id, download: false })) return;
     sendBytes(req, res, out.data, out.type, 'inline');
   });
 
@@ -71,6 +73,7 @@ export function imageRoutes(s: Services): Router {
   r.get('/images/:id/download', gen, async (req, res) => {
     const out = await im.image(principalOf(req), String(req.params.id));
     await audit(req, 'image.downloaded', { image: out.row.id }, out.row.label, { imageSha256: out.provenance?.imageSha256 ?? null, highLabel: labelRank(out.row.label) >= labelRank('confidential') });
+    if (redirectToMedia(s, req, res, { kind: 'image', id: out.row.id, download: true })) return;
     sendBytes(req, res, out.data, out.type, `attachment; filename="image-${out.row.id.toLowerCase()}.${out.type === 'image/png' ? 'png' : 'jpg'}"`);
   });
 

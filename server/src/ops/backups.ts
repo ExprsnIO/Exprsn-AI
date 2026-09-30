@@ -1,9 +1,7 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { once } from 'node:events';
-import { createGzip, gunzipSync } from 'node:zlib';
 import { ulid } from 'ulid';
 import { canonicalJson } from '../crypto/index.js';
 import { createDb, json, migrate, type Db } from '../db/knex.js';
@@ -11,6 +9,9 @@ import { AuditLog } from '../audit/chain.js';
 import { AuditCheckpoints } from '../audit/checkpoints.js';
 import { conflict, notFound } from '../http/problem.js';
 import type { Services } from '../services.js';
+import type { BlobStore } from '../platform/blob.js';
+import type { Kms } from '../platform/kms.js';
+import { blobTar, deferForeignKeys, lines, openFromBlob, pgForeignKeys, restoreBlobTar, restoreRows, rowCounts, sealToBlob, setPgDeferrable, tableRows } from './restore.js';
 import { audit, getState, notifyAdmins, setState, type OpsActor } from './common.js';
 
 export interface BackupRow {
@@ -66,7 +67,14 @@ export interface BackupManifest {
   tables: { name: string; rows: number }[];
   totalRows: number;
   archive: { blob: string; sha256: string; bytes: number; cipher: 'aes-256-gcm'; iv: string; tag: string; kek: string; wrappedKey: string };
+  /** Sprint 15: the blob store as a tar, sealed with its own key (absent in older backups or with PLATFORM_BACKUP_BLOBS=false). */
+  blobs?: { blob: string; sha256: string; bytes: number; plainBytes: number; objects: number; cipher: 'aes-256-gcm'; iv: string; tag: string; kek: string; wrappedKey: string } | null;
 }
+
+/** Blob keys a backup of the blob store leaves out: the backups themselves. */
+export const BLOB_BACKUP_EXCLUDE = ['platform/backups/'];
+
+export const manifestKeyFor = (id: string) => `platform/backups/${id}.manifest.json`;
 
 export const DRILL_STEPS = [
   'Manifest signature verified',
@@ -109,18 +117,6 @@ const encodeRow = (r: Record<string, unknown>): Record<string, unknown> => {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(r)) out[k] = Buffer.isBuffer(v) ? { $b64: v.toString('base64') } : v instanceof Date ? v.toISOString() : v;
   return out;
-};
-
-/** The dump's values as SQLite binds them. */
-const sqliteValue = (v: unknown): unknown => {
-  if (v === null || v === undefined) return null;
-  if (typeof v === 'boolean') return v ? 1 : 0;
-  if (typeof v === 'object') {
-    const o = v as { $b64?: string };
-    if (typeof o.$b64 === 'string' && Object.keys(o).length === 1) return Buffer.from(o.$b64, 'base64');
-    return JSON.stringify(v);
-  }
-  return v;
 };
 
 const fmtMs = (ms: number): string => (ms < 1000 ? `${ms} ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s` : `${Math.floor(ms / 3_600_000)} h ${Math.round((ms % 3_600_000) / 60_000)} min`);
@@ -195,43 +191,56 @@ export class BackupService {
     try {
       const client = s.cfg.DB_CLIENT;
       const migrations = (await s.db('knex_migrations').select('name').orderBy('id')).map((r: { name: string }) => r.name);
-      const gz = createGzip();
-      const chunks: Buffer[] = [];
-      gz.on('data', (c: Buffer) => chunks.push(c));
       const counts: { name: string; rows: number }[] = [];
-      const dump = async (db: Db) => {
-        const tables = await listTables(db, client);
-        gz.write(JSON.stringify({ format: 'exprsn-backup/1', id: backupId }) + '\n');
-        for (const [i, t] of tables.entries()) {
-          const rows = (await db(t).select('*')) as Record<string, unknown>[];
-          for (const r of rows) gz.write(JSON.stringify([t, encodeRow(r)]) + '\n');
-          counts.push({ name: t, rows: rows.length });
-          // SQLite has one connection, held by nothing here; on the others progress goes through the pool.
-          if (client !== 'sqlite' || i % 10 === 0) await progress(Math.round(((i + 1) * 70) / tables.length), `Dumped ${t}`);
-        }
-      };
-      if (client === 'sqlite') await dump(s.db);
+      // The dump is produced a page at a time and flows through gzip and AES-256-GCM into the blob store.
+      const dump = (db: Db) =>
+        async function* (): AsyncGenerator<Buffer> {
+          const tables = await listTables(db, client);
+          yield Buffer.from(JSON.stringify({ format: 'exprsn-backup/1', id: backupId }) + '\n');
+          for (const [i, t] of tables.entries()) {
+            let n = 0;
+            let buf: string[] = [];
+            for await (const r of tableRows(db, client, t)) {
+              buf.push(JSON.stringify([t, encodeRow(r)]));
+              n++;
+              if (buf.length >= 500) {
+                yield Buffer.from(buf.join('\n') + '\n');
+                buf = [];
+              }
+            }
+            if (buf.length) yield Buffer.from(buf.join('\n') + '\n');
+            counts.push({ name: t, rows: n });
+            // SQLite has one connection, held by nothing here; on the others progress goes through the pool.
+            if (client !== 'sqlite' || i % 10 === 0) await progress(Math.round(((i + 1) * 60) / tables.length), `Dumped ${t}`);
+          }
+        };
+      const dek = randomBytes(32);
+      const iv = randomBytes(12);
+      const blob = `platform/backups/${backupId}.bin`;
+      let sealedDb: Awaited<ReturnType<typeof sealToBlob>>;
+      if (client === 'sqlite') sealedDb = await sealToBlob({ blobs: s.blobs, key: blob, plain: dump(s.db)(), gzip: true, dek, iv, aad: `exprsn-backup:${backupId}` });
       else {
         const trx = await s.db.transaction({ isolationLevel: 'repeatable read' });
         try {
-          await dump(trx as unknown as Db);
+          sealedDb = await sealToBlob({ blobs: s.blobs, key: blob, plain: dump(trx as unknown as Db)(), gzip: true, dek, iv, aad: `exprsn-backup:${backupId}` });
           await trx.commit();
         } catch (err) {
           await trx.rollback().catch(() => undefined);
           throw err;
         }
       }
-      gz.end();
-      await once(gz, 'end');
-      const archive = Buffer.concat(chunks);
-      await progress(80, 'Encrypting');
-      const dek = randomBytes(32);
-      const iv = randomBytes(12);
-      const cipher = createCipheriv('aes-256-gcm', dek, iv);
-      cipher.setAAD(Buffer.from(`exprsn-backup:${backupId}`));
-      const sealed = Buffer.concat([cipher.update(archive), cipher.final()]);
       await s.kms.ensureKey(this.kek);
-      const blob = `platform/backups/${backupId}.bin`;
+      let blobsPart: BackupManifest['blobs'] = null;
+      if (s.cfg.PLATFORM_BACKUP_BLOBS) {
+        await progress(65, 'Archiving the blob store');
+        const bdek = randomBytes(32);
+        const biv = randomBytes(12);
+        const counter = { objects: 0, bytes: 0 };
+        const key = `platform/backups/${backupId}.blobs.bin`;
+        const r = await sealToBlob({ blobs: s.blobs, key, plain: blobTar(s.blobs, BLOB_BACKUP_EXCLUDE, counter), gzip: false, dek: bdek, iv: biv, aad: `exprsn-backup-blobs:${backupId}` });
+        blobsPart = { blob: key, sha256: r.sha256, bytes: r.bytes, plainBytes: r.plainBytes, objects: counter.objects, cipher: 'aes-256-gcm', iv: biv.toString('base64'), tag: r.tag, kek: this.kek, wrappedKey: await s.kms.wrap(this.kek, bdek, `backup-blobs:${backupId}`) };
+      }
+      await progress(85, 'Signing the manifest');
       const manifest: BackupManifest = {
         format: 'exprsn-backup/1',
         id: backupId,
@@ -240,15 +249,16 @@ export class BackupService {
         migrations,
         tables: counts,
         totalRows: counts.reduce((a, c) => a + c.rows, 0),
-        archive: { blob, sha256: createHash('sha256').update(archive).digest('hex'), bytes: sealed.length, cipher: 'aes-256-gcm', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), kek: this.kek, wrappedKey: await s.kms.wrap(this.kek, dek, `backup:${backupId}`) }
+        archive: { blob, sha256: sealedDb.sha256, bytes: sealedDb.bytes, cipher: 'aes-256-gcm', iv: iv.toString('base64'), tag: sealedDb.tag, kek: this.kek, wrappedKey: await s.kms.wrap(this.kek, dek, `backup:${backupId}`) },
+        ...(blobsPart ? { blobs: blobsPart } : {})
       };
       const signature = await s.kms.hmac(this.kek, canonicalJson(manifest));
-      const manifestKey = `platform/backups/${backupId}.manifest.json`;
-      await s.blobs.put(blob, sealed, 'application/octet-stream');
+      const manifestKey = manifestKeyFor(backupId);
       await s.blobs.put(manifestKey, Buffer.from(JSON.stringify({ manifest, signature }, null, 2)), 'application/json');
+      const sealed = { length: sealedDb.bytes + (blobsPart?.bytes ?? 0) };
       const manifestHash = createHash('sha256').update(canonicalJson(manifest)).digest('hex');
       await s.db('platform_backups').where({ id: backupId }).update({ state: 'succeeded', tables: counts.length, rows: manifest.totalRows, bytes: sealed.length, manifest_hash: manifestHash, signature: signature.slice(0, 200), blob_key: blob, manifest_key: manifestKey, finished_at: Date.now(), error: null });
-      await audit(s, by, 'platform.backup.created', { backup: backupId }, { tables: counts.length, rows: manifest.totalRows, bytes: sealed.length, manifestHash, kek: this.kek, store: s.blobs.kind });
+      await audit(s, by, 'platform.backup.created', { backup: backupId }, { tables: counts.length, rows: manifest.totalRows, bytes: sealed.length, manifestHash, kek: this.kek, store: s.blobs.kind, blobObjects: blobsPart?.objects ?? null });
       await progress(95, 'Applying retention');
       await this.prune(by);
       await this.watch(by);
@@ -269,6 +279,7 @@ export class BackupService {
     for (const b of old) {
       if (b.blob_key) await s.blobs.delete(b.blob_key);
       if (b.manifest_key) await s.blobs.delete(b.manifest_key);
+      await s.blobs.delete(`platform/backups/${b.id}.blobs.bin`);
       await s.db('platform_backups').where({ id: b.id }).delete();
     }
     if (old.length) await audit(s, by, 'platform.backup.pruned', {}, { removed: old.map((b) => b.id), retain: s.cfg.PLATFORM_BACKUP_RETAIN });
@@ -346,16 +357,19 @@ export class BackupService {
       pass(0, `HMAC by ${manifest.archive.kek}`);
 
       await begin(1);
-      const sealed = await s.blobs.get(manifest.archive.blob);
-      if (!sealed) throw new Error('The backup archive is missing from the blob store.');
-      const dek = await s.kms.unwrap(manifest.archive.kek, manifest.archive.wrappedKey, `backup:${b.id}`);
-      const decipher = createDecipheriv('aes-256-gcm', dek, Buffer.from(manifest.archive.iv, 'base64'));
-      decipher.setAAD(Buffer.from(`exprsn-backup:${b.id}`));
-      decipher.setAuthTag(Buffer.from(manifest.archive.tag, 'base64'));
-      const archive = Buffer.concat([decipher.update(sealed), decipher.final()]);
-      const digest = createHash('sha256').update(archive).digest('hex');
-      if (digest !== manifest.archive.sha256) throw new Error(`The archive digest ${digest.slice(0, 12)}… does not match the manifest.`);
-      pass(1, `${(sealed.length / 1e6).toFixed(1)} MB, sha256 ${digest.slice(0, 12)}…`);
+      // A streamed pass that only authenticates: nothing read from the archive is used before its tag and digest check.
+      const archiveIn = await this.openArchive(s.kms, s.blobs, manifest, false);
+      for await (const _ of archiveIn.stream) void _;
+      await archiveIn.done();
+      let blobNote = '';
+      if (manifest.blobs) {
+        const blobsIn = await this.openBlobArchive(s.kms, s.blobs, manifest);
+        for await (const _ of blobsIn.stream) void _;
+        await blobsIn.done();
+        blobNote = `; blob store ${manifest.blobs.objects} objects, ${(manifest.blobs.bytes / 1e6).toFixed(1)} MB`;
+        detail.blobs = { objects: manifest.blobs.objects, bytes: manifest.blobs.bytes, verified: true };
+      }
+      pass(1, `${(archiveIn.sealedBytes / 1e6).toFixed(1)} MB, sha256 ${manifest.archive.sha256.slice(0, 12)}…${blobNote}`);
 
       await begin(2);
       scratch = createDb({ DB_CLIENT: 'sqlite', SQLITE_FILENAME: path.join(dir, 'drill.sqlite'), DB_POOL_MAX: 1, DATABASE_URL: undefined });
@@ -369,33 +383,12 @@ export class BackupService {
       pass(2, `${schema.size} tables; the backup is at ${manifest.migrations.length} of ${known.size} migrations`);
 
       await begin(3);
-      const byTable = new Map<string, Record<string, unknown>[]>();
-      const lines = gunzipSync(archive).toString('utf8').split('\n');
-      const head = JSON.parse(lines[0] ?? '{}') as { format?: string; id?: string };
-      if (head.format !== 'exprsn-backup/1' || head.id !== b.id) throw new Error('The archive header does not match the backup.');
-      for (let i = 1; i < lines.length; i++) {
-        if (!lines[i]) continue;
-        const [t, row] = JSON.parse(lines[i]!) as [string, Record<string, unknown>];
-        let list = byTable.get(t);
-        if (!list) byTable.set(t, (list = []));
-        list.push(row);
-      }
-      const skipped: string[] = [];
-      let restored = 0;
-      for (const { name } of manifest.tables) {
-        const rows = byTable.get(name) ?? [];
-        if (!schema.has(name)) {
-          skipped.push(name);
-          continue;
-        }
-        await scratch(name).delete();
-        if (rows.length) {
-          const cols = Object.keys(rows[0]!).length || 1;
-          const chunk = Math.max(1, Math.min(200, Math.floor(30_000 / cols)));
-          await scratch.batchInsert(name, rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, sqliteValue(v)]))), chunk);
-        }
-        restored += rows.length;
-      }
+      for (const { name } of manifest.tables) if (schema.has(name)) await scratch(name).delete();
+      const second = await this.openArchive(s.kms, s.blobs, manifest, true);
+      const restoredRows = await restoreRows(scratch, 'sqlite', lines(second.stream), schema, { id: b.id });
+      await second.done();
+      const skipped = manifest.tables.map((t) => t.name).filter((n) => !schema.has(n));
+      const restored = [...restoredRows.counts.entries()].filter(([t]) => schema.has(t)).reduce((a, [, n]) => a + n, 0);
       detail.skipped = skipped;
       pass(3, `${restored} rows into ${manifest.tables.length - skipped.length} tables${skipped.length ? `; not in the portable schema: ${skipped.join(', ')}` : ''}`);
 
@@ -443,6 +436,92 @@ export class BackupService {
       await scratch?.destroy().catch(() => undefined);
       await rm(dir, { recursive: true, force: true });
     }
+  }
+
+  /** The database archive of a backup, decrypted (and gunzipped when `gunzip`) as a stream. */
+  private async openArchive(kms: Kms, blobs: BlobStore, m: BackupManifest, gunzip: boolean) {
+    const dek = await kms.unwrap(m.archive.kek, m.archive.wrappedKey, `backup:${m.id}`);
+    return openFromBlob({ blobs, key: m.archive.blob, dek, iv: m.archive.iv, tag: m.archive.tag, aad: `exprsn-backup:${m.id}`, sha256: m.archive.sha256, gunzip });
+  }
+
+  /** The blob-store archive of a backup, decrypted as a tar stream. */
+  private async openBlobArchive(kms: Kms, blobs: BlobStore, m: BackupManifest) {
+    const b = m.blobs!;
+    const dek = await kms.unwrap(b.kek, b.wrappedKey, `backup-blobs:${m.id}`);
+    return openFromBlob({ blobs, key: b.blob, dek, iv: b.iv, tag: b.tag, aad: `exprsn-backup-blobs:${m.id}`, sha256: b.sha256, gunzip: false });
+  }
+
+  /**
+   * Restores a backup into `target` (B-410): the application database this server is configured with, used by the
+   * `backup:restore` CLI. The manifest is read from `from` (the blob store holding the backup, which may be a copy
+   * kept elsewhere) and checked against the KMS; both archives are authenticated in a first streamed pass before
+   * anything is written. The rows go in in one transaction, with foreign keys checked at commit; then the blob store
+   * objects are written into `blobsTo`. A database that already has tenants, users or audit events is refused unless
+   * `force`, which empties it first.
+   */
+  async restoreInto(o: { target: Db; client: string; kms: Kms; from: BlobStore; blobsTo: BlobStore | null; backupId: string; force: boolean; progress?: (msg: string) => void }): Promise<{ rows: number; tables: number; skipped: string[]; blobs: { objects: number; bytes: number } | null; wiped: boolean }> {
+    const say = o.progress ?? (() => undefined);
+    const raw = await o.from.get(manifestKeyFor(o.backupId));
+    if (!raw) throw new Error(`No manifest for backup ${o.backupId} in the blob store (${manifestKeyFor(o.backupId)}).`);
+    const { manifest, signature } = JSON.parse(raw.toString('utf8')) as { manifest: BackupManifest; signature: string };
+    if (manifest.id !== o.backupId) throw new Error('The manifest belongs to a different backup.');
+    if (!(await o.kms.verifyHmac(manifest.archive.kek, canonicalJson(manifest), signature).catch(() => false))) throw new Error('The manifest signature does not verify with the KMS key.');
+    say('Manifest signature verified');
+
+    const schema = new Set(await listTables(o.target, o.client));
+    const known = new Set((await o.target('knex_migrations').select('name')).map((r: { name: string }) => r.name));
+    const unknown = manifest.migrations.filter((m) => !known.has(m));
+    if (unknown.length) throw new Error(`The backup comes from a newer schema (${unknown.join(', ')}); restore it with that release.`);
+
+    const occupied = (await rowCounts(o.target, ['tenants', 'users', 'audit_events'].filter((t) => schema.has(t)))).filter((c) => c.rows > 0);
+    if (occupied.length && !o.force) throw new Error(`The database is not empty (${occupied.map((c) => `${c.rows} ${c.table}`).join(', ')}). Restore into an empty database, or pass --force with the confirmation phrase to replace everything in it.`);
+
+    const archiveIn = await this.openArchive(o.kms, o.from, manifest, false);
+    for await (const _ of archiveIn.stream) void _;
+    await archiveIn.done();
+    if (manifest.blobs && o.blobsTo) {
+      const blobsIn = await this.openBlobArchive(o.kms, o.from, manifest);
+      for await (const _ of blobsIn.stream) void _;
+      await blobsIn.done();
+    }
+    say('Archives authenticated');
+
+    const fks = o.client === 'pg' ? await pgForeignKeys(o.target) : [];
+    if (fks.length) await setPgDeferrable(o.target, fks, true);
+    let result: Awaited<ReturnType<typeof restoreRows>>;
+    try {
+      result = await o.target.transaction(async (trx) => {
+        await deferForeignKeys(trx as unknown as Db, o.client);
+        // Everything in the schema is replaced, including rows the migrations or a first start seeded.
+        for (const t of schema) await trx(t).delete();
+        const second = await this.openArchive(o.kms, o.from, manifest, true);
+        const r = await restoreRows(trx as unknown as Db, o.client, lines(second.stream), schema, { id: manifest.id }, async (t, n) => say(`Restored ${t}: ${n} rows`));
+        await second.done();
+        for (const { name, rows } of manifest.tables) {
+          if (!schema.has(name)) continue;
+          const got = r.counts.get(name) ?? 0;
+          if (got !== rows) throw new Error(`${name}: restored ${got} rows, the manifest says ${rows}.`);
+        }
+        // The dump was taken while this backup's own row said "running": record it as the backup it turned out to be.
+        const own = { state: 'succeeded', tables: manifest.tables.length, rows: manifest.totalRows, bytes: manifest.archive.bytes + (manifest.blobs?.bytes ?? 0), manifest_hash: createHash('sha256').update(canonicalJson(manifest)).digest('hex'), signature: signature.slice(0, 200), blob_key: manifest.archive.blob, manifest_key: manifestKeyFor(manifest.id), error: null, finished_at: Date.now() };
+        if (!(await trx('platform_backups').where({ id: manifest.id }).update(own))) await trx('platform_backups').insert({ id: manifest.id, kind: 'cli', db_client: manifest.dbClient, created_by: null, created_at: manifest.createdAt, job_id: null, ...own });
+        if (o.client === 'mysql') await trx.raw('SET FOREIGN_KEY_CHECKS = 1');
+        return r;
+      });
+    } finally {
+      if (fks.length) await setPgDeferrable(o.target, fks, false).catch(() => undefined);
+    }
+    say('Rows committed');
+
+    let blobs: { objects: number; bytes: number } | null = null;
+    if (manifest.blobs && o.blobsTo) {
+      const blobsIn = await this.openBlobArchive(o.kms, o.from, manifest);
+      blobs = await restoreBlobTar(o.blobsTo, blobsIn.stream);
+      await blobsIn.done();
+      say(`Blob store: ${blobs.objects} objects restored`);
+    }
+    const rows = [...result.counts.entries()].filter(([t]) => schema.has(t)).reduce((a, [, n]) => a + n, 0);
+    return { rows, tables: manifest.tables.length - result.skipped.length, skipped: result.skipped, blobs, wiped: occupied.length > 0 };
   }
 
   /** The platform alert for a missed RPO: raised once, cleared when a backup lands, acknowledged by an admin. */

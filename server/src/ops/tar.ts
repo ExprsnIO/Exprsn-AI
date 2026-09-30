@@ -123,3 +123,158 @@ export function writeTar(files: { path: string; data: Buffer }[]): Buffer {
   parts.push(Buffer.alloc(BLOCK * 2));
   return Buffer.concat(parts);
 }
+
+/** Reads exact byte counts from an async stream of chunks, holding at most one chunk beyond what was asked for. */
+export class ByteReader {
+  private buf: Buffer = Buffer.alloc(0);
+  private readonly it: AsyncIterator<Buffer | Uint8Array>;
+  private done = false;
+  /** Bytes handed out so far. */
+  position = 0;
+
+  constructor(source: AsyncIterable<Buffer | Uint8Array>) {
+    this.it = source[Symbol.asyncIterator]();
+  }
+
+  private async fill(): Promise<boolean> {
+    if (this.done) return false;
+    const n = await this.it.next();
+    if (n.done) {
+      this.done = true;
+      return false;
+    }
+    const c = Buffer.isBuffer(n.value) ? n.value : Buffer.from(n.value.buffer, n.value.byteOffset, n.value.byteLength);
+    this.buf = this.buf.length ? Buffer.concat([this.buf, c]) : c;
+    return true;
+  }
+
+  /** Exactly `n` bytes, or fewer only at the end of the stream. */
+  async read(n: number): Promise<Buffer> {
+    while (this.buf.length < n && (await this.fill()));
+    const out = this.buf.subarray(0, n);
+    this.buf = this.buf.subarray(out.length);
+    this.position += out.length;
+    return out;
+  }
+
+  /** `n` bytes as they arrive, in pieces; throws if the stream ends first. */
+  async *chunks(n: number): AsyncGenerator<Buffer> {
+    let left = n;
+    while (left > 0) {
+      if (!this.buf.length && !(await this.fill())) throw new TarError('The tar archive is truncated');
+      const take = this.buf.subarray(0, Math.min(left, this.buf.length));
+      this.buf = this.buf.subarray(take.length);
+      this.position += take.length;
+      left -= take.length;
+      yield take;
+    }
+  }
+
+  async skip(n: number): Promise<void> {
+    for await (const _ of this.chunks(n)) void _;
+  }
+
+  /** Reads what is left, so a digest over the whole stream covers the end marker and padding too. */
+  async drain(): Promise<void> {
+    this.position += this.buf.length;
+    this.buf = Buffer.alloc(0);
+    while (await this.fill()) {
+      this.position += this.buf.length;
+      this.buf = Buffer.alloc(0);
+    }
+  }
+}
+
+export interface StreamEntry {
+  path: string;
+  size: number;
+  /** The entry's data. Consume it (or call `skip`) before asking for the next entry. */
+  body: () => AsyncGenerator<Buffer>;
+  /** The whole entry as a buffer, refused above `max` bytes. */
+  buffer: (max: number) => Promise<Buffer>;
+}
+
+/**
+ * The streaming counterpart of `tarEntries`: yields regular-file entries in archive order from a stream, with the
+ * same rules (only files and directories, safe paths, checksummed headers, an end marker). Memory stays at one
+ * chunk, whatever the size of the archive or its entries.
+ */
+export async function* tarStream(source: AsyncIterable<Buffer | Uint8Array>): AsyncGenerator<StreamEntry> {
+  const r = new ByteReader(source);
+  let nextPath: string | null = null;
+  for (;;) {
+    const at = r.position;
+    const h = await r.read(BLOCK);
+    if (h.length < BLOCK) throw new TarError('The tar archive has no end marker');
+    if (h.every((x) => x === 0)) {
+      await r.drain();
+      return;
+    }
+    if (!checksumOk(h)) throw new TarError(`Corrupt tar header at byte ${at}`);
+    const size = octal(h, 124, 12);
+    const type = String.fromCharCode(h[156]! || 0x30);
+    const prefix = h.subarray(257, 262).toString() === 'ustar' ? str(h, 345, 155) : '';
+    const pad = Math.ceil(size / BLOCK) * BLOCK - size;
+    if (type === 'x') {
+      if (size > 1024 * 1024) throw new TarError('A pax header is too large');
+      nextPath = paxPath(Buffer.from(await r.read(size)));
+      await r.skip(pad);
+      continue;
+    }
+    if (type === 'g') {
+      await r.skip(size + pad);
+      continue;
+    }
+    const path = nextPath ?? (prefix ? `${prefix}/${str(h, 0, 100)}` : str(h, 0, 100));
+    nextPath = null;
+    if (type === '5') {
+      await r.skip(size + pad);
+      continue;
+    }
+    if (type !== '0') throw new TarError(`Bundle entry ${JSON.stringify(path).slice(0, 120)} is not a regular file (type ${type})`);
+    const safe = safePath(path);
+    let consumed = false;
+    const body = async function* () {
+      if (consumed) throw new TarError('An entry can be read once');
+      consumed = true;
+      yield* r.chunks(size);
+      await r.skip(pad);
+    };
+    const buffer = async (max: number) => {
+      if (size > max) throw new TarError(`${safe} is larger than ${max} bytes`);
+      const parts: Buffer[] = [];
+      for await (const c of body()) parts.push(c);
+      return Buffer.concat(parts);
+    };
+    yield { path: safe, size, body, buffer };
+    if (!consumed) {
+      consumed = true;
+      await r.skip(size + pad);
+    }
+  }
+}
+
+/** Writes a ustar header (with a pax path record first when the path is longer than 100 bytes). */
+export function entryHeader(path: string, size: number): Buffer {
+  if (Buffer.byteLength(path) <= 100) return header(path, size);
+  const rec = (k: string, v: string) => {
+    const body = ` ${k}=${v}\n`;
+    const n = Buffer.byteLength(body);
+    // The length counts its own digits: find the fixed point.
+    let len = n + 1;
+    while (String(len).length + n !== len) len = String(len).length + n;
+    return `${len}${body}`;
+  };
+  const pax = Buffer.from(rec('path', path));
+  const h = header('PaxHeader', pax.length);
+  h[156] = 0x78; // 'x'
+  // The checksum covers the type byte: recompute it.
+  h.fill(0x20, 148, 156);
+  let sum = 0;
+  for (const x of h) sum += x;
+  field(h, sum.toString(8).padStart(6, '0') + '\0 ', 148, 8);
+  return Buffer.concat([h, pax, Buffer.alloc((BLOCK - (pax.length % BLOCK)) % BLOCK), header(path.slice(0, 100), size)]);
+}
+
+export const tarPadding = (size: number): Buffer => Buffer.alloc((BLOCK - (size % BLOCK)) % BLOCK);
+export const TAR_END = Buffer.alloc(BLOCK * 2);
