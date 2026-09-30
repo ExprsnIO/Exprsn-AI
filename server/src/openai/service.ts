@@ -7,6 +7,9 @@ import { badRequest, forbidden, HttpProblem } from '../http/problem.js';
 import { QueueTimeout, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
 import { THINK_LEVELS, type ThinkLevel } from '../gateway/repo.js';
 import type { ChatMessage } from '../gateway/ollama.js';
+import { CALCULATE_TOOL } from '../chat/calc.js';
+import { formatContext, passageSpan, type ContextItem } from '../chat/context.js';
+import type { ResolvedTool } from '../registry/dispatch.js';
 import type { Services } from '../services.js';
 
 /*
@@ -84,7 +87,29 @@ export interface CompletionResult {
   toolCalls: OpenAiToolCall[];
   finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  /** Sprint 16: the `exprsn` extension (citations, the label the answer carries, server-side tool calls). */
+  exprsn?: Exprsn;
 }
+
+/** The `exprsn` extension field of a completion (Sprint 16). */
+export interface Exprsn {
+  /** The label of the answer: the request's, raised to the highest retrieved item used. */
+  label: Label;
+  citations: Record<string, unknown>[];
+  tools: { name: string; ok: boolean }[];
+}
+
+/** Sprint 16 request extensions, from the `X-Exprsn-*` headers. */
+export interface Extensions {
+  /** Knowledge bases to retrieve from (B-701). */
+  knowledge?: string[];
+  /** The caller's memories (B-701). */
+  memory?: boolean;
+  /** The profile's read-only tools, run on the server (B-702). */
+  serverTools?: boolean;
+}
+
+const MAX_TOOL_ROUNDS = 6;
 
 /** A problem with the OpenAI error `code` (and `param`) the translation layer should report. */
 export const apiProblem = (status: number, detail: string, code: string, param?: string) => new HttpProblem(status, status === 400 ? 'Bad request' : 'Error', detail, { extensions: { code, ...(param ? { param } : {}) } });
@@ -222,17 +247,67 @@ export class OpenAiService {
    * One chat completion. `onDelta` receives answer text as it is generated (only when the stream mode is `live`); the
    * returned content is what passed the output checkpoint.
    */
-  async chat(p: Principal, body: ChatBody, label: Label, signal: AbortSignal, opts: { id?: string; onDelta?: (text: string) => void } = {}): Promise<CompletionResult> {
+  /**
+   * The knowledge bases named in `X-Exprsn-Knowledge`: each must be one the caller may read and published. A base the
+   * caller may not read is reported exactly like one that does not exist.
+   */
+  private async checkKnowledge(p: Principal, ids: string[]): Promise<void> {
+    const visible = new Map((await this.s().knowledge.visible(p)).map((x) => [x.kb.id, x.kb]));
+    for (const kbId of ids) {
+      const kb = visible.get(kbId);
+      if (!kb) throw apiProblem(404, `The knowledge base ${kbId} does not exist or you do not have access to it.`, 'knowledge_base_not_found', 'X-Exprsn-Knowledge');
+      if (kb.status !== 'published') throw apiProblem(409, `The knowledge base ${kb.name} is not published.`, 'knowledge_base_unavailable', 'X-Exprsn-Knowledge');
+    }
+  }
+
+  /**
+   * Retrieved context for a `/v1` request (B-701), through chat's providers with chat's rules: nothing above the lowest
+   * of the caller's clearance, the profile's label, the pool's ceiling and the workspace's ceiling. Items go in one
+   * delimited system message after the profile's prompt; the answer's label rises to the highest item used.
+   */
+  private async context(p: Principal, requestId: string, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], label: Label, ext: Extensions): Promise<{ items: ContextItem[]; label: Label }> {
+    const s = this.s();
+    const query = [...messages].reverse().find((x) => x.role === 'user')?.content ?? '';
+    const ws = p.workspaceId ? await s.tenants.workspace(p.tenantId, p.workspaceId) : undefined;
+    const caps: Label[] = [p.clearance, r.profile.label, lease.pool.label_ceiling, ...(ws ? [ws.label_ceiling] : [])];
+    const ceiling = caps.reduce((a, b) => (labelRank(b) < labelRank(a) ? b : a));
+    const req = { principal: p, tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, conversationId: requestId, messageId: requestId, profile: r.profile, query, label, ceiling };
+    const items: ContextItem[] = [];
+    if (ext.knowledge?.length) items.push(...(await s.knowledge.contextFor({ ...req, kbIds: ext.knowledge })));
+    if (ext.memory) items.push(...(await s.memory.contextFor(req)));
+    const kept = items.filter((x) => labelRank(x.label) <= labelRank(ceiling));
+    if (!kept.length) return { items: [], label };
+    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(kept) });
+    return { items: kept, label: kept.reduce<Label>((a, x) => (labelRank(x.label) > labelRank(a) ? x.label : a), label) };
+  }
+
+  /** The profile's tools a `/v1` request may have run on the server (B-702): calculate and read-only registry and MCP tools. */
+  private async serverTools(p: Principal, r: ResolvedProfile, label: Label): Promise<{ calculate: boolean; extra: ResolvedTool[] }> {
+    const calculate = r.profile.tools.includes('calculate');
+    const names = r.profile.tools.filter((t) => t !== 'calculate');
+    const extra = names.length ? (await this.s().tools.resolve(p, names, label)).tools.filter((t) => t.sideEffect === 'read' && t.confirm === 'never') : [];
+    return { calculate, extra };
+  }
+
+  async chat(p: Principal, body: ChatBody, label: Label, signal: AbortSignal, opts: { id?: string; onDelta?: (text: string) => void; ext?: Extensions } = {}): Promise<CompletionResult> {
     const s = this.s();
     const id = opts.id ?? `chatcmpl-${ulid()}`;
     const onDelta = opts.onDelta;
+    const ext = opts.ext ?? {};
     const created = Math.floor(Date.now() / 1000);
     await this.checkLabel(p, label);
     let r = await this.resolve(p, body.model, label);
     const toolsWanted = !!body.tools?.length && body.tool_choice !== 'none';
-    if (toolsWanted && (!r.model.capabilities.includes('tools') || r.model.evaluation?.toolsWithheld)) throw apiProblem(400, `${body.model} does not support tools.`, 'tools_not_supported', 'tools');
+    if (toolsWanted && ext.serverTools) throw apiProblem(400, 'Send either tools or X-Exprsn-Tools: profile, not both.', 'tools_conflict', 'X-Exprsn-Tools');
+    const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
+    if ((toolsWanted || ext.serverTools) && !modelTools) throw apiProblem(400, `${body.model} does not support tools.`, 'tools_not_supported', ext.serverTools ? 'X-Exprsn-Tools' : 'tools');
+    if (ext.knowledge?.length) await this.checkKnowledge(p, ext.knowledge);
     await this.admit(p);
     const messages = await this.messages(p, body, r, label, id);
+    let answerLabel = label;
+    let items: ContextItem[] = [];
+    const toolsRun: { name: string; ok: boolean }[] = [];
+    let calcCalls = 0;
     if (body.tool_choice === 'required' || typeof body.tool_choice === 'object') {
       const which = typeof body.tool_choice === 'object' ? `the ${body.tool_choice.function.name} tool` : 'one of the tools';
       messages.push({ role: 'system', content: `Answer by calling ${which}.` });
@@ -274,25 +349,65 @@ export class OpenAiService {
       if (body.presence_penalty != null) options.presence_penalty = body.presence_penalty;
       if (body.frequency_penalty != null) options.frequency_penalty = body.frequency_penalty;
       const think = this.think(r, body.reasoning_effort);
-      const tools = toolsWanted ? body.tools!.map((t) => ({ type: 'function', function: { name: t.function.name, ...(t.function.description ? { description: t.function.description } : {}), parameters: t.function.parameters ?? { type: 'object', properties: {} } } })) : undefined;
-      for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(think !== undefined ? { think } : {}), ...(tools ? { tools } : {}), options }, signal)) {
-        const msg = chunk.message;
-        if (msg && (msg.content || msg.thinking) && firstTokenMs == null) {
-          firstTokenMs = Date.now() - started;
-          if (lease.cold) s.gateway.noteResident(lease.instance.id, r.model.name);
+      if (ext.knowledge?.length || ext.memory) ({ items, label: answerLabel } = await this.context(p, id, r, lease, messages, label, ext));
+      const server = ext.serverTools ? await this.serverTools(p, r, answerLabel) : null;
+      const serverDefs = server ? [...(server.calculate ? [CALCULATE_TOOL] : []), ...server.extra.map((t) => t.def)] : [];
+      const tools = toolsWanted ? body.tools!.map((t) => ({ type: 'function', function: { name: t.function.name, ...(t.function.description ? { description: t.function.description } : {}), parameters: t.function.parameters ?? { type: 'object', properties: {} } } })) : serverDefs.length ? serverDefs : undefined;
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const roundCalls: NonNullable<ChatMessage['tool_calls']> = [];
+        let roundContent = '';
+        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(think !== undefined ? { think } : {}), ...(tools ? { tools } : {}), options }, signal)) {
+          const msg = chunk.message;
+          if (msg && (msg.content || msg.thinking) && firstTokenMs == null) {
+            firstTokenMs = Date.now() - started;
+            if (lease.cold) s.gateway.noteResident(lease.instance.id, r.model.name);
+          }
+          if (msg?.content) {
+            content += msg.content;
+            roundContent += msg.content;
+            if (onDelta && this.o.streamMode === 'live') onDelta(msg.content);
+          }
+          if (msg?.tool_calls?.length) roundCalls.push(...msg.tool_calls);
+          if (chunk.done) {
+            counted = true;
+            doneReason = chunk.done_reason;
+            promptTokens += chunk.prompt_eval_count ?? 0;
+            outputTokens += chunk.eval_count ?? 0;
+            gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
+          }
         }
-        if (msg?.content) {
-          content += msg.content;
-          if (onDelta && this.o.streamMode === 'live') onDelta(msg.content);
+        // The caller's own tools: the calls go back to the caller. Server tools (B-702): run here, then ask again.
+        if (!server || !roundCalls.length) {
+          calls.push(...roundCalls);
+          break;
         }
-        if (msg?.tool_calls?.length) calls.push(...msg.tool_calls);
-        if (chunk.done) {
-          counted = true;
-          doneReason = chunk.done_reason;
-          promptTokens += chunk.prompt_eval_count ?? 0;
-          outputTokens += chunk.eval_count ?? 0;
-          gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
+        messages.push({ role: 'assistant', content: roundContent, tool_calls: roundCalls });
+        for (const call of roundCalls) {
+          const args = (call.function.arguments ?? {}) as Record<string, unknown>;
+          const ext2 = server.extra.find((t) => t.fn === call.function.name);
+          let out: unknown;
+          let ok = false;
+          if (ext2) {
+            const o = await s.tools.call({ principal: p, label: answerLabel, source: { kind: 'api-request', id }, signal }, ext2, args);
+            ok = o.ok;
+            out = o.ok ? o.result : { error: o.error ?? 'The tool failed.' };
+            toolsRun.push({ name: ext2.entry.name, ok });
+          } else if (call.function.name === 'calculate' && server.calculate) {
+            calcCalls++;
+            try {
+              out = await s.calc.evaluate(String(args.expression ?? ''));
+              ok = true;
+            } catch (err) {
+              out = { error: (err as Error).message };
+            }
+            toolsRun.push({ name: 'calculate', ok });
+          } else {
+            out = { error: 'Unknown tool' };
+            toolsRun.push({ name: call.function.name, ok: false });
+          }
+          messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(out) });
         }
+        if (round === MAX_TOOL_ROUNDS - 1) doneReason = 'length';
       }
     } catch (err) {
       failed = err as Error;
@@ -304,7 +419,7 @@ export class OpenAiService {
       outputTokens = Math.ceil(content.length / 4);
     }
     if (promptTokens + outputTokens > 0) {
-      await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'api', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens, outputTokens, gpuMs });
+      await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'api', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens, outputTokens, gpuMs, ...(calcCalls ? { calcCalls } : {}) });
     }
     if (failed) {
       if (signal.aborted) throw failed;
@@ -319,7 +434,7 @@ export class OpenAiService {
     if (content) {
       let d;
       try {
-        d = await s.guardrails.check({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, checkpoint: 'model-output', text: content, label, principal: p, source: { kind: 'api-request', id }, meta: { profile: r.profile.name, model: r.model.name, via: 'openai-api' } });
+        d = await s.guardrails.check({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, checkpoint: 'model-output', text: content, label: answerLabel, principal: p, source: { kind: 'api-request', id }, meta: { profile: r.profile.name, model: r.model.name, via: 'openai-api', ...(ext.serverTools ? { tools: true } : {}) } });
       } catch (err) {
         s.log.error({ err, request: id }, 'model-output guardrail failed');
         d = { action: 'block' as const, text: content, findings: [], reason: 'The guardrail check could not run, so the answer is withheld.' };
@@ -332,7 +447,17 @@ export class OpenAiService {
         finishReason = 'content_filter';
       }
     }
+    // Citations with the passage each knowledge item contributed; none for an answer that was withheld.
+    const withheld = finishReason === 'content_filter' && content.startsWith('This answer was withheld.');
+    const citations = withheld ? [] : items.map((x, i) => {
+      const cite: Record<string, unknown> = { n: i + 1, kind: x.tag === 'context' ? 'knowledge' : 'memory', label: x.label, ...x.cite };
+      if (x.tag !== 'context') return cite;
+      const [a, b] = passageSpan(x.text, content);
+      return { ...cite, span: [a, b], passage: x.text.slice(a, b) };
+    });
+    const exprsn: Exprsn | undefined = ext.knowledge?.length || ext.memory || ext.serverTools ? { label: answerLabel, citations, tools: toolsRun } : undefined;
     return {
+      ...(exprsn ? { exprsn } : {}),
       id,
       created,
       model: body.model,
