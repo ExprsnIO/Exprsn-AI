@@ -114,6 +114,26 @@ export const assetView = (a: AssetRow, names?: Map<string, string>) => ({
   createdAt: a.created_at
 });
 
+/**
+ * An SRT transcript as plain text for a knowledge base: one line per cue, starting with the cue's start time
+ * (`[00:01:02] …`), without the cue numbers and end times.
+ */
+export function transcriptText(srt: string): string {
+  return srt
+    .replace(/\r\n?/g, '\n')
+    .split(/\n{2,}/)
+    .map((cue) => {
+      const lines = cue.split('\n').filter((l) => l.trim());
+      const at = lines.findIndex((l) => /-->/.test(l));
+      if (at < 0) return '';
+      const start = /(\d{1,2}:\d{2}:\d{2})/.exec(lines[at]!)?.[1] ?? '';
+      const text = lines.slice(at + 1).join(' ').trim();
+      return text ? `[${start}] ${text}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
 export const mediaJobView = (j: MediaJobRow) => ({ id: j.id, assetId: j.asset_id, preset: j.preset, params: j.params, encoder: j.encoder, state: j.state, stage: j.stage, progress: j.progress, node: j.node, outputs: j.outputs.map((o, i) => ({ index: i, name: o.name, type: o.type, size: o.size })), result: j.result, label: j.label, error: j.error, createdAt: j.created_at, finishedAt: j.finished_at });
 
 /**

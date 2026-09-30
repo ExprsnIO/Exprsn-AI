@@ -260,4 +260,33 @@ describe('agent runs', () => {
     await m.post('/api/runs', { agent: 'Data analyst', input: 'x', label: 'restricted' }).expect(403);
     await m.post('/api/runs', { agent: 'Nobody', input: 'x' }).expect(404);
   });
+
+  it('starts a run with the agent\'s accepted memories at or below the run\'s label', async () => {
+    await publishAgent(['calculate']);
+    ollama.reply = () => ({ content: 'Done.' });
+    const remember = async (text: string, o: { agent?: string; state?: string; label?: string; expiresAt?: number | null } = {}) => {
+      const id = `M${Math.random().toString(36).slice(2)}`.padEnd(26, '0').slice(0, 26).toUpperCase();
+      const t = Date.now();
+      await h.s.db('memories').insert({ id, tenant_id: h.tenantId, scope: 'agent', owner_id: o.agent ?? 'Data analyst', type: 'progress', content: await h.s.keys.seal(h.tenantId, text, `memory:${id}`), label: o.label ?? 'internal', source_label: o.label ?? 'internal', state: o.state ?? 'active', source: null, origin: 'manual', author_id: null, accepted_by: null, embed_model: null, expires_at: o.expiresAt ?? null, version: 1, created_at: t, updated_at: t });
+    };
+    await remember('The ledger tool times out on queries over 12 months; split them by quarter.');
+    await remember('Proposed, not accepted yet.', { state: 'proposed' });
+    await remember('Confidential cost centre codes.', { label: 'confidential' });
+    await remember('Another agent\'s note.', { agent: 'Travel desk' });
+    await remember('Expired note.', { expiresAt: Date.now() - 1000 });
+    const m = await member();
+    const run = (await m.post('/api/runs', { agent: 'Data analyst', input: 'Q3 travel?', label: 'internal' }).expect(202)).body;
+    await h.s.jobs.runDue();
+    expect((await view(m, run.id)).state).toBe('succeeded');
+    const system = (ollama.requests.filter((r) => r.path === '/api/chat')[0]!.body.messages as { role: string; content: string }[])[0]!;
+    expect(system.role).toBe('system');
+    expect(system.content).toBe('Be exact.\n\nWhat you remember from earlier runs (accepted by a curator):\n- The ledger tool times out on queries over 12 months; split them by quarter.');
+    // At the confidential label the confidential memory is included too.
+    const run2 = (await m.post('/api/runs', { agent: 'Data analyst', input: 'Q3 travel?', label: 'confidential' }).expect(202)).body;
+    await h.s.jobs.runDue();
+    expect((await view(m, run2.id)).state).toBe('succeeded');
+    const second = (ollama.requests.filter((r) => r.path === '/api/chat')[1]!.body.messages as { content: string }[])[0]!.content;
+    expect(second).toContain('- Confidential cost centre codes.');
+    expect(second).not.toMatch(/Proposed|Another agent|Expired/);
+  });
 });

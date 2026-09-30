@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkSpan, parseTime, presetById } from '../src/media/presets.js';
 import { FfmpegRunner, sniffContainer } from '../src/media/runner.js';
+import { transcriptText } from '../src/media/service.js';
 import type { Guardrails } from '../src/guardrails/types.js';
 import { localUser, login, type Client, type Harness } from './helpers.js';
 import { FakeMediaRunner, FakeSafety, fakeMp4, fakeWav, harness8 } from './sprint8-fakes.js';
@@ -163,6 +164,38 @@ describe('media', () => {
     expect(srt).toContain('[phone redacted]');
     expect(srt).not.toContain('7946');
     expect(await h.s.db('audit_events').where({ action: 'media.frames.withheld' })).toHaveLength(1);
+  });
+
+  it('sends a transcript to a knowledge base the caller curates, as a document with the job\'s label', async () => {
+    expect(transcriptText('1\r\n00:00:01,000 --> 00:00:04,000\r\nGood morning\r\neveryone.\r\n\r\n2\r\n00:01:05,000 --> 00:01:09,000\r\n\r\n')).toBe('[00:00:01] Good morning everyone.');
+    const m = await setup({ MEDIA_WHISPER_BIN: '/opt/whisper/whisper-cli', MEDIA_WHISPER_MODEL: '/opt/whisper/ggml-large-v3.bin' });
+    await localUser(h, 'cur', ['member', 'knowledge-curator'], 'confidential');
+    const cur = await login(h, 'cur');
+    const repo = h.s.gateway.repo;
+    const model = await repo.createModel({ name: 'nomic-embed-text', source: 'Ollama library', expectedDigest: null, license: { name: 'test' }, label: 'confidential', notes: null, requestedBy: 'x', requestedTenant: h.tenantId });
+    await repo.updateModel(model.id, { state: 'approved', import_state: 'pulled', capabilities: ['embedding'] });
+    const kb = (await cur.agent.post('/api/knowledge/bases').set('x-csrf-token', cur.csrf).send({ name: 'Town halls', label: 'internal', embedModel: 'nomic-embed-text' }).expect(201)).body;
+
+    const a = (await upload(cur, 'town-hall.mp4', fakeMp4({ durationMs: 120_000 }), 'confidential').expect(202)).body;
+    await h.s.jobs.runDue();
+    const job = (await cur.agent.post(`/api/media/assets/${a.id}/jobs`).set('x-csrf-token', cur.csrf).send({ preset: 'transcribe-srt', params: { language: 'en' } }).expect(202)).body;
+    const clip = (await cur.agent.post(`/api/media/assets/${a.id}/jobs`).set('x-csrf-token', cur.csrf).send({ preset: 'normalise-audio', params: {} }).expect(202)).body;
+    const send = (c: Client, id: string) => c.agent.post(`/api/media/jobs/${id}/knowledge`).set('x-csrf-token', c.csrf).send({ kbId: kb.id });
+    await h.s.jobs.runDue();
+    await send(cur, clip.id).expect(409);
+    await send(m, job.id).expect(404); // not the member's job to read
+    const doc = (await send(cur, job.id).expect(202)).body;
+    expect(doc).toMatchObject({ name: 'town-hall transcript.txt', label: 'confidential', state: 'quarantined', kb: { id: kb.id, name: 'Town halls' } });
+    const row = await h.s.db('knowledge_documents').where({ id: doc.id }).first();
+    expect(row.kb_id).toBe(kb.id);
+    expect(await h.s.audit.list(h.tenantId, { action: 'media.transcript.sent' })).toHaveLength(1);
+
+    // A member who cannot curate the base cannot add to it.
+    const own = (await upload(m, 'call.mp4', fakeMp4({ durationMs: 60_000 })).expect(202)).body;
+    await h.s.jobs.runDue();
+    const mine = (await m.agent.post(`/api/media/assets/${own.id}/jobs`).set('x-csrf-token', m.csrf).send({ preset: 'transcribe-srt', params: { language: 'en' } }).expect(202)).body;
+    await h.s.jobs.runDue();
+    await send(m, mine.id).expect(403);
   });
 
   it('keeps assets within the workspace and clearance, and lets only the owner cancel a job', async () => {

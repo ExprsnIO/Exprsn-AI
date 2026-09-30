@@ -6,7 +6,7 @@
   const STATUSES = ['draft', 'in_review', 'published', 'deprecated', 'retired'];
   const statusText = (s) => String(s || '').replace('_', ' ');
   const SIDE = { read: 'read-only', write: 'write', destructive: 'destructive' };
-  const IMPL = { builtin: 'Built-in', mcp: 'MCP server tool', script: 'Script-backed', archive: 'Versioned archive', agent: 'Agent definition' };
+  const IMPL = { builtin: 'Built-in', mcp: 'MCP server tool', script: 'Script-backed', archive: 'Versioned archive', agent: 'Agent definition', workflow: 'Workflow' };
   const sidePill = (s) => UI.pill(SIDE[s] || s || 'not applicable', s === 'read' ? 'ok' : s === 'write' ? 'warn' : s === 'destructive' ? 'danger' : 'outline');
   const statusPill = (s) => UI.pill(statusText(s), s === 'published' ? 'ok' : s === 'in_review' ? 'info' : s === 'deprecated' ? 'warn' : s === 'retired' ? 'danger' : '');
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
@@ -129,7 +129,7 @@
             ['Owner', esc(sel.owner || '')],
             ['Version', '<span class="mono">' + esc(sel.version) + '</span> <span class="muted">' + esc(statusText(sel.status)) + '</span>' + (d.versions && d.versions.length > 1 ? ' <span class="muted">(' + d.versions.length + ' versions)</span>' : '')],
             ['Schema hash', '<span class="mono">' + esc(String(sel.schemaHash).slice(0, 8)) + '</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copyhash="' + esc(sel.schemaHash) + '"' }) + (sel.approvedHash && sel.approvedHash !== sel.schemaHash ? ' <span style="color:var(--danger-fg)">differs from approved</span>' : '')],
-            ['Implemented as', esc(IMPL[sel.impl] || sel.impl) + (sel.impl === 'script' && sel.definition ? ' <span class="muted">' + esc(sel.definition.scriptName || '') + ' v' + esc(sel.definition.version) + '</span>' : '')],
+            ['Implemented as', esc(IMPL[sel.impl] || sel.impl) + (sel.impl === 'script' && sel.definition ? ' <span class="muted">' + esc(sel.definition.scriptName || '') + ' v' + esc(sel.definition.version) + '</span>' : '') + (sel.impl === 'workflow' && sel.definition ? ' <a href="#" data-goworkflow="' + esc(sel.definition.workflowId) + '">' + esc(sel.definition.workflowName || 'workflow') + ' v' + esc(sel.definition.version) + '</a>' : '')],
             ['Ceiling label', UI.label(sel.label, { sm: true })],
             ['Confirmation required', sel.kind === 'tool' ? esc(sel.confirm) + (sel.sideEffect && sel.sideEffect !== 'read' ? ' <span class="muted">(' + esc(SIDE[sel.sideEffect]) + ' class)</span>' : '') : 'not applicable'],
             ['Rate limit', sel.ratePerHour ? esc(sel.ratePerHour + ' per user per hour') : 'none'],
@@ -141,7 +141,7 @@
           + '<div class="vstack gap4">' + sel.checks.map((c) => '<div class="hstack" style="align-items:flex-start;color:var(--' + (c.ok ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c.ok ? 'check' : 'x', 14) + '<span style="color:var(--fg)"><b style="font-weight:600">' + esc(c.name) + '</b><span class="fg2" style="display:block;font-size:12px">' + esc(c.detail) + '</span></span></div>').join('') + (sel.checkedAt ? '<div class="muted" style="font-size:12px">Checked ' + esc(when(sel.checkedAt)) + '</div>' : '') + '</div>'
           + '<div class="hstack wrap">'
           + (!canManage(sel) ? '' : sel.status === 'in_review' ? UI.btn('Reject', { attrs: 'data-reject', disabled: mine, title: mine ? 'Someone other than the author reviews' : '' }) + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve', disabled: !sel.checksPassed || mine, title: mine ? 'Someone other than the author reviews' : sel.checksPassed ? '' : 'Approve stays disabled until the checks pass' })
-            : sel.status === 'draft' ? (sel.impl !== 'mcp' && sel.impl !== 'script' ? UI.btn('Edit', { attrs: 'data-editentry' }) : '') + UI.btn('Submit for review', { kind: 'primary', attrs: 'data-submitreview' })
+            : sel.status === 'draft' ? (sel.impl !== 'mcp' && sel.impl !== 'script' && sel.impl !== 'workflow' ? UI.btn('Edit', { attrs: 'data-editentry' }) : '') + UI.btn('Submit for review', { kind: 'primary', attrs: 'data-submitreview' })
               : sel.status === 'published' ? UI.btn('Deprecate', { attrs: 'data-deprecate' }) + UI.btn('Publish to more', { kind: 'primary', attrs: 'data-publishmore' })
                 : sel.status === 'deprecated' ? UI.btn('Retire', { kind: 'danger', attrs: 'data-retire' }) + UI.btn('Restore', { attrs: 'data-restore' }) : '')
           + (sel.kind !== 'skill' && sel.status !== 'retired' ? UI.btn('Test harness', { kind: 'ghost', icon: 'play', attrs: 'data-harness-open' }) : '')
@@ -214,6 +214,7 @@
         ctx.modal({ title: 'New version of ' + esc(sel.name), body: UI.field('Version', UI.input(parts[0] + '.' + (parts[1] + 1) + '.0', { attrs: 'data-ver' }), 'A draft copied from ' + esc(sel.version) + '; it goes through checks and review like any draft.'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', async () => { const version = m.querySelector('[data-ver]').value.trim(); App.closeOverlay(); const r = await act(() => App.post('/api/admin/registry/' + sel.id + '/versions', { version }), 'Draft ' + esc(sel.name) + ' ' + esc(version) + ' created.'); if (r && r.id) st.sel = r.id; }); } });
       });
       ctx.on('click', '[data-editentry]', () => entryForm(sel));
+      ctx.on('click', '[data-goworkflow]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { id: t.dataset.goworkflow }); });
       ctx.on('click', '[data-submit]', () => entryForm(null));
 
       if (st.openSubmit) { st.openSubmit = false; setTimeout(() => entryForm(null), 30); }

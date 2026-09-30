@@ -10,8 +10,9 @@ import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { LABELS, type Label } from '../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
-import { badRequest, HttpProblem } from '../http/problem.js';
-import { assetView, mediaJobView } from '../media/service.js';
+import { badRequest, conflict, HttpProblem } from '../http/problem.js';
+import { docView } from '../knowledge/service.js';
+import { assetView, mediaJobView, transcriptText } from '../media/service.js';
 import type { Services } from '../services.js';
 
 const safeName = (n: string) => n.replace(/[^\w.() -]+/g, '_').slice(0, 120) || 'media';
@@ -137,6 +138,26 @@ export function mediaRoutes(s: Services): Router {
     const out = await m.output(principalOf(req), String(req.params.id), Number(req.params.i));
     if (q.download) await audit(req, 'media.output.downloaded', { asset: out.job.asset_id, job: out.job.id, output: out.name }, out.job.label);
     sendBytes(req, res, out.data, out.type, `${q.download ? 'attachment' : 'inline'}; filename="${safeName(out.name)}"`);
+  });
+
+  /**
+   * Send transcript to a knowledge base: the transcript of a finished transcription job becomes a document in the
+   * base's uploads, as text with a start time per line, keeping the job's label (the classifier may raise it, never
+   * lower it). The base must be one the caller can curate; the document is scanned and indexed like any upload.
+   */
+  r.post('/media/jobs/:id/knowledge', write, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ kbId: z.string().length(26) }).strict(), req.body);
+    const out = await m.output(p, String(req.params.id), 0);
+    if (out.job.preset !== 'transcribe-srt' || out.job.state !== 'succeeded') throw conflict('Only the transcript of a finished transcription job can be sent to a knowledge base.');
+    const text = transcriptText(out.data.toString('utf8'));
+    if (!text) throw conflict('The transcript is empty.');
+    const a = await m.asset(p, out.job.asset_id);
+    const name = `${a.name.replace(/\.[^.]+$/, '')} transcript.txt`;
+    const doc = await s.knowledge.upload(p, body.kbId, { name, label: out.job.label, data: Buffer.from(text, 'utf8') });
+    await audit(req, 'media.transcript.sent', { asset: a.id, job: out.job.id, kb: doc.kb_id, document: doc.id }, doc.label, { name: doc.name, size: doc.size });
+    const kb = await s.knowledge.base(p, doc.kb_id);
+    res.status(202).json({ ...docView(doc), kb: { id: kb.id, name: kb.name } });
   });
 
   /** "Ask for a higher cap": tells the system admins, with the probe result. */

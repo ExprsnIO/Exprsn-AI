@@ -37,6 +37,13 @@ export interface ToolCallContext {
   approved?: boolean;
 }
 
+/** Runs a workflow published as a tool (`impl: 'workflow'`): the workflow service, installed after it is built. */
+export interface WorkflowToolRunner {
+  /** Why the entry's workflow cannot run now, or null. */
+  unavailable(entry: EntryRow): Promise<string | null>;
+  runAsTool(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown>;
+}
+
 export interface ToolOutcome {
   name: string;
   arguments: Record<string, unknown>;
@@ -59,10 +66,11 @@ export interface ToolOutcome {
  * to published registry entries the caller may use, offers their schemas to the model, and for each call:
  * validates the arguments, applies the tool's label ceiling and rate limit, passes the `tool-call` guardrail
  * checkpoint (meta: side-effect class, the tool's ceiling), holds write and destructive calls for approval, then runs
- * the built-in, MCP or script implementation and checks the result against the output schema.
+ * the built-in, MCP, script or workflow implementation and checks the result against the output schema.
  */
 export class ToolDispatcher {
   private readonly limiters = new Map<number, RateLimiterMemory>();
+  private workflows: WorkflowToolRunner | null = null;
 
   constructor(
     private readonly registry: RegistryService,
@@ -71,6 +79,11 @@ export class ToolDispatcher {
     private readonly calc: CalcWorker,
     private readonly guard: () => Guardrails
   ) {}
+
+  /** Workflows published as tools run through this runner. */
+  useWorkflows(runner: WorkflowToolRunner): void {
+    this.workflows = runner;
+  }
 
   /** Resolves tool names for a principal and a data label; tools that cannot be offered come back with a reason. */
   async resolve(p: Principal, names: string[], label: Label): Promise<{ tools: ResolvedTool[]; hidden: { name: string; reason: string }[] }> {
@@ -107,6 +120,7 @@ export class ToolDispatcher {
   private async unavailable(p: Principal, entry: EntryRow, label: Label): Promise<string | null> {
     if (labelRank(label) > labelRank(entry.label)) return `its ceiling is ${entry.label}; the data is ${label}`;
     if (entry.impl === 'mcp') return this.mcp.unavailable(String(entry.definition.serverId), String(entry.definition.tool), p.userId);
+    if (entry.impl === 'workflow') return this.workflows ? this.workflows.unavailable(entry) : 'workflows are not running on this instance';
     return null;
   }
 
@@ -182,6 +196,9 @@ export class ToolDispatcher {
       }
       case 'script':
         return this.scripts.runAsTool(entry, args, ctx.signal);
+      case 'workflow':
+        if (!this.workflows) throw new Error('Workflows are not running on this instance.');
+        return this.workflows.runAsTool(ctx, entry, args);
       default:
         throw new Error(`${entry.name} cannot be called (${entry.impl}).`);
     }

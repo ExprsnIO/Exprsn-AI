@@ -3,11 +3,14 @@ import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { LABELS, type Label } from '../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { entryView, SIDE_EFFECTS } from '../registry/service.js';
 import { graphSchema } from '../workflows/graph.js';
 import type { Services } from '../services.js';
 
 const name = z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens');
 const input = z.record(z.string(), z.unknown()).default({});
+const entryName = z.string().trim().regex(/^[a-z0-9][a-z0-9_.:-]{0,119}$/i, 'Letters, digits and . _ : -, for example workflow.video-to-notes');
+const semver = z.string().trim().regex(/^\d+\.\d+\.\d+(?:-[\w.]+)?$/, 'A semantic version such as 1.0.0');
 
 /**
  * Workflows. Editing and publishing need `workflows:manage`; starting runs of published versions and reading run
@@ -16,7 +19,7 @@ const input = z.record(z.string(), z.unknown()).default({});
  */
 export function workflowRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/workflows', '/workflow-runs', '/workflow-approvals'], noStore, requireAuth());
+  r.use(['/workflows', '/workflow-runs', '/workflow-approvals', '/workflow-tools'], noStore, requireAuth());
   const run = requirePermission(s, 'agents:run');
   const manage = requirePermission(s, 'workflows:manage');
   const wf = s.workflows;
@@ -25,6 +28,11 @@ export function workflowRoutes(s: Services): Router {
     const p = principalOf(req);
     return s.audit.append({ tenantId: p.tenantId, action, kind: 'admin', actor: actorFrom(p, ip(req)), target, ...(label ? { label } : {}), ...(detail ? { detail } : {}), traceId: req.traceId });
   };
+
+  /** Registry tools a tool step may call from the current workspace, for the editor's palette. */
+  r.get('/workflow-tools', run, async (req, res) => {
+    res.json(await wf.callableTools(principalOf(req)));
+  });
 
   r.get('/workflows', run, async (req, res) => {
     res.json(await wf.list(principalOf(req)));
@@ -54,7 +62,7 @@ export function workflowRoutes(s: Services): Router {
     const p = principalOf(req);
     const w = await wf.workflow(p, String(req.params.id));
     const body = parseBody(z.object({ graph: graphSchema.optional() }).strict(), req.body);
-    res.json(await wf.validate(p.tenantId, body.graph ?? graphSchema.parse(JSON.parse(w.draft)), w.label));
+    res.json(await wf.validate({ tenantId: w.tenant_id, workspaceId: w.workspace_id }, body.graph ?? graphSchema.parse(JSON.parse(w.draft)), w.label));
   });
 
   r.post('/workflows/:id/publish', manage, async (req, res) => {
@@ -69,6 +77,21 @@ export function workflowRoutes(s: Services): Router {
       await audit(req, 'workflow.publish.refused', { workflow: w.id, name: w.name }, w.label, { detail: (err as Error).message.slice(0, 300) });
       throw err;
     }
+  });
+
+  /**
+   * Publish as tool: a registry tool entry (`impl: workflow`) for the published version, with the trigger's schema as
+   * its input schema. The registry's checks must pass (`422` naming them); the entry is submitted for review, and a
+   * tool admin other than the author approves it before chat, agents or scripts can call it.
+   */
+  r.post('/workflows/:id/tool', manage, async (req, res) => {
+    const body = parseBody(z.object({ name: entryName, version: semver.default('1.0.0'), description: z.string().trim().max(2000).nullable().default(null), sideEffect: z.enum(SIDE_EFFECTS).optional(), label: z.enum(LABELS).optional(), ratePerHour: z.number().int().min(1).max(100_000).nullable().default(null) }).strict(), req.body);
+    const p = principalOf(req);
+    const { entry, workflow } = await wf.publishAsTool(p, String(req.params.id), body);
+    const target = { registryEntry: entry.id, kind: entry.kind, name: entry.name, version: entry.version };
+    await audit(req, 'registry.created', target, undefined, { impl: 'workflow', workflow: workflow.id, workflowVersion: entry.definition.version });
+    await audit(req, 'registry.submitted', target, undefined, { checks: entry.checks.map((c) => ({ name: c.name, ok: c.ok })) });
+    res.status(201).json(entryView(entry));
   });
 
   r.delete('/workflows/:id', manage, async (req, res) => {

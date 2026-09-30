@@ -415,6 +415,27 @@ export class MemoryService {
     return out;
   }
 
+  /**
+   * Memories of an agent (scope `agent`, owned by the agent's name) for a run's context: accepted, unexpired, at or
+   * below the run's label, most recent first, each through the `memory` checkpoint like chat's.
+   */
+  async forAgent(p: Principal, agent: string, label: Label, limit = 10): Promise<{ id: string; type: string; label: Label; text: string }[]> {
+    const rows = ((await this.db('memories')
+      .where({ tenant_id: p.tenantId, scope: 'agent', owner_id: agent, state: 'active' })
+      .whereIn('label', labelsUpTo(label))
+      .andWhere((w) => w.whereNull('expires_at').orWhere('expires_at', '>', Date.now()))
+      .orderBy('updated_at', 'desc')
+      .limit(limit)) as Record<string, unknown>[]).map(fromRow);
+    const out = [];
+    for (const m of rows) {
+      const text = await this.open(m, m.content);
+      const g = await this.d.guard.check({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, checkpoint: 'memory', text, label: m.label, principal: p, source: { kind: 'memory', id: m.id }, meta: { op: 'read', scope: 'agent', agent } });
+      if (g.action === 'block' || g.action === 'require-approval') continue;
+      out.push({ id: m.id, type: m.type, label: m.label, text: g.action === 'redact' ? g.text : text });
+    }
+    return out;
+  }
+
   // ---------- export ----------
 
   async requestExport(p: Principal, tab: 'mine' | 'workspace' | 'agents', format: 'json' | 'csv') {

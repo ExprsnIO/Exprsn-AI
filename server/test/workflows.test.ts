@@ -2,9 +2,11 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProfileRow } from '../src/gateway/repo.js';
+import { loadPrincipal } from '../src/http/middleware.js';
 import { TOPICS } from '../src/platform/bus.js';
-import { validateGraph, type WfGraph } from '../src/workflows/graph.js';
+import { guardedByApproval, portFromJsonSchema, validateGraph, type ToolInfo, type WfGraph } from '../src/workflows/graph.js';
 import { internalRequest, isInternalAddress } from '../src/workflows/http.js';
+import { FakeMcp } from './fake-mcp.js';
 import { FakeOllama } from './fake-ollama.js';
 import { harness, localUser, login, loginAdmin, type Client, type Harness } from './helpers.js';
 
@@ -391,5 +393,213 @@ describe('workflows', () => {
     const run = (await admin.agent.get(`/api/workflow-runs/${started.id}`).expect(200)).body;
     expect(run.approvals[0].state).toBe('expired');
     await admin.agent.delete(`/api/workflows/${id}`).set('x-csrf-token', admin.csrf).expect(204);
+  });
+});
+
+const QUERY_SCHEMA = { type: 'object' as const, properties: { q: { type: 'string' as const } }, required: ['q'] };
+const tool = (over: Partial<ToolInfo> = {}): ToolInfo => ({ name: 'jira.search_issues', version: '1.0.0', impl: 'mcp', label: 'confidential', sideEffect: 'read', confirm: 'never', inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] }, outputSchema: null, ...over });
+
+/** Trigger {q} → search (read tool) → create (write tool, arguments from templates), with an optional approval before create. */
+function toolGraph(approval: boolean): WfGraph {
+  return {
+    nodes: [
+      { id: 'trigger', kind: 'trigger', title: 'Trigger', x: 20, y: 24, config: { source: 'manual' }, output: QUERY_SCHEMA },
+      { id: 'search', kind: 'tool', title: 'Search issues', x: 230, y: 24, config: { tool: 'jira.search_issues' } },
+      ...(approval ? [{ id: 'ok', kind: 'approval' as const, title: 'Approval', x: 440, y: 24, config: { role: 'workflow-admin' } }] : []),
+      { id: 'create', kind: 'tool', title: 'Create issue', x: 20, y: 152, config: { tool: 'jira.create_issue', args: { summary: 'Follow up {{steps.search.hits[0]}}' } } }
+    ],
+    edges: [{ from: 'trigger', to: 'search' }, ...(approval ? [{ from: 'search', to: 'ok' }, { from: 'ok', to: 'create' }] : [{ from: 'search', to: 'create' }])],
+    limits: {}
+  };
+}
+
+describe('workflow tool steps (validation)', () => {
+  const tools: Record<string, ToolInfo | { missing: string }> = {
+    'jira.search_issues': tool(),
+    'jira.create_issue': tool({ name: 'jira.create_issue', sideEffect: 'write', confirm: 'always', inputSchema: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] } }),
+    'kb.draft': { missing: 'is draft, not published' },
+    'workflow.notes': tool({ name: 'workflow.notes', impl: 'workflow' })
+  };
+  const tenv = { ...env, tool: (n: string) => tools[n] };
+
+  it('checks the tool is published, its input schema, its ceiling and approvals before write calls', () => {
+    let v = validateGraph(toolGraph(false), tenv);
+    expect(v.errors).toEqual([]);
+    expect(v.warnings.map((w) => [w.nodeId, w.message])).toEqual([['create', 'Create issue calls jira.create_issue, a write tool: no Approval step comes before it on every path, so the run pauses for the workflow-admin role before the call.']]);
+    expect(validateGraph(toolGraph(true), tenv).warnings).toEqual([]);
+    expect(guardedByApproval(toolGraph(true), 'create')).toBe(true);
+    expect(guardedByApproval(toolGraph(false), 'create')).toBe(false);
+
+    // The incoming port must fit the tool's input schema; explicit arguments must name the required ones.
+    const g = toolGraph(false);
+    g.nodes[0]!.output = { type: 'object', properties: { topic: { type: 'string' } }, required: ['topic'] };
+    g.nodes.find((n) => n.id === 'create')!.config = { tool: 'jira.create_issue', args: { title: 'x' } };
+    v = validateGraph(g, tenv);
+    expect(v.errors.map((e) => `${e.code}:${e.nodeId}`)).toEqual(['schema:search', 'schema:create']);
+    expect(v.errors[0]!.message).toBe('Schema mismatch at Search issues: q is expected but not provided (the input schema of jira.search_issues).');
+    expect(v.errors[0]!.expected).toEqual(portFromJsonSchema(QUERY_SCHEMA));
+
+    // A draft tool, a workflow tool, no tool at all, and a ceiling below the data.
+    const g2 = toolGraph(false);
+    g2.nodes.find((n) => n.id === 'search')!.config = { tool: 'kb.draft' };
+    g2.nodes.find((n) => n.id === 'create')!.config = { tool: 'workflow.notes' };
+    g2.nodes.push({ id: 'none', kind: 'tool', title: 'Nothing', x: 0, y: 0, config: {} });
+    g2.edges.push({ from: 'trigger', to: 'none' });
+    const msgs = validateGraph(g2, tenv).errors.map((e) => e.message);
+    expect(msgs).toEqual(expect.arrayContaining(['Search issues: kb.draft is draft, not published.', 'Create issue: workflow.notes is a workflow published as a tool; a workflow cannot call another workflow.', 'Nothing: choose a published tool.']));
+    const low = validateGraph(toolGraph(false), { ...tenv, label: 'restricted', tool: (n: string) => (n === 'jira.search_issues' ? tool({ label: 'internal' }) : tools[n]) });
+    expect(low.errors.find((e) => e.code === 'label' && e.nodeId === 'search')!.message).toBe('Blocked by label ceiling: Search issues has ceiling internal; the data arriving is restricted.');
+  });
+});
+
+describe('workflow tool steps and workflows as tools', () => {
+  let h: Harness;
+  let ollama: FakeOllama;
+  let mcp: FakeMcp;
+  let admin: Client;
+  let t: Client;
+  const post = (c: Client, url: string, body: object = {}) => c.agent.post(url).set('x-csrf-token', c.csrf).send(body);
+  const put = (c: Client, url: string, body: object) => c.agent.put(url).set('x-csrf-token', c.csrf).send(body);
+
+  beforeEach(async () => {
+    h = await harness({ OLLAMA_POLL_MS: '600000', MCP_TIMEOUT_MS: '3000' });
+    ollama = await new FakeOllama().start();
+    await seed(h, ollama);
+    mcp = await new FakeMcp().start();
+    mcp.tools = [
+      { name: 'search_issues', description: 'Searches issues by text.', inputSchema: QUERY_SCHEMA, annotations: { readOnlyHint: true }, run: (a) => ({ hits: [`${String(a.q)}-1`] }) },
+      { name: 'create_issue', description: 'Creates an issue.', inputSchema: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] }, run: (a) => ({ key: 'FIN-1188', summary: a.summary }) }
+    ];
+    await localUser(h, 'wadmin', ['workflow-admin', 'member'], 'confidential');
+    await localUser(h, 'tadmin', ['tool-admin'], 'confidential');
+    admin = await loginAdmin(h, 'wadmin');
+    t = await loginAdmin(h, 'tadmin');
+    const reg = (await post(t, '/api/admin/mcp-servers', { name: 'jira', url: mcp.url }).expect(201)).body;
+    await post(t, `/api/admin/mcp-servers/${reg.id}/tools/search_issues/approve`, { sideEffect: 'read', confirm: 'never', label: 'confidential' }).expect(200);
+    await post(t, `/api/admin/mcp-servers/${reg.id}/tools/create_issue/approve`, { sideEffect: 'write', confirm: 'always', label: 'confidential' }).expect(200);
+  });
+  afterEach(async () => {
+    await h.close();
+    await ollama.stop();
+    await mcp.stop();
+  });
+
+  async function workflow(name: string, g: WfGraph) {
+    const w = (await post(admin, '/api/workflows', { name, label: 'internal' }).expect(201)).body;
+    const saved = (await put(admin, `/api/workflows/${w.id}/draft`, { graph: g }).expect(200)).body;
+    return { id: w.id as string, saved };
+  }
+
+  it('calls published tools through the dispatcher, pausing before a write call until it is approved', async () => {
+    const offered = (await admin.agent.get('/api/workflow-tools').expect(200)).body;
+    expect(offered.map((x: { name: string; sideEffect: string }) => `${x.name}:${x.sideEffect}`)).toEqual(['calculate:read', 'jira.create_issue:write', 'jira.search_issues:read']);
+    const { id, saved } = await workflow('triage', toolGraph(false));
+    expect(saved.validation).toMatchObject({ ok: true, labels: { create: 'internal' } });
+    expect(saved.validation.warnings[0].nodeId).toBe('create');
+    await post(admin, `/api/workflows/${id}/publish`).expect(200);
+
+    // Dry runs mock tool output and call nothing.
+    const dry = (await post(admin, `/api/workflows/${id}/dry-run`, { input: { q: 'travel' } }).expect(202)).body;
+    await h.s.jobs.runDue();
+    const d = (await admin.agent.get(`/api/workflow-runs/${dry.id}`).expect(200)).body;
+    expect(d.state).toBe('succeeded');
+    expect(d.steps.find((s: { nodeId: string }) => s.nodeId === 'create')).toMatchObject({ state: 'passed', detail: { mocked: true, tool: 'jira.create_issue', sideEffect: 'write' } });
+    expect(mcp.calls).toHaveLength(0);
+
+    const started = (await post(admin, `/api/workflows/${id}/runs`, { input: { q: 'travel' } }).expect(202)).body;
+    await h.s.jobs.runDue();
+    let run = (await admin.agent.get(`/api/workflow-runs/${started.id}`).expect(200)).body;
+    expect(run.state).toBe('waiting');
+    expect(run.steps.find((s: { nodeId: string }) => s.nodeId === 'search')).toMatchObject({ state: 'passed', output: { hits: ['travel-1'] }, detail: { tool: 'jira.search_issues', decision: 'allow', valid: null } });
+    expect(mcp.calls.map((c) => c.name)).toEqual(['search_issues']);
+    // The write call waits for the step's approver role, showing the arguments it will send.
+    expect(run.approvals[0]).toMatchObject({ nodeId: 'create', role: 'workflow-admin', state: 'pending', shown: { tool: 'jira.create_issue', sideEffect: 'write', arguments: { summary: 'Follow up travel-1' } } });
+    await localUser(h, 'wadmin2', ['workflow-admin'], 'confidential');
+    const approver = await loginAdmin(h, 'wadmin2');
+    await post(approver, `/api/workflow-approvals/${run.approvals[0].id}`, { decision: 'approve' }).expect(200);
+    await h.s.jobs.runDue();
+    run = (await admin.agent.get(`/api/workflow-runs/${started.id}`).expect(200)).body;
+    expect(run.state).toBe('succeeded');
+    expect(run.steps.find((s: { nodeId: string }) => s.nodeId === 'create')).toMatchObject({ state: 'passed', attempts: 2, output: { key: 'FIN-1188', summary: 'Follow up travel-1' }, detail: { approvedBy: 'this step' } });
+    expect(mcp.calls.map((c) => c.name)).toEqual(['search_issues', 'create_issue']);
+    expect(await h.s.audit.list(h.tenantId, { action: 'workflow.tool.called' })).toHaveLength(1);
+
+    // With an Approval step before it on every path, the write call runs once that step is approved.
+    const { id: id2 } = await workflow('triage-approved', toolGraph(true));
+    await post(admin, `/api/workflows/${id2}/publish`).expect(200);
+    const r2 = (await post(admin, `/api/workflows/${id2}/runs`, { input: { q: 'hotels' } }).expect(202)).body;
+    await h.s.jobs.runDue();
+    const [a] = (await approver.agent.get('/api/workflow-approvals').expect(200)).body;
+    expect(a.nodeId).toBe('ok');
+    await post(approver, `/api/workflow-approvals/${a.id}`, { decision: 'approve' }).expect(200);
+    await h.s.jobs.runDue();
+    const v2 = (await admin.agent.get(`/api/workflow-runs/${r2.id}`).expect(200)).body;
+    expect(v2.state).toBe('succeeded');
+    expect(v2.approvals).toHaveLength(1);
+    expect(v2.steps.find((s: { nodeId: string }) => s.nodeId === 'create').detail.approvedBy).toBe('an approval step');
+  });
+
+  it('refuses to publish a tool step whose tool is not callable, and a rejected tool call ends the run', async () => {
+    const g = toolGraph(false);
+    g.nodes.find((n) => n.id === 'create')!.config = { tool: 'jira.close_issue' };
+    const { id } = await workflow('broken', g);
+    const refused = await post(admin, `/api/workflows/${id}/publish`).expect(422);
+    expect(refused.body.errors).toEqual([expect.objectContaining({ code: 'unavailable', nodeId: 'create', message: 'Create issue: jira.close_issue is not in the registry.' })]);
+
+    const { id: id2 } = await workflow('reject-me', toolGraph(false));
+    await post(admin, `/api/workflows/${id2}/publish`).expect(200);
+    const started = (await post(admin, `/api/workflows/${id2}/runs`, { input: { q: 'x' } }).expect(202)).body;
+    await h.s.jobs.runDue();
+    const [a] = (await admin.agent.get('/api/workflow-approvals').expect(200)).body;
+    await post(admin, `/api/workflow-approvals/${a.id}`, { decision: 'reject', reason: 'duplicate' }).expect(200);
+    await h.s.jobs.runDue();
+    const run = (await admin.agent.get(`/api/workflow-runs/${started.id}`).expect(200)).body;
+    expect(run.state).toBe('rejected');
+    expect(mcp.calls.map((c) => c.name)).toEqual(['search_issues']);
+  });
+
+  it('publishes a workflow as a registry tool that goes through review, and runs it when called', async () => {
+    const g: WfGraph = {
+      nodes: [
+        { id: 'trigger', kind: 'trigger', title: 'Trigger', x: 20, y: 24, config: { source: 'api' }, output: TOPIC_SCHEMA },
+        { id: 'shape', kind: 'transform', title: 'Shape', x: 230, y: 24, config: { fields: { summary: 'Notes on {{input.topic}}' } } }
+      ],
+      edges: [{ from: 'trigger', to: 'shape' }],
+      limits: {}
+    };
+    const { id } = await workflow('notes', g);
+    const desc = 'Writes short notes on a topic from the notes workflow and returns the summary text it produced.';
+    await post(admin, `/api/workflows/${id}/tool`, { name: 'workflow.notes', description: desc }).expect(409); // nothing published yet
+    await post(admin, `/api/workflows/${id}/publish`).expect(200);
+    const short = await post(admin, `/api/workflows/${id}/tool`, { name: 'workflow.notes', description: 'Notes.' }).expect(422);
+    expect(short.body.checks.map((c: { name: string }) => c.name)).toEqual(['Description quality']);
+    const e = (await post(admin, `/api/workflows/${id}/tool`, { name: 'workflow.notes', description: desc }).expect(201)).body;
+    expect(e).toMatchObject({ impl: 'workflow', status: 'in_review', sideEffect: 'read', label: 'internal', checksPassed: true, inputSchema: { type: 'object', properties: { topic: { type: 'string' } }, required: ['topic'] }, definition: { workflowId: id, workflowName: 'notes', version: 1 } });
+    expect((await admin.agent.get(`/api/workflows/${id}`).expect(200)).body.tools).toEqual([expect.objectContaining({ name: 'workflow.notes', status: 'in_review', workflowVersion: 1 })]);
+    // Not callable until a tool admin other than the author approves it.
+    const principal = (await loadPrincipal(h.s, h.tenantId, (await h.s.users.byUsername(h.tenantId, 'wadmin'))!.id, {}))!;
+    expect((await h.s.tools.resolve(principal, ['workflow.notes'], 'internal')).tools).toHaveLength(0);
+    await post(t, `/api/admin/registry/${e.id}/review`, { decision: 'approve' }).expect(200);
+
+    expect((await admin.agent.get('/api/workflow-tools').expect(200)).body.map((x: { name: string }) => x.name)).not.toContain('workflow.notes');
+    // The harness calls it like any read tool: a run of the pinned version, executed in the call.
+    const out = (await post(t, `/api/admin/registry/${e.id}/test`, { arguments: { topic: 'budgets' } }).expect(200)).body;
+    expect(out).toMatchObject({ ok: true, result: { output: { summary: 'Notes on budgets' } } });
+    const run = (await h.s.db('workflow_runs').where({ id: out.result.run }).first());
+    expect(run).toMatchObject({ trigger: 'tool', state: 'succeeded', version: 1 });
+    expect((await post(t, `/api/admin/registry/${e.id}/test`, { arguments: { subject: 'x' } }).expect(200)).body.error).toMatch(/input schema/);
+
+    // A workflow cannot call a workflow tool, and the declared side effect cannot be below what the steps do.
+    const g2 = toolGraph(false);
+    g2.nodes.find((n) => n.id === 'create')!.config = { tool: 'workflow.notes' };
+    const { saved } = await workflow('nested', g2);
+    expect(saved.validation.errors.map((x: { message: string }) => x.message)).toContain('Create issue: workflow.notes is a workflow published as a tool; a workflow cannot call another workflow.');
+    const { id: wid } = await workflow('writer', toolGraph(true));
+    await post(admin, `/api/workflows/${wid}/publish`).expect(200);
+    const w = await post(admin, `/api/workflows/${wid}/tool`, { name: 'workflow.writer', description: desc, sideEffect: 'read' }).expect(409);
+    expect(w.body.detail).toBe('Create issue makes writer write; declare write or destructive.');
+    await post(admin, `/api/workflows/${wid}/tool`, { name: 'workflow.notes', description: desc }).expect(409); // name and version taken
+    const actions = (await h.s.audit.list(h.tenantId, {})).map((x: { action: string }) => x.action);
+    expect(actions).toEqual(expect.arrayContaining(['registry.created', 'registry.submitted', 'registry.published']));
   });
 });

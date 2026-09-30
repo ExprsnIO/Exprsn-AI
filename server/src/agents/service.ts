@@ -99,7 +99,13 @@ class Pause extends Error {
  * budget, and can be replayed from any step as a new run. Write and destructive calls pause the run until an
  * approver decides; a rejection goes back to the model as data. Steps are pushed live to the owner's sockets.
  */
+/** Accepted memories of an agent for a run at a label (the memory service, installed after it is built). */
+export type AgentMemories = (p: Principal, agent: string, label: Label) => Promise<{ id: string; type: string; text: string }[]>;
+
 export class AgentService {
+  /** Reads the agent's accepted memories into a run's first prompt; unset, runs start without them. */
+  memories: AgentMemories | null = null;
+
   constructor(
     private readonly db: Db,
     private readonly keys: DataKeys,
@@ -264,7 +270,7 @@ export class AgentService {
     const t = Date.now();
     const row: RunRow = { id, tenant_id: p.tenantId, workspace_id: p.workspaceId ?? null, user_id: p.userId, agent_id: e.id, agent_name: e.name, agent_version: e.version, profile: def.profile, state: 'queued', label, input: await this.seal(p.tenantId, `agent-run-input:${id}`, input.input), output: null, error: null, budgets: JSON.stringify(budgets), usage: JSON.stringify(EMPTY_USAGE), job_id: null, replay_of: null, replay_from: null, created_at: t, started_at: null, finished_at: null, updated_at: t };
     await this.db('agent_runs').insert(row);
-    await this.checkpoint(row, 0, { messages: await this.initialMessages(p, def, input.input), pending: [] }, EMPTY_USAGE);
+    await this.checkpoint(row, 0, { messages: await this.initialMessages(p, e, label, input.input), pending: [] }, EMPTY_USAGE);
     await this.enqueue(row);
     return this.summary(row, p.displayName);
   }
@@ -274,14 +280,20 @@ export class AgentService {
     return { steps: Math.min(b.steps, MAX_BUDGETS.steps), tokens: Math.min(b.tokens, MAX_BUDGETS.tokens), wallSeconds: Math.min(b.wallSeconds, MAX_BUDGETS.wallSeconds), toolCalls: Math.min(b.toolCalls, MAX_BUDGETS.toolCalls) };
   }
 
-  /** The system prompt with the instructions of the agent's published skills, then the user's request. */
-  private async initialMessages(p: Principal, def: AgentDefinition, input: string): Promise<ChatMessage[]> {
+  /**
+   * The system prompt with the instructions of the agent's published skills and the agent's accepted memories (at or
+   * below the run's label, through the memory checkpoint), then the user's request.
+   */
+  private async initialMessages(p: Principal, e: EntryRow, label: Label, input: string): Promise<ChatMessage[]> {
+    const def = e.definition as unknown as AgentDefinition;
     const parts: string[] = [];
     if (def.systemPrompt) parts.push(def.systemPrompt);
     for (const name of def.skills ?? []) {
       const skill = await this.registry.resolve(p, name, 'skill');
       if (skill) parts.push(`Skill ${skill.name} ${skill.version}:\n${String(skill.definition.instructions ?? '')}`);
     }
+    const memories = this.memories ? await this.memories(p, e.name, label) : [];
+    if (memories.length) parts.push(`What you remember from earlier runs (accepted by a curator):\n${memories.map((m) => `- ${m.text.replace(/\s+/g, ' ')}`).join('\n')}`);
     return [...(parts.length ? [{ role: 'system' as const, content: parts.join('\n\n') }] : []), { role: 'user', content: input }];
   }
 

@@ -12,7 +12,10 @@ export const ENTRY_STATUSES = ['draft', 'in_review', 'published', 'deprecated', 
 export type EntryStatus = (typeof ENTRY_STATUSES)[number];
 export const SIDE_EFFECTS = ['read', 'write', 'destructive'] as const;
 export type SideEffect = (typeof SIDE_EFFECTS)[number];
-export type EntryImpl = 'builtin' | 'mcp' | 'script' | 'archive' | 'agent';
+export type EntryImpl = 'builtin' | 'mcp' | 'script' | 'archive' | 'agent' | 'workflow';
+
+/** Where an entry is looked up: a tenant and, for workspace-scoped entries, the workspace. */
+export type RegistryScope = Pick<Principal, 'tenantId' | 'workspaceId'>;
 
 /** Upper limits an agent definition may ask for; a run can be raised up to these, never beyond. */
 export const MAX_BUDGETS = { steps: 100, tokens: 200_000, wallSeconds: 3600, toolCalls: 100 } as const;
@@ -182,7 +185,7 @@ export class RegistryService {
    * Is the entry published to the principal's current workspace? An entry's label is a ceiling (the highest data it
    * may receive), not a classification of the entry, so it limits calls rather than who sees the entry.
    */
-  visibleTo(e: EntryRow, p: Principal): boolean {
+  visibleTo(e: EntryRow, p: RegistryScope): boolean {
     if (e.tenant_id === null) return true;
     if (e.tenant_id !== p.tenantId) return false;
     if (e.publish_scope === 'tenant') return true;
@@ -193,7 +196,7 @@ export class RegistryService {
    * The callable version of a name for the principal: published (or deprecated, still callable with a warning),
    * visible to them, the newest first. Retired and unreviewed entries are never returned.
    */
-  async resolve(p: Principal, name: string, kind: EntryKind = 'tool'): Promise<EntryRow | undefined> {
+  async resolve(p: RegistryScope, name: string, kind: EntryKind = 'tool'): Promise<EntryRow | undefined> {
     const rows = (await this.db('registry_entries')
       .where({ kind, name })
       .whereIn('status', ['published', 'deprecated'])
@@ -429,6 +432,11 @@ export class RegistryService {
     row.checks = await this.checks(row);
     await this.db('registry_entries').insert(toRow(row));
     return row;
+  }
+
+  /** Tool entries that run a workflow (`impl: workflow`), newest first, for the Workflows screen. */
+  async workflowEntries(tenantId: string, workflowId: string): Promise<EntryRow[]> {
+    return (await this.db('registry_entries').where({ tenant_id: tenantId, impl: 'workflow' }).orderBy('created_at', 'desc')).map(fromRow).filter((e) => e.definition.workflowId === workflowId);
   }
 
   /** Entries backed by an MCP server, for deregistration. */

@@ -102,7 +102,8 @@ export const CONFIGS = {
     .strict(),
   calc: z.object({ expression: template.min(1).max(2000) }).strict(),
   wait: z.object({ ms: z.number().int().min(1000).max(LIMITS.maxWaitMs) }).strict(),
-  tool: z.object({ tool: z.string().max(200).default(''), args: template.optional() }).strict()
+  /** `args` maps the tool's argument names to templates; without it the step passes on the matching fields of its input. */
+  tool: z.object({ tool: z.string().max(200).default(''), args: z.union([z.record(propName, template), template]).optional(), approverRole: z.string().max(63).default('workflow-admin') }).strict()
 } satisfies Record<NodeKind, z.ZodType>;
 
 export type NodeConfig<K extends NodeKind> = z.infer<(typeof CONFIGS)[K]>;
@@ -128,8 +129,48 @@ export function mergeSchemas(list: PortSchema[]): PortSchema {
   return { type: 'object', properties, required: [...required] };
 }
 
-/** The output a node produces, given the merged output of the steps feeding it. */
-export function outputSchemaOf(n: WfNode, incoming: PortSchema): PortSchema {
+const PORT_TYPES: SchemaType[] = ['string', 'number', 'integer', 'boolean', 'array', 'object'];
+
+/** A JSON Schema (a registry tool's input or output) as a port schema; anything it cannot express is `any`. */
+export function portFromJsonSchema(js: unknown): PortSchema {
+  if (!js || typeof js !== 'object' || Array.isArray(js)) return ANY;
+  const s = js as Record<string, unknown>;
+  const type = PORT_TYPES.find((t) => t === s.type);
+  if (!type) return ANY;
+  const out: PortSchema = { type };
+  if (type === 'object' && s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties)) {
+    out.properties = Object.fromEntries(Object.entries(s.properties as Record<string, unknown>).map(([k, v]) => [k, portFromJsonSchema(v)]));
+  }
+  if (type === 'object' && Array.isArray(s.required)) out.required = (s.required as unknown[]).filter((r): r is string => typeof r === 'string');
+  if (type === 'array' && s.items) out.items = portFromJsonSchema(s.items);
+  return out;
+}
+
+/** A published registry tool as a tool step sees it (from the validation environment). */
+export interface ToolInfo {
+  name: string;
+  version: string;
+  impl: string;
+  /** The tool's ceiling: the highest label it may receive. */
+  label: Label;
+  sideEffect: 'read' | 'write' | 'destructive';
+  confirm: 'always' | 'never';
+  inputSchema: Record<string, unknown> | null;
+  outputSchema: Record<string, unknown> | null;
+}
+
+/** What a tool step outputs: the tool's result when it is an object, otherwise `{result}`. */
+export function toolOutputPort(t: Pick<ToolInfo, 'outputSchema'>): PortSchema {
+  if (!t.outputSchema) return { type: 'object' };
+  const p = portFromJsonSchema(t.outputSchema);
+  return p.type === 'object' ? p : obj({ result: p });
+}
+
+/** Write and destructive tools, and tools that always ask for confirmation, need an approval before they are called. */
+export const toolNeedsApproval = (t: Pick<ToolInfo, 'sideEffect' | 'confirm'>): boolean => t.sideEffect !== 'read' || t.confirm === 'always';
+
+/** The output a node produces, given the merged output of the steps feeding it (and, for tool steps, the tool). */
+export function outputSchemaOf(n: WfNode, incoming: PortSchema, tool?: ToolInfo): PortSchema {
   const own = (): PortSchema => {
     switch (n.kind) {
       case 'trigger':
@@ -151,7 +192,7 @@ export function outputSchemaOf(n: WfNode, incoming: PortSchema): PortSchema {
       case 'wait':
         return obj({});
       case 'tool':
-        return n.output ?? { type: 'object' };
+        return n.output ?? (tool ? toolOutputPort(tool) : { type: 'object' });
     }
   };
   return PASS_THROUGH.includes(n.kind) ? mergeSchemas([incoming, own()]) : own();
@@ -296,7 +337,7 @@ function templatesOf(n: WfNode): string[] {
   const c = n.config as Record<string, unknown>;
   const out: string[] = [];
   for (const k of ['prompt', 'text', 'show', 'left', 'url', 'body', 'expression', 'args']) if (typeof c[k] === 'string') out.push(c[k] as string);
-  if (c.fields && typeof c.fields === 'object') for (const v of Object.values(c.fields as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
+  for (const k of ['fields', 'args']) if (c[k] && typeof c[k] === 'object') for (const v of Object.values(c[k] as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
   if (c.headers && typeof c.headers === 'object') for (const v of Object.values(c.headers as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
   return out;
 }
@@ -340,6 +381,27 @@ export function backEdge(g: WfGraph): WfEdge | null {
   };
   for (const n of g.nodes) if (!state.get(n.id) && !found) visit(n.id);
   return found;
+}
+
+/**
+ * True when every path from the trigger to `id` passes through an Approval step, so by the time the step runs a
+ * person has approved the run on its way there.
+ */
+export function guardedByApproval(g: WfGraph, id: string): boolean {
+  const trigger = g.nodes.find((n) => n.kind === 'trigger');
+  if (!trigger) return false;
+  const kind = new Map(g.nodes.map((n) => [n.id, n.kind]));
+  const seen = new Set<string>([trigger.id]);
+  const stack = [trigger.id];
+  while (stack.length) {
+    for (const e of outgoing(g, stack.pop()!)) {
+      if (e.to === id) return false;
+      if (seen.has(e.to) || kind.get(e.to) === 'approval') continue;
+      seen.add(e.to);
+      stack.push(e.to);
+    }
+  }
+  return true;
 }
 
 /** Every node downstream of `id`, including itself. */
@@ -388,6 +450,8 @@ export interface ValidationEnv {
   label: Label;
   /** Published profiles by name: their label ceiling. Undefined when the profile does not exist or is not published. */
   profile(name: string): { label: Label } | undefined;
+  /** Registry tools callable from the workflow's workspace, or why a name is not (missing: "is a draft"). */
+  tool?(name: string): ToolInfo | { missing: string } | undefined;
 }
 
 export interface Validation {
@@ -441,7 +505,11 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
       errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: ${i.path.length ? i.path.join('.') + ': ' : ''}${i.message}` });
       continue;
     }
-    if (n.kind === 'tool') errors.push({ code: 'unavailable', nodeId: n.id, message: `${n.title}: tool steps are not available until the registry ships.` });
+    if (n.kind === 'tool') {
+      const cfg = r.data as NodeConfig<'tool'>;
+      if (!cfg.tool.trim()) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: choose a published tool.` });
+      if (!isRole(cfg.approverRole)) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${cfg.approverRole}.` });
+    }
     if (n.kind === 'approval' && !isRole(String(n.config.role))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.role)}.` });
     if (n.kind === 'guardrail' && !isRole(String((r.data as { approverRole: string }).approverRole))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.approverRole)}.` });
     if (n.kind === 'http') {
@@ -504,10 +572,12 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
           errors.push({ code: 'schema', nodeId: id, ...(single ? { edge: { from: single.from, to: single.to } } : {}), message: `Schema mismatch at ${n.title}: ${err}.`, expected: n.input, actual: merged });
         }
       }
-      outs.set(id, outputSchemaOf(n, merged));
+      const tool = n.kind === 'tool' ? checkToolStep(g, n, merged, preds, env, errors, warnings) : undefined;
+      outs.set(id, outputSchemaOf(n, merged, tool));
 
       const label = highest(env.label, ...preds.map((e) => labels[e.from] ?? env.label), ...(n.raises ? [n.raises] : []));
       let ceiling: Label | undefined = n.ceiling;
+      if (tool) ceiling = ceiling && labelRank(ceiling) < labelRank(tool.label) ? ceiling : tool.label;
       if (n.kind === 'model' && typeof n.config.profile === 'string') {
         const p = env.profile(n.config.profile);
         if (!p) errors.push({ code: 'config', nodeId: id, message: `${n.title}: profile ${n.config.profile} is not published.` });
@@ -521,6 +591,39 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
   }
 
   return { ok: errors.length === 0, errors, warnings, labels };
+}
+
+/**
+ * A tool step against the registry: the tool is published and in the workflow's workspace, it is not itself a
+ * workflow, the arguments it receives fit its input schema, and a write or destructive tool is either behind an
+ * Approval step on every path or pauses for one (a warning). Returns the tool when it can be called.
+ */
+function checkToolStep(g: WfGraph, n: WfNode, merged: PortSchema, preds: WfEdge[], env: ValidationEnv, errors: Issue[], warnings: Issue[]): ToolInfo | undefined {
+  const cfg = CONFIGS.tool.safeParse(n.config);
+  if (!cfg.success || !cfg.data.tool.trim()) return undefined;
+  const name = cfg.data.tool.trim();
+  const t = env.tool?.(name);
+  if (!t || 'missing' in t) {
+    errors.push({ code: 'unavailable', nodeId: n.id, message: `${n.title}: ${name} ${t ? t.missing : 'is not in the registry'}.` });
+    return undefined;
+  }
+  if (t.impl === 'workflow') {
+    errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: ${name} is a workflow published as a tool; a workflow cannot call another workflow.` });
+    return undefined;
+  }
+  const args = cfg.data.args;
+  // A string template is only known at run time, where the dispatcher checks the arguments against the schema.
+  const given = args === undefined ? merged : typeof args === 'string' ? null : obj(Object.fromEntries(Object.keys(args).map((k) => [k, ANY])));
+  if (given) {
+    const expected = portFromJsonSchema(t.inputSchema ?? { type: 'object' });
+    const err = compatible(given, expected);
+    const single = args === undefined && preds.length === 1 ? preds[0] : undefined;
+    if (err) errors.push({ code: 'schema', nodeId: n.id, ...(single ? { edge: { from: single.from, to: single.to } } : {}), message: `Schema mismatch at ${n.title}: ${err} (the input schema of ${name}).`, expected, actual: given });
+  }
+  if (toolNeedsApproval(t) && !guardedByApproval(g, n.id)) {
+    warnings.push({ code: 'config', nodeId: n.id, message: `${n.title} calls ${name}, a ${t.sideEffect} tool${t.sideEffect === 'read' ? ' that asks for confirmation' : ''}: no Approval step comes before it on every path, so the run pauses for the ${cfg.data.approverRole} role before the call.` });
+  }
+  return t;
 }
 
 /** A new workflow: just a manual trigger. */

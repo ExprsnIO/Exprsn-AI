@@ -316,7 +316,10 @@ Lifecycle: `draft → in_review → published → deprecated → retired`. Each 
 | `POST /admin/registry/:id/versions` `{version}` | A new draft version copied from this one |
 | `POST /admin/registry/:id/test` `{arguments, label?}` or, for agents, `{input, label?}` | Test harness. A tool runs once through the dispatcher (built-in and script tools in their sandbox; write and destructive MCP tools are not run against live systems): the dispatcher outcome below plus `{label, sandboxed, note}`. An agent starts a real run: `202 {runId}` |
 
-An entry: `{id, kind, name, version, description, impl: builtin|mcp|script|archive|agent, sideEffect, confirm,
+Tools with `impl: workflow` run a workflow version (`definition: {workflowId, workflowName, version}`); they are
+created from the Workflows screen (`POST /workflows/:id/tool`, below) and reviewed here like any other tool.
+
+An entry: `{id, kind, name, version, description, impl: builtin|mcp|script|archive|agent|workflow, sideEffect, confirm,
 ratePerHour, label, inputSchema, outputSchema, definition, status, schemaHash, approvedHash, checks: [{name, ok,
 detail}], checksPassed, checkedAt, platform, owner, ownerId, submittedAt, reviewedBy, reviewedAt, reviewNote,
 publishScope: tenant|workspace|platform, publishWorkspaces, replacement, createdAt, updatedAt}`. The checks: Required
@@ -327,6 +330,12 @@ workspace policy (agents: at most 100 steps, 200,000 tokens, 3,600 s).
 A dispatcher outcome (harness, and each doing step of a run): `{name, arguments, ok, result?, error?, decision
 (the tool-call guardrail's action), denied?, needsApproval?, valid (output schema), durationMs}`. Every call passes the
 `tool-call` guardrail checkpoint with `meta: {tool, sideEffect, toolLabel, ceiling, confirm, impl}`.
+
+A workflow tool call starts a run of the pinned version as the caller (trigger `tool`, label the higher of the
+workflow's and the caller's data) and executes it within the call, for at most 5 minutes (or the workflow's shorter
+run timeout). The result is `{run, output}`: the output of the steps nothing follows. A run that pauses on an approval
+carries on without the caller, which gets an error naming the run; a result labelled above the caller's data is
+refused; a workflow step cannot call a workflow tool.
 
 ### MCP servers (`mcp:manage`)
 
@@ -372,6 +381,10 @@ status, never the token), `DELETE /mcp/servers/:id/token`.
 | `POST /runs/:id/resume` `{budgets}` | After a budget stop: raises this run's limits (never beyond the maximum) and continues from the last checkpoint |
 | `POST /runs/:id/replay` `{fromStep}` | A new run (`replayOf`, `replayFrom`) reusing steps before `fromStep` and continuing from the checkpoint before it; approvals are asked again |
 
+A run's first prompt holds the agent's system prompt, its skills' instructions and the agent's accepted memories
+(scope `agent`, owned by the agent's name, unexpired, at or below the run's label, each through the `memory`
+checkpoint). Runs do not write memories yet.
+
 A run summary: `{id, agentId, agent, agentVersion, profile, state: queued|running|waiting|succeeded|failed|cancelled|
 budget, label, userId, by, error, budgets: {steps, tokens, wallSeconds, toolCalls}, usage: {steps, tokens, toolCalls,
 calcCalls, wallMs, gpuMs}, replayOf, replayFrom, createdAt, startedAt, finishedAt}`. A step: `{n, lane: think|do|calc,
@@ -414,10 +427,12 @@ started a dry run), with clearance for the run's label.
 | --- | --- |
 | `GET /workflows` | `[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt…}]` (`waiting`: runs paused on an approval) |
 | `POST /workflows` `{name, description?, label?, graph?}` | A new workflow; the draft starts with a manual trigger |
-| `GET /workflows/:id` | `{…, draft: graph, dirty, validation, limits, versions: [{version, state: published\|deprecated, note, publishedBy, publishedAt, graph}]}` |
+| `GET /workflows/:id` | `{…, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\|deprecated, note, publishedBy, publishedAt, graph}]}` |
 | `PUT /workflows/:id/draft` `{graph?, rev?, description?, label?}` | Saves the draft; `rev` is the revision the editor loaded (`409` when someone saved since) |
 | `POST /workflows/:id/validate` `{graph?}` | Validates the given graph (or the draft) without saving |
 | `POST /workflows/:id/publish` `{note?}` | Publishes the draft as the next version; `422` with `errors` when it is invalid |
+| `POST /workflows/:id/tool` `{name, version?, description, sideEffect?, label?, ratePerHour?}` | Publish as tool: a registry tool (`impl: workflow`) pinned to the published version, its input schema the trigger's output schema (`409` without a published version or an object trigger schema). The side effect defaults to, and cannot be below, what the steps do (an HTTP write or a write tool makes it `write`); the label defaults to, and cannot be below, the workflow's. The registry's checks must pass (`422` with `checks`); the entry is submitted for review and a tool admin other than the author approves it on the Registry screen. `201` entry |
+| `GET /workflow-tools` | Tools a tool step may call from the current workspace: published registry and MCP tools visible there with their approved schema, newest version per name, workflow tools left out: `[{name, version, description, impl, sideEffect, confirm, label, status, inputSchema, outputSchema}]` |
 | `DELETE /workflows/:id` | Refused (`409`) while runs are queued, running or waiting |
 | `POST /workflows/:id/runs` `{input}` | Starts a run of the published version: `202 {id, state, version, mode: run, label}`; `input` must match the trigger's output schema |
 | `POST /workflows/:id/dry-run` `{input}` | Runs the draft with model and HTTP steps mocked, guardrails not consulted and nothing metered (`workflows:manage`) |
@@ -443,12 +458,23 @@ branch?: true|false}], limits: {timeoutMs?, tokens?}}`. `input` and `output` are
 | `http` | `{method: GET\|POST\|PUT, url, body?, headers?}` | `{status, body}`; private addresses only, never link-local |
 | `calc` | `{expression}` | `{value, fraction, exact}` |
 | `wait` | `{ms}` | its input, after the wait |
-| `tool` | `{tool, args?}` | not available until the registry ships (publishing refuses it) |
+| `tool` | `{tool, args?: {name: template} \| template, approverRole}` | the tool's result when it is an object, else `{result}` |
 
 Templates read `{{input.path}}` and `{{steps.<id>.path}}` of upstream steps; a template that is a single placeholder
 keeps the value's type, and URL placeholders are percent-encoded. Validation errors are `{code: structure|cycle|config|
 schema|label|limit|reference|unavailable|unreachable, message, nodeId?, edge?, expected?, actual?}`. Limits: 40 steps,
 fan-out 10, 30 minutes per step, 2 hours and 200,000 tokens per run.
+
+Tool steps call a published registry tool (built-in, script or MCP) through the dispatcher, as the run's owner in the
+workflow's workspace: the arguments are `args` rendered (or, without `args`, the fields of the step's input that the
+tool's input schema names), checked against its input schema, then the `tool-call` guardrail checkpoint and the
+tool's rate limit apply. Publishing checks that the tool exists, is published and visible in the workspace, is not a
+workflow tool, that the incoming port (or `args`) fits its input schema, and that the data's label is within its
+ceiling. A write or destructive tool (or one with `confirm: always`, or a call the checkpoint holds) is called as
+approved when an Approval step comes before it on every path; otherwise the step pauses for `approverRole` like an
+Approval step (the approver sees the tool and arguments) and runs again, approved, once someone decides, and
+validation warns about it. A replay asks again. Dry runs mock the result from the tool's output schema and call
+nothing. Calls of write tools are audited as `workflow.tool.called`.
 
 Socket events to the run's owner: `workflow.run {runId, workflowId, state, mode, error}` and `workflow.step {runId,
 workflowId, nodeId, state: running|passed|failed|skipped|waiting|blocked, error, label, attempts, detail}`.
@@ -468,6 +494,7 @@ workflowId, nodeId, state: running|passed|failed|skipped|waiting|blocked, error,
 | `POST /media/jobs/:id/cancel` | Cancels the caller's own job |
 | `GET /media/jobs/:id/outputs/:i?download=1` | An output (a download is audited) |
 | `POST /media/caps/request` `{assetId, note?}` | Asks the system admins for a higher cap, with the probe result |
+| `POST /media/jobs/:id/knowledge` `{kbId}` | Send transcript to a knowledge base: the transcript of a finished `transcribe-srt` job (`409` otherwise) becomes a text document (`<asset> transcript.txt`, one line per caption with its start time) in the base's uploads, labelled with the job's label (classification may raise it). The caller must curate the base (`403`). `202` document with `kb: {id, name}`; audited as `media.transcript.sent` |
 
 Presets: `clip-720p` `{start, end, height: 720|480|1080, crop}`, `transcribe-srt` `{language}` (needs whisper.cpp),
 `frames-1fps` `{start, end, fps: 1|0.5|2, maxFrames: 48|96|200}` (frames pass the image-safety classifier) and

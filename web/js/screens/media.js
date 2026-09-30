@@ -189,7 +189,7 @@
         + '<div class="muted" style="font-size:12px;margin-top:auto">Uploads are probed with ffprobe and refused above the caps: ' + esc(capText) + '.</div></div>'
         + '<div class="page">'
         + (a ? UI.pagehead(a.name, 'Uploaded by ' + esc(a.uploadedByName || (det && det.uploadedByName) || 'a member of this workspace') + ', ' + esc(when(a.createdAt)),
-          (a.kind !== 'image' ? UI.btn('Send transcript to a knowledge base', { attrs: 'data-sendkb disabled title="Knowledge bases are connected to media in Sprint 6. Download the transcript from its job meanwhile."' }) : '')
+          (a.kind !== 'image' ? UI.btn('Send transcript to a knowledge base', { attrs: 'data-sendkb', disabled: !transcriptJob || !App.can('knowledge:read') || !App.can('chat:write'), title: !App.can('knowledge:read') ? 'Needs access to knowledge bases' : transcriptJob ? 'Adds the transcript as a document, keeping its label' : 'Run the transcribe-srt preset first' }) : '')
           + UI.btn('Run preset', { kind: 'primary', icon: 'play', attrs: 'data-run', disabled: !ready || !App.can('chat:write') }))
           : UI.pagehead('Media', 'Assets, presets and media jobs'))
         + probeNotice + pending
@@ -243,6 +243,27 @@
         } catch (err) { App.fail(err, 'Could not open the transcript'); }
       };
       ctx.on('click', '[data-transcript]', (e, t) => { e.preventDefault(); showTranscript(t.dataset.transcript); });
+      ctx.on('click', '[data-sendkb]', async () => {
+        const j = transcriptJob; if (!j) return;
+        let bases;
+        try { bases = (await App.get('/api/knowledge/bases')).filter((k) => k.access === 'manage'); } catch (err) { App.fail(err, 'Could not list knowledge bases'); return; }
+        ctx.modal({ title: 'Send transcript to a knowledge base',
+          body: (bases.length ? UI.field('Knowledge base', UI.select(bases.map((k) => ({ value: k.id, label: k.name + ' · ' + k.label + (k.status === 'published' ? '' : ' · draft') })), bases[0].id, 'data-kb'), 'Bases you can curate') : UI.notice('You cannot curate any knowledge base. A knowledge curator can give you manage access to one, or send the transcript for you.', 'warn'))
+            + UI.kv([['Transcript', 'job <span class="mono">' + esc(String(j.id).slice(-6).toLowerCase()) + '</span>' + (j.result && j.result.words ? ', ' + esc(j.result.words) + ' words' : '')], ['Label', UI.label(j.label, { sm: true }) + ' <span class="muted">kept; classification may raise it, never lower it</span>']], 1)
+            + UI.notice('The transcript becomes a text document in the base\'s uploads, one line per caption with its start time. It is scanned, classified and indexed like any upload.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send', { kind: 'primary', attrs: 'data-go', disabled: !bases.length }),
+          onMount(m) {
+            const go = m.querySelector('[data-go]');
+            go.addEventListener('click', async () => {
+              go.disabled = true;
+              try {
+                const d = await App.post('/api/media/jobs/' + enc(j.id) + '/knowledge', { kbId: m.querySelector('[data-kb]').value });
+                App.closeOverlay();
+                toast(esc(d.name) + ' added to ' + esc(d.kb.name) + ', labelled ' + esc(d.label) + '. It is scanned and indexed next. <a href="#/knowledge?kb=' + enc(d.kb.id) + '">Open in Knowledge</a>', 'ok', 7000);
+              } catch (err) { go.disabled = false; App.fail(err, 'Could not send the transcript'); }
+            });
+          } });
+      });
 
       ctx.on('click', '[data-job]', (e, t) => {
         const j = jobs.find((x) => x.id === t.dataset.job); if (!j) return;
