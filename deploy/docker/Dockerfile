@@ -26,7 +26,7 @@ ENV NODE_ENV=production \
     BLOB_DIR=/var/lib/exprsn-ai/blobs
 WORKDIR /app
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini ca-certificates \
+ && apt-get install -y --no-install-recommends tini ca-certificates git \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /var/lib/exprsn-ai \
  && chown node:node /var/lib/exprsn-ai

@@ -1,106 +1,165 @@
 (function () {
   const { UI, esc } = App;
 
-  const KBS = [
-    { id: 'finance', name: 'Finance KB', sub: '1,284 documents, synced 2 h ago', label: 'confidential', status: 'published', embed: 'nomic-embed-text', index: 'v7', chunks: '41,208', built: '4 Sep 2026' },
-    { id: 'travel', name: 'Travel policy', sub: '42 documents', label: 'internal', status: 'published', embed: 'nomic-embed-text', index: 'v3', chunks: '1,120', built: '28 Aug 2026' },
-    { id: 'vendor', name: 'Vendor contracts', sub: '316 documents, index swap pending', label: 'confidential', status: 'published', embed: 'nomic-embed-text', index: 'v5', chunks: '12,940', built: '12 Sep 2026', swap: true },
-    { id: 'hr', name: 'HR handbook', sub: '88 documents', label: 'internal', status: 'published', embed: 'nomic-embed-text', index: 'v2', chunks: '2,310', built: '2 Sep 2026' },
-    { id: 'public', name: 'Public product docs', sub: '1,020 documents', label: 'public', status: 'published', embed: 'nomic-embed-text', index: 'v11', chunks: '33,870', built: '18 Sep 2026' }
-  ];
-  const SOURCES = {
-    finance: [
-      { src: 's3://finance/reports/', mono: true, type: 'S3 prefix', sync: 'watermark 19 Sep 11:40', docs: 912, status: 'synced' },
-      { src: 'git: finance/policies', mono: true, type: 'Git repository', sync: 'commit 8c1f2ab', docs: 64, status: 'synced' },
-      { src: 'pg: ledger.v_cost_centres', mono: true, type: 'Postgres view', sync: 'updated_at 19 Sep 12:02', docs: 286, status: 'syncing' },
-      { src: 'Uploads', type: 'Upload', sync: 'manual', docs: 22, status: '1 quarantined' }
-    ],
-    travel: [{ src: 'git: finance/policies/travel', mono: true, type: 'Git repository', sync: 'commit 8c1f2ab', docs: 42, status: 'synced' }],
-    vendor: [{ src: 's3://legal/contracts/', mono: true, type: 'S3 prefix', sync: 'watermark 18 Sep 23:10', docs: 298, status: 'synced' }, { src: 'Uploads', type: 'Upload', sync: 'manual', docs: 18, status: 'synced' }],
-    hr: [{ src: 'git: people/handbook', mono: true, type: 'Git repository', sync: 'commit 41d0e77', docs: 88, status: 'synced' }],
-    public: [{ src: 's3://docs/public/', mono: true, type: 'S3 prefix', sync: 'watermark 19 Sep 09:00', docs: 1020, status: 'synced' }]
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const rank = (l) => LABELS.indexOf(l);
+  const enc = encodeURIComponent;
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+  const ago = (ms) => { if (!ms) return ''; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
+  const size = (n) => (n == null ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Postgres view' };
+  const SCHED = { '15m': 'every 15 min, incremental', hourly: 'hourly', daily: 'daily', manual: 'manual' };
+  const BUSY_DOC = ['quarantined', 'scanning', 'queued', 'indexing'];
+  const STORE = { db: 'table scan with cosine similarity in the database', pgvector: 'pgvector on PostgreSQL' };
+
+  const srcName = (s) => (s.kind === 'upload' ? 'Uploads' : s.kind === 'git' ? 'git: ' + s.location : s.kind === 'database' ? 'pg: ' + (s.config.object || s.location) : s.location);
+  const syncText = (s) => {
+    if (s.kind === 'upload') return 'manual';
+    if (s.state === 'syncing') return 'running';
+    if (!s.lastSyncAt) return 'not synced yet';
+    if (s.kind === 'git' && s.watermark) return 'commit ' + String(s.watermark).slice(0, 7);
+    if (s.kind === 'database') return (s.config.watermarkColumn || 'full read') + (s.watermark ? ' ' + s.watermark : '') + ', ' + ago(s.lastSyncAt);
+    return 'synced ' + ago(s.lastSyncAt);
   };
-  const DOCS = {
-    finance: [
-      { name: 'Q3 cost centre review.pdf', label: 'confidential', origin: 'auto-classifier, PII', chunks: 48, state: 'indexed', source: 's3://finance/reports/', size: '2.1 MB', hash: '9f31..c0de' },
-      { name: 'Travel budget 2026.xlsx', label: 'confidential', origin: 'manual', chunks: 31, state: 'indexed', source: 's3://finance/reports/', size: '410 KB', hash: '77b0..13fd' },
-      { name: 'Supplier bank details.docx', label: 'restricted', origin: 'auto-classifier, IBAN', chunks: 12, state: 'indexed', source: 'Uploads', size: '84 KB', hash: 'e2a9..5511' },
-      { name: 'Board pack August.pdf', label: 'confidential', origin: 'inherited', chunks: 0, state: 'extraction failed', source: 'Uploads', size: '6.4 MB', hash: '1b7c..a8e4' },
-      { name: 'Expense policy v7.md', label: 'internal', origin: 'manual', chunks: 19, state: 'unchanged, skipped', source: 'git: finance/policies', size: '31 KB', hash: '5d02..7f19' }
-    ],
-    travel: [{ name: 'Travel policy v7.md', label: 'internal', origin: 'manual', chunks: 22, state: 'indexed', source: 'git: finance/policies/travel', size: '28 KB', hash: '5d02..7f19' }, { name: 'Per diem table 2026.csv', label: 'internal', origin: 'inherited', chunks: 6, state: 'indexed', source: 'git: finance/policies/travel', size: '9 KB', hash: 'c41a..0b2e' }],
-    vendor: [{ name: 'Fabrikam MSA 2025.pdf', label: 'confidential', origin: 'manual', chunks: 64, state: 'indexed', source: 's3://legal/contracts/', size: '1.8 MB', hash: '0aa1..d3c7' }, { name: 'Contoso SOW 4.docx', label: 'confidential', origin: 'inherited', chunks: 18, state: 'indexing', source: 'Uploads', size: '220 KB', hash: '8e44..91b0' }],
-    hr: [{ name: 'Handbook 2026.md', label: 'internal', origin: 'manual', chunks: 140, state: 'indexed', source: 'git: people/handbook', size: '210 KB', hash: '2c19..e77a' }],
-    public: [{ name: 'Getting started.md', label: 'public', origin: 'manual', chunks: 12, state: 'indexed', source: 's3://docs/public/', size: '14 KB', hash: 'b0b0..1e1e' }]
-  };
-  const CHUNKS = [
-    { doc: 'Q3 cost centre review.pdf, p. 4', terms: 'travel overrun lisbon q3 cost centre variance', v: 0.83, ft: 0.61, rr: 0.91, label: 'confidential' },
-    { doc: 'Travel budget 2026.xlsx, sheet Q3', terms: 'travel budget overrun q3 lisbon onboarding', v: 0.79, ft: 0.44, rr: 0.74, label: 'confidential' },
-    { doc: 'Expense policy v7.md, section 4.3', terms: 'taxi expense policy receipt approval travel', v: 0.71, ft: 0.52, rr: 0.66, label: 'internal' },
-    { doc: 'Supplier bank details.docx, p. 1', terms: 'supplier bank iban payment lisbon', v: 0.68, ft: 0.39, rr: 0.58, label: 'restricted' }
-  ];
-  const ACCESS = [
-    ['Finance Ops members', 'read', 'workspace membership', UI.pill('active', 'ok')],
-    ['Knowledge curators', 'manage', 'role knowledge-curator', UI.pill('active', 'ok')],
-    ['Data analyst agent', 'read', 'profile analyst, tool ceiling confidential', UI.pill('active', 'ok')],
-    ['Field Sales', 'none', 'not shared', UI.pill('no access', 'outline')]
-  ];
-  const TRACE = '7c1e0a9b4d2f4e8f9a3b5c6d7e8f9a0b';
+  const srcStatus = (s, quarantined) => (s.state === 'failed' ? 'failed' : s.state === 'syncing' ? 'syncing' : s.kind === 'upload' && quarantined ? quarantined + ' quarantined' : s.lastSyncAt || s.kind === 'upload' ? 'synced' : 'queued');
+  const statePill = (s) => (s === 'indexed' || s === 'synced' || s === 'serving' ? UI.pill(s, 'ok') : s === 'syncing' || s === 'indexing' || s === 'queued' || s === 'scanning' || s === 'building' ? UI.pill(s, 'info') : /quarantin/.test(s) ? UI.pill(s, 'warn') : /failed|rejected/.test(s) ? UI.pill(s, 'danger') : UI.pill(s, ''));
+  const docState = (d) => (d.state === 'failed' ? 'extraction failed' : d.state === 'unchanged' ? 'unchanged, skipped' : d.state);
+  const origin = (d) => d.labelOrigin || 'inherited';
+
+  function cur(st) { return (st.bases || []).find((k) => k.id === st.kb) || null; }
 
   App.register({
-    id: 'knowledge', title: 'Knowledge', summary: 'Knowledge bases, sources, documents and labels, index, access, test search',
-    crumb: (st, params) => ['Knowledge', (KBS.find((k) => k.id === ((params && params.kb) || st.kb || 'finance')) || KBS[0]).name],
-    label: (st, params) => (KBS.find((k) => k.id === ((params && params.kb) || st.kb || 'finance')) || KBS[0]).label,
+    id: 'knowledge', title: 'Knowledge', live: true, summary: 'Knowledge bases, sources, documents and labels, index, access, test search',
+    crumb: (st) => ['Knowledge'].concat(cur(st) ? [cur(st).name] : []),
+    label: (st) => (cur(st) ? cur(st).label : null),
     commands: [{ label: 'Add a knowledge source', sub: 'Knowledge', run(app) { app.stateFor('knowledge').openAdd = true; app.render(); } }],
     states: [
-      { title: 'Index swap pending', tone: 'info', text: 'Index v8 is building beside v7 with a new embedding model: 71% complete. Retrieval keeps using v7 until the atomic switch.', apply(ctx) { ctx.state.kb = 'finance'; ctx.state.swap = true; ctx.state.tab = 'index'; ctx.rerender(); } },
-      { title: 'Upload quarantined', tone: 'warn', text: 'invoice-scan.pdf is held until the malware scan and classification pass. It cannot be attached or indexed yet.', apply(ctx) { ctx.state.kb = 'finance'; ctx.state.quarantine = true; ctx.state.tab = 'documents'; ctx.rerender(); } },
-      { title: 'Extraction failed', tone: 'danger', text: 'Board pack August.pdf is password protected. Shows the error, the trace ID and a retry action.', apply(ctx) { ctx.state.kb = 'finance'; ctx.state.tab = 'documents'; ctx.state.failedOpen = true; ctx.rerender(); } },
+      { title: 'Index swap pending', tone: 'info', text: 'A new index builds beside the serving one, for example with a new embedding model. Retrieval keeps using the serving index until the atomic switch.', apply(ctx) { ctx.state.demo = 'swap'; ctx.rerender(); } },
+      { title: 'Upload quarantined', tone: 'warn', text: 'An upload is held until the type check, malware scan and classification pass. It cannot be attached or indexed yet.', apply(ctx) { ctx.state.demo = 'quarantine'; ctx.rerender(); } },
+      { title: 'Extraction failed', tone: 'danger', text: 'A document that could not be read (for example a password-protected PDF) shows the error, the trace ID and a retry action.', apply(ctx) { ctx.state.demo = 'failed'; ctx.rerender(); } },
       { title: 'Member view', tone: 'neutral', text: 'Members see sources and documents read-only, with no relabel or reindex actions.', apply(ctx) { ctx.state.member = true; ctx.state.tab = 'sources'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.kb) { st.kb = ctx.params.kb; delete ctx.params.kb; }
-      st.kb = KBS.find((k) => k.id === st.kb) ? st.kb : 'finance';
-      st.tab = st.tab || 'sources'; st.filter = st.filter || ''; st.docq = st.docq || ''; st.query = st.query == null ? 'travel overrun Lisbon' : st.query;
-      st.overrides = st.overrides || {}; st.added = st.added || {}; st.searched = st.searched == null ? true : st.searched;
-      const kb = KBS.find((k) => k.id === st.kb);
-      const member = !!st.member;
-      const swap = st.swap || kb.swap;
-      const sources = (SOURCES[kb.id] || []).concat(st.added[kb.id] || []);
-      const docs = DOCS[kb.id].map((d) => Object.assign({}, d, st.overrides[kb.id + d.name] || {})).concat(st.quarantine && kb.id === 'finance' ? [{ name: 'invoice-scan.pdf', label: 'internal', origin: 'pending', chunks: 0, state: 'quarantined', source: 'Uploads', size: '1.3 MB', hash: 'scan pending' }] : []);
-      const kbList = KBS.filter((k) => !st.filter || k.name.toLowerCase().includes(st.filter.toLowerCase()));
+      const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
+      st.tab = st.tab || 'sources'; st.filter = st.filter || ''; st.docq = st.docq || ''; st.query = st.query || '';
+      st.detail = st.detail || {}; st.docs = st.docs || {}; st.access = st.access || {};
+      // Re-rendering closes any open dialog, so data that arrives while one is open waits until it closes.
+      const later = () => { if (App.state.route !== 'knowledge') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
+      const load = () => {
+        if (st.loading) return;
+        st.loading = true;
+        Promise.all([App.get('/api/knowledge/bases'), App.get('/api/knowledge/models').catch(() => null)])
+          .then(([bases, models]) => { Object.assign(st, { bases, models, loaded: true, loadError: null }); if (st.kb && st.detail[st.kb]) loadKb(st.kb); })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; later(); });
+      };
+      const loadKb = (id) => {
+        if (!id || st.kbLoading === id) return;
+        st.kbLoading = id;
+        Promise.all([App.get('/api/knowledge/bases/' + enc(id)), App.get('/api/knowledge/bases/' + enc(id) + '/documents?limit=500')])
+          .then(([d, docs]) => { st.detail[id] = d; st.docs[id] = docs; const i = (st.bases || []).findIndex((k) => k.id === id); if (i >= 0) st.bases[i] = Object.assign({}, st.bases[i], d); })
+          .catch((err) => { st.detail[id] = { error: err }; })
+          .finally(() => { st.kbLoading = null; later(); });
+      };
+      const loadAccess = (id) => { App.get('/api/knowledge/bases/' + enc(id) + '/access').then((a) => { st.access[id] = a; later(); }).catch((err) => { st.access[id] = { error: err }; later(); }); };
+      if (!st.loaded && !st.loading) st.paramHash = null;
+      if (!st.loaded && !st.loadError) load();
+      const refresh = () => { load(); if (st.kb) loadKb(st.kb); if (st.kb && st.access[st.kb]) loadAccess(st.kb); };
+      /** Runs one server call; refusals show as a toast with the problem's detail and trace. */
+      const act = async (fn, okMsg) => {
+        try { const r = await fn(); if (okMsg) toast(okMsg, 'ok', 5000); refresh(); return r || true; } catch (err) { App.fail(err); return null; }
+      };
 
-      const statePill = (s) => s === 'indexed' || s === 'synced' ? UI.pill(s, 'ok') : s === 'syncing' || s === 'indexing' ? UI.pill(s, 'info') : /quarantin/.test(s) ? UI.pill(s, 'warn') : /failed/.test(s) ? UI.pill(s, 'danger') : UI.pill(s, '');
-      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.mono ? '<span class="mono">' + esc(s.src) + '</span>' : esc(s.src), esc(s.type), esc(s.sync), String(s.docs), statePill(s.status)], attrs: 'data-src="' + esc(s.src) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository or Postgres view.' });
-      const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [esc(d.name), UI.label(d.label, { sm: true }), esc(d.origin), String(d.chunks), statePill(d.state)], attrs: 'data-doc="' + esc(d.name) + '"', selected: st.failedOpen && d.state === 'extraction failed' })), { minWidth: '0', emptyTitle: 'No documents match', emptyText: 'Try another word.' });
-      const failedDoc = docs.find((d) => d.state === 'extraction failed');
-      const failedPanel = st.failedOpen && failedDoc ? '<div class="problem"><div class="ptitle">Extraction failed for ' + esc(failedDoc.name) + '</div><div class="ptext">The PDF is password protected, so the index.document job could not extract text. Upload an unlocked copy, or remove the password and retry. The document keeps its inherited label and stays out of retrieval.</div><div class="trace"><span>Trace</span><span class="mono">' + TRACE + '</span>' + UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + TRACE + '"' }) + '<span class="right"></span>' + (member ? '' : UI.btn('Retry extraction', { size: 'sm', icon: 'refresh', attrs: 'data-retry="' + esc(failedDoc.name) + '"' })) + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissfail' }) + '</div></div>' : '';
-      const qWords = st.query.toLowerCase().split(/\s+/).filter(Boolean);
-      const hits = st.searched && qWords.length ? CHUNKS.filter((c) => qWords.some((w) => c.terms.includes(w))) : [];
-      const visible = hits.filter((c) => c.label !== 'restricted');
-      const filtered = hits.length - visible.length;
-      const testSearch = () => '<section class="panel"><div class="phead"><div class="eyebrow">Test search</div><span class="muted" style="font-size:12px">Runs with your clearance: confidential. Restricted chunks are filtered inside the query.</span></div>'
-        + '<div class="hstack" style="align-items:flex-end"><div class="field grow"><label for="kb-q">Query</label><input class="input" id="kb-q" value="' + esc(st.query) + '" placeholder="What would a user ask?"></div><div>' + UI.btn('Search', { attrs: 'data-search' }) + '</div></div>'
-        + (st.searched ? UI.table(['Chunk', 'Vector', 'Full-text', 'Reranker', 'Label'], visible.map((c) => ({ cells: [esc(c.doc), c.v.toFixed(2), c.ft.toFixed(2), c.rr.toFixed(2), UI.label(c.label, { sm: true })], attrs: 'data-chunk="' + esc(c.doc) + '"' })), { minWidth: '0', emptyTitle: 'No chunks match', emptyText: 'Nothing in ' + kb.name + ' scores above the threshold for this query.' }) + '<div class="muted" style="font-size:12px">Hybrid: pgvector HNSW plus full-text, fused with reciprocal rank fusion, then reranked. ' + (filtered ? filtered + ' restricted chunk' + (filtered > 1 ? 's' : '') + ' filtered by clearance before ranking.' : 'No chunks were filtered by clearance.') + '</div>' : '') + '</section>';
+      if (st.loadError || !st.loaded) {
+        root.innerHTML = '<div class="page">' + UI.pagehead('Knowledge', 'Knowledge bases, sources, documents and labels', '')
+          + (st.loadError ? UI.problem('Knowledge bases could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        ctx.on('click', '[data-reload]', () => { st.loadError = null; ctx.rerender(); });
+        return;
+      }
+
+      const bases = st.bases;
+      // The shell re-reads the hash on every render, so a link's parameters apply once per visit.
+      if (ctx.params.kb && st.paramHash !== location.hash) { st.kb = ctx.params.kb; st.paramHash = location.hash; }
+      if (!bases.find((k) => k.id === st.kb)) st.kb = bases[0] ? bases[0].id : null;
+      const curator = App.can('knowledge:manage');
+      const models = st.models || { embedding: [], rerankers: [] };
+      const myClearance = (App.me && App.me.user && App.me.user.clearance) || 'internal';
+      const myLabels = LABELS.filter((l) => rank(l) <= rank(myClearance));
+
+      // ---- demo states: find a base in live data that shows the state, or say why none does ----
+      if (st.demo) {
+        const d = st.demo; st.demo = null; st.demoNote = null; st.member = false;
+        if (d === 'swap') { const b = bases.find((k) => k.building); if (b) { st.kb = b.id; st.tab = 'index'; } else st.demoNote = 'No index is building right now. Reindex starts a build beside the serving index; this page then shows its progress.'; }
+        else if (d === 'quarantine') { const b = bases.find((k) => st.detail[k.id] && st.detail[k.id].quarantined); if (b) { st.kb = b.id; st.tab = 'documents'; st.docq = 'quarantined'; } else st.demoNote = 'Nothing is in quarantine. An upload waits there while its type, malware scan and classification are checked, usually for a few seconds.'; }
+        else if (d === 'failed') { const b = bases.find((k) => (st.docs[k.id] || []).some((x) => x.state === 'failed')); if (b) { st.kb = b.id; st.tab = 'documents'; st.failedOpen = true; } else st.demoNote = 'No document failed extraction in the bases loaded so far.'; }
+      }
+
+      const kb = cur(st);
+      if (kb && !st.detail[kb.id]) loadKb(kb.id);
+      const det = kb ? st.detail[kb.id] : null;
+      const manage = !st.member && kb && (curator || kb.access === 'manage');
+      const docs = kb ? st.docs[kb.id] || [] : [];
+      const sources = det && det.sources ? det.sources : [];
+      const quarantinedDocs = docs.filter((x) => x.state === 'quarantined' || x.state === 'scanning');
+      const busy = !!(kb && (kb.building || sources.some((s) => s.state === 'syncing') || docs.some((x) => BUSY_DOC.indexOf(x.state) >= 0)));
+      if (busy && !st.poll) st.poll = setTimeout(() => { st.poll = null; if (App.state.route === 'knowledge' && st.kb) loadKb(st.kb); }, 3000);
+      if (st.tab === 'access' && kb && !st.access[kb.id]) loadAccess(kb.id);
+      const kbList = bases.filter((k) => !st.filter || k.name.toLowerCase().indexOf(st.filter.toLowerCase()) >= 0);
+      const subOf = (k) => k.documents + ' document' + (k.documents === 1 ? '' : 's') + (k.building ? ', index swap pending' : k.lastSyncAt ? ', synced ' + ago(k.lastSyncAt) : '') + (k.status === 'draft' ? ', draft' : '');
+
+      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository or Postgres view.' });
+      const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [esc(d.name), UI.label(d.label, { sm: true }), esc(origin(d)), String(d.chunks), statePill(docState(d))], attrs: 'data-doc="' + esc(d.id) + '"', selected: st.failedOpen && d.state === 'failed' })), { minWidth: '0', emptyTitle: docs.length ? 'No documents match' : 'No documents yet', emptyText: docs.length ? 'Try another word.' : 'Add a source or upload a file. Documents appear as they are extracted.' });
+      const failedDoc = docs.find((d) => d.state === 'failed');
+      const failedPanel = st.failedOpen && failedDoc ? '<div class="problem"><div class="ptitle">Extraction failed for ' + esc(failedDoc.name) + '</div><div class="ptext">' + esc(failedDoc.error || 'The document could not be read.') + ' The document keeps its label and stays out of retrieval until a retry succeeds.</div><div class="trace"><span>Trace</span><span class="mono">' + esc(failedDoc.traceId || 'none') + '</span>' + (failedDoc.traceId ? UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + esc(failedDoc.traceId) + '"' }) : '') + '<span class="right"></span>' + (manage ? UI.btn('Retry extraction', { size: 'sm', icon: 'refresh', attrs: 'data-retry="' + esc(failedDoc.id) + '"' }) : '') + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissfail' }) + '</div></div>' : '';
+
+      const res = kb && st.results && st.results.kb === kb.id ? st.results : null;
+      const testSearch = () => '<section class="panel"><div class="phead"><div class="eyebrow">Test search</div><span class="muted" style="font-size:12px">Runs with your clearance: ' + esc(myClearance) + '. Chunks above it are filtered inside the query.</span></div>'
+        + '<div class="hstack" style="align-items:flex-end"><div class="field grow"><label for="kb-q">Query</label><input class="input" id="kb-q" value="' + esc(st.query) + '" placeholder="What would a user ask?"></div><div>' + UI.btn(st.searching ? 'Searching…' : 'Search', { attrs: 'data-search', disabled: !!st.searching }) + '</div></div>'
+        + (res && res.error ? UI.problem('Search failed', res.error.message, res.error.problem && res.error.problem.trace_id) : '')
+        + (res && res.hits ? (res.vectorSkipped ? UI.notice('Vector ranking was skipped: ' + esc(res.vectorSkipped) + ' Keyword ranking still ran.', 'warn') : '')
+          + UI.table(['Chunk', 'Vector', 'Full-text', 'Reranker', 'Label'], res.hits.map((c, i) => ({ cells: [esc(c.document) + (c.heading ? ', ' + esc(c.heading) : '') + (c.withheld ? ' ' + UI.pill('withheld', 'warn') : ''), c.vector == null ? '–' : c.vector.toFixed(2), c.keyword == null ? '–' : c.keyword.toFixed(2), c.rerank == null ? '–' : c.rerank.toFixed(2), UI.label(c.label, { sm: true })], attrs: 'data-chunk="' + i + '"' })), { minWidth: '0', emptyTitle: 'No chunks match', emptyText: 'Nothing in ' + kb.name + ' scores for this query at or below your clearance.' })
+          + '<div class="muted" style="font-size:12px">Hybrid: vector similarity (' + esc(STORE[res.vectorStore] || res.vectorStore) + ') plus BM25 full-text, fused with reciprocal rank fusion' + (kb.reranker ? ', then reranked by ' + esc(kb.reranker) : '') + '. Chunks above ' + esc(res.ceiling) + ' were filtered by clearance before ranking.</div>' : '') + '</section>';
+
+      const serving = kb && kb.serving;
+      const building = kb && kb.building;
+      const indexTab = () => (serving ? '<section class="panel"><div class="phead"><div class="eyebrow">Index v' + serving.version + '</div>' + UI.pill('serving', 'ok') + '</div>' + UI.kv([['Embedding model', '<span class="mono">' + esc(serving.embedModel) + '</span> via the gateway, cached by content hash for 30 days'], ['Vector index', esc(STORE[det && det.vectorStore] || 'database')], ['Full-text', 'BM25 over keyed-hash terms, filtered by label'], ['Chunks', String(serving.chunks)], ['Chunking', 'structure-aware, about ' + kb.chunking.tokens + ' tokens with ' + kb.chunking.overlap + ' overlap, headings kept as metadata'], ['Reranker', kb.reranker ? '<span class="mono">' + esc(kb.reranker) + '</span>' : 'none'], ['Last full build', esc(when(serving.builtAt) || 'not yet')], ['Label per chunk', 'the higher of the manual label, the source floor and the auto-classifier result']], 2) + (serving.message ? UI.notice(esc(serving.message), 'warn') : '') + '</section>' : UI.empty('No serving index', 'Reindex builds one.'))
+        + (building ? '<section class="panel"><div class="phead"><div class="eyebrow">Index v' + building.version + ' building</div>' + UI.pill('building', 'info') + '</div>' + UI.meter('Embedding with ' + esc(building.embedModel), building.progress + '%' + (building.message ? ', ' + esc(building.message) : ''), building.progress, 'accent') + '<div class="fg2">Built beside v' + (serving ? serving.version : '?') + (serving && building.embedModel !== serving.embedModel ? ' with a new embedding model' : '') + '. Retrieval keeps using v' + (serving ? serving.version : '?') + ' until the switch, which is atomic.</div>' + (manage ? '<div class="hstack">' + UI.btn('Cancel build', { size: 'sm', attrs: 'data-cancelbuild' }) + '</div>' : '') + '</section>' : '')
+        + (det && det.indexes && det.indexes.length ? UI.table(['Version', 'Embedding model', 'Chunks', 'State', 'Built'], det.indexes.map((i) => ['v' + i.version, '<span class="mono">' + esc(i.embedModel) + '</span>', String(i.chunks), statePill(i.state), esc(when(i.builtAt || i.createdAt)) + (i.error ? ' <span class="muted">' + esc(i.error) + '</span>' : '')]), { clickable: false, minWidth: '0' }) : '');
+
+      const accessTab = () => {
+        const a = kb ? st.access[kb.id] : null;
+        if (!a) return UI.notice('Loading…', 'info');
+        if (a.error) return UI.problem('Access could not be loaded', a.error.message, a.error.problem && a.error.problem.trace_id);
+        const ws = kb.workspaceId && App.me && (App.me.workspaces || []).find((w) => w.id === kb.workspaceId);
+        const rows = [['Knowledge curators', 'manage', 'role knowledge-curator', UI.pill('active', 'ok'), '']]
+          .concat(kb.sharing === 'members' ? [[ws ? esc(ws.name) + ' members' : kb.workspaceId ? 'Workspace members' : 'Everyone in the tenant', 'read', kb.workspaceId ? 'workspace membership' : 'tenant-wide base', UI.pill('active', 'ok'), '']] : [])
+          .concat(a.map((g) => [esc(g.name), esc(g.access), g.kind === 'profile' ? 'profile: retrieval in chat' : g.kind === 'workspace' ? 'shared with the workspace' : 'shared with the user', UI.pill('active', 'ok'), manage ? UI.btn('Remove', { kind: 'ghost', size: 'xs', attrs: 'data-unshare="' + esc(g.id) + '"' }) : '']));
+        return UI.table(['Principal', 'Access', 'Via', 'State', ''], rows, { clickable: false, minWidth: '0' }) + UI.notice('Retrieval filters chunks above the reader\'s clearance inside the query, so a search never sees a chunk it may not return. Restricted chunks are returned only to principals with restricted clearance.', 'info') + (manage ? '<div>' + UI.btn('Add principal', { icon: 'plus', attrs: 'data-addprincipal' }) + '</div>' : '');
+      };
 
       let body = '';
-      if (st.tab === 'sources') body = sourcesTable() + '<div class="hstack"><div class="eyebrow grow">Documents</div>' + UI.btn('All documents', { kind: 'ghost', size: 'sm', attrs: 'data-tab="documents"' }) + '</div>' + docsTable(docs.slice(0, 5)) + failedPanel + testSearch();
-      else if (st.tab === 'documents') body = '<div class="toolbar">' + UI.search('Search documents', 'data-docq', st.docq) + '<span class="muted" style="font-size:12px">' + docs.length + ' shown of ' + kb.sub.split(' ')[0] + ' documents</span></div>' + docsTable(docs.filter((d) => !st.docq || (d.name + ' ' + d.state + ' ' + d.label).toLowerCase().includes(st.docq.toLowerCase()))) + failedPanel;
-      else if (st.tab === 'index') body = '<section class="panel"><div class="phead"><div class="eyebrow">Index ' + esc(kb.index) + '</div>' + UI.pill('serving', 'ok') + '</div>' + UI.kv([['Embedding model', '<span class="mono">' + esc(kb.embed) + '</span> via the gateway, cached by content hash for 30 days'], ['Vector index', 'pgvector HNSW, m 16, ef_construction 200'], ['Full-text', 'Postgres tsvector, english'], ['Chunks', esc(kb.chunks)], ['Chunking', 'structure-aware, 500 to 1,000 tokens with overlap, headings kept as metadata'], ['Reranker', '<span class="mono">bge-reranker-v2-m3</span>, optional per profile'], ['Last full build', esc(kb.built)], ['Label per chunk', 'the higher of the manual label and the auto-classifier result']], 2) + '</section>'
-        + (swap ? '<section class="panel"><div class="phead"><div class="eyebrow">Index ' + (kb.id === 'finance' ? 'v8' : 'v6') + ' building</div>' + UI.pill('building', 'info') + '</div>' + UI.meter('Embedding with bge-m3', '71% of ' + esc(kb.chunks) + ' chunks', 71, 'accent') + '<div class="fg2">Built beside ' + esc(kb.index) + ' with the new embedding model. Retrieval keeps using ' + esc(kb.index) + ' until the switch, which is atomic. About 40 minutes left on gpu-small-1.</div>' + (member ? '' : '<div class="hstack">' + UI.btn('Cancel build', { size: 'sm', attrs: 'data-cancelbuild' }) + '</div>') + '</section>' : '');
-      else if (st.tab === 'access') body = UI.table(['Principal', 'Access', 'Via', 'State'], ACCESS, { clickable: false, minWidth: '0' }) + UI.notice('Retrieval filters chunks above the reader\'s clearance inside the query, so a search never sees a chunk it may not return. Restricted chunks are returned only to principals with restricted clearance.', 'info') + (member ? '' : '<div>' + UI.btn('Add principal', { icon: 'plus', attrs: 'data-addprincipal' }) + '</div>');
+      if (!kb) body = UI.empty('No knowledge bases yet', curator ? 'Create one, then add an upload, S3 prefix, Git repository or Postgres view as a source.' : 'No knowledge base is shared with you or your workspace yet.', curator ? UI.btn('New knowledge base', { kind: 'primary', attrs: 'data-newkb' }) : '');
+      else if (det && det.error) body = UI.problem('This knowledge base could not be loaded', det.error.message, det.error.problem && det.error.problem.trace_id);
+      else if (!det) body = UI.notice('Loading…', 'info');
+      else if (st.tab === 'sources') body = sourcesTable() + '<div class="hstack"><div class="eyebrow grow">Documents</div>' + UI.btn('All documents', { kind: 'ghost', size: 'sm', attrs: 'data-tab="documents"' }) + '</div>' + docsTable(docs.slice(0, 5)) + failedPanel + testSearch();
+      else if (st.tab === 'documents') { const shown = docs.filter((d) => !st.docq || (d.name + ' ' + docState(d) + ' ' + d.label).toLowerCase().indexOf(st.docq.toLowerCase()) >= 0); body = '<div class="toolbar">' + UI.search('Search documents', 'data-docq', st.docq) + '<span class="muted" style="font-size:12px">' + shown.length + ' shown of ' + docs.length + ' documents at or below your clearance</span>' + (manage ? '<span class="right">' + UI.btn('Upload files', { size: 'sm', icon: 'upload', attrs: 'data-upload' }) + '</span>' : '') + '</div>' + docsTable(shown) + failedPanel; }
+      else if (st.tab === 'index') body = indexTab();
+      else if (st.tab === 'access') body = accessTab();
       else body = testSearch();
 
       root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}.kb-page > *{flex-shrink:0}</style>'
-        + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Knowledge bases</div>' + (member ? '' : UI.btn('New', { size: 'sm', attrs: 'data-newkb' })) + '</div>' + UI.search('Filter', 'data-filter', st.filter).replace('class="search"', 'class="search" style="width:100%"')
-        + '<div class="kb-list">' + kbList.map((k) => UI.listItem(esc(k.name), esc(k.sub), { active: k.id === kb.id, attrs: 'data-kb="' + k.id + '"', right: UI.label(k.label, { sm: true }) })).join('') + (kbList.length ? '' : UI.empty('No knowledge base matches', 'Try another word.')) + '</div></div>'
+        + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Knowledge bases</div>' + (curator && !st.member ? UI.btn('New', { size: 'sm', attrs: 'data-newkb' }) : '') + '</div>' + UI.search('Filter', 'data-filter', st.filter).replace('class="search"', 'class="search" style="width:100%"')
+        + '<div class="kb-list">' + kbList.map((k) => UI.listItem(esc(k.name), esc(subOf(k)), { active: kb && k.id === kb.id, attrs: 'data-kb="' + esc(k.id) + '"', right: UI.label(k.label, { sm: true }) })).join('') + (kbList.length || !bases.length ? '' : UI.empty('No knowledge base matches', 'Try another word.')) + '</div></div>'
         + '<div class="page kb-page">'
-        + (member ? UI.notice('You are viewing as a member. Sources and documents are read-only; relabel, reindex and source changes need the knowledge curator role.', 'info', '<a href="#" data-leavemember>Back to curator view</a>') : '')
-        + UI.pagehead(kb.name, 'Embedding ' + esc(kb.embed) + ', index ' + esc(kb.index) + ', HNSW plus full-text · ' + UI.pill(kb.status, 'ok'), member ? '' : UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }))
-        + (swap && st.tab !== 'index' ? UI.notice('Index ' + (kb.id === 'finance' ? 'v8' : 'v6') + ' is building beside ' + esc(kb.index) + ' with a new embedding model: 71% complete. Retrieval keeps using ' + esc(kb.index) + ' until the atomic switch.', 'info', '<a href="#" data-tab="index">Index</a>') : '')
-        + (st.quarantine && kb.id === 'finance' ? UI.notice('<b>invoice-scan.pdf</b> is held in quarantine until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn', '<a href="#" data-doc="invoice-scan.pdf">Details</a>') : '')
-        + UI.tabs([{ id: 'sources', label: 'Sources' }, { id: 'documents', label: 'Documents' }, { id: 'index', label: 'Index' }, { id: 'access', label: 'Access' }, { id: 'test', label: 'Test search' }], st.tab)
+        + (st.member ? UI.notice('You are viewing as a member. Sources and documents are read-only; relabel, reindex and source changes need the knowledge curator role.', 'info', '<a href="#" data-leavemember>Back to curator view</a>') : '')
+        + (st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissnote' })) : '')
+        + (kb ? UI.pagehead(esc(kb.name), 'Embedding ' + esc(kb.embedModel) + ', index v' + (serving ? serving.version : '–') + ', vector plus full-text · ' + UI.pill(kb.status, kb.status === 'published' ? 'ok' : '') + (kb.description ? '<div class="muted" style="font-size:12px">' + esc(kb.description) + '</div>' : ''),
+          manage ? UI.btn('Edit', { kind: 'ghost', attrs: 'data-editkb' }) + (kb.status === 'draft' ? UI.btn('Publish', { attrs: 'data-publish' }) : '') + UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }) : '')
+          + (kb.status === 'draft' ? UI.notice('This knowledge base is a draft. Chat retrieves only from published bases.', 'warn') : '')
+          + (building && st.tab !== 'index' ? UI.notice('Index v' + building.version + ' is building beside v' + (serving ? serving.version : '?') + ': ' + building.progress + '% complete. Retrieval keeps using v' + (serving ? serving.version : '?') + ' until the atomic switch.', 'info', '<a href="#" data-tab="index">Index</a>') : '')
+          + (quarantinedDocs.length ? UI.notice('<b>' + esc(quarantinedDocs[0].name) + '</b>' + (quarantinedDocs.length > 1 ? ' and ' + (quarantinedDocs.length - 1) + ' more are' : ' is') + ' held in quarantine until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn', '<a href="#" data-doc="' + esc(quarantinedDocs[0].id) + '">Details</a>') : '')
+          + UI.tabs([{ id: 'sources', label: 'Sources' }, { id: 'documents', label: 'Documents' }, { id: 'index', label: 'Index' }, { id: 'access', label: 'Access' }, { id: 'test', label: 'Test search' }], st.tab) : UI.pagehead('Knowledge', 'Knowledge bases, sources, documents and labels', ''))
         + body
         + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div>';
@@ -110,57 +169,185 @@
       ctx.on('input', '[data-filter]', (e, t) => { st.filter = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-filter]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('input', '[data-docq]', (e, t) => { st.docq = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-docq]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-tab]', (e, t) => { e.preventDefault(); st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('input', '#kb-q', (e, t) => { st.query = t.value; });
-      ctx.on('keydown', '#kb-q', (e) => { if (e.key === 'Enter') { e.preventDefault(); st.searched = true; ctx.rerender(); } });
-      ctx.on('click', '[data-search]', () => { st.searched = true; ctx.rerender(); });
       ctx.on('click', '[data-leavemember]', (e) => { e.preventDefault(); st.member = false; ctx.rerender(); });
+      ctx.on('click', '[data-dismissnote]', () => { st.demoNote = null; ctx.rerender(); });
       ctx.on('click', '[data-dismissfail]', () => { st.failedOpen = false; ctx.rerender(); });
-      ctx.on('click', 'tr[data-chunk]', (e, t) => { const c = CHUNKS.find((x) => x.doc === t.dataset.chunk); ctx.drawer({ title: esc(c.doc), body: UI.kv([['Vector', c.v.toFixed(2)], ['Full-text', c.ft.toFixed(2)], ['Reranker', c.rr.toFixed(2)], ['Label', UI.label(c.label, { sm: true })]], 2) + UI.ctx('Chunk text', c.doc.startsWith('Q3') ? 'Field Sales exceeded its travel allocation in each month of the quarter. The Lisbon onboarding programme carried an approved exception of 38,000 EUR, agreed by the CFO on 2 July.' : c.doc.startsWith('Travel budget') ? 'Q3 travel: budget 361,500.00, actual 412,880.00, variance 51,380.00 (14.2%). LIS-ONBOARD 96,310.00 against 60,000.00.' : 'Taxis after 22:00 need no pre-approval where public transport has stopped running. A receipt is still required.', c.label) + '<div class="muted" style="font-size:12px">Headings and page are kept as chunk metadata and cited as the source ID in answers.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) }); });
+      ctx.on('click', '[data-copy]', (e, t) => { if (navigator.clipboard) navigator.clipboard.writeText(t.dataset.copy).then(() => toast('Trace ID copied.'), () => toast('Copy failed.', 'warn')); });
+      if (!kb) { ctx.on('click', '[data-newkb]', () => newKb()); ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state)); if (st.openAdd) st.openAdd = false; return; }
+
+      const search = async () => {
+        const i = ctx.$('#kb-q'); if (i) st.query = i.value;
+        if (!st.query.trim()) { toast('Type a query first.'); return; }
+        st.searching = true; ctx.rerender();
+        try { const r = await App.post('/api/knowledge/search', { kbIds: [kb.id], query: st.query.trim(), k: 10 }); st.results = Object.assign({ kb: kb.id }, r); }
+        catch (err) { st.results = { kb: kb.id, error: err }; }
+        st.searching = false; later();
+      };
+      ctx.on('input', '#kb-q', (e, t) => { st.query = t.value; });
+      ctx.on('keydown', '#kb-q', (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
+      ctx.on('click', '[data-search]', search);
+      ctx.on('click', 'tr[data-chunk]', (e, t) => {
+        const c = res && res.hits[+t.dataset.chunk]; if (!c) return;
+        ctx.drawer({ title: esc(c.document) + (c.heading ? ', ' + esc(c.heading) : ''), body: UI.kv([['Vector', c.vector == null ? '–' : c.vector.toFixed(3)], ['Full-text', c.keyword == null ? '–' : c.keyword.toFixed(3)], ['Fused (RRF)', c.fused == null ? '–' : c.fused.toFixed(4)], ['Reranker', c.rerank == null ? '–' : c.rerank.toFixed(2)], ['Label', UI.label(c.label, { sm: true })], ['Source', '<span class="mono">' + esc(c.source || '') + '</span>']], 2)
+          + (c.withheld ? UI.notice('Withheld by the context checkpoint: ' + esc(c.withheld), 'warn') : UI.ctx('Chunk text', c.text || '', c.label)) + '<div class="muted" style="font-size:12px">Headings and page are kept as chunk metadata and cited as the source in answers.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) });
+      });
+
       ctx.on('click', 'tr[data-src]', (e, t) => {
-        const s = sources.find((x) => x.src === t.dataset.src);
-        const quarantined = /quarantin/.test(s.status);
-        ctx.drawer({ title: (s.mono ? '<span class="mono">' : '') + esc(s.src) + (s.mono ? '</span>' : ''), body: UI.kv([['Type', esc(s.type)], ['Sync', esc(s.sync)], ['Documents', String(s.docs)], ['Status', statePill(s.status)], ['Schedule', s.type === 'Upload' ? 'manual' : 'every 15 min, incremental by watermark'], ['Label floor', UI.label(kb.label, { sm: true })]], 2)
-          + (quarantined ? UI.table(['File', 'Scan', 'Classification', 'Held since'], [['<span class="mono">invoice-scan.pdf</span>', UI.pill('pending', 'warn'), UI.pill('pending', 'warn'), '11 min']], { clickable: false, minWidth: '0' }) + '<div class="fg2">Quarantined uploads cannot be attached or indexed until the malware scan and classification jobs pass.</div>' : '<div class="fg2">Unchanged documents are skipped by content hash. Each document keeps the higher of its manual label and the auto-classifier result.</div>'),
-          actions: member ? UI.btn('Close', { attrs: 'data-close' }) : UI.btn('Sync now', { icon: 'refresh', attrs: 'data-syncnow' }) + UI.btn('Remove source', { kind: 'danger', attrs: 'data-removesrc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+        const s = sources.find((x) => x.id === t.dataset.src); if (!s) return;
+        const status = srcStatus(s, quarantinedDocs.length);
+        ctx.drawer({ title: s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', body: UI.kv([['Type', esc(KIND[s.kind])], ['Sync', esc(syncText(s))], ['Documents', String(s.documents)], ['Status', statePill(status)], ['Schedule', esc(SCHED[s.schedule] || s.schedule) + (s.kind === 'database' ? ', incremental by watermark' : s.kind === 'upload' ? '' : ', unchanged documents skipped')], ['Label floor', UI.label(s.labelFloor, { sm: true })]].concat(s.kind === 'git' && s.config.ref ? [['Ref', '<span class="mono">' + esc(s.config.ref) + '</span>']] : []), 2)
+          + (s.lastError ? UI.problem('Last sync failed', s.lastError, s.lastTrace) : '')
+          + (s.kind === 'upload' && quarantinedDocs.length ? UI.table(['File', 'State', 'Label', 'Held since'], quarantinedDocs.map((d) => ['<span class="mono">' + esc(d.name) + '</span>', statePill(d.state), UI.label(d.label, { sm: true }), esc(ago(d.createdAt))]), { clickable: false, minWidth: '0' }) + '<div class="fg2">Quarantined uploads cannot be attached or indexed until the type check, malware scan and classification pass.</div>' : '<div class="fg2">Unchanged documents are skipped by version or content hash. Each document keeps the higher of its manual label, the floor and the auto-classifier result.</div>'),
+          actions: !manage ? UI.btn('Close', { attrs: 'data-close' }) : (s.kind === 'upload' ? UI.btn('Upload files', { icon: 'upload', attrs: 'data-up' }) : UI.btn('Sync now', { icon: 'refresh', attrs: 'data-syncnow', disabled: s.state === 'syncing' })) + UI.btn('Remove source', { kind: 'danger', attrs: 'data-removesrc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
           onMount(d) {
-            const sn = d.querySelector('[data-syncnow]'); if (sn) sn.addEventListener('click', () => { App.closeOverlay(); setOverrideSource(s, 'syncing'); ctx.toast('Sync queued for <span class="mono">' + esc(s.src) + '</span>. Incremental by watermark.', 'ok'); });
-            const rm = d.querySelector('[data-removesrc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove source', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">Documents and chunks from this source leave the index at the next build. Cached retrieval results for ' + esc(kb.name) + ' are invalidated by the version bump.</div>', kv: [['Source', esc(s.src)], ['Documents', String(s.docs)]] }); if (ok) { s.removed = true; SOURCES[kb.id] = SOURCES[kb.id].filter((x) => x !== s); st.added[kb.id] = (st.added[kb.id] || []).filter((x) => x !== s); ctx.rerender(); ctx.toast('Source removed. ' + s.docs + ' documents scheduled for removal.'); } });
+            const up = d.querySelector('[data-up]'); if (up) up.addEventListener('click', () => { App.closeOverlay(); pickFiles(); });
+            const sn = d.querySelector('[data-syncnow]'); if (sn) sn.addEventListener('click', () => { App.closeOverlay(); act(() => App.post('/api/knowledge/sources/' + enc(s.id) + '/sync'), 'Sync queued for <span class="mono">' + esc(srcName(s)) + '</span>. Unchanged documents are skipped.'); });
+            const rm = d.querySelector('[data-removesrc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove source', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">Its documents, chunks and vectors leave every index of ' + esc(kb.name) + ' now.</div>', kv: [['Source', esc(srcName(s))], ['Documents', String(s.documents)]] }); if (ok) act(() => App.del('/api/knowledge/sources/' + enc(s.id)), 'Source removed with its ' + s.documents + ' documents. Audit entry written.'); });
           } });
       });
-      function setOverrideSource(s, status) { s.status = status; s.sync = s.type === 'Upload' ? 'manual' : 'running since 12:14'; ctx.rerender(); }
+
       ctx.on('click', '[data-doc]', (e, t) => {
         e.preventDefault();
-        const d = docs.find((x) => x.name === t.dataset.doc); if (!d) return;
-        const failed = d.state === 'extraction failed', quarantined = d.state === 'quarantined';
-        ctx.drawer({ title: esc(d.name), body: '<div class="hstack">' + UI.label(d.label) + statePill(d.state) + '</div>' + UI.kv([['Label origin', esc(d.origin)], ['Chunks', String(d.chunks)], ['Source', '<span class="mono">' + esc(d.source) + '</span>'], ['Size', esc(d.size)], ['Content hash', '<span class="mono">' + esc(d.hash) + '</span>'], ['Knowledge base', esc(kb.name)]], 2)
-          + (failed ? UI.problem('Extraction failed', 'The PDF is password protected, so the index.document job could not extract text. Upload an unlocked copy, or remove the password and retry.', TRACE) : quarantined ? UI.notice('Held until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn') : d.state === 'unchanged, skipped' ? '<div class="fg2">The content hash matched the previous build, so extraction and embedding were skipped.</div>' : '<div class="fg2">Chunks carry this label, the tenant, the source version and an ACL. Restricted chunks are never cached.</div>'),
-          actions: member || quarantined ? UI.btn('Close', { attrs: 'data-close' }) : (failed ? UI.btn('Retry extraction', { kind: 'primary', icon: 'refresh', attrs: 'data-retry="' + esc(d.name) + '"' }) : UI.btn('Reindex document', { icon: 'refresh', attrs: 'data-reindexdoc' })) + UI.btn('Relabel', { icon: 'edit', attrs: 'data-relabel' }) + UI.btn('Remove', { kind: 'danger', attrs: 'data-removedoc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+        const d = docs.find((x) => x.id === t.dataset.doc); if (!d) return;
+        const failed = d.state === 'failed' || d.state === 'rejected', quarantined = d.state === 'quarantined' || d.state === 'scanning';
+        ctx.drawer({ title: esc(d.name), body: '<div class="hstack">' + UI.label(d.label) + statePill(docState(d)) + '</div>' + UI.kv([['Label origin', esc(origin(d))], ['Chunks', String(d.chunks)], ['Source', '<span class="mono">' + esc(d.source || '') + '</span>'], ['Type', esc(d.type || 'not detected yet')], ['Size', esc(size(d.size))], ['Content hash', '<span class="mono">' + esc(d.sha256 ? d.sha256.slice(0, 4) + '..' + d.sha256.slice(-4) : '') + '</span>'], ['Knowledge base', esc(kb.name)], ['Indexed', esc(when(d.indexedAt) || 'not yet')]], 2)
+          + (failed ? UI.problem(d.state === 'rejected' ? 'Upload rejected' : 'Extraction failed', d.error || 'The document could not be read.', d.traceId) : quarantined ? UI.notice('Held until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn') : d.state === 'unchanged' ? '<div class="fg2">The content hash matched the previous build, so extraction and embedding were skipped.</div>' : '<div class="fg2">Chunks carry this label, the tenant, the source version and an ACL.</div>'),
+          actions: !manage || quarantined ? UI.btn('Close', { attrs: 'data-close' }) : (d.state === 'rejected' ? '' : failed ? UI.btn('Retry extraction', { kind: 'primary', icon: 'refresh', attrs: 'data-retry="' + esc(d.id) + '"' }) : UI.btn('Reindex document', { icon: 'refresh', attrs: 'data-reindexdoc' })) + UI.btn('Relabel', { icon: 'edit', attrs: 'data-relabel' }) + UI.btn('Remove', { kind: 'danger', attrs: 'data-removedoc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
           onMount(dr) {
             const rl = dr.querySelector('[data-relabel]'); if (rl) rl.addEventListener('click', () => relabel(d));
-            const ri = dr.querySelector('[data-reindexdoc]'); if (ri) ri.addEventListener('click', () => { App.closeOverlay(); override(d, { state: 'indexing' }); ctx.toast('index.document queued for ' + esc(d.name) + '. Embeddings come from cache where the hash matches.', 'ok'); });
+            const ri = dr.querySelector('[data-reindexdoc]'); if (ri) ri.addEventListener('click', () => { App.closeOverlay(); act(() => App.post('/api/knowledge/documents/' + enc(d.id) + '/reindex'), 'Reindex queued for ' + esc(d.name) + '. Embeddings come from cache where the text is unchanged.'); });
             const rt = dr.querySelector('[data-retry]'); if (rt) rt.addEventListener('click', () => { App.closeOverlay(); retry(d); });
-            const rm = dr.querySelector('[data-removedoc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove document', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">The document and its ' + d.chunks + ' chunks leave the index at the next build. Retrieval cache entries for ' + esc(kb.name) + ' are invalidated.</div>', kv: [['Document', esc(d.name)], ['Label', UI.label(d.label, { sm: true })]] }); if (ok) { override(d, { state: 'removing', chunks: 0 }); ctx.toast('Removal queued for ' + esc(d.name) + '.'); } });
+            const rm = dr.querySelector('[data-removedoc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove document', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">The document and its ' + d.chunks + ' chunks leave every index now. A synced document stays removed, so the next sync does not bring it back.</div>', kv: [['Document', esc(d.name)], ['Label', UI.label(d.label, { sm: true })]] }); if (ok) act(() => App.del('/api/knowledge/documents/' + enc(d.id)), esc(d.name) + ' removed. Audit entry written.'); });
           } });
       });
-      function override(d, o) { st.overrides[kb.id + d.name] = Object.assign({}, st.overrides[kb.id + d.name] || {}, o); ctx.rerender(); }
-      function retry(d) { ctx.confirm({ title: 'Retry extraction', tone: 'primary', ok: 'Retry', body: '<div class="fg2">Runs index.document again for this file. If the password is still set the job fails with the same trace.</div>', kv: [['Document', esc(d.name)], ['Last error', 'password protected'], ['Trace', '<span class="mono">' + TRACE.slice(0, 12) + '…</span>']] }).then((ok) => { if (!ok) return; st.failedOpen = false; override(d, { state: 'indexing', chunks: 0 }); ctx.toast('Extraction retried for ' + esc(d.name) + '. Job index.document queued.', 'ok'); }); }
-      ctx.on('click', '[data-retry]', (e, t) => { const d = docs.find((x) => x.name === t.dataset.retry); if (d) retry(d); });
-      function relabel(d) {
-        ctx.modal({ title: 'Relabel ' + esc(d.name), body: UI.field('Label', UI.select(['public', 'internal', 'confidential', 'restricted'], d.label, 'data-lbl'), 'A manual label can raise the auto-classifier result but not lower it below the classifier\'s finding.') + UI.field('Reason', UI.textarea('', { placeholder: 'Recorded in the audit log', rows: 2, attrs: 'data-reason' })) + UI.notice('Chunks take the new label at the next build. Cached retrieval results for ' + esc(kb.name) + ' are invalidated by the version bump.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Relabel', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { const l = m.querySelector('[data-lbl]').value; const auto = /auto-classifier/.test(d.origin); if (auto && ['public', 'internal', 'confidential', 'restricted'].indexOf(l) < ['public', 'internal', 'confidential', 'restricted'].indexOf(d.label)) { ctx.toast('Refused: the auto-classifier found ' + esc(d.origin.split(', ')[1]) + ', so the label cannot go below ' + esc(d.label) + '.', 'danger'); return; } App.closeOverlay(); override(d, { label: l, origin: 'manual' }); ctx.toast(esc(d.name) + ' relabelled ' + esc(l) + '. Audit entry written.', 'ok'); }); } });
+      function retry(d) {
+        ctx.confirm({ title: 'Retry extraction', tone: 'primary', ok: 'Retry', body: '<div class="fg2">Runs extraction and embedding again for this file. If the cause is still there the job fails with a new trace.</div>', kv: [['Document', esc(d.name)], ['Last error', esc(d.error || '')], ['Trace', '<span class="mono">' + esc((d.traceId || '').slice(0, 12)) + '…</span>']] })
+          .then((ok) => { if (!ok) return; st.failedOpen = false; act(() => App.post('/api/knowledge/documents/' + enc(d.id) + '/reindex'), 'Extraction retried for ' + esc(d.name) + '.'); });
       }
-      ctx.on('click', '[data-reindex]', async () => { const ok = await ctx.confirm({ title: 'Reindex ' + esc(kb.name), tone: 'primary', ok: 'Start build', body: '<div class="fg2">A new index builds beside ' + esc(kb.index) + '. Retrieval keeps using ' + esc(kb.index) + ' until the build completes and the switch is atomic. Unchanged documents are skipped by hash.</div>', kv: [['Embedding model', '<span class="mono">bge-m3</span> (new)'], ['Chunks', esc(kb.chunks)], ['Estimated', 'about 2 h on gpu-small-1'], ['Cost', 'embeddings not in cache: about 61%']] }); if (!ok) return; st.swap = true; st.tab = 'index'; ctx.rerender(); ctx.toast('Index ' + (kb.id === 'finance' ? 'v8' : 'v6') + ' is building beside ' + esc(kb.index) + '.', 'ok'); });
-      ctx.on('click', '[data-cancelbuild]', async () => { const ok = await ctx.confirm({ title: 'Cancel the index build', tone: 'danger', ok: 'Cancel build', body: '<div class="fg2">The partial index is discarded. Retrieval is unaffected because ' + esc(kb.index) + ' never stopped serving.</div>' }); if (!ok) return; st.swap = false; kb.swap = false; ctx.rerender(); ctx.toast('Build cancelled. ' + esc(kb.index) + ' keeps serving.'); });
-      ctx.on('click', '[data-addsource]', () => openAdd());
-      function openAdd() {
-        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select(['Upload', 'S3 prefix', 'Git repository', 'Postgres view'], 'S3 prefix', 'data-type')) + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/, git: org/repo, pg: schema.view', attrs: 'data-loc' }), 'Credentials come from the connection, never from this form.') + UI.field('Label floor', UI.select(['public', 'internal', 'confidential', 'restricted'], kb.label, 'data-floor'), 'Documents get at least this label; the auto-classifier can raise it.') + UI.field('Sync', UI.select(['every 15 min, incremental', 'hourly', 'daily', 'manual'], 'every 15 min, incremental')) + UI.notice('Uploads go to quarantine first. Other sources are read with the connection\'s allow-list and sync by watermark.', 'info'), actions: UI.btn('Add and sync', { kind: 'primary', attrs: 'data-go' }) + UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }), onMount(d) {
-          d.querySelector('[data-go]').addEventListener('click', () => { const loc = d.querySelector('[data-loc]').value.trim(); const type = d.querySelector('[data-type]').value; if (!loc && type !== 'Upload') { ctx.toast('Give the source a location.'); return; } App.closeOverlay(); (st.added[kb.id] = st.added[kb.id] || []).push({ src: loc || 'Uploads', mono: !!loc, type, sync: 'first sync running', docs: 0, status: 'syncing' }); st.tab = 'sources'; ctx.rerender(); ctx.toast('Source added. First sync started; documents appear as they are extracted.', 'ok'); });
-          setTimeout(() => { const i = d.querySelector('[data-loc]'); if (i) i.focus(); }, 30);
+      ctx.on('click', '[data-retry]', (e, t) => { const d = docs.find((x) => x.id === t.dataset.retry); if (d) retry(d); });
+      function relabel(d) {
+        ctx.modal({ title: 'Relabel ' + esc(d.name), body: UI.field('Label', UI.select(myLabels, d.label, 'data-lbl'), 'A manual label can raise the auto-classifier result but not lower it below the classifier\'s finding or the source floor.') + UI.field('Reason', UI.textarea('', { placeholder: 'Recorded in the audit log', rows: 2, attrs: 'data-reason' })) + UI.notice('Chunks take the new label at once; the clearance filter applies to it on the next query.', 'info') + '<div data-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Relabel', { kind: 'primary', attrs: 'data-go' }), onMount(m) {
+          m.querySelector('[data-go]').addEventListener('click', async () => {
+            const l = m.querySelector('[data-lbl]').value;
+            try { await App.patch('/api/knowledge/documents/' + enc(d.id), { label: l, reason: m.querySelector('[data-reason]').value.trim() }); App.closeOverlay(); toast(esc(d.name) + ' relabelled ' + esc(l) + '. Audit entry written.', 'ok'); refresh(); }
+            catch (err) { const p = err.problem || {}; m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc(p.title || 'Refused') + '.</b> ' + esc(err.message), 'danger'); }
+          });
         } });
       }
-      ctx.on('click', '[data-newkb]', () => ctx.modal({ title: 'New knowledge base', body: UI.field('Name', UI.input('', { placeholder: 'Treasury KB', attrs: 'data-name' })) + UI.field('Label floor', UI.select(['public', 'internal', 'confidential'], 'internal')) + UI.field('Embedding model', UI.select(['nomic-embed-text', 'bge-m3'], 'nomic-embed-text'), 'Changing it later builds a new index beside the old one.') + UI.field('Shared with', UI.select(['Finance Ops members', 'Curators only'], 'Finance Ops members')), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { const n = m.querySelector('[data-name]').value.trim(); if (!n) { ctx.toast('Give it a name.'); return; } App.closeOverlay(); if (!KBS.find((k) => k.name === n)) { const id = 'kb' + (KBS.length + 1); KBS.push({ id, name: n, sub: '0 documents', label: 'internal', status: 'draft', embed: 'nomic-embed-text', index: 'v1', chunks: '0', built: 'not yet' }); SOURCES[id] = []; DOCS[id] = []; st.kb = id; } ctx.rerender(); ctx.toast('Created ' + esc(n) + '. Add a source to start indexing.', 'ok'); }); } }));
-      ctx.on('click', '[data-addprincipal]', () => ctx.modal({ title: 'Share ' + esc(kb.name), body: UI.field('Principal', UI.select(['Field Sales (workspace)', 'People Ops (workspace)', 'Contracts agent (agent)', 'Sam Reyes (user)'], 'Field Sales (workspace)')) + UI.field('Access', UI.select(['read', 'manage'], 'read')) + UI.notice('Sharing does not lift the clearance filter: readers still see only chunks at or below their clearance.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Share', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { App.closeOverlay(); ACCESS[3] = ['Field Sales', 'read', 'shared by Mara Okafor', UI.pill('active', 'ok')]; ctx.rerender(); ctx.toast('Shared with Field Sales. Audit entry written.', 'ok'); }); } }));
+
+      ctx.on('click', '[data-reindex]', () => {
+        const emb = models.embedding.filter((m) => rank(m.label) >= rank(kb.label)).map((m) => m.name);
+        if (emb.indexOf(kb.embedModel) < 0) emb.unshift(kb.embedModel);
+        ctx.modal({ title: 'Reindex ' + esc(kb.name), body: '<div class="fg2">A new index builds beside ' + (serving ? 'v' + serving.version : 'the serving index') + '. Retrieval keeps using it until the build completes and the switch is atomic. Embeddings of unchanged text come from the cache.</div>' + UI.field('Embedding model', UI.select(emb, kb.embedModel, 'data-emb'), 'A different model builds a new index with new vectors; only approved embedding models cleared for ' + esc(kb.label) + ' are listed.') + UI.kv([['Chunks', String(serving ? serving.chunks : 0)], ['Documents', String(kb.documents)]], 2),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Start build', { kind: 'primary', attrs: 'data-go' }), onMount(m) {
+            m.querySelector('[data-go]').addEventListener('click', async () => { const e2 = m.querySelector('[data-emb]').value; App.closeOverlay(); const r = await act(() => App.post('/api/knowledge/bases/' + enc(kb.id) + '/reindex', e2 !== kb.embedModel ? { embedModel: e2 } : {})); if (r) { st.tab = 'index'; toast('Index v' + r.version + ' is building beside ' + (serving ? 'v' + serving.version : 'the serving index') + '.', 'ok'); } });
+          } });
+      });
+      ctx.on('click', '[data-cancelbuild]', async () => { const ok = await ctx.confirm({ title: 'Cancel the index build', tone: 'danger', ok: 'Cancel build', body: '<div class="fg2">The partial index is discarded. Retrieval is unaffected because ' + (serving ? 'v' + serving.version : 'the serving index') + ' never stopped serving.</div>' }); if (ok) act(() => App.post('/api/knowledge/bases/' + enc(kb.id) + '/cancel-build'), 'Build cancelled. ' + (serving ? 'v' + serving.version : 'The serving index') + ' keeps serving.'); });
+      ctx.on('click', '[data-publish]', async () => { const ok = await ctx.confirm({ title: 'Publish ' + esc(kb.name), tone: 'primary', ok: 'Publish', body: '<div class="fg2">Chat retrieves from published bases attached to a conversation or a profile, up to each reader\'s clearance.</div>' }); if (ok) act(() => App.patch('/api/knowledge/bases/' + enc(kb.id), { status: 'published' }), esc(kb.name) + ' published.'); });
+      ctx.on('click', '[data-editkb]', () => {
+        const rr = [{ value: '', label: 'none' }].concat(models.rerankers.map((m) => ({ value: m.name, label: m.name })));
+        ctx.modal({ title: 'Edit ' + esc(kb.name), body: '<div class="formgrid">' + UI.field('Name', UI.input(kb.name, { attrs: 'data-name' })) + UI.field('Label floor', UI.select(myLabels, kb.label, 'data-lbl'), 'Raising it relabels indexed chunks at once.') + UI.field('Reranker', UI.select(rr, kb.reranker || '', 'data-rr')) + UI.field('Shared with', UI.select([{ value: 'members', label: kb.workspaceId ? 'Workspace members' : 'Everyone in the tenant' }, { value: 'curators', label: 'Curators only' }], kb.sharing, 'data-sharing')) + UI.field('Chunk size, tokens', UI.input(String(kb.chunking.tokens), { type: 'number', attrs: 'data-tokens' })) + UI.field('Overlap, tokens', UI.input(String(kb.chunking.overlap), { type: 'number', attrs: 'data-overlap' })) + UI.field('Status', UI.select(['draft', 'published'], kb.status, 'data-status')) + '</div>' + UI.field('Description', UI.textarea(kb.description || '', { rows: 2, attrs: 'data-desc' })) + UI.notice('A new chunk size applies at the next reindex.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Delete base', { kind: 'danger', attrs: 'data-del' }) + '<span class="grow"></span>' + UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-go' }), onMount(m) {
+            const err = (e2) => { m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Not saved') + '.</b> ' + esc(e2.message), 'danger'); };
+            m.querySelector('[data-go]').addEventListener('click', async () => {
+              const v = (s) => m.querySelector(s).value;
+              try { await App.patch('/api/knowledge/bases/' + enc(kb.id), { name: v('[data-name]').trim(), label: v('[data-lbl]'), reranker: v('[data-rr]') || null, sharing: v('[data-sharing]'), status: v('[data-status]'), description: v('[data-desc]').trim() || null, chunking: { tokens: Math.round(+v('[data-tokens]')), overlap: Math.round(+v('[data-overlap]')) } }); App.closeOverlay(); toast('Saved. Audit entry written.', 'ok'); refresh(); }
+              catch (e2) { err(e2); }
+            });
+            m.querySelector('[data-del]').addEventListener('click', async () => {
+              App.closeOverlay();
+              const ok = await ctx.confirm({ title: 'Delete ' + esc(kb.name), tag: 'cannot be undone', tone: 'danger', ok: 'Delete', body: '<div class="fg2">Deletes the base, its sources, documents, chunks, vectors and stored files. Conversations that cited it keep their citations.</div>', kv: [['Documents', String(kb.documents)], ['Chunks', String(kb.chunks)]] });
+              if (ok && await act(() => App.del('/api/knowledge/bases/' + enc(kb.id)), esc(kb.name) + ' deleted. Audit entry written.')) { delete st.detail[kb.id]; st.bases = st.bases.filter((k) => k.id !== kb.id); st.kb = null; ctx.rerender(); }
+            });
+          } });
+      });
+
+      ctx.on('click', '[data-addsource]', () => openAdd());
+      function openAdd() {
+        const needConns = () => (st.conns ? Promise.resolve(st.conns) : App.get('/api/knowledge/connections').then((c) => { st.conns = c; return c; }).catch(() => { st.conns = []; return []; }));
+        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Postgres view' }], 's3', 'data-type'))
+          + '<div data-loc-wrap>' + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/', attrs: 'data-loc' }), 'Credentials come from the platform or the connection, never from this form.') + '</div>'
+          + '<div data-git-wrap hidden>' + UI.field('Ref', UI.input('', { placeholder: 'main (default branch when empty)', attrs: 'data-ref' })) + UI.field('Path', UI.input('', { placeholder: 'docs/ (whole repository when empty)', attrs: 'data-path' })) + '</div>'
+          + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn><option value="">Loading…</option></select>', 'PostgreSQL connections registered on the Connections screen.') + UI.field('View or table', '<select class="select" data-obj></select>', 'Only objects on the connection\'s allow-list.') + '</div>'
+          + '<div data-file-wrap hidden>' + UI.field('Files', '<input type="file" multiple data-files class="input">', 'Text, Markdown, CSV, JSON, HTML, PDF with a text layer, DOCX.') + '</div>'
+          + UI.field('Label floor', UI.select(myLabels.filter((l) => rank(l) >= rank(kb.label)), kb.label, 'data-floor'), 'Documents get at least this label; the auto-classifier can raise it.')
+          + '<div data-sched-wrap>' + UI.field('Sync', UI.select([{ value: '15m', label: 'every 15 min, incremental' }, { value: 'hourly', label: 'hourly' }, { value: 'daily', label: 'daily' }, { value: 'manual', label: 'manual' }], '15m', 'data-sched')) + '</div>'
+          + UI.notice('Uploads go to quarantine first. Other sources are read with the connection\'s allow-list and sync by watermark or version.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Add and sync', { kind: 'primary', attrs: 'data-go' }) + UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }), onMount(d) {
+            const q = (s) => d.querySelector(s);
+            const fillObjs = () => { const c = (st.conns || []).find((x) => x.id === q('[data-conn]').value); q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : ''; };
+            const sync = () => {
+              const t = q('[data-type]').value;
+              q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload';
+              q('[data-loc]').placeholder = t === 'git' ? 'https://git.example.internal/org/repo.git' : 's3://bucket/prefix/';
+              if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.label) + ')</option>').join('') : '<option value="">No PostgreSQL connection registered</option>'; fillObjs(); });
+            };
+            q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); sync();
+            q('[data-go]').addEventListener('click', async () => {
+              const t = q('[data-type]').value; const floor = q('[data-floor]').value;
+              const showErr = (e2) => { q('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Refused') + '.</b> ' + esc(e2.message), 'danger'); };
+              if (t === 'upload') { const files = q('[data-files]').files; if (!files || !files.length) { toast('Choose at least one file.'); return; } App.closeOverlay(); uploadFiles(files, floor); return; }
+              const body = { kind: t, labelFloor: floor, schedule: q('[data-sched]').value };
+              if (t === 'database') { body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view.'); return; } }
+              else { body.location = q('[data-loc]').value.trim(); if (!body.location) { toast('Give the source a location.'); return; } }
+              if (t === 'git') { const r = q('[data-ref]').value.trim(); const p = q('[data-path]').value.trim(); if (r) body.ref = r; if (p) body.path = p; }
+              try { await App.post('/api/knowledge/bases/' + enc(kb.id) + '/sources', body); App.closeOverlay(); st.tab = 'sources'; toast('Source added. First sync started; documents appear as they are extracted.', 'ok'); refresh(); }
+              catch (e2) { showErr(e2); }
+            });
+            setTimeout(() => { const i = q('[data-loc]'); if (i) i.focus(); }, 30);
+          } });
+      }
+      const pickFiles = () => {
+        const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.style.display = 'none';
+        inp.addEventListener('change', () => { if (inp.files && inp.files.length) uploadFiles(inp.files, kb.label); inp.remove(); });
+        document.body.appendChild(inp); inp.click();
+      };
+      async function uploadFiles(files, label) {
+        let ok = 0; const failed = [];
+        for (const file of Array.prototype.slice.call(files)) {
+          try {
+            const r = await fetch('/api/knowledge/bases/' + enc(kb.id) + '/uploads?name=' + enc(file.name) + '&label=' + enc(label), { method: 'PUT', body: file, credentials: 'same-origin', headers: { 'X-CSRF-Token': App.state.csrf || '', 'Content-Type': file.type || 'application/octet-stream', Accept: 'application/json' } });
+            if (r.status === 401) { App.sessionEnded('Your session ended. Sign in again.'); return; }
+            if (!r.ok) { let p = null; try { p = await r.json(); } catch (e2) { /* not JSON */ } failed.push(file.name + ': ' + ((p && (p.detail || p.title)) || r.statusText)); } else ok++;
+          } catch (e2) { failed.push(file.name + ': the server could not be reached.'); }
+        }
+        st.tab = 'documents';
+        if (ok) toast(ok + ' file' + (ok === 1 ? '' : 's') + ' uploaded to quarantine. Indexing starts once the scan and classification pass.', 'ok', 5000);
+        if (failed.length) toast('<b>Not uploaded.</b> ' + esc(failed.join('; ')), 'danger', 8000);
+        refresh();
+      }
+      ctx.on('click', '[data-upload]', pickFiles);
+
+      function newKb() {
+        const emb = models.embedding.map((m) => ({ value: m.name, label: m.name + ' (up to ' + m.label + ')' }));
+        const ws = App.me && App.me.workspace ? (App.me.workspaces || []).find((w) => w.id === App.me.workspace) : null;
+        ctx.modal({ title: 'New knowledge base', body: UI.field('Name', UI.input('', { placeholder: 'Treasury KB', attrs: 'data-name' })) + UI.field('Label floor', UI.select(myLabels, 'internal', 'data-lbl')) + UI.field('Embedding model', emb.length ? UI.select(emb, emb[0].value, 'data-emb') : UI.select([{ value: '', label: 'No approved embedding model' }], '', 'data-emb disabled'), emb.length ? 'Changing it later builds a new index beside the old one.' : 'Import and approve an embedding model on the Models screen first.') + UI.field('Shared with', UI.select([{ value: 'members', label: ws ? esc(ws.name) + ' members' : 'Everyone in the tenant' }, { value: 'curators', label: 'Curators only' }], 'members', 'data-sharing')) + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create', { kind: 'primary', attrs: 'data-go', disabled: !emb.length }), onMount(m) {
+            m.querySelector('[data-go]').addEventListener('click', async () => {
+              const n = m.querySelector('[data-name]').value.trim(); if (!n) { toast('Give it a name.'); return; }
+              try { const r = await App.post('/api/knowledge/bases', { name: n, label: m.querySelector('[data-lbl]').value, embedModel: m.querySelector('[data-emb]').value, sharing: m.querySelector('[data-sharing]').value }); App.closeOverlay(); st.bases = st.bases.concat([r]); st.detail[r.id] = r; st.docs[r.id] = []; st.kb = r.id; st.tab = 'sources'; toast('Created ' + esc(n) + ' as a draft. Add a source to start indexing.', 'ok'); refresh(); }
+              catch (e2) { m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Not created') + '.</b> ' + esc(e2.message), 'danger'); }
+            });
+          } });
+      }
+      ctx.on('click', '[data-newkb]', newKb);
+
+      ctx.on('click', '[data-unshare]', async (e, t) => { const g = (st.access[kb.id] || []).find((x) => x.id === t.dataset.unshare); if (!g) return; const ok = await ctx.confirm({ title: 'Remove access', tone: 'danger', ok: 'Remove', body: '<div class="fg2">' + esc(g.name) + ' loses ' + esc(g.access) + ' access to ' + esc(kb.name) + '.</div>' }); if (ok) act(() => App.del('/api/knowledge/bases/' + enc(kb.id) + '/access/' + enc(g.id)), 'Access removed. Audit entry written.'); });
+      ctx.on('click', '[data-addprincipal]', async () => {
+        let pr;
+        try { pr = st.principals || (st.principals = await App.get('/api/knowledge/principals')); } catch (err) { App.fail(err); return; }
+        const opts = pr.workspaces.map((w) => ({ value: 'workspace:' + w.id, label: w.name + ' (workspace)' })).concat(pr.profiles.map((p) => ({ value: 'profile:' + p.id, label: p.name + ' (profile)' })), pr.users.map((u) => ({ value: 'user:' + u.id, label: u.name + ' (user)' })));
+        ctx.modal({ title: 'Share ' + esc(kb.name), body: UI.field('Principal', UI.select(opts, opts[0] && opts[0].value, 'data-who')) + UI.field('Access', UI.select(['read', 'manage'], 'read', 'data-acc'), 'A profile reads only: retrieval in chat for conversations on that profile.') + UI.notice('Sharing does not lift the clearance filter: readers still see only chunks at or below their clearance.', 'info') + '<div data-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Share', { kind: 'primary', attrs: 'data-go' }), onMount(m) {
+          m.querySelector('[data-go]').addEventListener('click', async () => {
+            const who = m.querySelector('[data-who]').value.split(':'); const o = opts.find((x) => x.value === who.join(':'));
+            try { st.access[kb.id] = await App.post('/api/knowledge/bases/' + enc(kb.id) + '/access', { kind: who[0], id: who[1], access: m.querySelector('[data-acc]').value }); App.closeOverlay(); toast('Shared with ' + esc(o ? o.label : '') + '. Audit entry written.', 'ok'); ctx.rerender(); }
+            catch (e2) { m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Refused') + '.</b> ' + esc(e2.message), 'danger'); }
+          });
+        } });
+      });
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
-      if (st.openAdd) { st.openAdd = false; setTimeout(openAdd, 30); }
+      if (st.openAdd) { st.openAdd = false; if (manage) setTimeout(openAdd, 30); }
     }
   });
 })();

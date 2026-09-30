@@ -64,6 +64,14 @@ export interface ChatChunk {
   error?: string;
 }
 
+export interface EmbedResult {
+  model?: string;
+  embeddings: number[][];
+  total_duration?: number;
+  load_duration?: number;
+  prompt_eval_count?: number;
+}
+
 export class OllamaError extends Error {
   constructor(
     message: string,
@@ -200,6 +208,11 @@ export class OllamaClient {
       if (chunk.error) throw new OllamaError(chunk.error, 500);
       yield chunk;
     }
+  }
+
+  /** Embeddings for a batch of inputs (`/api/embed`), truncated to the model's context. */
+  async embed(model: string, input: string[], signal?: AbortSignal): Promise<EmbedResult> {
+    return (await (await this.req('POST', '/api/embed', { model, input, truncate: true }, { timeoutMs: 5 * 60_000, ...(signal ? { signal } : {}) })).json()) as EmbedResult;
   }
 
   async close(): Promise<void> {

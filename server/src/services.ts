@@ -43,6 +43,13 @@ import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
 import { createBackends, type ImageBackend } from './images/backends.js';
 import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
+import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
+import { ConnectionService } from './connections/service.js';
+import { defaultDrivers, type DriverFactory } from './connections/drivers.js';
+import { KnowledgeService } from './knowledge/service.js';
+import { CliGit, type GitFetcher } from './knowledge/sources.js';
+import { MemoryService } from './memory/service.js';
+import { effectivePermissions } from './authz/policy.js';
 
 export interface Services {
   cfg: Config;
@@ -93,6 +100,11 @@ export interface Services {
   images: ImageService;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
+  /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
+  vectors: VectorStore;
+  connections: ConnectionService;
+  knowledge: KnowledgeService;
+  memory: MemoryService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -103,6 +115,10 @@ export interface ServiceOverrides {
   mediaRunner?: MediaRunner;
   imageBackends?: ImageBackend[];
   imageSafety?: ImageSafety;
+  vectors?: VectorStore;
+  /** Data connection drivers by engine (tests use in-process fakes). */
+  drivers?: Partial<Record<'postgres' | 'opensearch', DriverFactory>>;
+  git?: GitFetcher;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -156,6 +172,22 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
   });
   const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
+  // Checkpoints go through whatever `s.guardrails` is when they run.
+  const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
+  const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
+  const connections = new ConnectionService(db, keys, audit, checkpoint, { ...defaultDrivers, ...overrides.drivers });
+  const knowledge = new KnowledgeService(
+    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id) },
+    {
+      maxBytes: cfg.ATTACHMENT_MAX_BYTES,
+      ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
+      ...(cfg.S3_ENDPOINT && cfg.S3_ACCESS_KEY_ID && cfg.S3_SECRET_ACCESS_KEY ? { s3: { endpoint: cfg.S3_ENDPOINT, region: cfg.S3_REGION, accessKeyId: cfg.S3_ACCESS_KEY_ID, secretAccessKey: cfg.S3_SECRET_ACCESS_KEY, pathStyle: cfg.S3_FORCE_PATH_STYLE } } : {}),
+      git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 })
+    }
+  );
+  const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
+  chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
+  chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
     db,
@@ -198,6 +230,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     media,
     images,
     imageSafety: overrides.imageSafety ?? (cfg.IMAGE_SAFETY_URL ? new HttpSafety(cfg.IMAGE_SAFETY_URL) : noSafety),
+    vectors,
+    connections,
+    knowledge,
+    memory,
     close: async () => {
       scheduler.stop();
       chat.close();
@@ -241,4 +277,6 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('audit.checkpoint', s.cfg.AUDIT_CHECKPOINT_MINUTES * 60_000, activeTenants);
   s.scheduler.every('guardrails.sweep', 2 * 60_000, activeTenants);
   s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
+  s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
+  s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
 }

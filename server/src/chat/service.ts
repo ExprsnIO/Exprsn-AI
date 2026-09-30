@@ -15,6 +15,7 @@ import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
 import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
 import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
+import { formatContext, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
 
 export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed';
 
@@ -64,6 +65,7 @@ interface MessageRow {
   completed_at: number | null;
   /** JSON: the guardrail outcome of an answer (Sprint 5). */
   guard?: string | null;
+  citations?: string | null;
 }
 
 export interface Chunk {
@@ -112,6 +114,10 @@ export class ChatService {
   private readonly streams = new Map<string, Stream>();
   private readonly offStop: () => void;
   private toolDispatch: ToolDispatcher | null = null;
+  /** Knowledge and memory add retrieved context to each answer (`context.ts`). */
+  readonly contextProviders: ContextProvider[] = [];
+  /** Called when an answer finishes (memory proposals). */
+  readonly answerListeners: ((e: AnswerEvent) => void)[] = [];
 
   constructor(
     private readonly db: Db,
@@ -254,6 +260,7 @@ export class ChatService {
       error: m.error,
       label: m.label,
       attachments: json<string[]>(m.attachments, []),
+      citations: json<Record<string, unknown>[]>(await this.open(m.tenant_id, m.id, 'citations', m.citations ?? null), []),
       usage: m.role === 'assistant' && m.completed_at ? { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0), thinkingTokens: Number(m.thinking_tokens ?? 0), calcCalls: Number(m.calc_calls ?? 0), gpuMs: Number(m.gpu_ms ?? 0), firstTokenMs: m.first_token_ms == null ? null : Number(m.first_token_ms) } : null,
       createdAt: Number(m.created_at),
       completedAt: m.completed_at == null ? null : Number(m.completed_at),
@@ -547,6 +554,36 @@ export class ChatService {
     return out;
   }
 
+  /**
+   * Asks the context providers for material up to the turn's ceiling, adds it as one delimited system message after
+   * the profile's prompt, raises the conversation's label to the highest item used and records the citations.
+   */
+  private async addContext(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], st: Stream): Promise<void> {
+    if (!this.contextProviders.length) return;
+    const query = [...messages].reverse().find((x) => x.role === 'user')?.content ?? '';
+    const ws = c.workspace_id ? ((await this.db('workspaces').where({ id: c.workspace_id }).first('label_ceiling')) as { label_ceiling: Label } | undefined) : undefined;
+    const caps: Label[] = [p.clearance, r.profile.label, lease.pool.label_ceiling, ...(ws ? [ws.label_ceiling] : [])];
+    const ceiling = caps.reduce((a, b) => (labelRank(b) < labelRank(a) ? b : a));
+    const items: ContextItem[] = [];
+    for (const provider of this.contextProviders) {
+      try {
+        items.push(...(await provider({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, messageId: m.id, profile: r.profile, query, label: c.label, ceiling })).filter((x) => labelRank(x.label) <= labelRank(ceiling)));
+      } catch (err) {
+        this.log.warn({ err, message: m.id }, 'context provider failed');
+      }
+    }
+    if (!items.length) return;
+    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items) });
+    const label = highest(c.label, ...items.map((x) => x.label));
+    const citations = items.map((x, i) => ({ n: i + 1, kind: x.tag === 'context' ? 'knowledge' : 'memory', label: x.label, ...x.cite }));
+    await this.db('messages').where({ id: m.id }).update({ citations: await this.seal(c.tenant_id, m.id, 'citations', JSON.stringify(citations)), ...(label !== c.label ? { label } : {}) });
+    if (label !== c.label) {
+      await this.db('conversations').where({ id: c.id }).update({ label });
+      c.label = label;
+    }
+    this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'context', label, citations: citations.length });
+  }
+
   private async generate(p: Principal, c: ConversationRow, m: MessageRow, resolved: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', st: Stream): Promise<void> {
     const usage: Usage = { promptTokens: 0, outputTokens: 0, thinkingTokens: 0, calcCalls: 0, gpuMs: 0, firstTokenMs: null };
     let lease: Lease | null = null;
@@ -581,6 +618,7 @@ export class ChatService {
       const messages: ChatMessage[] = [];
       if (r.profile.system_prompt) messages.push({ role: 'system', content: r.profile.system_prompt });
       messages.push(...(await this.history(c, m.parent_id!, r.model.capabilities.includes('vision'))));
+      await this.addContext(p, c, m, r, lease, messages, st);
       promptChars = messages.reduce((a, x) => a + x.content.length, 0);
       const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
       // Beyond calculate: published registry and MCP tools, read-only in chat (write and destructive calls need an
@@ -683,6 +721,13 @@ export class ChatService {
     }
     const error = st.state === 'failed' ? ((await this.db('messages').where({ id: m.id }).first('error')) as { error: string | null } | undefined)?.error : null;
     this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name, ...(guard ? { guard: guard.summary } : {}) });
+    for (const fn of this.answerListeners) {
+      try {
+        fn({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, userMessageId: m.parent_id, messageId: m.id, state: st.state, label: c.label });
+      } catch (err) {
+        this.log.warn({ err, message: m.id }, 'answer listener failed');
+      }
+    }
     if (st.state === 'failed') {
       await this.audit.append({ tenantId: c.tenant_id, action: 'chat.failed', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, profile: r.profile.name, model: r.model.name }, label: c.label, detail: { state: st.state, error: error ?? null } });
     }

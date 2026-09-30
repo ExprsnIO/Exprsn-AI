@@ -25,6 +25,9 @@ import { scriptRoutes } from '../routes/scripts.js';
 import { workflowRoutes } from '../routes/workflows.js';
 import { mediaRoutes } from '../routes/media.js';
 import { imageRoutes } from '../routes/images.js';
+import { knowledgeRoutes } from '../routes/knowledge.js';
+import { memoryRoutes } from '../routes/memory.js';
+import { connectionAdminRoutes } from '../routes/admin/connections.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -89,7 +92,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   const api = express.Router();
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets') ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path)) ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -123,6 +126,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(workflowRoutes(s));
   api.use(mediaRoutes(s));
   api.use(imageRoutes(s));
+  api.use('/admin', connectionAdminRoutes(s));
+  api.use(knowledgeRoutes(s));
+  api.use(memoryRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
