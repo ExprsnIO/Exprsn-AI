@@ -1,9 +1,11 @@
 /* Exprsn-AI console prototype — tokens and components.
-   Values are lifted from the design boards (exprsn-ai-design-dc). */
+   Values are lifted from the design boards (exprsn-ai-design-dc).
+   --faint is for rules and fills; text that looks faint (line numbers, breadcrumb separators) uses --faint-text, which
+   keeps 4.5:1 on every surface in Standard and 7:1 in Enhanced (B-1104). */
 :root{
   --bg:#F3F3F2; --nav:#FAFAF9; --panel:#FFFFFF; --panel2:#FAFAF9;
   --line:#DCDCDA; --line2:#EBEBE9; --sel:#EBEBE9; --bubble:#EBEBE9;
-  --fg:#1A1A19; --fg2:#4E4E49; --muted:#66665F; --faint:#C9C9C5;
+  --fg:#1A1A19; --fg2:#4E4E49; --muted:#66665F; --faint:#C9C9C5; --faint-text:#696963;
   --accent:#B4380A; --accent-fg:#FFFFFF; --accent-tint:#FBEBE3;
   --warn-bg:#FBF1D9; --warn-fg:#7A5200;
   --danger-bg:#FBE7E5; --danger-fg:#A01E18;
@@ -22,7 +24,7 @@
   :root:not([data-theme="light"]){
     --bg:#121212; --nav:#161615; --panel:#1B1B1A; --panel2:#1F1F1E;
     --line:#31312F; --line2:#262625; --sel:#262625; --bubble:#31312F;
-    --fg:#EFEFEC; --fg2:#BDBDB7; --muted:#9C9C95; --faint:#4A4A47;
+    --fg:#EFEFEC; --fg2:#BDBDB7; --muted:#9C9C95; --faint:#4A4A47; --faint-text:#93938D;
     --accent:#FF8150; --accent-fg:#1A0D06; --accent-tint:#3A1E12;
     --warn-bg:#332708; --warn-fg:#E5B95A;
     --danger-bg:#3A1616; --danger-fg:#F28B82;
@@ -37,7 +39,7 @@
 :root[data-theme="dark"]{
   --bg:#121212; --nav:#161615; --panel:#1B1B1A; --panel2:#1F1F1E;
   --line:#31312F; --line2:#262625; --sel:#262625; --bubble:#31312F;
-  --fg:#EFEFEC; --fg2:#BDBDB7; --muted:#9C9C95; --faint:#4A4A47;
+  --fg:#EFEFEC; --fg2:#BDBDB7; --muted:#9C9C95; --faint:#4A4A47; --faint-text:#93938D;
   --accent:#FF8150; --accent-fg:#1A0D06; --accent-tint:#3A1E12;
   --warn-bg:#332708; --warn-fg:#E5B95A;
   --danger-bg:#3A1616; --danger-fg:#F28B82;
@@ -52,7 +54,7 @@
    or when they follow the system and the browser asks for more contrast. Text tokens reach 7:1 on every surface,
    control borders and the focus ring reach 4.5:1, and shadows go (they read as glass on some displays). */
 :root[data-a11y="aaa"]{
-  --line:#8A8A84; --line2:#C4C4BF; --faint:#6E6E68;
+  --line:#8A8A84; --line2:#C4C4BF; --faint:#6E6E68; --faint-text:#4A4A45;
   --fg:#111110; --fg2:#3E3E3A; --muted:#4A4A45;
   --accent:#8A2A07; --accent-fg:#FFFFFF;
   --warn-fg:#5F4000; --danger-fg:#8E1A14; --info-fg:#17427A; --ok-fg:#155229;
@@ -61,7 +63,7 @@
 }
 @media (prefers-color-scheme:dark){
   :root[data-a11y="aaa"]:not([data-theme="light"]){
-    --line:#75756F; --line2:#4A4A46; --faint:#8F8F89;
+    --line:#75756F; --line2:#4A4A46; --faint:#8F8F89; --faint-text:#BDBDB7;
     --fg:#F7F7F4; --fg2:#D4D4CE; --muted:#BDBDB7;
     --accent:#FFA27E; --accent-fg:#1A0D06;
     --warn-fg:#EDC66E; --danger-fg:#F7A59E; --info-fg:#9EC1F2; --ok-fg:#8ED6A5;
@@ -69,7 +71,7 @@
   }
 }
 :root[data-a11y="aaa"][data-theme="dark"]{
-  --line:#75756F; --line2:#4A4A46; --faint:#8F8F89;
+  --line:#75756F; --line2:#4A4A46; --faint:#8F8F89; --faint-text:#BDBDB7;
   --fg:#F7F7F4; --fg2:#D4D4CE; --muted:#BDBDB7;
   --accent:#FFA27E; --accent-fg:#1A0D06;
   --warn-fg:#EDC66E; --danger-fg:#F7A59E; --info-fg:#9EC1F2; --ok-fg:#8ED6A5;
@@ -125,7 +127,7 @@ h1:focus{outline:none}
 .header{height:var(--header-h);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--bg)}
 .crumbs{display:flex;align-items:center;gap:8px;min-width:0}
 .crumbs .c1{font-weight:500;color:var(--muted)}
-.crumbs .sep{color:var(--faint)}
+.crumbs .sep{color:var(--faint-text)}
 .crumbs .c2{font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .htools{display:flex;align-items:center;gap:8px}
 .cmdbtn{display:flex;align-items:center;justify-content:space-between;width:260px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);cursor:pointer}
@@ -207,7 +209,7 @@ h1:focus{outline:none}
 .kv > div{display:flex;flex-direction:column;gap:2px;min-width:0}
 .kv .k{font-size:11px;font-weight:600;color:var(--muted)}
 .kv .v{font-size:13px;overflow-wrap:anywhere}
-.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.tablewrap{position:relative;overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px}
 .tablewrap.bare{background:transparent;border:0}
 table.dt{width:100%;border-collapse:collapse;min-width:520px}
 table.dt th{text-align:left;padding:7px 10px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap}
@@ -280,7 +282,7 @@ table.dt .actions{white-space:nowrap}
 .ctxblock .chead .eyebrow{font-size:10px;margin-right:6px}
 .ctxblock pre{margin:0;font-family:var(--mono);font-size:12px;color:var(--fg2);white-space:pre-wrap;overflow-wrap:anywhere}
 .codebox{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--fg);overflow:auto;white-space:pre}
-.codebox .ln{display:inline-block;width:2.2em;color:var(--faint);user-select:none}
+.codebox .ln{display:inline-block;width:2.2em;color:var(--faint-text);user-select:none}
 .codebox .k{color:var(--accent)}.codebox .s{color:var(--ok-fg)}.codebox .c{color:var(--muted)}.codebox .n{color:var(--info-fg)}
 .reviewbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--info-bg);border-radius:6px;color:var(--info-fg)}
 .reviewbar .grow{flex-grow:1}
@@ -382,12 +384,27 @@ table.dt .actions{white-space:nowrap}
   .inspector,.inspector.w360,.inspector.w300{width:100%;border-left:0;border-top:1px solid var(--line)}
   .leftpane,.leftpane.w320{width:100%;border-right:0;border-bottom:1px solid var(--line);max-height:220px}
   .kv,.formgrid{--cols:1}
-  .grid2,.grid3,.grid4{grid-template-columns:1fr}
+  .grid2,.grid3,.grid4{grid-template-columns:minmax(0,1fr)}
   .cols{flex-direction:column}
   .cols > *{width:100%!important}
   .search{width:100%}
   .drawer{width:100%}
 }
+/* Reflow (WCAG 1.4.10, B-1102): at 320 px wide (400 % zoom) and 640 px (200 %) nothing scrolls in two dimensions.
+   Rows of controls wrap instead of pushing the page sideways; only tables and code scroll, each marked data-scrolls by
+   App.a11yPass with a scrollbar that stays visible. */
+@media (max-width:640px){
+  .main{overflow-wrap:anywhere}
+  .main .hstack,.panel > .phead,.tabs{flex-wrap:wrap}
+  .seg{display:inline-flex;flex-wrap:wrap;max-width:100%}
+  .seg button + button{border-left:0;box-shadow:-1px 0 0 var(--line)}
+  .main input.input,.main .select{max-width:100%}
+}
+[data-scrolls]{scrollbar-width:thin;scrollbar-color:var(--meter) var(--line2)}
+[data-scrolls]::-webkit-scrollbar{height:10px;width:10px}
+[data-scrolls]::-webkit-scrollbar-track{background:var(--line2)}
+[data-scrolls]::-webkit-scrollbar-thumb{background:var(--meter);border-radius:5px}
+[data-scrolls]:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
 
 /* ---------- Accessibility ---------- */
 /* Enhanced (AAA) mode: larger targets, a focus ring on every focused element (not only keyboard focus), underlined
