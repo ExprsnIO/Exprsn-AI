@@ -11,6 +11,14 @@ import type { Guardrails } from '../guardrails/types.js';
 import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
 import type { DynamicCredentials } from './dynamic.js';
 import type { ConnectionSpec, DriverFactory, QueryResult, SchemaObject } from './drivers.js';
+import type { ReplicationOptions, RowChange } from './replication.js';
+
+/** A replicated change after masking; `raw` is the unmasked value of the requested column (the access column). */
+export type MaskedChange = RowChange & { raw: unknown };
+export interface MaskedReplicationStream {
+  run(onBatch: (b: { lsn: string; changes: MaskedChange[] }) => Promise<void>, onReady?: () => void): Promise<void>;
+  stop(): Promise<void>;
+}
 
 export type Engine = ConnectionSpec['engine'];
 export const ENGINES: readonly Engine[] = ['postgres', 'opensearch', 'mysql'];
@@ -420,13 +428,53 @@ export class ConnectionService {
     return { file, csv, rows: r.rows.length, label: c.label };
   }
 
-  /** Rows of an allow-listed object for a knowledge source, masked the same way. */
-  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string }> {
+  /**
+   * Rows of an allow-listed object for a knowledge source, masked the same way. `rawColumn` (a row-level access
+   * column, B-1002) is also returned unmasked beside the rows, as it decides who may retrieve each row.
+   */
+  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; rawColumn?: string | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string; raw?: unknown[] }> {
     const c = await this.get(tenantId, id);
-    if (c.engine !== 'postgres') throw conflict('Only PostgreSQL tables and views can be a knowledge source.');
+    if (c.engine !== 'postgres' && c.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views can be a knowledge source.');
     if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
-    const r = await (await this.driver(c)).rows(object, { ...opts, timeoutMs: c.timeout_s * 1000 });
+    const r = await (await this.driver(c)).rows(object, { watermarkColumn: opts.watermarkColumn, after: opts.after, limit: opts.limit, timeoutMs: c.timeout_s * 1000 });
+    const at = opts.rawColumn ? r.columns.indexOf(opts.rawColumn) : -1;
+    const raw = at >= 0 ? r.rows.map((row) => row[at]) : undefined;
     const m = this.mask(c, [object], r);
-    return { columns: r.columns, rows: m.rows, capped: r.capped, label: c.label, name: c.name };
+    return { columns: r.columns, rows: m.rows, capped: r.capped, label: c.label, name: c.name, ...(raw ? { raw } : {}) };
+  }
+
+  /**
+   * A logical replication stream of one allow-listed PostgreSQL table (B-1003). Changes to other relations are
+   * dropped; values are masked as in every other read, with `rawColumn` kept unmasked beside them (`raw`).
+   */
+  async replicate(tenantId: string, id: string, object: string, opts: Omit<ReplicationOptions, 'table' | 'timeoutMs'> & { rawColumn?: string | null }): Promise<MaskedReplicationStream> {
+    const c = await this.get(tenantId, id);
+    if (c.engine !== 'postgres') throw conflict('Logical replication is for PostgreSQL connections.');
+    if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
+    const d = await this.driver(c);
+    if (!d.replicate) throw conflict(`The ${c.engine} driver cannot replicate.`);
+    const inner = await d.replicate({ slot: opts.slot, publication: opts.publication, startLsn: opts.startLsn, table: object, timeoutMs: c.timeout_s * 1000 });
+    const same = (rel: string) => rel.toLowerCase() === object.toLowerCase() || `public.${rel}`.toLowerCase() === object.toLowerCase() || rel.toLowerCase() === `public.${object}`.toLowerCase();
+    const maskOne = (columns: string[], row: unknown[] | null) => (row ? this.mask(c, [object], { columns, rows: [row], capped: false, estimate: null }).rows[0]! : null);
+    return {
+      stop: () => inner.stop(),
+      run: (onBatch, onReady) =>
+        inner.run(async (b) => {
+          const changes = b.changes
+            .filter((ch) => same(ch.relation))
+            .map((ch) => {
+              const at = opts.rawColumn ? ch.columns.indexOf(opts.rawColumn) : -1;
+              return { ...ch, raw: at >= 0 && ch.values ? ch.values[at] : undefined, values: maskOne(ch.columns, ch.values), old: maskOne(ch.columns, ch.old) };
+            });
+          await onBatch({ lsn: b.lsn, changes });
+        }, onReady)
+    };
+  }
+
+  /** Drops a knowledge source's replication slot on its connection (when the source is removed). */
+  async dropReplicationSlot(tenantId: string, id: string, slot: string): Promise<boolean> {
+    const c = await this.get(tenantId, id);
+    const d = await this.driver(c);
+    return d.dropReplicationSlot ? d.dropReplicationSlot(slot, c.timeout_s * 1000) : false;
   }
 }

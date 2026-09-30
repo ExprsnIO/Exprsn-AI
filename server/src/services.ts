@@ -240,13 +240,14 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),
     safety: () => s.imageSafety,
     safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD,
+    safetyRequired: cfg.IMAGE_SAFETY_REQUIRED,
     guardrails: () => s.guardrails,
     caps: { maxBytes: cfg.MEDIA_MAX_BYTES, maxDurationMs: cfg.MEDIA_MAX_DURATION_S * 1000, maxWidth: cfg.MEDIA_MAX_WIDTH, maxHeight: cfg.MEDIA_MAX_HEIGHT, maxStreams: cfg.MEDIA_MAX_STREAMS },
     encoder: cfg.MEDIA_ENCODER,
     ...(cfg.MEDIA_WORK_DIR ? { workDir: cfg.MEDIA_WORK_DIR } : {}),
     ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
   });
-  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
+  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
@@ -257,7 +258,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       maxBytes: cfg.ATTACHMENT_MAX_BYTES,
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
       ...(cfg.S3_ENDPOINT && cfg.S3_ACCESS_KEY_ID && cfg.S3_SECRET_ACCESS_KEY ? { s3: { endpoint: cfg.S3_ENDPOINT, region: cfg.S3_REGION, accessKeyId: cfg.S3_ACCESS_KEY_ID, secretAccessKey: cfg.S3_SECRET_ACCESS_KEY, pathStyle: cfg.S3_FORCE_PATH_STYLE } } : {}),
-      git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 })
+      git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 }),
+      replication: { enabled: cfg.KNOWLEDGE_REPLICATION === 'on', tickMs: cfg.KNOWLEDGE_REPLICATION_TICK_MS }
     }
   );
   const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
@@ -347,6 +349,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await mcp.close();
       await bus.close();
       await counters.close();
+      await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
     }
   };
@@ -398,6 +401,7 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('guardrails.sweep', 2 * 60_000, activeTenants);
   s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
+  s.knowledge.replication.start(); // Sprint 19: logical replication streams for PostgreSQL knowledge sources
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
   s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
   s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);

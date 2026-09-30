@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -272,6 +272,20 @@ const base = z.object({
     /** OpenBao database secrets engine mount for dynamic data-connection credentials. */
     OPENBAO_DATABASE_MOUNT: z.string().regex(/^[a-z0-9_/-]+$/).default('database'),
     // --- end operations ---
+
+    // --- Sprint 19: knowledge, integrations and workflows ---
+    /** Logical replication for PostgreSQL knowledge sources: off, or on for sources that ask for it. */
+    KNOWLEDGE_REPLICATION: z.enum(['off', 'on']).default('on'),
+    /** How often each instance claims and renews replication streams (ms); a stream's lease is three times this. */
+    KNOWLEDGE_REPLICATION_TICK_MS: z.coerce.number().int().min(200).max(300_000).default(10_000),
+    /** The Stripe webhook endpoint's signing secret (whsec_…); unset, POST /billing/stripe/webhook answers 404. */
+    STRIPE_WEBHOOK_SECRET: z.string().min(8).optional(),
+    STRIPE_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+    /** Without an image-safety classifier, withhold generated images and sampled frames instead of marking them. */
+    IMAGE_SAFETY_REQUIRED: bool.default(false),
+    /** An OCI runtime for script containers (runsc for gVisor); the runner passes --runtime and checks it exists. */
+    SCRIPT_RUNTIME: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,62}$/).optional(),
+    // --- end Sprint 19 ---
 
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),

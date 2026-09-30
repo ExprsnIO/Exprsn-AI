@@ -6,6 +6,7 @@ import { effectivePermissions } from '../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, workspacesFor } from '../http/middleware.js';
 import { badRequest, conflict, forbidden } from '../http/problem.js';
 import { docView, indexView, SCHEDULES, SOURCE_KINDS, sourceView } from '../knowledge/service.js';
+import { replicationView } from '../knowledge/replication.js';
 import type { Services } from '../services.js';
 
 const id26 = z.string().length(26);
@@ -37,7 +38,7 @@ export function knowledgeRoutes(s: Services): Router {
     return {
       ...summary!,
       quarantined,
-      sources: sources.map((x) => sourceView(x, counts.get(x.id) ?? 0)),
+      sources: await Promise.all(sources.map(async (x) => ({ ...sourceView(x, counts.get(x.id) ?? 0), replication: x.config.replication ? (replicationView(await k.replication.row(x.id)) ?? { state: 'starting' }) : null }))),
       indexes: (await k.indexes(kb.id)).slice(0, 10).map(indexView),
       vectorStore: s.vectors.kind
     };
@@ -68,11 +69,11 @@ export function knowledgeRoutes(s: Services): Router {
     });
   });
 
-  /** PostgreSQL connections a curator may read a view through: names and allow-listed objects, never credentials. */
+  /** PostgreSQL and MySQL connections a curator may read a table or view through: names and allow-listed objects, never credentials. */
   r.get('/knowledge/connections', read, async (req, res) => {
     const p = principalOf(req);
     if (!effectivePermissions(p).has('knowledge:manage')) throw forbidden('Adding a source needs the knowledge curator role.', { step: 'role', action: 'knowledge:manage' });
-    res.json((await s.connections.list(p.tenantId)).filter((c) => c.engine === 'postgres').map((c) => ({ id: c.id, name: c.name, label: c.label, objects: c.allow_list, columns: Object.fromEntries((c.schema ?? []).filter((o) => c.allow_list.includes(o.name)).map((o) => [o.name, o.columns.map((x) => x.name)])) })));
+    res.json((await s.connections.list(p.tenantId)).filter((c) => c.engine === 'postgres' || c.engine === 'mysql').map((c) => ({ id: c.id, name: c.name, engine: c.engine, label: c.label, objects: c.allow_list, columns: Object.fromEntries((c.schema ?? []).filter((o) => c.allow_list.includes(o.name)).map((o) => [o.name, o.columns.map((x) => x.name)])) })));
   });
 
   // ---------- knowledge bases ----------
@@ -175,14 +176,18 @@ export function knowledgeRoutes(s: Services): Router {
           path: z.string().trim().max(300).regex(/^[^\0]*$/).optional(),
           connectionId: id26.optional(),
           idColumn: z.string().trim().max(63).nullable().optional(),
-          watermarkColumn: z.string().trim().max(63).nullable().optional()
+          watermarkColumn: z.string().trim().max(63).nullable().optional(),
+          accessColumn: z.string().trim().min(1).max(63).nullable().optional(),
+          accessKind: z.enum(['group', 'user']).optional(),
+          replication: z.boolean().optional(),
+          publication: z.string().trim().regex(/^[a-z_][a-z0-9_]{0,62}$/, 'a publication name: lower-case letters, digits and _').nullable().optional()
         })
         .strict(),
       req.body
     );
     if (body.kind !== 'upload' && !body.location) throw badRequest('Give the source a location.');
     const src = await k.addSource(principalOf(req), String(req.params.id), body);
-    await audit(req, 'knowledge.source.added', { kb: src.kb_id, source: src.id }, { kind: src.kind, location: src.location, schedule: src.schedule, labelFloor: src.label_floor }, src.label_floor);
+    await audit(req, 'knowledge.source.added', { kb: src.kb_id, source: src.id }, { kind: src.kind, location: src.location, schedule: src.schedule, labelFloor: src.label_floor, ...(src.config.accessColumn ? { accessColumn: src.config.accessColumn, accessKind: src.config.accessKind } : {}), ...(src.config.replication ? { replication: true, publication: src.config.publication } : {}) }, src.label_floor);
     res.status(201).json(sourceView(src));
   });
 
