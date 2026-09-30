@@ -22,6 +22,8 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `DATA_KEY` (`_FILE`) | — | 32 bytes, base64; the local KMS master key that wraps each tenant's data key. Required with `KMS_PROVIDER=local` |
 | `KMS_PROVIDER` | `local` | `local` or `openbao` (OpenBao or Vault transit) |
 | `OPENBAO_ADDR`, `OPENBAO_TOKEN` (`_FILE`), `OPENBAO_TRANSIT_MOUNT`, `OPENBAO_KEY_PREFIX`, `OPENBAO_CA_FILE` | —, —, `transit`, `exprsn-`, — | Transit engine address and token; one key per tenant (`exprsn-tenant-<id>`), one for audit checkpoints. The token needs create, encrypt, decrypt, hmac, verify, update-config and delete on those keys |
+| (OpenBao signing, Sprint 14) | — | With `KMS_PROVIDER=openbao` the OIDC (ES256, `ecdsa-p256`) and SAML (RS256, `rsa-2048`) signing keys are created in transit as `<OPENBAO_KEY_PREFIX>fed-<kid>` and every token, assertion and logout message is signed there (`sign/<key>/sha2-256`), so no private signing key enters the process. The token also needs create, read and sign on those keys. The SAML SP decryption key stays sealed locally |
+| `DPOP_PROOF_MAX_AGE_SECONDS` | `60` | How old a DPoP proof (RFC 9449) may be; its `jti` is remembered that long (in the database, shared by all instances) so it cannot be replayed. The API checks the proof's `htu` against `PUBLIC_URL` |
 | `BLOB_STORE` | `fs` | `fs` or `s3` (MinIO, Ceph, SeaweedFS, AWS) |
 | `BLOB_DIR` | `./data/blobs` | For `fs` |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (`_FILE`), `S3_FORCE_PATH_STYLE` | —, `us-east-1`, —, —, —, `true` | For `s3` |

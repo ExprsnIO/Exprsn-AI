@@ -171,18 +171,31 @@ filter, private `/tmp`, only the state directory writable.
   drill proves a backup is readable and complete, it does not restore production. Tables outside the portable
   schema (`vectors_pg`) are listed as skipped in the drill and rebuilt by reindexing.
 - Clock skew is measured against the database server, not against NTP.
-- Federation: DPoP, pushed authorization requests, `request` objects, `prompt=login`/`max_age` re-authentication,
-  front- and back-channel logout, SAML single logout and encrypted assertions are not implemented. The SAML IdP signs
-  the assertion, not the whole response, with RSA-SHA256 only; SP metadata is pasted, never fetched. Upstream SAML
-  accepts only exclusive C14N with RSA-SHA256 or ECDSA-SHA256 over SHA-256 digests and refuses IdP-initiated
-  responses; upstream SAML's browser binding needs HTTPS (a `SameSite=None; Secure` cookie).
+- Federation: the SAML IdP signs the assertion, not the whole response, with RSA-SHA256 only; SP metadata is pasted,
+  never fetched. Upstream SAML accepts only exclusive C14N with RSA-SHA256 or ECDSA-SHA256 over SHA-256 digests and
+  refuses IdP-initiated responses; upstream SAML's browser binding needs HTTPS (a `SameSite=None; Secure` cookie).
+  Encrypted assertions use AES-GCM with RSA-OAEP only (CBC and RSA 1.5 are refused, so an IdP that only offers those
+  must send them unencrypted).
+- Logout: front-channel logout relies on the browser loading the relying parties' pages in frames with their own
+  cookies, which browsers that block third-party cookies prevent; back-channel logout does not depend on the browser.
+  Signing out in the console (`POST /api/auth/logout`) reaches back-channel clients only; front-channel frames and
+  SP-initiated upstream SAML logout happen at `/oauth/logout`. SAML SPs that only take HTTP-POST single logout are not
+  told when another SP or a relying party starts the sign-out (their sessions end at their own timeout).
+  `prompt=login` and `max_age` re-authentication sign the current session out first, which also signs the user out of
+  that session's other applications.
+- DPoP: the server does not issue `DPoP-Nonce` values (RFC 9449 section 8 is optional), so a proof's freshness rests on
+  `iat` within `DPOP_PROOF_MAX_AGE_SECONDS` and the single-use `jti`. The API checks `htu` against `PUBLIC_URL`, so a
+  reverse proxy that serves the API under another origin or path prefix makes DPoP-bound calls fail.
+- Token introspection answers only for tokens issued to the calling client; a separate resource server that needs to
+  introspect other clients' tokens is not supported.
 - Kerberos needs the optional `kerberos` npm module (GSSAPI bindings) and a keytab on the host; it is not bundled.
   Mapping takes the principal's user part and looks it up in the tenant's user stores; realms map to tenants only
   through the per-tenant realm allow-list.
-- Signing keys are sealed with the platform data key rather than signed in the KMS (OpenBao transit signing is not
-  used), so the application process holds unsealed private keys in memory.
-- OAuth access tokens are not individually revocable: they end with their grant, client or user, or after at most
-  30 minutes.
+- Signing keys: with `KMS_PROVIDER=local` the OIDC and SAML signing keys are sealed with the platform data key and
+  held unsealed in memory while in use (with OpenBao they are signed in transit and never enter the process). The SAML
+  SP decryption key for upstream encrypted assertions is always sealed locally, also with OpenBao (transit's RSA
+  decryption does not offer the OAEP variants IdPs use). Turning on OpenBao replaces the signing keys at once: SAML
+  service providers must re-import the IdP metadata for the new certificate.
 - Key-encryption keys cannot be re-wrapped: changing `DATA_KEY` or `KMS_PROVIDER` makes existing tenant data keys
   unreadable. `kms:rotate` adds a data-key version under the same key-encryption key.
 - Sensitive account changes (creating API keys, removing a second factor, regenerating recovery codes) need a
