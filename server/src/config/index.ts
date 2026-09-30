@@ -302,6 +302,15 @@ const base = z.object({
 
     /** Sprint 12, chat: a streaming answer whose instance is silent this long is interrupted (and can be continued). */
     CHAT_STREAM_LEASE_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+    /**
+     * Sprint 16: the guard model and classifiers check streamed answers in the background. Hold-back is how many
+     * screened sentence windows may wait for a verdict before generation pauses; 0 releases each window at once and
+     * lets a verdict only stop later ones. The concurrency is the most background checks one instance runs at once.
+     */
+    CHAT_GUARD_HOLDBACK_SENTENCES: z.coerce.number().int().min(0).max(8).default(1),
+    CHAT_GUARD_STREAM_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(16),
+    /** Sprint 16: anonymous share links opened per client address per minute. */
+    SHARE_ANONYMOUS_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /** How often each tenant's conversation retention policy is applied. */
     CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60)
   });

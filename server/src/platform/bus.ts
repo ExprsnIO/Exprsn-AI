@@ -88,7 +88,9 @@ export const TOPICS = {
    * Events for outbound webhooks that are not audit appends or job states (flags, approvals), emitted locally on the
    * instance where they happen: `{ tenantId, type, label, id, data }`.
    */
-  integrationEvent: 'integration.event'
+  integrationEvent: 'integration.event',
+  /** Sprint 16: access to a shared conversation may have ended (a share revoked, a label raised): `ShareAccessEvent`. */
+  shareAccess: 'share.access'
 } as const;
 
 export interface IntegrationEvent {

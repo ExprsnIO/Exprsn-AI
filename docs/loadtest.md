@@ -126,6 +126,28 @@ npx tsx server/loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instan
 Exit codes: `0` every threshold holds, `1` a threshold is exceeded, `2` the setup failed (no user could sign in, or the
 in-process server did not start).
 
+## Guard model while streaming (Sprint 16)
+
+`--guard-model` also publishes a guard-model rule at `model-output` (the fake guard model answers "safe"), so every
+answer is checked in the background while it streams; `--holdback <n>` sets `CHAT_GUARD_HOLDBACK_SENTENCES` and
+`--sentence-words <n>` puts a sentence end every n words in the fake answers. Measured in-process on a laptop, 20
+users, 3 messages each, 64-word answers with a sentence every 8 words, 10 ms per token:
+
+| Pool | Screening | Time to first token p50 / p95 | Answer complete p50 / p95 | Answers/s |
+| --- | --- | --- | --- | --- |
+| 64 slots (no queueing) | none | 80 / 86 ms | 734 / 749 ms | 22.3 |
+| 64 slots | guard model, hold-back 0 | 78 / 83 ms | 716 / 730 ms | 22.8 |
+| 64 slots | guard model, hold-back 1 | 88 / 94 ms | 710 / 741 ms | 22.8 |
+| 8 slots | none | 917 / 1446 ms | 1572 / 2098 ms | 10.2 |
+| 8 slots, the guard model on the same pool | guard model, hold-back 0 | 603 / 1146 ms | 1562 / 2672 ms | 9.9 |
+| 8 slots, the guard model on the same pool | guard model, hold-back 1 | 1509 / 1962 ms | 1561 / 2690 ms | 10.0 |
+
+With free slots, hold-back 1 costs about one guard-model call on the first sentence and nothing on throughput. When
+the guard model competes for the same saturated pool as the answers, its checks queue behind them: nothing
+deadlocks (the generation never waits for a verdict) and throughput holds, but the text of each answer arrives at the
+end, after the full check. Serve the guard model from its own pool (or give it reserved slots) to keep streaming
+smooth; `CHAT_GUARD_STREAM_CONCURRENCY` caps the background checks one instance runs at once.
+
 ## Options
 
 | Option | Default | Meaning |
@@ -144,6 +166,9 @@ in-process server did not start).
 | `--parallel` | 8 | Parallel requests per fake instance (in-process) |
 | `--instances` | 1 | Fake instances in the pool (in-process) |
 | `--fake-ollama <port>` | | Only run a fake Ollama on that port, for a pool instance in a running stack |
+| `--sentence-words` | 0 | End a sentence every n words of the fake answer |
+| `--guard-model` | off | Publish a guard-model rule at `model-output` (in-process), so answers are checked while they stream |
+| `--holdback` | the server's default | `CHAT_GUARD_HOLDBACK_SENTENCES` for the in-process server |
 | `--max-error-rate`, `--max-p95-ttft-ms`, `--max-p99-ttft-ms`, `--max-p95-total-ms`, `--min-tokens-per-s` | error rate 0.01 | Thresholds |
 | `--json` | | Summary as JSON |
 

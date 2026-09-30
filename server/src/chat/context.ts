@@ -22,6 +22,11 @@ export interface ContextRequest {
   label: Label;
   /** Nothing above this label may be added. */
   ceiling: Label;
+  /**
+   * Sprint 16 (`/v1`): the knowledge bases the caller named, used instead of the conversation's bindings and the
+   * profile's grants. `conversationId` and `messageId` are then the API request's id.
+   */
+  kbIds?: string[];
 }
 
 export interface ContextItem {

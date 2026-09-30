@@ -4,7 +4,8 @@ import { json } from '../db/knex.js';
 import { clears, labelRank, type Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
 import { actorFrom } from '../audit/chain.js';
-import { conflict, forbidden, notFound } from '../http/problem.js';
+import { badRequest, conflict, forbidden, notFound } from '../http/problem.js';
+import { TOPICS } from '../platform/bus.js';
 import { loadPrincipal, workspacesFor } from '../http/middleware.js';
 import type { Services } from '../services.js';
 import type { ConversationRow } from './service.js';
@@ -39,7 +40,31 @@ export interface ShareRow {
   revoked_at: number | null;
   revoked_by: string | null;
   last_viewed_at: number | null;
+  /** Sprint 16: a link that opens signed-out (only while the conversation is `public` and the tenant allows it). */
+  anonymous?: boolean | number;
 }
+
+/** The tenant's sharing settings (Sprint 16). Anonymous links are off by default. */
+export interface SharingSettings {
+  anonymousLinks: boolean;
+  anonymousMaxHours: number;
+  updatedBy: string | null;
+  updatedAt: number | null;
+}
+
+/**
+ * What the socket layer hears when access to a shared conversation may have ended: a share revoked, or the
+ * conversation's label raised above some readers. Readers' live subscriptions are re-checked at once.
+ */
+export interface ShareAccessEvent {
+  tenantId: string;
+  conversationId: string;
+  shareId?: string;
+  label?: Label;
+}
+
+/** A transcript for an anonymous reader: no owner, no ids of people. */
+export type PublicTranscript = Omit<Transcript, 'owner'>;
 
 export interface ExportRow {
   id: string;
@@ -99,7 +124,7 @@ export interface Transcript {
 }
 
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
-const shareFromRow = (r: Record<string, unknown>): ShareRow => ({ ...(r as unknown as ShareRow), expires_at: num(r.expires_at), created_at: Number(r.created_at), revoked_at: num(r.revoked_at), last_viewed_at: num(r.last_viewed_at) });
+const shareFromRow = (r: Record<string, unknown>): ShareRow => ({ ...(r as unknown as ShareRow), expires_at: num(r.expires_at), created_at: Number(r.created_at), revoked_at: num(r.revoked_at), last_viewed_at: num(r.last_viewed_at), anonymous: !!r.anonymous });
 const exportFromRow = (r: Record<string, unknown>): ExportRow => ({ ...(r as unknown as ExportRow), bytes: num(r.bytes), created_at: Number(r.created_at) });
 const live = (x: ShareRow, now = Date.now()) => x.revoked_at == null && (x.expires_at == null || x.expires_at > now);
 /** Answers that are not finished (or are held for review) are never shown to readers or exported. */
@@ -123,10 +148,26 @@ export class ConversationSharing {
 
   // ---------- shares (owner side) ----------
 
-  async create(p: Principal, conversationId: string, input: { kind: 'user'; userId: string } | { kind: 'workspace'; workspaceId: string } | { kind: 'link'; expiresInHours: number }): Promise<{ share: ShareRow; token?: string }> {
+  // ---------- tenant settings (Sprint 16) ----------
+
+  async settings(tenantId: string): Promise<SharingSettings> {
+    const r = (await this.db('chat_sharing_settings').where({ tenant_id: tenantId }).first()) as { anonymous_links: boolean | number; anonymous_max_hours: number; updated_by: string | null; updated_at: number } | undefined;
+    return { anonymousLinks: !!r?.anonymous_links, anonymousMaxHours: r ? Number(r.anonymous_max_hours) : 72, updatedBy: r?.updated_by ?? null, updatedAt: r ? Number(r.updated_at) : null };
+  }
+
+  async setSettings(tenantId: string, userId: string, input: { anonymousLinks: boolean; anonymousMaxHours?: number }): Promise<SharingSettings> {
+    const before = await this.settings(tenantId);
+    const row = { anonymous_links: input.anonymousLinks, anonymous_max_hours: input.anonymousMaxHours ?? before.anonymousMaxHours, updated_by: userId, updated_at: Date.now() };
+    if (!(await this.db('chat_sharing_settings').where({ tenant_id: tenantId }).update(row))) await this.db('chat_sharing_settings').insert({ tenant_id: tenantId, ...row });
+    return this.settings(tenantId);
+  }
+
+  // ---------- shares (owner side) ----------
+
+  async create(p: Principal, conversationId: string, input: { kind: 'user'; userId: string } | { kind: 'workspace'; workspaceId: string } | { kind: 'link'; expiresInHours: number; anonymous?: boolean }): Promise<{ share: ShareRow; token?: string }> {
     const c = await this.s().chat.conversation(p, conversationId);
     const t = Date.now();
-    const base: ShareRow = { id: ulid(), tenant_id: p.tenantId, conversation_id: c.id, kind: input.kind, user_id: null, workspace_id: null, token_hash: null, expires_at: null, created_by: p.userId, created_at: t, revoked_at: null, revoked_by: null, last_viewed_at: null };
+    const base: ShareRow = { id: ulid(), tenant_id: p.tenantId, conversation_id: c.id, kind: input.kind, user_id: null, workspace_id: null, token_hash: null, expires_at: null, created_by: p.userId, created_at: t, revoked_at: null, revoked_by: null, last_viewed_at: null, anonymous: false };
     let token: string | undefined;
     if (input.kind === 'user') {
       const u = await this.s().users.get(p.tenantId, input.userId);
@@ -144,6 +185,14 @@ export class ConversationSharing {
       if (dup) throw conflict(`The conversation is already shared with ${ws.name}.`);
       base.workspace_id = ws.id;
     } else {
+      if (input.anonymous) {
+        // B-706: opt-in per tenant, public conversations only, and never longer than the tenant allows.
+        const set = await this.settings(p.tenantId);
+        if (!set.anonymousLinks) throw forbidden('Anonymous links are turned off for this tenant. A tenant admin can turn them on.', { step: 'policy' });
+        if (c.label !== 'public') throw forbidden(`Only public conversations can have an anonymous link; this one is ${c.label}.`, { step: 'label' });
+        if (input.expiresInHours > set.anonymousMaxHours) throw badRequest(`Anonymous links expire within ${set.anonymousMaxHours} hours in this tenant.`);
+        base.anonymous = true;
+      }
       token = `exs_${randomToken(32)}`;
       base.token_hash = this.tokenHash(token);
       base.expires_at = t + input.expiresInHours * 3_600_000;
@@ -165,6 +214,8 @@ export class ConversationSharing {
     if (x.revoked_at != null) return x;
     const t = Date.now();
     await this.db('conversation_shares').where({ id: x.id }).update({ revoked_at: t, revoked_by: p.userId });
+    // Live readers through this share lose the stream at once, on every instance (B-705).
+    this.s().bus.publish(TOPICS.shareAccess, { tenantId: p.tenantId, conversationId: c.id, shareId: x.id } satisfies ShareAccessEvent);
     return { ...x, revoked_at: t, revoked_by: p.userId };
   }
 
@@ -238,6 +289,30 @@ export class ConversationSharing {
     return { transcript: await this.transcript(c, p.clearance), share: x };
   }
 
+  /**
+   * Opens an anonymous link (B-706), signed-out. It works only while the link is live, the tenant still allows
+   * anonymous links, and the conversation is `public` at this moment: a label raised since, the setting turned off, a
+   * revocation or expiry all end it. Every open is audited with the address; nothing is kept for the reader (no
+   * session, no cookie). Any refusal looks the same, so a link says nothing about what is behind it.
+   */
+  async openAnonymous(token: string, ip: string | null, traceId?: string): Promise<PublicTranscript> {
+    const gone = () => notFound('Shared conversation');
+    const r = await this.db('conversation_shares').where({ token_hash: this.tokenHash(token), kind: 'link' }).first();
+    if (!r || !r.anonymous) throw gone();
+    const x = shareFromRow(r);
+    if (!live(x)) throw gone();
+    if (!(await this.settings(x.tenant_id)).anonymousLinks) throw gone();
+    const tenant = await this.s().tenants.byId(x.tenant_id);
+    if (!tenant || tenant.state !== 'active') throw gone();
+    const c = await this.conversationRow(x.tenant_id, x.conversation_id);
+    if (!c || c.label !== 'public') throw gone();
+    await this.db('conversation_shares').where({ id: x.id }).update({ last_viewed_at: Date.now() });
+    await this.s().audit.append({ tenantId: x.tenant_id, action: 'conversation.share.opened', kind: 'system', actor: { ip: ip ?? null }, target: { conversation: c.id, share: x.id }, label: c.label, detail: { kind: 'link', anonymous: true }, traceId: traceId ?? null });
+    const t = await this.transcript(c, 'public');
+    const { owner: _owner, ...rest } = t;
+    return rest;
+  }
+
   /** The active branch (root to head), opened, with citations the reader is cleared for. */
   async transcript(c: ConversationRow, clearance: Label): Promise<Transcript> {
     const keys = this.s().keys;
@@ -248,7 +323,8 @@ export class ConversationSharing {
     const owner = await this.s().users.get(c.tenant_id, c.user_id);
     const messages: TranscriptMessage[] = [];
     for (const m of path) {
-      const shown = m.role === 'user' || SHOWN.has(m.state);
+      // A question held for review (or rejected) is not shown to readers, nor its answer.
+      const shown = m.role === 'user' ? m.state !== 'held' && m.state !== 'withdrawn' : SHOWN.has(m.state);
       const content = shown && m.content ? await keys.open(c.tenant_id, m.content, `content:${m.id}`) : '';
       const citations = shown && m.citations ? json<Record<string, unknown>[]>(await keys.open(c.tenant_id, m.citations, `citations:${m.id}`), []) : [];
       const tools = shown && m.tools ? json<Record<string, unknown>[]>(await keys.open(c.tenant_id, m.tools, `tools:${m.id}`), []) : [];
@@ -381,6 +457,7 @@ export const shareView = (x: ShareRow, extra: { userName?: string | null; worksp
   createdAt: x.created_at,
   revokedAt: x.revoked_at,
   lastViewedAt: x.last_viewed_at,
+  anonymous: !!x.anonymous,
   state: x.revoked_at != null ? 'revoked' : x.expires_at != null && x.expires_at <= Date.now() ? 'expired' : 'active'
 });
 

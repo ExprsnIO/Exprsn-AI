@@ -1090,7 +1090,7 @@ export class KnowledgeService {
 
   /** The chat context provider: published bases bound to the conversation or granted to the profile, which the user may read. */
   async contextFor(req: ContextRequest): Promise<ContextItem[]> {
-    const ids = new Set([...(await this.bindings(req.conversationId)), ...((await this.db('knowledge_access').where({ tenant_id: req.tenantId, principal_kind: 'profile', principal_id: req.profile.id }).select('kb_id')) as { kb_id: string }[]).map((r) => r.kb_id)]);
+    const ids = new Set(req.kbIds ?? [...(await this.bindings(req.conversationId)), ...((await this.db('knowledge_access').where({ tenant_id: req.tenantId, principal_kind: 'profile', principal_id: req.profile.id }).select('kb_id')) as { kb_id: string }[]).map((r) => r.kb_id)]);
     if (!ids.size || !req.query.trim()) return [];
     const kbs = (await this.visible(req.principal)).map((x) => x.kb).filter((kb) => ids.has(kb.id) && kb.status === 'published');
     if (!kbs.length) return [];

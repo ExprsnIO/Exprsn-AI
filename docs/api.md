@@ -1246,3 +1246,83 @@ The `billing.close` schedule closes last month's statements. Audit actions: `bil
 - Media is sandboxed; see "Media origin" above. Platform routes for signer proposals, dns-01 and backups are under
   "Sprint 9: Platform operations". Data connections gained MySQL and OpenBao dynamic credentials; MCP server
   registration and tool approval check zones (`422`/`403 step: zone`, the refusal audited as `mcp.register.refused`).
+
+## Sprint 16: Chat and AI depth
+
+### `/v1` context and server tools
+
+`POST /v1/chat/completions` takes three optional headers. Without them nothing changes. Each needs its own permission
+beside `inference:invoke` (and, for an API key or OAuth token, the scope): `knowledge:read`, `memory:write` and
+`tools:invoke` respectively (`403` with `code: denied_role` or `denied_scope` and the header as `param`).
+
+| Header | Behaviour |
+| --- | --- |
+| `X-Exprsn-Knowledge: <id>[,<id>…]` (up to 10) | Retrieves from those knowledge bases with chat's context provider and rules: each must be one the caller may read (`404 knowledge_base_not_found` otherwise, exactly as for one that does not exist) and published (`409 knowledge_base_unavailable`); nothing above the lowest of the caller's clearance, the profile's label, the pool's ceiling and the workspace's ceiling is used. The items go in one delimited system message after the profile's prompt |
+| `X-Exprsn-Memory: on \| off` | Adds the caller's memories (user and workspace scope), each through the `memory` checkpoint, as in chat |
+| `X-Exprsn-Tools: profile \| none` | Offers the profile's read-only tools (calculate, and registry and MCP tools with side effect `read` that need no confirmation) and runs them on the server through the dispatcher, up to six rounds; only the final answer is returned. Refused with `400 tools_conflict` together with `tools`, and `400 tools_not_supported` for a model without tool calling. Calculations are metered |
+
+With any of them the completion (and, when streaming, the chunk carrying the finish reason) has an extension field
+`exprsn: {label, citations: [{n, kind: knowledge \| memory, label, kbId, kb, documentId, document, chunkId, section, score, span, passage} | {n, kind: memory, label, memoryId, scope, type}], tools: [{name, ok}]}`.
+`label` is the request's label raised to the highest item used; the answer passes `model-output` at that label.
+Citations are left out of an answer that was withheld.
+
+### Held prompts (`require-approval` at `user-input`)
+
+In chat (`POST /chat`, `POST /conversations/:id/messages`, edits), a prompt a `require-approval` rule holds is stored
+with its question `state: held` and the answer `state: awaiting`; the send returns `202 {…, state: 'awaiting', reason}`
+and nothing reaches the model. The Flags queue gets a `hold` flag at checkpoint `user-input` whose `held` shows the
+question. `POST /flags/:ref/decide {decision: approved}` sends it: the owner is loaded again (clearance, profile
+access and quota are checked now) and the answer is generated as usual (`chat.released {messageId: <question>,
+answerId, state: queued}`, then the stream). `rejected` withdraws the question and its answer (the answer says the
+question was not sent) and notifies the owner. Regenerating an awaiting answer is `409`. A hold caused by a check
+that could not run still refuses the send (`422`); compare and `/v1` refuse held prompts. Audit: `chat.prompt.held`,
+`chat.hold.approved` / `chat.hold.rejected`.
+
+### Guard model while streaming
+
+With enforced guard-model or classifier rules at `model-output`, each sentence window that passed the deterministic
+rules is also checked by them in the background, over the text so far (`CHAT_GUARD_HOLDBACK_SENTENCES`,
+`CHAT_GUARD_STREAM_CONCURRENCY`). A block stops the model and the answer is replaced; a hold holds it for review.
+Tool results shown in chat pass the same screen before their `chat.chunk`: a block shows `{name, error: 'This tool
+result was withheld…'}`, a redaction `{name, output: {redacted}}`; what is shown is what is stored.
+
+### Live sharing (socket)
+
+A reader of a conversation shared with them (user or workspace share) emits `shared.watch {conversationId}` with an
+acknowledgement callback: `{ok: true, label}` after the server checked the share and the reader's clearance, `{ok:
+true, owner: true}` for the owner (who already receives their events), `{ok: false}` otherwise (at most 20 watched
+conversations per socket). The reader then receives `chat.chunk {conversationId, messageId, seq, delta? , tool?}`
+(no thinking), `chat.status {conversationId, messageId, state}`, `chat.done` and `chat.released` for that conversation.
+`shared.unwatch {conversationId}` stops. Revoking the share, or the conversation's label rising above the reader,
+removes the socket from the room at once and sends `shared.revoked {conversationId}` (unless another live share still
+admits them).
+
+| Route | Notes |
+| --- | --- |
+| `GET /shared-conversations/:id/messages/:mid/stream?after=` (`chat:read`) | Catch-up for a reader: the answer's chunks after `after` (answer text and tools only), or its screened text so far; a held answer shows nothing |
+
+### Anonymous share links
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/tenants/:tid/sharing`, `PUT /admin/tenants/:tid/sharing` `{anonymousLinks: boolean, anonymousMaxHours?: 1–720}` (`tenant:manage`) | Off by default; maximum 72 hours by default. Turning it off ends every anonymous link at once. Audit: `tenant.sharing.updated` |
+| `POST /conversations/:id/shares` `{kind: link, expiresInHours, anonymous: true}` | Only for a conversation labelled `public` (`403`), when the tenant allows it (`403`), within its maximum (`400`). The `url` is `…/#/shared?t=<token>`; shares list `anonymous: true` |
+| `POST /api/public/shared-links/open` `{token}` (no sign-in) | Outside the authenticated API: no session is read or created and no cookie is set. `{id, title, label, createdAt, updatedAt, messages, readOnly: true}` (no owner). `404` for anything that does not open, including a conversation no longer `public` or the setting turned off; `429` past `SHARE_ANONYMOUS_PER_MINUTE` per client address. Audited `conversation.share.opened` with `{anonymous: true}` and the address |
+
+The console's `#/shared?t=…` page opens it signed-out and takes the token out of the address bar at once.
+
+### Retention per workspace and per user (`tenant:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/tenants/:tid/retention` | Adds `scopes: [{id, scope: workspace \| user, scopeId, name, conversationDays, updatedBy, updatedAt}]` |
+| `PUT /admin/tenants/:tid/retention/scopes` `{scope, scopeId, conversationDays: 1–3650 \| null}` | Sets or (null) removes a period for a workspace or user of the tenant (`404` otherwise). Audit: `tenant.retention.scope.updated` |
+
+A conversation is purged after the shortest period that applies to it: the tenant's, its workspace's and its
+owner's. `POST …/retention/run` needs at least one period. The purge audit adds `scopes`.
+
+### Prompt templates
+
+`POST /prompts`, `POST /prompts/:id/versions` and publishing (`POST /prompts/:id/state {state: published}`) pass the
+body through the `user-input` checkpoint: a block, hold or redaction refuses with `422` (`step: guardrail`, `action`,
+`rules`) and nothing changes.

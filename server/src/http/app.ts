@@ -39,6 +39,7 @@ import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
+import { publicSharingRoutes } from '../routes/sharing-public.js';
 import { mediaHostGuard, mediaOriginRoutes } from '../media/origin.js';
 import { sendBytes } from '../routes/media.js';
 import { authenticate, csrfProtection, noStore } from './middleware.js';
@@ -166,6 +167,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(() => {
     throw notFound('API route');
   });
+  // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
+  app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 
   // Console: static files, and the single page for everything else.
