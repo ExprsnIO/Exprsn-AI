@@ -113,12 +113,16 @@ filter, private `/tmp`, only the state directory writable.
 - First-factor enrolment: an admin with no second factor enrols one at first sign-in, so until then the account is
   protected by its password alone. Have new admins sign in and enrol promptly; an identity admin can reset factors
   (which forces re-enrolment) if an account may have been enrolled by someone else.
-- Guardrails: while an answer streams, only the deterministic `model-output` rules (patterns, detectors, lists,
-  labels, budgets, meta) screen it sentence by sentence; the guard model and classifiers run once on the finished
-  answer, so text they would block can be shown first and is replaced afterwards. A phrase that spans a sentence
-  boundary is blocked when its second half arrives, but the first half has already been shown. The final sentence is released
-  before that full check. Tool results shown in chat are not screened by the stream screen. In chat, a
-  `require-approval` on the prompt (`user-input`) still refuses the turn; on the answer it holds it for review.
+- Guardrails: while an answer streams, the deterministic `model-output` rules screen it sentence by sentence and the
+  guard-model and classifier rules check the text so far in the background (Sprint 16). With
+  `CHAT_GUARD_HOLDBACK_SENTENCES` ≥ 1 (the default) a sentence is shown only after a clean verdict covers it; with 0
+  it is shown at once and a verdict can only stop what follows, so text the guard model would block can be shown and
+  is replaced afterwards. A background check that cannot run stops release; the rest is shown after the full check.
+  Thinking is screened like the answer, but the full check on the finished answer covers the answer text only. A
+  phrase that spans a sentence boundary is blocked when its second half arrives, but the first half may have been
+  shown. Tool results shown in chat pass the same screen (the model still receives them, checked at `context`). A
+  `require-approval` on the prompt (`user-input`) holds it for a reviewer in chat; a hold that comes from a check that
+  could not run still refuses the turn, and compare and `/v1` still refuse a held prompt.
 - The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
   labelled cases (the console warns below 200 per label).
 - Knowledge: row-level permissions of source databases are not mapped to chunk access; a database source's chunks
@@ -159,8 +163,9 @@ filter, private `/tmp`, only the state directory writable.
   interrupted before its full `model-output` check ran shows what passed the streaming screen until it is continued
   or regenerated. Without Redis the catch-up buffer lives in the database; running several instances still needs Redis
   for the bus and the socket adapter.
-- Conversation retention deletes conversations by last activity for the whole tenant (no per-workspace or per-user
-  periods yet); usage records, audit events and flags that quote a purged answer are kept under their own rules.
+- Conversation retention deletes conversations by last activity; the shortest of the tenant's, the workspace's and
+  the owner's periods applies (Sprint 16). Periods are set by tenant admins; users cannot set their own. Usage
+  records, audit events and flags that quote a purged answer are kept under their own rules.
 - Training: the orchestrator sends the scrubbed rows of a dataset to the training worker in the submit request, so
   they are in plaintext in transit to it and on its scratch storage for the run; run the worker inside the training
   zone over TLS, with encrypted scratch that it clears after each run. Checkpoints and GGUF artefacts live in the
@@ -234,9 +239,12 @@ filter, private `/tmp`, only the state directory writable.
   work (a token row and an email hand-off) when it does, so response time is not strictly constant. Reset and invite
   links need `SMTP_URL`. An admin password reset ends the account's sessions and OAuth grants but leaves its API keys,
   which are separate credentials (revoke them in the user's detail or by disabling the account).
-- OpenAI-compatible API (`/v1`): requests are stateless, so the knowledge and memory context providers of chat are not
-  applied and nothing is stored as a conversation; the profile's own tools (calculate, registry and MCP tools) are not
-  offered, only the tools the client sends, and their calls are returned to the client rather than run. An OAuth
+- OpenAI-compatible API (`/v1`): requests are stateless and nothing is stored as a conversation. Knowledge and memory
+  context apply only when asked for (`X-Exprsn-Knowledge`, `X-Exprsn-Memory`), and the profile's read-only tools run
+  on the server only with `X-Exprsn-Tools: profile` (write and destructive tools are never offered there); otherwise
+  the client's tools are offered and their calls returned to it. A `require-approval` on the prompt refuses the
+  request (there is no conversation to hold it in). Citations come back in the `exprsn` extension field, which strict
+  OpenAI clients ignore. An OAuth
   token whose only inference scopes are `inference:invoke:<profile>` is bound to those profiles (by name or alias) in
   chat, agent runs and `/v1`; embeddings are not profiles and stay open to it. With `OPENAI_STREAM_MODE=live` tokens are sent before the output guardrail has run, so a later block
   can only end the stream with `finish_reason: content_filter`; the default `checked` mode sends the answer after the
@@ -246,13 +254,19 @@ filter, private `/tmp`, only the state directory writable.
   de-duplicate by the event id (a replay reuses it). The signing secret is sealed at rest but is a shared secret, not a
   key pair. Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
   against the operator's rules and the tenant's list, as for MCP servers.
-- Conversation sharing: link shares need a signed-in user of the same tenant (there are no anonymous links). Readers see
-  stored answers only, not an answer while it streams.
+- Conversation sharing: readers of a user or workspace share can watch an answer stream (Sprint 16), answer text only
+  (no thinking); a revocation or a label rising above them ends it at once, but a reader removed from a shared
+  workspace keeps a watch already open until they reload or reconnect. Signed-in link shares open the transcript but
+  do not stream. Anonymous links are off by default per tenant, open only conversations labelled `public` at that
+  moment, expire within the tenant's limit (72 hours by default), are rate-limited per client address
+  (`SHARE_ANONYMOUS_PER_MINUTE`, shared through Redis when set) and are audited with the address; anyone holding the
+  link can read the conversation until then, and the address is only as reliable as the proxy settings.
 - Billing: price books are platform-wide; there is no currency conversion, tax or proration, and a pushed Stripe invoice
   is not reconciled back (no inbound Stripe webhook). Statements are computed from `usage_records`, so usage deleted
   with a tenant's data is gone from later recomputations; push a finished month to keep it.
-- Prompt templates are not screened by guardrails when they are written; the filled text passes the chat
-  `user-input` checkpoint when it is sent.
+- Prompt templates pass the `user-input` checkpoint when they are saved and when a version is published (Sprint 16);
+  a template published before a rule existed stays usable until it is published again, and the filled text still
+  passes the checkpoint when it is sent.
 - Pool instance, zone endpoint, connection and image backend URLs are chosen by operators and are not checked against
   internal or link-local addresses. Git sources refuse link-local hosts, but git's own DNS lookup is not pinned to the
   checked address.
