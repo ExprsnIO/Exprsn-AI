@@ -1,0 +1,23 @@
+# Values used by CI: one replica on MySQL, OpenBao transit, a blob volume and the migration hook Job.
+replicaCount: 1
+config:
+  publicUrl: https://ai.example.internal
+  database: { client: mysql }
+  kms:
+    provider: openbao
+    openbao:
+      addr: https://openbao.vault.svc:8200
+      caSecret: { name: openbao-ca, key: ca.pem }
+  blobStore:
+    type: pvc
+    pvc: { accessModes: [ReadWriteOnce], size: 20Gi }
+secrets:
+  DATA_KEY: { name: "", key: data_key }
+  REDIS_URL: { name: "", key: redis_url }
+  OPENBAO_TOKEN: { name: exprsn-ai, key: openbao_token }
+  S3_SECRET_ACCESS_KEY: { name: "", key: s3_secret_access_key }
+migrations: { mode: job }
+ingress:
+  className: traefik
+  annotations: {}
+podDisruptionBudget: { enabled: true }

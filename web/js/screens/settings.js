@@ -15,14 +15,8 @@
     const os = /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : '';
     return b + (os ? ' on ' + os : '');
   };
-  const applyContrast = (mode) => {
-    const r = document.documentElement.style;
-    if (mode === 'AAA') { r.setProperty('--muted', 'var(--fg2)'); r.setProperty('--line', 'var(--muted)'); r.setProperty('--faint', 'var(--muted)'); r.setProperty('--shadow', 'none'); }
-    else { r.removeProperty('--muted'); r.removeProperty('--line'); r.removeProperty('--faint'); r.removeProperty('--shadow'); }
-  };
-  let pref = {}; try { pref = JSON.parse(localStorage.getItem('exprsn.prefs') || '{}'); } catch (e) { pref = {}; }
-  if (pref.contrast === 'AAA') applyContrast('AAA');
-  const savePref = () => { try { localStorage.setItem('exprsn.prefs', JSON.stringify(pref)); } catch (e) { /* storage unavailable */ } };
+  // Accessibility modes (App.setA11y in app.js; the tokens are in css/app.css under [data-a11y="aaa"]).
+  const A11Y = [{ value: 'system', label: 'Follow system' }, { value: 'aa', label: 'Standard (AA)' }, { value: 'aaa', label: 'Enhanced (AAA)' }];
 
   App.register({
     id: 'settings', title: 'Settings', summary: 'Profile, appearance, second factors, API keys, sessions', crumb: ['Settings'], live: true,
@@ -43,8 +37,12 @@
       const profile = UI.panel('Profile', UI.kv([['Name', esc(me.user.displayName)], ['Account', '<span class="mono">' + esc(me.user.username) + '</span>'], ['Tenant', esc(me.tenant ? me.tenant.name : '')], ['Clearance', UI.label(me.user.clearance, { sm: true })], ['Roles', esc(me.roles.map((r) => r.name).join(', ') || 'none')], ['Signed in with', me.credential === 'api_key' ? 'API key' : 'browser session']], 2)
         + '<div class="muted" style="font-size:12px">Name, account, clearance and roles come from your user store and its group mappings. Ask an identity admin to change them.</div>');
 
-      const appearance = UI.panel('Appearance', '<div class="formgrid" style="--cols:2">' + UI.field('Theme', UI.select(['Follow system', 'Light', 'Dark'], theme, 'data-theme')) + UI.field('Contrast', UI.select(['AA (default)', 'AAA'], pref.contrast === 'AAA' ? 'AAA' : 'AA (default)', 'data-contrast')) + '</div>'
-        + '<span class="muted" style="font-size:12px">Saved in this browser. AAA mode raises contrast and removes glass surfaces.</span>');
+      const a11y = App.state.a11y || 'system';
+      const eff = App.a11yMode();
+      const appearance = UI.panel('Appearance', '<div class="formgrid" style="--cols:2">' + UI.field('Theme', UI.select(['Follow system', 'Light', 'Dark'], theme, 'data-theme'))
+        + UI.field('Accessibility', UI.select(A11Y, a11y, 'data-a11y-mode'), a11y === 'system' ? 'In use: ' + (eff === 'aaa' ? 'Enhanced, because your system asks for more contrast.' : 'Standard.') : '') + '</div>'
+        + UI.toggle('Single-key shortcuts (? opens the screen map)', App.state.singleKeys, 'data-singlekeys data-manual="1"')
+        + '<span class="muted" style="font-size:12px">Saved in this browser. Standard meets WCAG 2.2 AA. Enhanced raises text contrast to 7:1, enlarges click targets, shows a focus ring on every focused control, underlines links, stops animation and keeps messages on screen longer. Reduced motion from your system is always honoured.</span>');
 
       const factors = st.mfa ? st.mfa.factors : [];
       const mfaPanel = UI.panel('Second factors', (st.codes ? UI.notice('<b>New recovery codes. Store them now; they are shown once.</b><div class="mono" style="margin-top:4px;columns:2">' + st.codes.map((c) => '<div>' + esc(c) + '</div>').join('') + '</div>', 'warn', UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-codesdone' })) : '')
@@ -76,7 +74,8 @@
       const act = async (fn, okMsg) => { try { await fn(); if (okMsg) ctx.toast(okMsg, 'ok'); reload(); } catch (err) { App.fail(err); } };
 
       ctx.on('change', '[data-theme]', (e, t) => { App.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '.'); });
-      ctx.on('change', '[data-contrast]', (e, t) => { pref.contrast = t.value === 'AAA' ? 'AAA' : 'AA'; applyContrast(pref.contrast); savePref(); ctx.rerender(); });
+      ctx.on('change', '[data-a11y-mode]', (e, t) => { App.setA11y(t.value === 'system' ? null : t.value); ctx.rerender(); ctx.toast('Accessibility: ' + esc(A11Y.find((o) => o.value === t.value).label) + '.'); });
+      ctx.on('click', '[data-singlekeys]', (e, t) => { App.setSingleKeys(!App.state.singleKeys); t.classList.toggle('on', App.state.singleKeys); t.setAttribute('aria-checked', App.state.singleKeys ? 'true' : 'false'); ctx.toast(App.state.singleKeys ? 'Single-key shortcuts on.' : 'Single-key shortcuts off. Ctrl K still opens the command palette.'); });
 
       ctx.on('click', '[data-addtotp]', () => act(async () => { st.totp = await App.post('/api/me/mfa/totp', { label: 'Authenticator app' }); }));
       ctx.on('click', '[data-totpcancel]', () => { st.totp = null; ctx.rerender(); });

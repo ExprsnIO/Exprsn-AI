@@ -1,0 +1,109 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+# Zone: app. Everything in and out of the release's pods (the server and the migration Job) is denied unless a policy
+# below allows it. Kubernetes adds the allowances of every policy that selects a pod, so the default-deny policy
+# stays in force and each further policy opens one path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}-default-deny
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exprsn-ai.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+# Zone edge to app: the ingress controller reaches the server's HTTP port (HTTP, WebSocket, health checks).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}-ingress
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exprsn-ai.serverSelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- $peer := dict }}
+    {{- with $np.ingress.controller.namespaceSelector }}{{ $_ := set $peer "namespaceSelector" . }}{{ end }}
+    {{- with $np.ingress.controller.podSelector }}{{ $_ := set $peer "podSelector" . }}{{ end }}
+    {{- if not $peer }}
+    {{- fail "networkPolicy.ingress.controller needs a namespaceSelector or a podSelector" }}
+    {{- end }}
+    - from:
+        - {{ toYaml $peer | indent 10 | trim }}
+      ports:
+        - { port: http, protocol: TCP }
+    {{- if .Values.serviceMonitor.enabled }}
+    # Prometheus scrapes /metrics (bearer token required).
+    - from:
+        - namespaceSelector:
+            {{- toYaml ($np.ingress.monitoring.namespaceSelector | default dict) | nindent 12 }}
+          podSelector:
+            {{- toYaml ($np.ingress.monitoring.podSelector | default dict) | nindent 12 }}
+      ports:
+        - { port: http, protocol: TCP }
+    {{- end }}
+    {{- with $np.ingress.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- $groups := list
+  (list "dns" "DNS resolution (kube-dns / CoreDNS)")
+  (list "database" "zone data: PostgreSQL or MySQL")
+  (list "redis" "zone data: Redis (job queue, Socket.io adapter, bus)")
+  (list "objectStorage" "zone data: S3 / MinIO blob store")
+  (list "kms" "OpenBao transit (KMS)")
+  (list "directory" "zone directory: OpenLDAP and the Kerberos KDC")
+  (list "inference" "zone inference: Ollama instances and image workers; only the gateway calls them")
+  (list "sandbox" "zone sandbox: MCP servers, tool and script runners, ClamAV, media workers, egress proxy")
+  (list "notifications" "mail relay")
+  (list "siem" "SIEM collector")
+}}
+{{- range $groups }}
+{{- $key := index . 0 }}
+{{- $rule := index $np.egress $key | default dict }}
+{{- if $rule.to }}
+---
+# Egress from app to {{ index . 1 }}.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "exprsn-ai.fullname" $ }}-egress-{{ $key | lower }}
+  labels:
+    {{- include "exprsn-ai.labels" $ | nindent 4 }}
+    exprsn.ai/egress: {{ $key | lower }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exprsn-ai.selectorLabels" $ | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- toYaml $rule.to | nindent 8 }}
+      {{- with $rule.ports }}
+      ports:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- with $np.egress.extra }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "exprsn-ai.fullname" $ }}-egress-extra
+  labels:
+    {{- include "exprsn-ai.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exprsn-ai.selectorLabels" $ | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}

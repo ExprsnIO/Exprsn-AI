@@ -1,0 +1,12 @@
+apiVersion: v2
+name: exprsn-ai
+description: Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
+type: application
+version: 1.0.0-rc.1
+appVersion: "1.0.0-rc.1"
+kubeVersion: ">=1.27.0-0"
+keywords: [ollama, llm, chat, multi-tenant, self-hosted]
+home: https://github.com/ExprsnIO/Exprsn-AI
+sources: [https://github.com/ExprsnIO/Exprsn-AI]
+annotations:
+  category: AI

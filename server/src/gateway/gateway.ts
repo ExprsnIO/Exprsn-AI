@@ -1,5 +1,6 @@
 import type { Logger } from 'pino';
 import { labelRank, type Label } from '../authz/labels.js';
+import { zoneAdmits } from '../authz/policy.js';
 import { HttpProblem, tooManyRequests } from '../http/problem.js';
 import { TOPICS, type Bus } from '../platform/bus.js';
 import type { JobContext, JobQueue } from '../platform/jobs.js';
@@ -69,6 +70,8 @@ export class Gateway {
   private readonly runtimes = new Map<string, Runtime>();
   private timer: NodeJS.Timeout | null = null;
   private polling = false;
+  /** Label ceiling of a network zone (Sprint 9); the zone service sets it. Null: no current definition, no zone step. */
+  zoneCeiling: (zone: string) => Promise<Label | null> = async () => null;
 
   constructor(
     readonly repo: GatewayRepo,
@@ -410,7 +413,16 @@ export class Gateway {
   async acquire(profile: ProfileRow, model: ModelRow, label: Label, opts: { signal: AbortSignal; waitMs?: number; onPosition?: (n: number) => void }): Promise<Lease> {
     if (model.state === 'retired') throw new HttpProblem(409, 'Conflict', `${model.name} is retired.`);
     if (!['approved', 'deprecated'].includes(model.state)) throw new HttpProblem(409, 'Conflict', `${model.name} is not approved.`);
-    const pools = (await this.poolsFor(profile, model)).filter((p) => labelRank(p.label_ceiling) >= labelRank(label));
+    const cleared = (await this.poolsFor(profile, model)).filter((p) => labelRank(p.label_ceiling) >= labelRank(label));
+    // The zone step of the policy pipeline: a pool whose zone ceiling is below the data label is never routed to.
+    const pools: PoolRow[] = [];
+    let zoneDenied: { pool: string; zone: string; ceiling: Label } | null = null;
+    for (const p of cleared) {
+      const ceiling = await this.zoneCeiling(p.zone);
+      if (zoneAdmits(label, ceiling)) pools.push(p);
+      else zoneDenied ??= { pool: p.name, zone: p.zone, ceiling: ceiling! };
+    }
+    if (!pools.length && zoneDenied) throw new HttpProblem(403, 'Forbidden', `Zone ceiling ${zoneDenied.ceiling} is below the data label ${label}: ${zoneDenied.pool} is in the ${zoneDenied.zone} zone, so ${model.name} cannot serve this request there.`, { extensions: { step: 'zone', zone: zoneDenied.zone, zoneCeiling: zoneDenied.ceiling } });
     if (!pools.length) throw new HttpProblem(503, 'No capacity', `No pool cleared for ${label} data runs ${model.name}.`, { extensions: { step: 'zone' } });
     const poolById = new Map(pools.map((p) => [p.id, p]));
     const candidates = () =>

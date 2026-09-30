@@ -25,6 +25,10 @@ Commands:
     at first sign-in.
   audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
   kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
+  backup:create                Back up the application database into the blob store (sealed, KMS-signed)
+  backup:restore-drill [--backup id]
+                               Restore a backup (default: the newest) into a scratch SQLite database and verify
+                               its signature, digest, row counts and audit chains; the live database is not touched
 `;
 
 async function readPassword(prompt: string): Promise<string> {
@@ -123,6 +127,22 @@ async function main(): Promise<void> {
         const r = await s.keys.rotate(tenant.id);
         await s.audit.append({ tenantId: tenant.id, action: 'kms.key.rotated', kind: 'system', actor: { service: 'cli' }, target: { key: s.keys.kekName(tenant.id) }, detail: r });
         process.stdout.write(`Data key for ${tenant.slug} rotated to version ${r.version}\n`);
+        break;
+      }
+      case 'backup:create': {
+        const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
+        if (!tenant) throw new Error('Unknown tenant');
+        const b = await s.ops.backups.createNow({ tenantId: tenant.id, actor: { service: 'cli' }, userId: null }, async (pct, msg) => void process.stderr.write(`${pct}% ${msg}\n`));
+        process.stdout.write(`Backup ${b.id}: ${b.tables} tables, ${b.rows} rows, ${b.bytes} bytes in the ${s.blobs.kind} blob store; manifest ${b.manifest_hash}\n`);
+        break;
+      }
+      case 'backup:restore-drill': {
+        const { values } = parseArgs({ args: rest, options: { backup: { type: 'string' } } });
+        const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
+        if (!tenant) throw new Error('Unknown tenant');
+        const d = await s.ops.backups.drillNow({ tenantId: tenant.id, actor: { service: 'cli' }, userId: null }, values.backup ?? null, async (pct, msg) => void process.stderr.write(`${pct}% ${msg}\n`));
+        process.stdout.write(JSON.stringify({ drill: d.id, backup: d.backup_id, state: d.state, rpoMs: d.rpo_ms, rtoMs: d.rto_ms, withinTarget: d.within_target, steps: d.steps, detail: d.detail, error: d.error }, null, 2) + '\n');
+        if (d.state !== 'passed') process.exitCode = 2;
         break;
       }
       default:

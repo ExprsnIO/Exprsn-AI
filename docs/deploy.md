@@ -96,6 +96,46 @@ credentials, and installs a hardened unit (`ProtectSystem=strict`, no capabiliti
 Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forward WebSocket upgrades for
 `/socket.io/`. Preparing Ollama GPU nodes: [deploy/baremetal/ollama-node.md](../deploy/baremetal/ollama-node.md).
 
+## Kubernetes (Helm)
+
+The chart in [deploy/helm/exprsn-ai](../deploy/helm/exprsn-ai/README.md) runs the application server as a Deployment
+with a Service, an Ingress, a PodDisruptionBudget, an optional HorizontalPodAutoscaler and ServiceMonitor, and
+NetworkPolicies that mirror the network zones. PostgreSQL or MySQL, Redis, the S3 store, OpenBao, the directory and the
+Ollama nodes are external; Ollama instances are registered in the console as usual.
+
+```sh
+kubectl create namespace exprsn-ai
+kubectl -n exprsn-ai create secret generic exprsn-ai \
+  --from-literal=session_secret="$(openssl rand -hex 32)" --from-literal=data_key="$(openssl rand -base64 32)" \
+  --from-literal=database_url='postgres://...' --from-literal=redis_url='redis://...' \
+  --from-literal=s3_secret_access_key='...'
+helm install exprsn-ai deploy/helm/exprsn-ai -n exprsn-ai -f my-values.yaml
+kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:create --username root --display-name "Platform admin"
+```
+
+- Secrets are never values in the chart: each `secrets.<NAME>` entry names a key of an existing Secret, mounted as a
+  file under `/run/secrets/` and read through `<NAME>_FILE`.
+- Pods run as UID 1000 with a read-only root filesystem, no capabilities, no privilege escalation, the `RuntimeDefault`
+  seccomp profile and no service-account token. Probes use `/healthz` (startup, liveness) and `/readyz` (readiness).
+- Migrations run in an init container (`node server/dist/cli.js migrate`) or a pre-upgrade hook Job, and the chart sets
+  `DB_MIGRATE_ON_START=false`.
+- The chart refuses to render several replicas without `REDIS_URL`, SQLite, or a plain `http://` `PUBLIC_URL` in
+  production.
+- NetworkPolicies deny everything in and out of the pods except the ingress controller, DNS and the egress groups you
+  fill in (data, directory, inference, sandbox, KMS, mail, SIEM). Nothing allows the internet.
+- `SCRIPT_RUNNER` is `none` in the chart, since the pod has no container runtime; run script runners in the sandbox
+  zone.
+
+## Runbooks and load testing
+
+- [Backup and restore](runbooks/backup-restore.md): database dumps per dialect, blob store, keys, restore order,
+  verification with `exprsn-ai audit:verify`, restore drills.
+- [Incident response](runbooks/incident-response.md): severity, first 15 minutes, revoking sessions and API keys,
+  rotating `SESSION_SECRET` and data keys, disabling a tenant, audit forensics, guardrail emergency blocks, draining
+  Ollama instances.
+- [Upgrade and rollback](runbooks/upgrade.md): rolling upgrades, migrations, rollback, Ollama node upgrades.
+- [Load test of the streaming path](loadtest.md): `server/loadtest/stream.ts` and the 1.0 targets.
+
 ## Operations
 
 - **Health:** `/healthz` (process up), `/readyz` (database reachable and migrated, KMS and blob store answering; 503 while draining).
@@ -111,3 +151,36 @@ Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forw
   lockout counters and Redis can be lost safely; the audit chain and users cannot.
 - **Several instances:** set `REDIS_URL` on every instance. Chat streams are served by the instance that runs them;
   stop requests, session revocations and notifications reach every instance through Redis.
+
+## Platform operations
+
+### Backups and restore drills
+
+- The app backs up its own database into the blob store every `PLATFORM_BACKUP_MINUTES` (default a day; 0 turns it
+  off), keeps the newest `PLATFORM_BACKUP_RETAIN` (14), and runs a restore drill every `PLATFORM_DRILL_MINUTES`
+  (default a week) into a scratch SQLite file under `PLATFORM_DRILL_DIR` (default the OS temp dir; give it room for a
+  copy of the database). Targets: `PLATFORM_BACKUP_RPO_MINUTES` (1 day) and `PLATFORM_BACKUP_RTO_MINUTES` (4 h).
+- Each backup is encrypted with a key wrapped by the KMS key `<OPENBAO_KEY_PREFIX>platform-backups` and signed by
+  it: keep `DATA_KEY` (local KMS) or the OpenBao transit keys backed up separately, and back up the blob store
+  (`BLOB_DIR` or the S3 bucket) with the host's or the bucket's own replication. The Platform screen lists both as
+  "not covered" and "external" so this stays visible.
+- By hand: `exprsn-ai backup:create`, then `exprsn-ai backup:restore-drill [--backup <id>]` (exit code 2 on failure),
+  for example from a systemd timer or before an upgrade.
+
+### ACME certificates
+
+- Set `ACME_DIRECTORY_URL` to the internal CA's ACME directory (https in production; `ACME_CA_FILE` for a private
+  root), and optionally `ACME_CONTACT`. The CA validates http-01 by fetching
+  `http://<name>/.well-known/acme-challenge/<token>` on port 80, so route port 80 for each certificate name to the
+  app (the reverse proxy must pass `/.well-known/acme-challenge/` through without redirecting it to HTTPS or
+  requiring authentication).
+- Renewal runs every `ACME_CHECK_MINUTES` (6 h) and renews `ACME_RENEW_DAYS` (30) before expiry. Install renewed
+  certificates with the deploy tooling: `GET /api/admin/platform/certificates/:id/chain` and the audited
+  `POST …/key`.
+
+### Import bundles
+
+- `PLATFORM_TRIVY_BIN` (and `PLATFORM_TRIVY_CACHE_DIR` holding the offline vulnerability database) enables the scan;
+  `PLATFORM_STAGING_URL` is an internal service that receives `{bundle, digest, contents, files}` and answers
+  `{ok, detail}`. Mirror URLs, the staging hook and probes must resolve to internal addresses; `PLATFORM_ALLOWED_HOSTS`
+  adds exceptions.

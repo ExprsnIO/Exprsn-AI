@@ -4,6 +4,7 @@ import type { ProviderRepo, ProviderRow } from '../repos/providers.js';
 import { LdapProvider } from './providers/ldap.js';
 import { LocalProvider } from './providers/local.js';
 import { SqlProvider } from './providers/sql.js';
+import { FederatedProvider, type FederatedTester } from './providers/federated.js';
 import { burnPasswordCheck } from './passwords.js';
 import { parseProviderConfig, type ExternalUser, type IdentityProvider, type LdapConfig, type SqlConfig, type Step } from './providers/types.js';
 
@@ -21,6 +22,12 @@ export type ChainResult =
  */
 export class IdentityChain {
   private readonly cache = new Map<string, { updatedAt: number; provider: IdentityProvider }>();
+  /** Connectivity checks for upstream (OIDC, SAML) providers, supplied by the federation service. */
+  private federatedTester: FederatedTester | null = null;
+
+  useFederatedTester(tester: FederatedTester): void {
+    this.federatedTester = tester;
+  }
 
   constructor(
     private readonly db: Db,
@@ -44,6 +51,10 @@ export class IdentityChain {
         break;
       case 'sql':
         provider = new SqlProvider(row.id, row.name, cfg as SqlConfig);
+        break;
+      case 'oidc':
+      case 'saml':
+        provider = new FederatedProvider(row, (r, steps) => (this.federatedTester ? this.federatedTester(r, steps) : Promise.resolve(false)));
         break;
     }
     this.cache.set(row.id, { updatedAt: row.updated_at, provider });

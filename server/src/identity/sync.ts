@@ -8,7 +8,7 @@ import type { ProviderRepo, ProviderRow } from '../repos/providers.js';
 import { resolveMappings, type UserRepo } from '../repos/users.js';
 import type { ApiKeyService } from './apikeys.js';
 import type { IdentityChain } from './chain.js';
-import { parseProviderConfig } from './providers/types.js';
+import { isFederatedKind, parseProviderConfig } from './providers/types.js';
 import type { SessionService } from './sessions.js';
 
 export interface SyncReport {
@@ -42,7 +42,8 @@ export class DirectorySync {
   ) {}
 
   async syncTenant(tenantId: string, progress?: (pct: number, m?: string) => Promise<void>): Promise<SyncReport[]> {
-    const stores = (await this.providers.list(tenantId)).filter((p) => p.enabled && p.kind !== 'local');
+    // Local accounts have no directory; upstream (OIDC, SAML) providers are only asked at sign-in.
+    const stores = (await this.providers.list(tenantId)).filter((p) => p.enabled && p.kind !== 'local' && !isFederatedKind(p.kind));
     const reports: SyncReport[] = [];
     for (const [i, p] of stores.entries()) {
       reports.push(await this.syncProvider(p));
@@ -54,6 +55,7 @@ export class DirectorySync {
   async syncProvider(row: ProviderRow): Promise<SyncReport> {
     const report: SyncReport = { provider: row.name, checked: 0, updated: 0, disabled: [], errors: [] };
     const tenantId = row.tenant_id;
+    if (row.kind === 'local' || isFederatedKind(row.kind)) return { ...report, aborted: 'This store has no directory to sync with.' };
     const links = (await this.db('user_identities as i')
       .join('users as u', 'u.id', 'i.user_id')
       .where({ 'i.provider_id': row.id, 'u.tenant_id': tenantId, 'u.state': 'active' })

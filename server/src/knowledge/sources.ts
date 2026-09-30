@@ -4,6 +4,9 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import { isNeverAddress } from '../mcp/hosts.js';
 import { signV4 } from '../platform/blob.js';
 import { INDEXABLE_EXT } from './extract.js';
 
@@ -113,7 +116,10 @@ export function checkGitUrl(url: string, allowFile: boolean): string | null {
   } catch {
     return 'Give the repository as an https:// URL.';
   }
-  if (u.protocol === 'https:') return u.username || u.password ? 'Credentials in the URL are refused; use a repository the server may read.' : null;
+  if (u.protocol === 'https:') {
+    if (u.username || u.password) return 'Credentials in the URL are refused; use a repository the server may read.';
+    return isNeverAddress(u.hostname.replace(/^\[|\]$/g, '')) ? 'Link-local, multicast and unspecified addresses are refused.' : null;
+  }
   if (u.protocol === 'file:' && allowFile) return null;
   return 'Only https:// repositories are accepted.';
 }
@@ -128,6 +134,12 @@ export class CliGit implements GitFetcher {
   async checkout(url: string, ref: string | null, signal?: AbortSignal): Promise<GitCheckout> {
     const bad = checkGitUrl(url, this.o.allowFile);
     if (bad) throw new Error(bad);
+    // A name that resolves to a link-local address (cloud metadata) is refused before git connects.
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    if (host && !isIP(host)) {
+      const addrs = await dnsLookup(host, { all: true }).catch(() => []);
+      if (addrs.some((a) => isNeverAddress(a.address))) throw new Error(`${host} resolves to a link-local, multicast or unspecified address.`);
+    }
     const dir = await mkdtemp(path.join(tmpdir(), 'exprsn-git-'));
     const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', HOME: dir };
     const protocols = ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', ...(this.o.allowFile ? ['-c', 'protocol.file.allow=always'] : []), '-c', 'core.hooksPath=/dev/null'];

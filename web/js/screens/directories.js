@@ -1,7 +1,7 @@
 (function () {
   const { UI, esc } = App;
 
-  const KIND_LABEL = { ldap: 'OpenLDAP / LDAP', sql: 'SQL user table', local: 'Local accounts' };
+  const KIND_LABEL = { ldap: 'OpenLDAP / LDAP', sql: 'SQL user table', local: 'Local accounts', oidc: 'Upstream OIDC', saml: 'Upstream SAML' };
   const TEMPLATES = {
     ldap: { url: 'ldaps://ldap.example.internal:636', bindDN: 'cn=exprsn-svc,ou=services,dc=example,dc=internal', bindPassword: 'env:LDAP_BIND_PASSWORD', userBase: 'ou=people,dc=example,dc=internal', groupBase: 'ou=groups,dc=example,dc=internal', caFile: '/etc/exprsn-ai/ldap-ca.pem' },
     'sql:pg': { dialect: 'pg', connection: 'env:HR_PG_URL', table: 'users', columns: { id: 'id', username: 'username', passwordHash: 'password_hash', displayName: 'full_name', email: 'email', disabled: 'disabled', groups: 'groups' }, defaultRoles: [], defaultClearance: 'internal' },

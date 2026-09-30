@@ -1,7 +1,7 @@
 import { Router, type Request } from 'express';
 import { z, ZodError } from 'zod';
 import { actorFrom } from '../../audit/chain.js';
-import { clears, LABELS } from '../../authz/labels.js';
+import { clears, highest, LABELS, type Label } from '../../authz/labels.js';
 import { canGrant, isRole } from '../../authz/permissions.js';
 import { LoginThrottle } from '../../identity/lockout.js';
 import { PROVIDER_KINDS, parseProviderConfig, type Step } from '../../identity/providers/types.js';
@@ -146,6 +146,14 @@ export function identityAdminRoutes(s: Services): Router {
       if (!mapping.roles.length) {
         const cfg = parseProviderConfig(result.provider.kind, result.provider.config);
         mapping = { roles: cfg.defaultRoles, clearance: cfg.defaultRoles.length ? cfg.defaultClearance : null };
+      }
+      // Roles and clearance granted directly to the account the sign-in would link to also count, as at sign-in.
+      const link = await s.users.identity(result.provider.id, result.user.externalId);
+      const linked = link ? await s.users.get(p.tenantId, link.user_id) : await s.users.byUsername(p.tenantId, result.user.username);
+      if (linked) {
+        const direct = (await s.users.roles(linked.id)).filter((x) => x.source === 'direct').map((x) => x.role);
+        const clearance = linked.clearance_direct ? (mapping.clearance ? highest(mapping.clearance as Label, linked.clearance_direct) : linked.clearance_direct) : mapping.clearance;
+        mapping = { roles: [...new Set([...mapping.roles, ...direct])].sort(), clearance };
       }
     } else {
       await s.throttle.fail([keys.account]);

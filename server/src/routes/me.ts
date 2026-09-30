@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { effectivePermissions } from '../authz/policy.js';
-import { getRole, PERMISSIONS, type Permission } from '../authz/permissions.js';
+import { getRole, PERMISSIONS, rolesRequireMfa, type Permission } from '../authz/permissions.js';
 import { apiKeyState } from '../identity/apikeys.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, setSessionCookie, workspacesFor } from '../http/middleware.js';
 import { toClient as notificationView } from '../platform/notifications.js';
@@ -204,7 +204,8 @@ export function meRoutes(s: Services): Router {
     const factors = await s.mfa.factors(p.userId);
     const user = await s.users.get(p.tenantId, p.userId);
     if (!factors.some((f) => f.id === req.params.id)) throw notFound('Factor');
-    if (user?.mfa_required && factors.length <= 1) throw forbidden('Your roles require a second factor. Add another before removing this one.');
+    // Admin roles need a factor whether they were granted directly or through a group mapping after the account was made.
+    if ((user?.mfa_required || rolesRequireMfa(p.roles)) && factors.length <= 1) throw forbidden('Your roles require a second factor. Add another before removing this one.');
     await s.mfa.removeFactor(p.userId, String(req.params.id));
     await audit(req, 'mfa.removed', { factor: req.params.id });
     res.status(204).end();

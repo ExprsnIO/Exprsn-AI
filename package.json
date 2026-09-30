@@ -1,7 +1,7 @@
 {
   "name": "exprsn-ai",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "description": "Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.",
   "license": "SEE LICENSE IN LICENSE",
   "workspaces": ["server"],
@@ -12,6 +12,7 @@
     "start": "npm start -w server",
     "lint": "npm run lint -w server",
     "typecheck": "npm run typecheck -w server",
-    "test": "npm test -w server"
+    "test": "npm test -w server",
+    "test:e2e": "npm ci --prefix e2e && npm test --prefix e2e"
   }
 }

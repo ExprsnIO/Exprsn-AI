@@ -1,119 +1,127 @@
 (function () {
   const { UI, esc } = App;
 
-  // ---------- data ----------
-  const CLIENTS = [
-    { id: 'console', name: 'Exprsn-AI console', type: 'confidential, BFF', grants: 'authorization code and PKCE, refresh', scopes: 'openid chat:* context:*', status: 'active', clientId: 'c_a1c0ffee', lifetime: '10 min', refresh: '8 h, rotated on use', models: 'per profile', used: '2 min ago', pkce: true, redirects: ['https://ai.northwind.local/auth/callback', 'https://ai.northwind.local/auth/silent'], grantList: ['authorization_code', 'refresh_token'], secret: 'held in OpenBao, never shown', created: '3 Feb 2026', consent: 'first party, pre-consented' },
-    { id: 'cli', name: 'exprsn CLI', type: 'public', grants: 'device authorization', phase: 'Phase 5', scopes: 'chat:write inference:invoke', status: 'planned', clientId: 'c_cli_public', lifetime: '10 min', refresh: '24 h, rotated on use', models: 'chat-default, fast', used: 'never', pkce: true, redirects: ['urn:ietf:wg:oauth:2.0:oob'], grantList: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'], secret: 'none, public client', created: 'planned', consent: 'user approves the device code' },
-    { id: 'svc-close-bot', name: 'svc-close-bot', type: 'service account', grants: 'client credentials', scopes: 'inference:invoke:analyst', status: 'active', clientId: 'c_7f21ab90', lifetime: '10 min', refresh: 'none', models: 'analyst', used: '11 min ago', pkce: false, redirects: [], grantList: ['client_credentials'], secret: 'xs_live_9QmT4v...redacted-in-mockup', created: '19 Sep 2026', consent: 'not applicable', fresh: true },
-    { id: 'ledger-notebook', name: 'Ledger Notebook', type: 'third party', grants: 'authorization code and PKCE', scopes: 'chat:read chat:write', status: 'active', clientId: 'c_3d9e77b1', lifetime: '10 min', refresh: '8 h, rotated on use', models: 'chat-default', used: 'yesterday', pkce: true, redirects: ['https://notebook.northwind.local/oauth/cb'], grantList: ['authorization_code', 'refresh_token'], secret: 'created 2 Jun 2026', created: '2 Jun 2026', consent: 'user consent on first use, 27 granted' }
-  ];
-
-  const SAML = [
-    { name: 'Confluence (on-prem)', entity: 'https://wiki.northwind.local/saml', acs: 'https://wiki.northwind.local/plugins/servlet/samlconsumer', nameid: 'emailAddress', cert: 'expires 4 Mar 2027', status: 'active' },
-    { name: 'Grafana', entity: 'https://grafana.northwind.local/saml/metadata', acs: 'https://grafana.northwind.local/saml/acs', nameid: 'persistent', cert: 'expires 12 Nov 2026', status: 'active' },
-    { name: 'Legacy expense portal', entity: 'urn:northwind:expenses', acs: 'https://expenses.northwind.local/sso/acs', nameid: 'unspecified', cert: 'expired 1 Aug 2026', status: 'disabled' }
-  ];
-
-  const SCOPES = [
-    ['openid profile email groups', 'Identity claims', 'pre-consented'], ['chat:read, chat:write', 'Own conversations', 'user consent'], ['inference:invoke[:model]', 'Direct model calls via native or OpenAI-compatible API', 'user consent'],
-    ['context:read, context:write', 'Knowledge bases and documents', 'user consent'], ['images:generate', 'Image jobs', 'user consent'], ['tools:invoke, agents:run', 'Tool calls and agent runs', 'user consent, with per-call confirmation for writes'],
-    ['models:read, models:manage', 'Model registry, pulls, approvals', 'admin only'], ['tools:manage, agents:manage', 'Tool, agent and skill registry', 'admin only'], ['guardrails:manage', 'Guardrail profiles', 'admin only'],
-    ['training:submit, training:manage', 'Datasets and fine-tune jobs', 'admin only'], ['admin:tenant, admin:system, audit:read', 'Administration and audit', 'admin only']
-  ];
-
-  const KEYS0 = [
-    { kid: 'k-2026-07', alg: 'ES256', state: 'signing', created: '14 Jul 2026', rotates: '12 Oct 2026, in 23 days' },
-    { kid: 'k-2026-04', alg: 'ES256', state: 'verify only, overlap', created: '15 Apr 2026', rotates: 'removed 28 Jul 2026' }
-  ];
-
-  const UPSTREAM = [
-    { name: 'AD FS, corp.northwind.local', protocol: 'SAML 2.0 (we are SP)', reach: 'on-prem, directory zone', status: 'connected', used: 'Field Sales sign-ins' },
-    { name: 'Contoso Keycloak', protocol: 'OIDC (we are RP)', reach: 'on-prem, partner link', status: 'connected', used: 'Platform lab' }
-  ];
-
-  const SESSIONS = [
-    { user: 'Mara Okafor', signed: '09:02 today', method: 'Kerberos, passkey', client: 'Exprsn-AI console' },
-    { user: 'Tomasz Wieczorek', signed: '08:41 today', method: 'LDAP password, TOTP', client: 'Exprsn-AI console' },
-    { user: 'svc-close-bot', signed: 'token, 11 min ago', method: 'client credentials', client: 'svc-close-bot' },
-    { user: 'Priya Natarajan', signed: 'yesterday 17:20', method: 'Kerberos', client: 'Ledger Notebook' }
-  ];
-
-  const jwks = (keys) => JSON.stringify({ keys: keys.filter((k) => !/removed/.test(k.rotates)).map((k) => ({ kty: 'EC', crv: 'P-256', use: 'sig', alg: k.alg, kid: k.kid, x: k.kid === 'k-2026-07' ? 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU' : k.kid === 'k-2026-04' ? 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0' : 'WbL0aQ8XdYvPq8j2hCnJf1lyuY3fNc6h8gJ1F2pKq7c', y: k.kid === 'k-2026-07' ? 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0' : k.kid === 'k-2026-04' ? '4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM' : 'p9c2Hn0yQ4mR7dJxK1sVb3wFzLqT8uE6aC5oN2iG4kY' })) }, null, 2);
+  const TYPES = ['confidential, BFF', 'public', 'service account', 'third party'];
+  const GRANT_TEXT = { authorization_code: 'authorization code and PKCE', refresh_token: 'refresh', client_credentials: 'client credentials', 'urn:ietf:params:oauth:grant-type:device_code': 'device authorization', 'urn:ietf:params:oauth:grant-type:token-exchange': 'token exchange' };
+  const GRANT_SHORT = { authorization_code: 'authorization_code', refresh_token: 'refresh_token', client_credentials: 'client_credentials', device_code: 'urn:ietf:params:oauth:grant-type:device_code', token_exchange: 'urn:ietf:params:oauth:grant-type:token-exchange' };
+  const NAMEID = { emailAddress: 'emailAddress', persistent: 'persistent', unspecified: 'unspecified', transient: 'transient' };
+  const DAY = 86400000;
+  const date = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+  const when = (ms) => {
+    if (!ms) return 'never';
+    const d = Date.now() - ms;
+    if (d < 60000) return 'just now';
+    if (d < 3600000) return Math.round(d / 60000) + ' min ago';
+    if (d < DAY && new Date(ms).getDate() === new Date().getDate()) return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) + ' today';
+    if (d < 2 * DAY) return 'yesterday ' + new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return date(ms);
+  };
+  const inDays = (ms) => { const n = Math.round((ms - Date.now()) / DAY); return n > 1 ? 'in ' + n + ' days' : n === 1 ? 'tomorrow' : n === 0 ? 'today' : Math.abs(n) + ' days ago'; };
+  const grantsText = (c) => c.grants.filter((g) => g !== 'refresh_token').map((g) => GRANT_TEXT[g] || g).join(', ') + (c.grants.indexOf('refresh_token') >= 0 ? ', refresh' : '');
+  const certText = (cert) => (!cert ? 'none' : (cert.expired ? 'expired ' : 'expires ') + date(cert.validTo));
+  const stepsHtml = (steps) => UI.timeline(steps.map((s) => ({ title: esc(s.title), text: s.detail ? esc(s.detail) : '', meta: s.ms != null ? s.ms + ' ms' : '', tone: s.ok ? 'ok' : 'danger' })));
+  const copy = (text, what, ctx) => { if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => ctx.toast(esc(what) + ' copied.', 'ok'), () => ctx.toast('Copy failed; select the text instead.', 'warn')); else ctx.toast('Copy is not available here; select the text instead.', 'warn'); };
 
   App.register({
-    id: 'identity', title: 'Identity', section: 'admin', summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, upstream federation',
+    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, upstream federation',
+    crumb: ['Admin', 'Identity'],
     commands: [
       { label: 'Create an OIDC client', sub: 'Identity', run(app) { app.stateFor('identity').openCreate = true; app.render(); } },
       { label: 'Rotate the signing key', sub: 'Identity', run(app) { app.stateFor('identity').tab = 'keys'; app.stateFor('identity').openRotate = true; app.render(); } }
     ],
     states: [
-      { title: 'After the reveal', tone: 'neutral', text: 'The secret field shows only its creation date and a rotate action.', apply(ctx) { ctx.state.tab = 'clients'; ctx.state.client = 'svc-close-bot'; ctx.state.revealed = ctx.state.revealed || {}; ctx.state.revealed['svc-close-bot'] = '19 Sep 2026, 13:51'; ctx.rerender(); } },
+      { title: 'After the reveal', tone: 'neutral', text: 'The secret field shows only its creation date and a rotate action.', apply(ctx) { const st = ctx.state; st.tab = 'clients'; const c = (st.clients || []).find((x) => x.confidential); if (c) { st.client = c.id; delete st.fresh[c.id]; } ctx.rerender(); } },
       { title: 'Key nearing expiry', tone: 'warn', text: '14 days before rotation a banner appears. The new key is published to JWKS before it signs.', apply(ctx) { ctx.state.tab = 'keys'; ctx.state.keyExpiring = true; ctx.rerender(); } },
       { title: 'Upstream federation', tone: 'info', text: 'Only on-prem identity providers can be added. Cloud providers are unreachable from this network.', apply(ctx) { ctx.state.tab = 'upstream'; ctx.state.openUpstream = true; ctx.rerender(); } },
       { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      st.tab = st.tab || 'clients'; st.client = st.client || 'svc-close-bot'; st.revealed = st.revealed || {}; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.clients = st.clients || CLIENTS.map((c) => Object.assign({}, c)); st.saml = st.saml || SAML.slice(); st.upstream = st.upstream || UPSTREAM.slice(); st.revoked = st.revoked || {}; st.q = st.q || '';
-      if (ctx.params.client) { const c = st.clients.find((x) => x.name === ctx.params.client || x.id === ctx.params.client); if (c) { st.client = c.id; st.tab = 'clients'; } }
+      st.tab = st.tab || 'clients'; st.fresh = st.fresh || {}; st.q = st.q || '';
       if (ctx.params.tab) st.tab = ctx.params.tab;
-      const client = st.clients.find((c) => c.id === st.client) || st.clients[2];
-      const signing = st.keys.find((k) => k.state === 'signing');
 
-      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: st.clients.length }, { id: 'saml', label: 'SAML service providers', count: st.saml.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'Upstream federation' }, { id: 'sessions', label: 'Sessions' }], st.tab);
-      const banner = st.keyExpiring ? UI.notice('<b>Signing key ' + esc(signing.kid) + ' rotates in 13 days.</b> The next key is generated now and published to JWKS so relying parties cache it before it signs anything.', 'warn', UI.btn('Rotate now', { size: 'sm', attrs: 'data-rotatekey' })) : '';
+      const load = () => {
+        if (st.loading) return;
+        st.loading = true;
+        Promise.all([App.get('/api/admin/federation'), App.get('/api/admin/federation/oidc/clients'), App.get('/api/admin/federation/saml/sps'), App.get('/api/admin/federation/upstream'), App.get('/api/admin/federation/sessions'), App.get('/api/admin/federation/scopes'), App.get('/api/admin/federation/keys')])
+          .then(([overview, clients, sps, upstream, sessions, scopes, keys]) => { Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, loaded: true, loadError: null }); })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; if (App.state.route === 'identity' && !document.querySelector('.modal')) ctx.rerender(); });
+      };
+      if (!st.loaded && !st.loadError) load();
+      const reload = () => { st.loaded = false; st.loadError = null; load(); };
+
+      if (st.loadError) { root.innerHTML = '<div class="page">' + UI.pagehead('Identity and SSO', 'The identity service is the only token issuer', '') + UI.problem('Identity settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-retry' }) + '</div></div>'; ctx.on('click', '[data-retry]', () => { st.loadError = null; ctx.rerender(); }); return; }
+      if (!st.loaded) { root.innerHTML = '<div class="page">' + UI.pagehead('Identity and SSO', 'The identity service is the only token issuer', '') + UI.notice('Loading…', 'info') + '</div>'; return; }
+
+      const ov = st.overview;
+      const clients = st.clients;
+      if (ctx.params.client) { const c = clients.find((x) => x.name === ctx.params.client || x.clientId === ctx.params.client || x.id === ctx.params.client); if (c) { st.client = c.id; st.tab = 'clients'; } }
+      const client = clients.find((c) => c.id === st.client) || clients[0] || null;
+      const keys = ov.keys;
+      const signing = keys.find((k) => k.state === 'signing') || keys[0];
+      const nextKey = keys.find((k) => k.state === 'next, published');
+      const rotatesAt = ov.rotation.rotatesAt;
+      const nearing = st.keyExpiring || (!nextKey && rotatesAt && rotatesAt - Date.now() < 14 * DAY);
+
+      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'Upstream federation' }, { id: 'sessions', label: 'Sessions' }], st.tab);
+      const banner = nearing && signing ? UI.notice('<b>Signing key ' + esc(signing.kid) + ' rotates ' + esc(rotatesAt ? inDays(rotatesAt) : 'soon') + '.</b> Rotate now to generate the next key and publish it to JWKS, so relying parties cache it before it signs anything.', 'warn', UI.btn('Rotate now', { size: 'sm', attrs: 'data-rotatekey' })) : '';
+
+      function keysTable(compact) {
+        return UI.table(['Key ID', 'Algorithm', 'State', 'Created', 'Rotates'], keys.map((k) => ['<span class="mono">' + esc(k.kid) + '</span>', esc(k.alg), UI.pill(k.state, k.state === 'signing' ? 'ok' : k.state === 'next, published' ? 'info' : 'outline'),
+          esc(date(k.createdAt)),
+          (k.state === 'signing' ? (k.retiresAt ? esc(date(k.retiresAt) + ', ' + inDays(k.retiresAt)) : '') : k.state === 'next, published' ? 'signs from ' + esc(date(k.activatesAt)) : 'removed ' + esc(date(k.removesAt))) + (nearing && k.state === 'signing' && k.retiresAt ? ' ' + UI.pill(inDays(k.retiresAt), 'warn') : '')]), { clickable: false, minWidth: compact ? '520px' : '600px', emptyTitle: 'No keys yet', emptyText: 'The first key is created when a token is signed.' });
+      }
 
       let body = '';
       if (st.tab === 'clients') {
-        const rows = st.clients.filter((c) => !st.q || (c.name + ' ' + c.type + ' ' + c.scopes).toLowerCase().includes(st.q.toLowerCase()));
-        body = '<div class="hstack wrap">' + UI.search('Search clients', 'data-q', st.q) + '<span class="muted" style="font-size:12px">Every API call carries a scoped token from this issuer. Tokens stay in the BFF; browsers hold only a session cookie.</span></div>'
-          + UI.table(['Client', 'Type', 'Grants', 'Scopes', 'Status'], rows.map((c) => ({ cells: ['<b>' + esc(c.name) + '</b>', esc(c.type), esc(c.grants) + (c.phase ? ' ' + UI.pill(c.phase, 'outline') : ''), '<span class="mono">' + esc(c.scopes) + '</span>', UI.pill(c.status, c.status === 'active' ? 'ok' : c.status === 'planned' ? 'outline' : 'warn')], attrs: 'data-client="' + c.id + '"', selected: c.id === client.id })), { minWidth: '700px', emptyTitle: 'No clients match', emptyText: 'Clear the search or create a client.' })
-          + '<div class="eyebrow">Signing keys, 90 day rotation</div>' + keysTable(true)
-          + UI.panel('Delivered in stages', UI.kv([['Phase 1', 'Code and PKCE, client credentials, refresh rotation, LDAP'], ['Phase 4', 'Token exchange for agents, audience-bound tokens for MCP'], ['Phase 5', 'SAML IdP, Kerberos SPNEGO, device flow, DPoP, on-prem federation']], 3));
+        const rows = clients.filter((c) => !st.q || (c.name + ' ' + c.typeLabel + ' ' + c.scopes.join(' ')).toLowerCase().includes(st.q.toLowerCase()));
+        body = '<div class="hstack wrap">' + UI.search('Search clients', 'data-q', st.q) + '<span class="muted" style="font-size:12px">Every token comes from this issuer: <span class="mono">' + esc(ov.issuer) + '</span>. Browsers hold only a session cookie.</span></div>'
+          + UI.table(['Client', 'Type', 'Grants', 'Scopes', 'Status'], rows.map((c) => ({ cells: ['<b>' + esc(c.name) + '</b>', esc(c.typeLabel), esc(grantsText(c)), '<span class="mono">' + esc(c.scopes.join(' ')) + '</span>', UI.pill(c.status, c.status === 'active' ? 'ok' : 'warn')], attrs: 'data-client="' + esc(c.id) + '"', selected: client && c.id === client.id })), { minWidth: '700px', emptyTitle: clients.length ? 'No clients match' : 'No clients yet', emptyText: clients.length ? 'Clear the search or create a client.' : 'Create a client for each application that signs users in or calls the API.' })
+          + '<div class="eyebrow">Signing keys, ' + ov.rotation.days + ' day rotation</div>' + keysTable(true)
+          + UI.panel('Delivered', UI.kv([['Grants', 'Code and PKCE, client credentials, refresh rotation, device authorization, token exchange'], ['Protocols', 'OIDC provider, SAML IdP, Kerberos SPNEGO, upstream OIDC and SAML'], ['Not yet', 'DPoP and pushed authorization requests']], 3));
       } else if (st.tab === 'saml') {
-        body = '<div class="hstack"><span class="fg2">Applications that only speak SAML get assertions from the same issuer, with the same groups and clearance claims.</span><span class="right">' + UI.btn('Import metadata', { size: 'sm', icon: 'upload', attrs: 'data-saml' }) + '</span></div>'
-          + UI.table(['Service provider', 'Entity ID', 'ACS URL', 'NameID', 'Certificate', 'Status', ''], st.saml.map((s, i) => [ '<b>' + esc(s.name) + '</b>', '<span class="mono">' + esc(s.entity) + '</span>', '<span class="mono">' + esc(s.acs) + '</span>', esc(s.nameid), esc(s.cert), UI.pill(s.status, s.status === 'active' ? 'ok' : s.status === 'disabled' ? 'warn' : 'info'), s.status === 'disabled' ? UI.btn('Enable', { size: 'xs', attrs: 'data-samlenable="' + i + '"' }) : UI.btn('Download IdP metadata', { size: 'xs', kind: 'ghost', attrs: 'data-copy="idp-metadata.xml"' }) ]), { clickable: false, minWidth: '860px' })
-          + UI.notice('The IdP entity ID is <span class="mono">https://ai.northwind.local/saml/idp</span>. Assertions are signed with the current signing key and expire after 5 minutes.', 'info');
+        body = '<div class="hstack"><span class="fg2">Applications that only speak SAML get assertions from the same tenant, with the same groups and clearance claims.</span><span class="right">' + UI.btn('Import metadata', { size: 'sm', icon: 'upload', attrs: 'data-saml' }) + '</span></div>'
+          + UI.table(['Service provider', 'Entity ID', 'ACS URL', 'NameID', 'Certificate', 'Status', ''], st.sps.map((s) => ['<b>' + esc(s.name) + '</b>', '<span class="mono">' + esc(s.entityId) + '</span>', '<span class="mono">' + esc((s.acsUrls[0] || {}).url || '') + '</span>', esc(NAMEID[s.nameIdFormat] || s.nameIdFormat), esc(certText(s.cert)) + (s.status === 'active' && !s.signedRequests && s.cert && s.cert.expired ? ', unsigned requests' : ''), UI.pill(s.status, s.status === 'active' ? 'ok' : 'warn'), s.status === 'disabled' ? UI.btn('Enable', { size: 'xs', attrs: 'data-samlenable="' + esc(s.id) + '"' }) : UI.btn('Download IdP metadata', { size: 'xs', kind: 'ghost', attrs: 'data-idpmeta' })]), { clickable: false, minWidth: '860px', emptyTitle: 'No service providers', emptyText: 'Import an application\'s SAML metadata to add it.' })
+          + UI.notice('The IdP entity ID is <span class="mono">' + esc(ov.idp.entityId) + '</span>. Assertions are signed with the IdP certificate (RSA-SHA256' + (ov.idp.certificate && ov.idp.certificate.validTo ? ', expires ' + esc(date(ov.idp.certificate.validTo)) : '') + ') and expire after ' + ov.idp.assertionMinutes + ' minutes.', 'info');
       } else if (st.tab === 'scopes') {
-        body = UI.table(['Scope', 'Grants', 'Consent'], SCOPES.map((s) => ['<span class="mono">' + esc(s[0]) + '</span>', esc(s[1]), esc(s[2])]), { clickable: false, minWidth: '640px' })
-          + '<div class="grid2">' + UI.panel('Consent policy', UI.toggle('First-party clients are pre-consented', true, 'data-manual') + UI.toggle('Third-party clients ask on first use', true, 'data-manual') + UI.toggle('Remember consent for 90 days', true, 'data-manual') + '<div class="muted" style="font-size:12px">Effective permission is client scopes intersected with role permissions, then clearance and zone. Scopes never widen a role.</div>')
-          + UI.panel('Token shape', UI.kv([['Access token', 'JWT, ES256, 10 min, audience-bound'], ['Refresh token', 'opaque, rotated on every use (RFC 9700)'], ['Agent delegation', 'token exchange with an act claim (RFC 8693)'], ['High assurance', 'PAR and DPoP, optional per client'], ['Introspection', 'RFC 7662 for opaque tokens; revocation on logout and disable']], 1)) + '</div>';
+        const c = ov.settings.consent;
+        body = UI.table(['Scope', 'Grants', 'Consent'], st.scopes.map((s) => ['<span class="mono">' + esc(s.scopes.join(', ')) + '</span>', esc(s.grants), esc(s.consent)]), { clickable: false, minWidth: '640px' })
+          + '<div class="grid2">' + UI.panel('Consent policy', UI.toggle('First-party clients are pre-consented', c.firstPartyPreconsented, 'data-manual data-consent="firstPartyPreconsented"') + UI.toggle('Third-party clients ask on first use', c.thirdPartyAsk, 'data-manual data-consent="thirdPartyAsk"') + UI.toggle('Remember consent for 90 days', c.remember, 'data-manual data-consent="remember"') + '<div class="muted" style="font-size:12px">Effective permission is client scopes intersected with role permissions, then clearance and zone. Scopes never widen a role.</div>')
+          + UI.panel('Token shape', UI.kv([['Access token', 'JWT, ES256, 5 to 30 min per client, audience-bound'], ['Refresh token', 'opaque, rotated on every use; reuse revokes the grant (RFC 9700)'], ['Agent delegation', 'token exchange with an act claim (RFC 8693)'], ['High assurance', 'PKCE required for public clients; DPoP and PAR not yet'], ['Revocation', 'RFC 7009 at /oauth/revoke; client disable and session revoke end grants']], 1)) + '</div>';
       } else if (st.tab === 'keys') {
-        body = '<div class="hstack"><span class="eyebrow">Signing keys, 90 day rotation</span><span class="right hstack gap6">' + UI.btn('Copy JWKS URL', { size: 'sm', kind: 'ghost', attrs: 'data-copy="https://ai.northwind.local/.well-known/jwks.json"' }) + UI.btn('Rotate signing key', { size: 'sm', kind: 'primary', icon: 'key', attrs: 'data-rotatekey' }) + '</span></div>' + keysTable(false)
-          + '<div class="grid2">' + UI.panel('JWKS preview', '<div class="fg2" style="font-size:12px">Served at <span class="mono">/.well-known/jwks.json</span>. The overlap key stays listed until every token it signed has expired.</div>' + UI.code(jwks(st.keys), 'json'))
-          + UI.panel('Where keys live', UI.kv([['Store', 'OpenBao transit, never on disk in the app zone'], ['Algorithm', 'ES256 (P-256)'], ['Rotation', 'every 90 days with a 14 day overlap window'], ['Discovery', '/.well-known/openid-configuration'], ['Data keys', 'per-tenant envelope keys in the same transit mount']], 1) + '<div>' + UI.btn('Open secrets health', { size: 'sm', attrs: 'data-goplatform' }) + '</div>') + '</div>';
+        body = '<div class="hstack"><span class="eyebrow">Signing keys, ' + ov.rotation.days + ' day rotation</span><span class="right hstack gap6">' + UI.btn('Copy JWKS URL', { size: 'sm', kind: 'ghost', attrs: 'data-idcopy="' + esc(ov.jwksUrl) + '" data-what="JWKS URL"' }) + UI.btn('Rotate signing key', { size: 'sm', kind: 'primary', icon: 'key', attrs: 'data-rotatekey' }) + '</span></div>' + keysTable(false)
+          + '<div class="grid2">' + UI.panel('JWKS preview', '<div class="fg2" style="font-size:12px">Served at <span class="mono">' + esc(ov.jwksUrl) + '</span>. The overlap key stays listed until every token it signed has expired.</div>' + UI.code(JSON.stringify(st.jwks, null, 2), 'json'))
+          + UI.panel('Where keys live', UI.kv([['Store', 'Sealed with the platform data key (' + esc(ov.keyStore) + '); never leave the server'], ['Algorithm', 'ES256 (P-256) for OIDC; RSA-2048 for the SAML certificate'], ['Rotation', 'every ' + ov.rotation.days + ' days with a ' + ov.rotation.overlapDays + ' day overlap window'], ['Discovery', '<span class="mono">' + esc(ov.discoveryUrl) + '</span>'], ['Data keys', 'per-tenant envelope keys in the same KMS']], 1) + '<div>' + UI.btn('Open secrets health', { size: 'sm', attrs: 'data-goplatform' }) + '</div>') + '</div>';
       } else if (st.tab === 'upstream') {
+        const k = ov.kerberos;
         body = '<div class="hstack"><span class="fg2">Optional federation: this issuer acts as OIDC relying party or SAML service provider to an on-prem identity provider.</span><span class="right">' + UI.btn('Add upstream provider', { size: 'sm', icon: 'plus', attrs: 'data-upstream' }) + '</span></div>'
-          + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by'], st.upstream.map((u) => ['<b>' + esc(u.name) + '</b>', esc(u.protocol), esc(u.reach), UI.pill(u.status), esc(u.used)]), { clickable: false, minWidth: '640px' })
-          + '<div class="grid2">' + UI.panel('Primary authentication', UI.kv([['Kerberos SPNEGO', 'HTTP/ai.northwind.local keytab, validated against the KDC'], ['LDAP bind', 'LDAPS to OpenLDAP; never a clear bind'], ['Second factor', 'WebAuthn passkeys and TOTP, required for admin roles'], ['Device flow', 'RFC 8628 for the CLI, Phase 5'], ['Fallback order', 'Kerberos, then password, then MFA']], 1) + '<div>' + UI.btn('Test a login', { size: 'sm', attrs: 'data-testlogin' }) + '</div>')
-          + UI.panel('Air gap', UI.notice('Cloud identity providers are unreachable from this network. Only on-prem providers in the directory zone or over a partner link can be upstream.', 'info') + '<div>' + UI.btn('Open zones', { size: 'sm', kind: 'ghost', attrs: 'data-gozones' }) + '</div>') + '</div>';
+          + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by'], st.upstream.map((u) => ['<b>' + esc(u.name) + '</b>', esc(u.protocolLabel), esc(u.reach), UI.pill(u.status, u.status === 'connected' ? 'ok' : u.status === 'disabled' ? '' : 'danger'), esc(u.usedBy)]), { clickable: false, minWidth: '640px', emptyTitle: 'No upstream providers', emptyText: 'Users sign in with the user stores. Add an on-prem OIDC or SAML provider to federate.' })
+          + '<div class="grid2">' + UI.panel('Primary authentication', UI.kv([['Kerberos SPNEGO', k.available && k.enabled ? esc(k.detail) + (k.realms.length ? ', realms ' + esc(k.realms.join(', ')) : ', any realm') : k.enabled ? 'not available: ' + esc(k.detail) : 'turned off for this tenant'], ['LDAP bind', 'LDAPS or StartTLS to the directory; never a clear bind'], ['Second factor', 'WebAuthn passkeys and TOTP, required for admin roles, also after Kerberos and upstream sign-in'], ['Device flow', 'RFC 8628 at <span class="mono">' + esc(ov.device.verificationUri) + '</span>, codes live ' + ov.device.minutes + ' min'], ['Fallback order', 'Kerberos, then upstream or password, then MFA']], 1) + '<div>' + UI.btn('Test a login', { size: 'sm', attrs: 'data-testlogin' }) + '</div>')
+          + UI.panel('Air gap', UI.notice('Cloud identity providers are unreachable from this network. Only on-prem providers on internal addresses' + (ov.upstream.allowList ? ', or hosts on the allow-list (' + esc(ov.upstream.allowList) + '),' : '') + ' can be upstream.', 'info') + UI.kv([['OIDC redirect URI', '<span class="mono">' + esc(ov.upstream.redirectUri) + '</span>'], ['SAML ACS URL', '<span class="mono">' + esc(ov.upstream.acsUrl) + '</span>']], 1) + '<div>' + UI.btn('Open zones', { size: 'sm', kind: 'ghost', attrs: 'data-gozones' }) + '</div>') + '</div>';
       } else {
-        const rows = SESSIONS.filter((s) => !st.revoked[s.user]);
-        body = '<div class="eyebrow">Active sessions, all tenants</div>' + UI.table(['User', 'Signed in', 'Method', 'Client', ''], rows.map((s) => ['<b>' + esc(s.user) + '</b>', esc(s.signed), esc(s.method), esc(s.client), UI.btn('Revoke', { size: 'xs', attrs: 'data-revoke="' + esc(s.user) + '"' })]), { clickable: false, minWidth: '560px', emptyTitle: 'No active sessions', emptyText: 'Sessions appear when someone signs in or a service account requests a token.' })
+        body = '<div class="eyebrow">Active sessions and grants in this tenant</div>' + UI.table(['User', 'Signed in', 'Method', 'Client', ''], st.sessions.map((s, i) => ['<b>' + esc(s.user) + '</b>', esc(s.kind === 'service' ? 'token, ' + when(s.signedInAt) : when(s.signedInAt)), esc(s.method), esc(s.client), UI.btn('Revoke', { size: 'xs', attrs: 'data-revoke="' + i + '"' })]), { clickable: false, minWidth: '560px', emptyTitle: 'No active sessions', emptyText: 'Sessions appear when someone signs in or a service account requests a token.' })
           + '<div class="muted" style="font-size:12px">Revocation also invalidates refresh tokens. Users disabled by directory sync lose their sessions within one sync interval.</div><div>' + UI.btn('Open tenant sessions', { size: 'sm', kind: 'ghost', attrs: 'data-gotenants' }) + '</div>';
       }
 
-      function keysTable(compact) {
-        return UI.table(['Key ID', 'Algorithm', 'State', 'Created', 'Rotates'], st.keys.map((k) => ['<span class="mono">' + esc(k.kid) + '</span>', esc(k.alg), UI.pill(k.state, k.state === 'signing' ? 'ok' : k.state === 'next, published' ? 'info' : 'outline'), esc(k.created), esc(k.rotates) + (st.keyExpiring && k.state === 'signing' ? ' ' + UI.pill('13 days', 'warn') : '')]), { clickable: false, minWidth: compact ? '520px' : '600px' });
-      }
-
       // ----- inspector -----
-      const revealedAt = st.revealed[client.id];
-      const secretBlock = client.grantList.indexOf('client_credentials') >= 0 || client.type.indexOf('third') >= 0 || client.id === 'console'
-        ? (client.id === 'console' ? UI.kv([['Client secret', esc(client.secret)]], 1)
-          : (client.fresh && !revealedAt)
-            ? '<div class="id-secret"><div class="hstack"><b>Secret shown once</b>' + UI.pill('copy now', 'warn') + '</div><div class="mono" style="overflow-wrap:anywhere">' + esc(client.secret) + '</div><div class="muted" style="font-size:12px">Copy it now. It cannot be shown again, only rotated.</div><div class="hstack gap6">' + UI.btn('Copy secret', { size: 'sm', kind: 'primary', attrs: 'data-copysecret' }) + UI.btn('Rotate secret', { size: 'sm', attrs: 'data-rotatesecret' }) + '</div></div>'
-            : UI.kv([['Client secret', 'created ' + esc(revealedAt || client.secret.replace('created ', '')) + '<div style="margin-top:6px">' + UI.btn('Rotate secret', { size: 'sm', attrs: 'data-rotatesecret' }) + '</div>']], 1))
-        : UI.kv([['Client secret', 'none, public client with PKCE']], 1);
-      const insp = '<div class="eyebrow">' + esc(client.type) + '</div><div style="font-size:15px;font-weight:600">' + esc(client.name) + ' ' + UI.pill(client.status, client.status === 'active' ? 'ok' : 'outline') + '</div>'
-        + UI.kv([['Client ID', '<span class="mono">' + esc(client.clientId) + '</span>'], ['Access token lifetime', esc(client.lifetime)], ['Refresh', esc(client.refresh)], ['Allowed models', esc(client.models)], ['Last used', esc(client.used)], ['Consent', esc(client.consent)]], 2)
-        + '<div class="field"><span class="fl">Redirect URIs</span>' + (client.redirects.length ? client.redirects.map((r) => '<div class="mono" style="overflow-wrap:anywhere">' + esc(r) + '</div>').join('') : '<div class="muted">none</div>') + '</div>'
-        + '<div class="field"><span class="fl">Grant types</span><div class="hstack wrap gap4">' + client.grantList.map((g) => UI.pill(g, 'outline')).join('') + '</div></div>'
-        + '<div class="field"><span class="fl">Scopes</span><div class="mono">' + esc(client.scopes) + '</div></div>'
-        + UI.toggle(client.grantList.indexOf('client_credentials') >= 0 ? 'PKCE not applicable to client credentials' : 'PKCE required', client.pkce, 'data-pkce' + (client.grantList.indexOf('client_credentials') >= 0 ? ' data-manual data-na style="opacity:.6"' : ''))
-        + secretBlock
-        + '<div class="divider"></div><div class="vstack gap6">' + UI.btn('Edit client', { size: 'sm', icon: 'edit', attrs: 'data-edit' }) + (client.type === 'service account' ? UI.btn('Open service account', { size: 'sm', kind: 'ghost', attrs: 'data-gotenants' }) : '') + (client.status === 'active' ? UI.btn('Disable client', { size: 'sm', kind: 'danger', attrs: 'data-disable' }) : '') + '</div>';
+      let insp = '<div class="muted">Create a client to see its settings here.</div>';
+      if (client) {
+        const secret = st.fresh[client.id];
+        const secretBlock = !client.confidential ? UI.kv([['Client secret', 'none, public client with PKCE']], 1)
+          : secret
+            ? '<div class="id-secret"><div class="hstack"><b>Secret shown once</b>' + UI.pill('copy now', 'warn') + '</div><div class="mono" style="overflow-wrap:anywhere">' + esc(secret) + '</div><div class="muted" style="font-size:12px">Copy it now. It cannot be shown again, only rotated.</div><div class="hstack gap6">' + UI.btn('Copy secret', { size: 'sm', kind: 'primary', attrs: 'data-copysecret' }) + UI.btn('Rotate secret', { size: 'sm', attrs: 'data-rotatesecret' }) + '</div></div>'
+            : UI.kv([['Client secret', 'created ' + esc(date(client.secretCreatedAt)) + '<div style="margin-top:6px">' + UI.btn('Rotate secret', { size: 'sm', attrs: 'data-rotatesecret' }) + '</div>']], 1);
+        const cc = client.grants.indexOf('client_credentials') >= 0;
+        insp = '<div class="eyebrow">' + esc(client.typeLabel) + '</div><div style="font-size:15px;font-weight:600">' + esc(client.name) + ' ' + UI.pill(client.status, client.status === 'active' ? 'ok' : 'warn') + '</div>'
+          + UI.kv([['Client ID', '<span class="mono">' + esc(client.clientId) + '</span>'], ['Access token lifetime', Math.round(client.accessTtl / 60) + ' min'], ['Refresh', client.refreshTtl ? Math.round(client.refreshTtl / 3600) + ' h, rotated on use' : 'none'], ['Allowed models', esc(client.models || 'per profile')], ['Last used', esc(when(client.lastUsedAt))], ['Consent', esc(client.consent)]], 2)
+          + '<div class="field"><span class="fl">Redirect URIs</span>' + (client.redirectUris.length ? client.redirectUris.map((r) => '<div class="mono" style="overflow-wrap:anywhere">' + esc(r) + '</div>').join('') : '<div class="muted">none</div>') + '</div>'
+          + '<div class="field"><span class="fl">Grant types</span><div class="hstack wrap gap4">' + client.grants.map((g) => UI.pill(g, 'outline')).join('') + '</div></div>'
+          + '<div class="field"><span class="fl">Scopes</span><div class="mono">' + esc(client.scopes.join(' ')) + '</div></div>'
+          + UI.toggle(cc ? 'PKCE not applicable to client credentials' : 'PKCE required', client.pkceRequired, 'data-manual data-pkce' + (cc || client.type === 'public' ? ' data-na style="opacity:.6"' : ''))
+          + secretBlock
+          + '<div class="divider"></div><div class="vstack gap6">' + UI.btn('Edit client', { size: 'sm', icon: 'edit', attrs: 'data-edit' }) + (client.type === 'service' ? UI.btn('Open service account', { size: 'sm', kind: 'ghost', attrs: 'data-gousers' }) : '') + (client.status === 'active' ? UI.btn('Disable client', { size: 'sm', kind: 'danger', attrs: 'data-disable' }) : UI.btn('Enable client', { size: 'sm', attrs: 'data-enable' })) + '</div>';
+      }
 
       root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.id-secret{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--warn-fg);border-radius:6px;background:var(--warn-bg)}.id-secret .muted{color:var(--warn-fg)}</style>'
         + '<div class="page">' + UI.pagehead('Identity and SSO', 'The identity service is the only token issuer', UI.btn('Test a login', { attrs: 'data-testlogin' }) + UI.btn('Create client', { kind: 'primary', icon: 'plus', attrs: 'data-create' }))
@@ -121,47 +129,115 @@
         + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
         + '<aside class="inspector">' + insp + '</aside>';
 
+      const act = async (fn, okMsg, kind) => { try { const r = await fn(); if (okMsg) ctx.toast(typeof okMsg === 'function' ? okMsg(r) : okMsg, kind || 'ok', 5000); reload(); return r; } catch (err) { App.fail(err); return null; } };
+
       // ----- modals -----
       function rotateKey() {
-        ctx.confirm({ title: 'Rotate signing key', tag: 'affects every client', tone: 'info', body: '<p style="margin:0" class="fg2">Generates a new ES256 key in OpenBao transit and publishes it to JWKS. It starts signing after the 14 day overlap; the current key stays listed for verification until then.</p>', kv: [['Current', esc(signing.kid)], ['New', 'k-2026-09'], ['Overlap', '14 days']], ok: 'Rotate' }).then((ok) => {
+        ctx.confirm({ title: 'Rotate signing key', tag: 'affects every client', tone: 'info', body: '<p style="margin:0" class="fg2">Generates a new ES256 key, sealed with the platform data key, and publishes it to JWKS. It starts signing after the ' + ov.rotation.overlapDays + ' day overlap; the current key stays listed for verification until then.</p>', kv: [['Current', esc(signing ? signing.kid : 'none')], ['New', 'generated on rotate'], ['Overlap', ov.rotation.overlapDays + ' days']], ok: 'Rotate' }).then((ok) => {
           if (!ok) return;
-          st.keys = [{ kid: 'k-2026-09', alg: 'ES256', state: 'next, published', created: '19 Sep 2026', rotates: 'signs from 3 Oct 2026' }].concat(st.keys.map((k) => k.state === 'signing' ? Object.assign({}, k, { rotates: '3 Oct 2026, in 14 days' }) : k));
-          st.keyExpiring = false; st.tab = 'keys'; ctx.rerender(); ctx.toast('k-2026-09 published to JWKS. It signs from 3 Oct; k-2026-07 verifies until then.', 'ok', 5000);
+          st.keyExpiring = false; st.tab = 'keys';
+          act(() => App.post('/api/admin/federation/keys/rotate', {}), (r) => esc(r.next.kid) + ' published to JWKS. It signs from ' + esc(date(r.next.activatesAt)) + (r.previous ? '; ' + esc(r.previous) + ' verifies until then.' : '.'));
         });
       }
       function createClient() {
         ctx.modal({ title: 'Create client', cls: 'wide',
-          body: '<div class="formgrid">' + UI.field('Name', UI.input('', { attrs: 'data-cname placeholder="Treasury dashboard"' })) + UI.field('Type', UI.select(['confidential, BFF', 'public', 'service account', 'third party'], 'third party', 'data-ctype')) + UI.field('Redirect URIs', UI.textarea('https://treasury.northwind.local/oauth/cb', { rows: 2, attrs: 'data-credir' }), 'One per line. Exact match; wildcards are refused.') + UI.field('Scopes', UI.input('chat:read chat:write', { attrs: 'data-cscopes' })) + '<div class="span2 hstack wrap gap12">' + UI.check('authorization code', true, 'data-g="authorization_code"') + UI.check('refresh token', true, 'data-g="refresh_token"') + UI.check('client credentials', false, 'data-g="client_credentials"') + UI.check('device authorization', false, 'data-g="device_code"') + UI.check('token exchange', false, 'data-g="token_exchange"') + '</div>' + '<div class="span2">' + UI.toggle('PKCE required', true, 'data-cpkce') + '</div></div>' + UI.notice('The client secret is shown once after creation. Third-party clients ask users for consent on first use.', 'info'),
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('', { attrs: 'data-cname placeholder="Treasury dashboard"' })) + UI.field('Type', UI.select(TYPES, 'third party', 'data-ctype')) + UI.field('Redirect URIs', UI.textarea('', { rows: 2, placeholder: 'https://treasury.example.internal/oauth/cb', attrs: 'data-credir' }), 'One per line. Exact match; wildcards are refused.') + UI.field('Scopes', UI.input('openid chat:read chat:write', { attrs: 'data-cscopes' }), 'Space separated. openid, profile, email, groups, a permission such as chat:read, or chat:* for all of a resource.')
+            + '<div class="span2 hstack wrap gap12">' + UI.check('authorization code', true, 'data-g="authorization_code"') + UI.check('refresh token', true, 'data-g="refresh_token"') + UI.check('client credentials', false, 'data-g="client_credentials"') + UI.check('device authorization', false, 'data-g="device_code"') + UI.check('token exchange', false, 'data-g="token_exchange"') + '</div>' + '<div class="span2">' + UI.toggle('PKCE required', true, 'data-cpkce') + '</div></div>' + UI.notice('The client secret is shown once after creation. Third-party clients ask users for consent on first use. Service accounts get a user with the member role; their tokens\' scopes narrow it.', 'info') + '<div data-cerr></div>',
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create client', { kind: 'primary', attrs: 'data-cgo' }),
-          onMount(m) { m.querySelector('[data-cgo]').addEventListener('click', () => { const name = m.querySelector('[data-cname]').value.trim() || 'New client'; const type = m.querySelector('[data-ctype]').value; const grants = Array.prototype.slice.call(m.querySelectorAll('[data-g]:checked')).map((i) => i.dataset.g); const id = 'c-' + Date.now(); App.closeOverlay(); st.clients.push({ id: id, name: name, type: type, grants: grants.join(', ').replace(/_/g, ' '), scopes: m.querySelector('[data-cscopes]').value, status: 'active', clientId: 'c_' + Math.random().toString(16).slice(2, 10), lifetime: '10 min', refresh: grants.indexOf('refresh_token') >= 0 ? '8 h, rotated on use' : 'none', models: 'per profile', used: 'never', pkce: m.querySelector('[data-cpkce]').classList.contains('on'), redirects: m.querySelector('[data-credir]').value.split('\n').map((s) => s.trim()).filter(Boolean), grantList: grants, secret: 'xs_live_' + Math.random().toString(36).slice(2, 12) + '...shown-once', created: '19 Sep 2026', consent: type === 'third party' ? 'user consent on first use' : 'pre-consented', fresh: type !== 'public' }); st.client = id; st.tab = 'clients'; ctx.rerender(); ctx.toast('Client ' + esc(name) + ' created. Copy the secret now.', 'ok', 5000); }); }
+          onMount(m) {
+            m.querySelector('[data-cgo]').addEventListener('click', async () => {
+              const name = m.querySelector('[data-cname]').value.trim();
+              const type = m.querySelector('[data-ctype]').value;
+              const grants = Array.prototype.slice.call(m.querySelectorAll('[data-g]')).filter((i) => (i.querySelector('input') ? i.querySelector('input').checked : (i.checked || i.classList.contains('on')))).map((i) => i.dataset.g);
+              const body = { name, type, grants, redirectUris: m.querySelector('[data-credir]').value.split('\n').map((s) => s.trim()).filter(Boolean), scopes: m.querySelector('[data-cscopes]').value.split(/\s+/).filter(Boolean), pkceRequired: m.querySelector('[data-cpkce]').classList.contains('on') };
+              if (!name) { m.querySelector('[data-cerr]').innerHTML = UI.notice('Give the client a name.', 'warn'); return; }
+              try {
+                const r = await App.post('/api/admin/federation/oidc/clients', body);
+                App.closeOverlay();
+                if (r.secret) st.fresh[r.client.id] = r.secret;
+                st.client = r.client.id; st.tab = 'clients';
+                ctx.toast('Client ' + esc(r.client.name) + ' created.' + (r.secret ? ' Copy the secret now.' : ''), 'ok', 5000);
+                reload();
+              } catch (err) { m.querySelector('[data-cerr]').innerHTML = UI.notice('<b>' + esc((err.problem && err.problem.title) || 'Not created') + '.</b> ' + esc(err.message) + (err.problem && err.problem.errors ? ' ' + esc(err.problem.errors.map((e) => e.path + ': ' + e.message).join('; ')) : ''), 'danger'); }
+            });
+          }
         });
       }
       function samlImport() {
         ctx.modal({ title: 'SAML metadata import', cls: 'wide',
-          body: UI.field('Service provider metadata XML', UI.textarea('<EntityDescriptor entityID="https://treasury.northwind.local/saml">\n  <SPSSODescriptor>\n    <AssertionConsumerService Location="https://treasury.northwind.local/saml/acs" index="0"/>\n    <KeyDescriptor use="signing"><X509Certificate>MIIC...</X509Certificate></KeyDescriptor>\n  </SPSSODescriptor>\n</EntityDescriptor>', { rows: 6, attrs: 'data-xml' }), 'Paste the file contents or upload it. Nothing is fetched over the network.') + '<div id="saml-parsed"></div>',
+          body: UI.field('Name', UI.input('', { attrs: 'data-sname placeholder="Treasury"' })) + UI.field('Service provider metadata XML', UI.textarea('', { rows: 6, placeholder: '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://treasury.example.internal/saml">…', attrs: 'data-xml' }), 'Paste the file contents. Nothing is fetched over the network.') + '<div id="saml-parsed"></div>',
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Parse', { attrs: 'data-parse' }) + UI.btn('Save provider', { kind: 'primary', attrs: 'data-samlsave disabled' }),
           onMount(m) {
-            const parse = () => { m.querySelector('#saml-parsed').innerHTML = '<div class="eyebrow">Parsed, review before saving</div>' + UI.kv([['Entity ID', '<span class="mono">https://treasury.northwind.local/saml</span>'], ['ACS URLs', '<span class="mono">https://treasury.northwind.local/saml/acs</span> (index 0, POST)'], ['Certificate', 'CN=treasury.northwind.local, expires 2 Feb 2028, SHA-256 3f:9a:…:c1'], ['NameID format', 'emailAddress'], ['Signed requests', 'yes'], ['Issuer', 'Exprsn-CA']], 2); m.querySelector('[data-samlsave]').removeAttribute('disabled'); };
-            m.querySelector('[data-parse]').addEventListener('click', parse); parse();
-            m.querySelector('[data-samlsave]').addEventListener('click', () => { App.closeOverlay(); st.saml.push({ name: 'Treasury', entity: 'https://treasury.northwind.local/saml', acs: 'https://treasury.northwind.local/saml/acs', nameid: 'emailAddress', cert: 'expires 2 Feb 2028', status: 'active' }); st.tab = 'saml'; ctx.rerender(); ctx.toast('Service provider Treasury saved. Assertions include groups and clearance.', 'ok'); });
+            const out = m.querySelector('#saml-parsed');
+            m.querySelector('[data-xml]').addEventListener('input', () => m.querySelector('[data-samlsave]').setAttribute('disabled', ''));
+            m.querySelector('[data-parse]').addEventListener('click', async () => {
+              try {
+                const p = await App.post('/api/admin/federation/saml/parse', { xml: m.querySelector('[data-xml]').value });
+                out.innerHTML = '<div class="eyebrow">Parsed, review before saving</div>' + UI.kv([['Entity ID', '<span class="mono">' + esc(p.entityId) + '</span>'], ['ACS URLs', p.acsUrls.map((a) => '<span class="mono">' + esc(a.url) + '</span> (index ' + a.index + ', POST)').join('<br>')], ['Certificate', p.cert ? esc(p.cert.subject) + ', ' + (p.cert.expired ? 'expired ' : 'expires ') + esc(date(p.cert.validTo)) + ', SHA-256 ' + esc(p.cert.fingerprint.slice(0, 8) + '…' + p.cert.fingerprint.slice(-5)) : 'none'], ['NameID format', esc(p.nameIdFormat)], ['Signed requests', p.signedRequests ? 'yes' : 'no'], ['Issuer', p.cert ? esc(p.cert.issuer) : 'none']], 2);
+                m.querySelector('[data-samlsave]').removeAttribute('disabled');
+              } catch (err) { out.innerHTML = UI.notice('<b>Could not parse.</b> ' + esc(err.message), 'danger'); }
+            });
+            m.querySelector('[data-samlsave]').addEventListener('click', async () => {
+              const name = m.querySelector('[data-sname]').value.trim();
+              if (!name) { out.insertAdjacentHTML('afterbegin', UI.notice('Give the service provider a name.', 'warn')); return; }
+              try {
+                const sp = await App.post('/api/admin/federation/saml/sps', { name, xml: m.querySelector('[data-xml]').value });
+                App.closeOverlay(); st.tab = 'saml';
+                ctx.toast('Service provider ' + esc(sp.name) + ' saved. Assertions include groups and clearance.', 'ok');
+                reload();
+              } catch (err) { out.insertAdjacentHTML('afterbegin', UI.notice('<b>Not saved.</b> ' + esc(err.message), 'danger')); }
+            });
           }
         });
       }
       function upstreamModal() {
         ctx.modal({ title: 'Add upstream provider',
-          body: UI.notice('<b>Only on-prem identity providers can be added.</b> Cloud providers are unreachable from this network, so their discovery documents cannot be fetched.', 'info') + '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'AD FS, plant.northwind.local' })) + UI.field('Protocol', UI.select(['OIDC (we are RP)', 'SAML 2.0 (we are SP)'], 'OIDC (we are RP)')) + UI.field('Issuer or metadata', UI.input('https://', { attrs: 'data-uiss' }), 'Must resolve inside the directory zone or over a partner link.') + UI.field('Maps to tenant', UI.select(['Northwind', 'Contoso Freight'], 'Northwind')) + '</div><div id="up-check"></div>',
+          body: UI.notice('<b>Only on-prem identity providers can be added.</b> Cloud providers are unreachable from this network, so their discovery documents cannot be fetched.', 'info') + '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'AD FS, plant.example.internal', attrs: 'data-uname' })) + UI.field('Protocol', UI.select(['OIDC (we are RP)', 'SAML 2.0 (we are SP)'], 'OIDC (we are RP)', 'data-uproto')) + UI.field('Issuer or metadata', UI.input('https://', { attrs: 'data-uiss' }), 'OIDC: the issuer URL. SAML: the metadata URL, or paste the metadata XML. Must resolve to an internal address.') + UI.field('Maps to tenant', UI.select([App.me && App.me.tenant ? App.me.tenant.name : 'This tenant'], App.me && App.me.tenant ? App.me.tenant.name : 'This tenant', 'disabled')) + '<div data-oidconly class="span2 formgrid">' + UI.field('Client ID', UI.input('', { attrs: 'data-ucid', placeholder: 'registered at the provider' })) + UI.field('Client secret reference', UI.input('', { attrs: 'data-usecret', placeholder: 'env:UPSTREAM_CLIENT_SECRET' }), 'A reference resolved on the server, never the secret itself. Leave empty for a public client.') + '</div></div><div id="up-check"></div>',
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Check reachability', { attrs: 'data-ucheck' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-usave disabled' }),
           onMount(m) {
-            m.querySelector('[data-ucheck]').addEventListener('click', () => { const v = m.querySelector('[data-uiss]').value; const cloud = /login\.microsoftonline|okta\.com|accounts\.google|auth0\.com|^https:\/\/$/.test(v); m.querySelector('#up-check').innerHTML = cloud ? UI.notice('<b>Unreachable.</b> ' + esc(v || 'that address') + ' is outside every zone. Add an on-prem provider instead.', 'danger') : UI.notice('Reachable from the directory zone. Discovery document fetched through the egress proxy.', 'ok'); if (!cloud) m.querySelector('[data-usave]').removeAttribute('disabled'); });
-            m.querySelector('[data-usave]').addEventListener('click', () => { App.closeOverlay(); st.upstream.push({ name: m.querySelector('[data-uiss]').value.replace(/^https?:\/\//, ''), protocol: 'OIDC (we are RP)', reach: 'on-prem, directory zone', status: 'connected', used: 'not yet' }); ctx.rerender(); ctx.toast('Upstream provider saved.', 'ok'); });
+            const proto = () => (m.querySelector('[data-uproto]').value.indexOf('SAML') === 0 ? 'saml' : 'oidc');
+            const sync = () => { m.querySelector('[data-oidconly]').style.display = proto() === 'oidc' ? '' : 'none'; m.querySelector('[data-usave]').setAttribute('disabled', ''); };
+            m.querySelector('[data-uproto]').addEventListener('change', sync);
+            m.querySelector('[data-uiss]').addEventListener('input', () => m.querySelector('[data-usave]').setAttribute('disabled', ''));
+            sync();
+            m.querySelector('[data-ucheck]').addEventListener('click', async () => {
+              const v = m.querySelector('[data-uiss]').value.trim();
+              const out = m.querySelector('#up-check');
+              out.innerHTML = UI.notice('Checking…', 'info');
+              try {
+                const r = await App.post('/api/admin/federation/upstream/check', { protocol: proto(), source: v });
+                out.innerHTML = (r.ok ? UI.notice('Reachable: ' + esc(r.reach) + '.' + (r.parsed && r.parsed.entityId ? ' Entity ' + esc(r.parsed.entityId) + '.' : r.parsed && r.parsed.issuer ? ' Discovery document fetched.' : ''), 'ok') : UI.notice('<b>Unreachable.</b> ' + esc(v || 'that address') + ' could not be used. Add an on-prem provider instead.', 'danger')) + stepsHtml(r.steps);
+                if (r.ok) m.querySelector('[data-usave]').removeAttribute('disabled');
+              } catch (err) { out.innerHTML = UI.notice('<b>Check failed.</b> ' + esc(err.message), 'danger'); }
+            });
+            m.querySelector('[data-usave]').addEventListener('click', async () => {
+              const body = { name: m.querySelector('[data-uname]').value.trim() || m.querySelector('[data-uiss]').value.replace(/^https?:\/\//, '').slice(0, 100), protocol: proto(), source: m.querySelector('[data-uiss]').value.trim() };
+              if (body.protocol === 'oidc') { body.clientId = m.querySelector('[data-ucid]').value.trim(); const sec = m.querySelector('[data-usecret]').value.trim(); if (sec) body.clientSecret = sec; }
+              try {
+                const u = await App.post('/api/admin/federation/upstream', body);
+                App.closeOverlay(); st.tab = 'upstream';
+                ctx.toast('Upstream provider saved. Register ' + esc(u.protocol === 'oidc' ? ov.upstream.redirectUri : ov.upstream.acsUrl + ' and entity ' + u.spEntityId) + ' at the provider, and map its groups in User stores.', 'ok', 8000);
+                reload();
+              } catch (err) { m.querySelector('#up-check').innerHTML = UI.notice('<b>Not saved.</b> ' + esc(err.message), 'danger'); }
+            });
           }
         });
       }
       function testLogin() {
         ctx.modal({ title: 'Test a login',
-          body: '<div class="formgrid">' + UI.field('Method', UI.select(['Kerberos SPNEGO', 'LDAP password and TOTP', 'Device code'], 'Kerberos SPNEGO', 'data-tm')) + UI.field('As', UI.input('mokafor')) + '</div><div id="tl-out">' + UI.timeline([{ title: 'Ready', text: 'Runs the real flow against the identity service with a test audience. No session is created.' }]) + '</div>',
+          body: '<div class="formgrid">' + UI.field('Method', UI.select(['Kerberos SPNEGO', 'LDAP password and TOTP', 'Device code'], 'Kerberos SPNEGO', 'data-tm')) + UI.field('As', UI.input(App.me ? App.me.user.username : '', { attrs: 'data-tas' })) + '</div><div id="tl-out">' + UI.timeline([{ title: 'Ready', text: 'Runs the real pieces of the flow against the identity service with a test audience. No session is created.' }]) + '</div>',
           actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Run', { kind: 'primary', attrs: 'data-tlrun' }),
-          onMount(m) { m.querySelector('[data-tlrun]').addEventListener('click', () => { const method = m.querySelector('[data-tm]').value; const steps = method === 'Kerberos SPNEGO' ? [['401 Negotiate returned', 'ok'], ['SPNEGO token for HTTP/ai.northwind.local validated against the KDC', 'ok'], ['LDAP lookup: 6 groups, clearance confidential', 'ok'], ['Authorization code issued, PKCE verified', 'ok'], ['ID, access and refresh tokens minted with k-2026-07', 'ok']] : method === 'Device code' ? [['Device code WDJB-MJHT issued, expires in 15 min', 'ok'], ['Waiting for the user to approve at /device', 'warn']] : [['LDAPS bind as uid=mokafor,ou=people,ou=northwind', 'ok'], ['TOTP verified, skew 0 steps', 'ok'], ['LDAP lookup: 6 groups, clearance confidential', 'ok'], ['Tokens minted with k-2026-07', 'ok']]; let i = 0; const out = m.querySelector('#tl-out'); const draw = () => { out.innerHTML = UI.timeline(steps.slice(0, i + 1).map((s, j) => ({ title: s[0], tone: j < i ? s[1] : (j === steps.length - 1 ? s[1] : 'accent'), meta: j < i || j === steps.length - 1 ? (j * 38 + 42) + ' ms' : 'running' }))); if (++i < steps.length) setTimeout(draw, 350); }; draw(); }); }
+          onMount(m) {
+            m.querySelector('[data-tlrun]').addEventListener('click', async () => {
+              const method = { 'Kerberos SPNEGO': 'kerberos', 'LDAP password and TOTP': 'password', 'Device code': 'device' }[m.querySelector('[data-tm]').value];
+              const out = m.querySelector('#tl-out');
+              out.innerHTML = UI.timeline([{ title: 'Running', tone: 'accent', meta: 'running' }]);
+              try {
+                const r = await App.post('/api/admin/federation/test-login', { method, username: m.querySelector('[data-tas]').value.trim() });
+                out.innerHTML = UI.timeline(r.steps.map((s, i) => ({ title: esc(s.title), text: s.detail ? esc(s.detail) : '', meta: s.ms != null ? s.ms + ' ms' : '', tone: !s.ok ? 'danger' : r.pending && i === r.steps.length - 1 ? 'warn' : 'ok' })));
+              } catch (err) { out.innerHTML = UI.notice('<b>Could not run.</b> ' + esc(err.message), 'danger'); }
+            });
+          }
         });
       }
       if (st.openCreate) { st.openCreate = false; setTimeout(createClient, 50); }
@@ -170,22 +246,49 @@
       if (st.openUpstream) { st.openUpstream = false; setTimeout(upstreamModal, 50); }
 
       // ----- handlers -----
-      ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', 'tr[data-client]', (e, t) => { st.client = t.dataset.client; ctx.rerender(); });
+      ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; delete ctx.params.tab; ctx.rerender(); });
+      ctx.on('click', 'tr[data-client]', (e, t) => { st.client = t.dataset.client; delete ctx.params.client; ctx.rerender(); });
       ctx.on('input', '[data-q]', (e, t) => { st.q = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-q]'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } });
       ctx.on('click', '[data-create]', createClient);
       ctx.on('click', '[data-rotatekey]', rotateKey);
       ctx.on('click', '[data-saml]', samlImport);
       ctx.on('click', '[data-upstream]', upstreamModal);
       ctx.on('click', '[data-testlogin]', testLogin);
-      ctx.on('click', '[data-samlenable]', (e, t) => { const s = st.saml[+t.dataset.samlenable]; ctx.confirm({ title: 'Enable ' + esc(s.name), tone: 'info', body: '<p class="fg2" style="margin:0">Its signing certificate expired on 1 Aug 2026. Upload fresh metadata first, or enable with signed requests off.</p>', ok: 'Enable anyway' }).then((ok) => { if (!ok) return; s.status = 'active'; s.cert = 'expired 1 Aug 2026, unsigned requests'; ctx.rerender(); ctx.toast(esc(s.name) + ' enabled. Audit event written.', 'warn'); }); });
-      ctx.on('click', '[data-copysecret]', () => { st.revealed[client.id] = '19 Sep 2026, 13:51'; ctx.rerender(); ctx.toast('Secret copied. It is no longer shown here.', 'ok'); });
-      ctx.on('click', '[data-rotatesecret]', () => ctx.confirm({ title: 'Rotate secret', tag: 'breaks running jobs', tone: 'danger', body: '<p class="fg2" style="margin:0">The current secret stops working immediately. Update ' + esc(client.name) + ' with the new one, which is shown once.</p>', kv: [['Client', esc(client.name)], ['Last used', esc(client.used)]], ok: 'Rotate' }).then((ok) => { if (!ok) return; client.secret = 'xs_live_' + Math.random().toString(36).slice(2, 12) + '...shown-once'; client.fresh = true; delete st.revealed[client.id]; ctx.rerender(); ctx.toast('Secret rotated. Copy it now.', 'ok'); }));
-      ctx.on('click', '[data-pkce]', (e, t) => { if (t.hasAttribute('data-na')) return; client.pkce = !client.pkce; ctx.toast('PKCE ' + (client.pkce ? 'required' : 'optional') + ' for ' + esc(client.name) + '.'); });
-      ctx.on('click', '[data-disable]', () => ctx.confirm({ title: 'Disable ' + esc(client.name), tag: 'revokes tokens', tone: 'danger', body: '<p class="fg2" style="margin:0">Every access and refresh token for this client is revoked. Users see a sign-in prompt on their next request.</p>', ok: 'Disable' }).then((ok) => { if (!ok) return; client.status = 'disabled'; ctx.rerender(); ctx.toast(esc(client.name) + ' disabled. Tokens revoked; audit event written.', 'warn'); }));
-      ctx.on('click', '[data-edit]', () => ctx.modal({ title: 'Edit ' + esc(client.name), body: '<div class="formgrid">' + UI.field('Access token lifetime', UI.select(['5 min', '10 min', '30 min'], client.lifetime)) + UI.field('Allowed models', UI.input(client.models)) + UI.field('Scopes', UI.input(client.scopes, { attrs: 'data-escopes' })) + UI.field('Redirect URIs', UI.textarea(client.redirects.join('\n'), { rows: 2 })) + '</div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-esave' }), onMount(m) { m.querySelector('[data-esave]').addEventListener('click', () => { client.scopes = m.querySelector('[data-escopes]').value; App.closeOverlay(); ctx.rerender(); ctx.toast('Client saved. Existing tokens keep their scopes until they expire.', 'ok'); }); } }));
-      ctx.on('click', '[data-revoke]', (e, t) => { const u = t.dataset.revoke; ctx.confirm({ title: 'Revoke session', tag: 'signs out', tone: 'danger', body: '<p class="fg2" style="margin:0">Ends the session and its refresh tokens now.</p>', kv: [['User', esc(u)]], ok: 'Revoke' }).then((ok) => { if (!ok) return; st.revoked[u] = true; ctx.rerender(); ctx.toast('Session for ' + esc(u) + ' revoked.', 'ok'); }); });
-      ctx.on('click', '[data-gotenants]', () => ctx.navigate('tenants', { workspace: 'finance-ops', tab: client.type === 'service account' ? 'services' : 'sessions' }));
+      ctx.on('click', '[data-idcopy]', (e, t) => copy(t.dataset.idcopy, t.dataset.what || 'Value', ctx));
+      ctx.on('click', '[data-idpmeta]', () => window.open(ov.idp.metadataUrl, '_blank', 'noopener'));
+      ctx.on('click', '[data-samlenable]', (e, t) => {
+        const s = st.sps.find((x) => x.id === t.dataset.samlenable);
+        if (!s) return;
+        const expired = !s.cert || s.cert.expired;
+        ctx.confirm({ title: 'Enable ' + esc(s.name), tone: 'info', body: '<p class="fg2" style="margin:0">' + (expired && s.signedRequests ? 'Its signing certificate ' + (s.cert ? 'expired on ' + esc(date(s.cert.validTo)) : 'is missing') + '. Upload fresh metadata first, or enable with signed requests off.' : 'Assertions are issued to it again from the next sign-in.') + '</p>', ok: expired && s.signedRequests ? 'Enable anyway' : 'Enable' })
+          .then((ok) => { if (!ok) return; act(() => App.patch('/api/admin/federation/saml/sps/' + encodeURIComponent(s.id), expired && s.signedRequests ? { status: 'active', signedRequests: false } : { status: 'active' }), esc(s.name) + ' enabled. Audit event written.', expired ? 'warn' : 'ok'); });
+      });
+      ctx.on('click', '[data-consent]', (e, t) => { const k = t.dataset.consent; const patch = {}; patch[k] = !ov.settings.consent[k]; act(() => App.patch('/api/admin/federation/settings', { consent: patch }), 'Consent policy saved. Audit event written.'); });
+      if (client) {
+        const base = '/api/admin/federation/oidc/clients/' + encodeURIComponent(client.id);
+        ctx.on('click', '[data-copysecret]', () => { const sec = st.fresh[client.id]; if (!sec) return; const done = () => { delete st.fresh[client.id]; ctx.rerender(); ctx.toast('Secret copied. It is no longer shown here.', 'ok'); }; if (navigator.clipboard) navigator.clipboard.writeText(sec).then(done, () => ctx.toast('Copy failed; select the secret instead.', 'warn')); else ctx.toast('Copy is not available here; select the secret instead.', 'warn'); });
+        ctx.on('click', '[data-rotatesecret]', () => ctx.confirm({ title: 'Rotate secret', tag: 'breaks running jobs', tone: 'danger', body: '<p class="fg2" style="margin:0">The current secret stops working immediately. Update ' + esc(client.name) + ' with the new one, which is shown once.</p>', kv: [['Client', esc(client.name)], ['Last used', esc(when(client.lastUsedAt))]], ok: 'Rotate' }).then((ok) => { if (!ok) return; act(async () => { const r = await App.post(base + '/secret'); st.fresh[client.id] = r.secret; return r; }, 'Secret rotated. Copy it now.'); }));
+        ctx.on('click', '[data-pkce]', (e, t) => { if (t.hasAttribute('data-na')) { ctx.toast(client.type === 'public' ? 'Public clients always require PKCE.' : 'PKCE does not apply to client credentials.'); return; } act(() => App.patch(base, { pkceRequired: !client.pkceRequired }), 'PKCE ' + (client.pkceRequired ? 'optional' : 'required') + ' for ' + esc(client.name) + '.'); });
+        ctx.on('click', '[data-disable]', () => ctx.confirm({ title: 'Disable ' + esc(client.name), tag: 'revokes tokens', tone: 'danger', body: '<p class="fg2" style="margin:0">Every access and refresh token for this client is revoked. Users see a sign-in prompt on their next request.</p>', ok: 'Disable' }).then((ok) => { if (!ok) return; act(() => App.post(base + '/disable'), (r) => esc(client.name) + ' disabled. ' + r.revoked + ' refresh token' + (r.revoked === 1 ? '' : 's') + ' revoked; audit event written.', 'warn'); }));
+        ctx.on('click', '[data-enable]', () => ctx.confirm({ title: 'Enable ' + esc(client.name), tone: 'info', body: '<p class="fg2" style="margin:0">The client can request tokens again. Tokens revoked when it was disabled stay revoked.</p>', ok: 'Enable' }).then((ok) => { if (!ok) return; act(() => App.post(base + '/enable'), esc(client.name) + ' enabled. Audit event written.'); }));
+        ctx.on('click', '[data-edit]', () => ctx.modal({ title: 'Edit ' + esc(client.name),
+          body: '<div class="formgrid">' + UI.field('Access token lifetime', UI.select(['5 min', '10 min', '30 min'], Math.round(client.accessTtl / 60) + ' min', 'data-elife')) + UI.field('Allowed models', UI.input(client.models || '', { attrs: 'data-emodels', placeholder: 'per profile' })) + UI.field('Scopes', UI.input(client.scopes.join(' '), { attrs: 'data-escopes' })) + UI.field('Redirect URIs', UI.textarea(client.redirectUris.join('\n'), { rows: 2, attrs: 'data-eredir' })) + '</div><div data-eerr></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-esave' }),
+          onMount(m) {
+            m.querySelector('[data-esave]').addEventListener('click', async () => {
+              const body = { accessTtl: parseInt(m.querySelector('[data-elife]').value, 10) * 60, models: m.querySelector('[data-emodels]').value.trim() || null, scopes: m.querySelector('[data-escopes]').value.split(/\s+/).filter(Boolean), redirectUris: m.querySelector('[data-eredir]').value.split('\n').map((s) => s.trim()).filter(Boolean) };
+              try { await App.patch(base, body); App.closeOverlay(); ctx.toast('Client saved. Existing tokens keep their scopes until they expire.', 'ok'); reload(); } catch (err) { m.querySelector('[data-eerr]').innerHTML = UI.notice('<b>Not saved.</b> ' + esc(err.message) + (err.problem && err.problem.errors ? ' ' + esc(err.problem.errors.map((x) => x.path + ': ' + x.message).join('; ')) : ''), 'danger'); }
+            });
+          } }));
+      }
+      ctx.on('click', '[data-revoke]', (e, t) => {
+        const s = st.sessions[+t.dataset.revoke];
+        if (!s) return;
+        ctx.confirm({ title: s.kind === 'service' ? 'Disable service client' : 'Revoke session', tag: 'signs out', tone: 'danger', body: '<p class="fg2" style="margin:0">' + (s.kind === 'service' ? 'Service tokens are access tokens only; disabling the client ends them now. Enable it again from the client list.' : 'Ends the session and its refresh tokens now.') + '</p>', kv: [['User', esc(s.user)], ['Client', esc(s.client)]], ok: 'Revoke' })
+          .then((ok) => { if (!ok) return; act(() => App.post('/api/admin/federation/sessions/revoke', { kind: s.kind, id: s.id }), 'Session for ' + esc(s.user) + ' revoked.'); });
+      });
+      ctx.on('click', '[data-gotenants]', () => ctx.navigate('tenants', { tab: 'sessions' }));
+      ctx.on('click', '[data-gousers]', () => ctx.navigate('directories', { tab: 'users' }));
       ctx.on('click', '[data-gozones]', () => ctx.navigate('zones', { zone: 'directory' }));
       ctx.on('click', '[data-goplatform]', () => ctx.navigate('platform', { tab: 'secrets' }));
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));

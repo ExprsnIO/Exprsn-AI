@@ -40,7 +40,10 @@ export interface IdentityProvider {
   close(): Promise<void>;
 }
 
-export const PROVIDER_KINDS = ['local', 'ldap', 'sql'] as const;
+export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml'] as const;
+/** Upstream identity providers: sign-in is redirected to them; they take no passwords and have no directory to sync. */
+export const FEDERATED_KINDS = ['oidc', 'saml'] as const;
+export const isFederatedKind = (k: string): k is 'oidc' | 'saml' => k === 'oidc' || k === 'saml';
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 /** A secret is referenced, never stored: `env:NAME` or `file:/absolute/path`. */
@@ -108,11 +111,48 @@ export const sqlConfigSchema = z
   })
   .strict();
 
+const claimName = z.string().trim().min(1).max(200);
+
+/** An upstream OpenID Connect provider (we are the relying party). */
+export const oidcConfigSchema = z
+  .object({
+    ...common,
+    issuer: z.url().refine((u) => /^https?:\/\//.test(u), 'http:// or https:// issuer'),
+    clientId: z.string().trim().min(1).max(200),
+    /** Absent for a public client (PKCE only). */
+    clientSecret: secretRef.optional(),
+    scopes: z.string().trim().max(500).default('openid profile email'),
+    usernameClaim: claimName.default('preferred_username'),
+    displayNameClaim: claimName.default('name'),
+    emailClaim: claimName.default('email'),
+    groupsClaim: claimName.default('groups'),
+    algs: z.array(z.enum(['RS256', 'ES256'])).min(1).default(['RS256', 'ES256'])
+  })
+  .strict();
+
+/** An upstream SAML 2.0 identity provider (we are the service provider). */
+export const samlConfigSchema = z
+  .object({
+    ...common,
+    entityId: z.string().trim().min(1).max(1000),
+    ssoUrl: z.url(),
+    /** Base64 DER signing certificates from the IdP metadata; assertions must be signed by one of them. */
+    certificates: z.array(z.string().regex(/^[A-Za-z0-9+/=]+$/, 'Base64 DER certificate')).min(1).max(4),
+    /** Empty means the NameID. */
+    usernameAttribute: z.string().max(300).default(''),
+    displayNameAttribute: z.string().max(300).default('displayName'),
+    emailAttribute: z.string().max(300).default('email'),
+    groupsAttribute: z.string().max(300).default('groups')
+  })
+  .strict();
+
 export type LocalConfig = z.infer<typeof localConfigSchema>;
+export type OidcUpstreamConfig = z.infer<typeof oidcConfigSchema>;
+export type SamlUpstreamConfig = z.infer<typeof samlConfigSchema>;
 export type LdapConfig = z.infer<typeof ldapConfigSchema>;
 export type SqlConfig = z.infer<typeof sqlConfigSchema>;
 
-export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig {
+export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig {
   switch (kind) {
     case 'local':
       return localConfigSchema.parse(config ?? {});
@@ -120,6 +160,10 @@ export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalC
       return ldapConfigSchema.parse(config);
     case 'sql':
       return sqlConfigSchema.parse(config);
+    case 'oidc':
+      return oidcConfigSchema.parse(config);
+    case 'saml':
+      return samlConfigSchema.parse(config);
   }
 }
 

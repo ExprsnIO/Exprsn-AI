@@ -11,16 +11,19 @@ has three parts:
 | --- | --- |
 | `server/` | The application server (npm workspace `@exprsn-ai/server`): Node.js 22, TypeScript strict, Express 5, Socket.io 4, Knex |
 | `web/` | The console the server serves: the prototype's screen modules, wired to the API screen by screen |
+| `e2e/` | Playwright suite across every console screen (its own package, not a workspace member) |
 | `design/prototype/` | The clickable design prototype. It is the specification for behaviour and copy, with example data only |
-| `deploy/` | Dockerfile, Compose (production, development, GPU), bare-metal systemd unit and installer, example identity YAML |
-| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md` |
+| `deploy/` | Dockerfile, Compose (production, development, GPU), Helm chart with NetworkPolicies, bare-metal systemd unit and installer, example identity YAML |
+| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `asvs.md`, `accessibility.md`, `loadtest.md`, `runbooks/` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
 
-Sprints 0 to 8 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
+Sprints 0 to 9 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
 models, pools and profiles; chat, compare and metering; guardrails, classifiers and flags; knowledge, memory and
-connections; registry, MCP servers, agent runs and scripts; workflows, media and images). Every console screen is live
-except **Training**, **Zones**, **Platform** and **Identity**, which show a "Prototype data" banner naming Sprint 9. Check
-`Sprints.md` before starting work so you build the next sprint's scope, not a later one.
+connections; registry, MCP servers, agent runs and scripts; workflows, media and images; training, zones, platform
+operations and federation), and Sprint 10 (hardening) is at release candidate `1.0.0-rc.1`: Helm chart, supply-chain
+CI, streaming load test, runbooks, the ASVS L2 review (`docs/asvs.md`), AA/AAA accessibility modes
+(`docs/accessibility.md`) and the Playwright suite in `e2e/`. Every console screen is live. Check `Sprints.md` and the
+known gaps in `docs/security.md` before starting work.
 
 ## Commands
 
@@ -34,10 +37,14 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate>
+npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate | backup:create | backup:restore-drill>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
 for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
+npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
+helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
+cd e2e && npm ci && CHROME=/opt/pw-browsers/chromium npx playwright test   # console end-to-end suite across every screen
+                                           # (starts its own server on SQLite with the test fakes; see e2e/README.md)
 ```
 
 Local setup: `cp server/.env.example server/.env`, fill `SESSION_SECRET` (`openssl rand -hex 32`) and `DATA_KEY`
@@ -46,7 +53,9 @@ MySQL user stores is `docker compose -f deploy/docker/compose.dev.yml up --build
 that file).
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, build and the console parse check; integration tests
-against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; and a container build that must answer `/readyz`.
+against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; a container build that must answer `/readyz`; npm audit,
+CycloneDX SBOMs and a Trivy image scan; Helm lint and render; the in-process streaming load test; and the Playwright
+console suite.
 
 Tests never need a real Ollama: `server/test/fake-ollama.ts` speaks enough of its API (version, tags, ps, show, pull,
 delete, generate, streamed chat with thinking and tool calls) and is also handy for driving the console by hand
@@ -70,7 +79,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   **`services.ts`** builds the `Services` object (config, db, logger, metrics, bus, KMS and data keys, blob store,
   jobs, notifications, audit with checkpoints, exports and SIEM, repos, identity chain, sessions, API keys, MFA,
   directory sync, quotas, offboarding, gateway, attachments, calculator, chat, guardrails, vectors, connections,
-  knowledge, memory, registry, MCP, tools, scripts, agents, workflows, media, images) passed to every route factory.
+  knowledge, memory, registry, MCP, tools, scripts, agents, workflows, media, images, and the Sprint 9 services
+  training, zones, ops and federation, which read their collaborators lazily through `s`) passed to every route factory.
 - **`config/`**: zod-validated environment. Secrets (`SESSION_SECRET`, `DATA_KEY`, `DATABASE_URL`, `METRICS_TOKEN`,
   `OPENBAO_TOKEN`, `REDIS_URL`, `SMTP_URL`, `S3_SECRET_ACCESS_KEY`, `SIEM_TOKEN`) may be given as `<NAME>_FILE`; empty
   variables count as unset. Production refuses non-HTTPS cookies.
@@ -85,7 +95,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `admin/tenants.ts` (tenants, workspaces, members, quotas, offboarding, policy explainer), `admin/usage.ts`,
   `admin/gateway.ts` (pools, instances, placements, models, profiles), `guardrails.ts` (rule sets, classifiers, flags),
   `knowledge.ts`, `memory.ts`, `admin/connections.ts`, `admin/registry.ts`, `admin/mcp.ts`, `agents.ts`, `scripts.ts`,
-  `workflows.ts`, `media.ts`, `images.ts`, `health.ts`. The full list is `docs/api.md`.
+  `workflows.ts`, `media.ts`, `images.ts`, `training.ts`, `admin/zones.ts`, `admin/platform.ts` (plus the public ACME
+  http-01 route), `admin/federation.ts`, `federation-public.ts` (OIDC, SAML, device and Kerberos endpoints mounted at
+  the root, outside `/api`), `health.ts`. The full list is `docs/api.md`.
 - **`identity/`**: the per-tenant store chain, adapters in `providers/`, JIT provisioning (roles, clearance and
   workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys.
 - **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
@@ -116,6 +128,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
   step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg), **`images/`** (`ImageBackend` for ComfyUI
   and diffusers, safety classifier, signed provenance in the PNG).
+- **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a
+  draft model; `TrainerBackend` over HTTP to the Python worker), **`zones/`** (versioned zone specs with dual control,
+  ceilings enforced through `gateway.zoneCeiling`, NetworkPolicy/Compose/nftables rendering), **`ops/`** (signed import
+  bundles, mirrors, the ACME client, backups and restore drills), **`federation/`** (OIDC provider with ES256 keys,
+  SAML IdP with XML-DSig, upstream OIDC/SAML stores, device flow, `KerberosVerifier`; OAuth access tokens are accepted
+  by `authenticate`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -126,7 +144,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - Tests live in `server/test/` (`helpers.ts` builds an app on in-memory SQLite with a temporary blob directory and
   signs users in, including TOTP; `fake-ollama.ts` also answers embeddings and guard-model verdicts; `fake-mcp.ts`,
   `fake-runner.ts` (scripts) and `sprint8-fakes.ts` (media runner, image backend, safety classifier) stand in for the
-  other external workers; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents);
+  other external workers; `fake-trainer.ts`, `fake-acme.ts` and `fake-idp.ts` stand in for the training worker, an ACME directory and an
+  upstream identity provider; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents);
   `server/test/integration/` runs the stores and platform paths against real servers.
 
 ### Rules for server code (from `docs/PLAN.md`)
@@ -154,6 +173,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   bell and the workspace switcher (`App.switchWorkspace`), and the `NAV` entries' `perm`, `live` and `sprint` fields.
   A screen without `live: true` (on its `NAV` entry or its `App.register` definition) gets the "Prototype data"
   banner.
+- Accessibility: `App.setA11y` and the `:root[data-a11y="aaa"]` tokens in `app.css` give the Enhanced (AAA) mode;
+  `UI.field` labels its control and dialogs are `inert`-backed with focus return. Keep new markup keyboard-operable and
+  labelled (`docs/accessibility.md`).
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
   streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.

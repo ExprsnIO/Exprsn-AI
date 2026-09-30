@@ -28,6 +28,38 @@ jobs:
       - name: Console scripts parse
         run: for f in web/js/app.js web/js/screens/*.js; do node --check "$f"; done
 
+  e2e:
+    name: Console end-to-end (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            e2e/package-lock.json
+      # The suite starts the real server in-process (e2e/server.ts through tsx), so it needs the workspace's modules.
+      - run: npm ci
+      - name: Install the suite and Chromium
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run
+        working-directory: e2e
+        run: npx playwright test
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 14
+
   integration:
     name: Integration against PostgreSQL, MySQL, OpenLDAP and Redis
     runs-on: ubuntu-latest
@@ -84,3 +116,117 @@ jobs:
             -e SESSION_SECRET="$(openssl rand -hex 32)" -e DATA_KEY="$(openssl rand -base64 32)" exprsn-ai:ci
           for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 1; done
           docker logs app; exit 1
+
+  supply-chain:
+    name: Dependency audit and SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      # Production dependencies only; high and critical advisories fail the build.
+      - name: npm audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: CycloneDX SBOM of the npm workspace
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file sbom.cdx.json
+          node -e "const s=require('./sbom.cdx.json'); console.log('CycloneDX', s.specVersion, (s.components||[]).length, 'top-level components')"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom-npm
+          path: sbom.cdx.json
+          retention-days: 90
+
+  image-scan:
+    name: Container image scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/docker/Dockerfile -t exprsn-ai:scan .
+      # Fixed CRITICAL and HIGH findings in the OS packages or the bundled npm modules fail the build.
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: exprsn-ai:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: CycloneDX SBOM of the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        if: always()
+        with:
+          image-ref: exprsn-ai:scan
+          scan-type: image
+          format: cyclonedx
+          output: sbom-image.cdx.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sbom-image
+          path: sbom-image.cdx.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  helm:
+    name: Helm chart lint and render
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: v0.6.7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v5
+        with: { version: v3.16.4 }
+      - name: Install kubeconform
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz -C "$RUNNER_TEMP/bin" kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Lint, render and validate every CI values file
+        run: |
+          chart=deploy/helm/exprsn-ai
+          for f in "$chart"/ci/*.yaml; do
+            echo "::group::$f"
+            helm lint "$chart" -f "$f" --strict
+            helm template ci "$chart" -f "$f" | kubeconform -strict -summary -kubernetes-version 1.30.0 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            echo "::endgroup::"
+          done
+      - name: Refuses unsafe values
+        run: |
+          chart=deploy/helm/exprsn-ai
+          # Several replicas without Redis, SQLite, and a plain http:// address in production must not render.
+          for bad in secrets.REDIS_URL.name= config.database.client=sqlite config.publicUrl=http://ai.example.internal; do
+            if helm template ci "$chart" -f "$chart/ci/default-values.yaml" --set "$bad" >/dev/null 2>&1; then
+              echo "The chart rendered with --set $bad"; exit 1
+            fi
+          done
+
+  loadtest:
+    name: Streaming load test (in-process)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Lint the load test
+        working-directory: server
+        run: npx eslint loadtest
+      # 50 users on 64 fake slots; the thresholds are looser than the 1.0 targets in docs/loadtest.md because shared
+      # runners vary. The summary is kept as an artifact for comparison between runs.
+      - name: Run
+        working-directory: server
+        shell: bash # -eo pipefail: the load test's exit code survives the tee
+        run: |
+          npx tsx loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instances 4 \
+            --max-error-rate 0 --max-p95-ttft-ms 500 --max-p99-ttft-ms 1000 --json | tee loadtest-summary.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: loadtest-summary
+          path: server/loadtest-summary.json
+          if-no-files-found: ignore

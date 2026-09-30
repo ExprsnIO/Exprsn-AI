@@ -43,7 +43,7 @@
     label(level, opts) {
       level = String(level || 'internal').toLowerCase(); const n = LEVELS[level] || 2; opts = opts || {};
       let bars = ''; for (let i = 1; i <= 4; i++) bars += '<i class="' + (i <= n ? 'on' : '') + '"></i>';
-      return '<span class="label ' + level + (opts.sm ? ' sm' : '') + '" title="Classification: ' + level + '"><span class="bars">' + bars + '</span>' + level + '</span>';
+      return '<span class="label ' + level + (opts.sm ? ' sm' : '') + '" title="Classification: ' + level + '"><span class="bars" aria-hidden="true">' + bars + '</span>' + level + '</span>';
     },
     pill(text, kind) {
       if (!kind) {
@@ -55,7 +55,7 @@
       }
       return '<span class="pill ' + (kind || '') + '">' + esc(text) + '</span>';
     },
-    chip(text, on, attrs) { return '<button type="button" class="chip' + (on ? ' on' : '') + '" ' + (attrs || '') + '>' + text + '</button>'; },
+    chip(text, on, attrs) { return '<button type="button" class="chip' + (on ? ' on' : '') + '" aria-pressed="' + (on ? 'true' : 'false') + '" ' + (attrs || '') + '>' + text + '</button>'; },
     btn(label, opts) {
       opts = opts || {};
       const cls = ['btn', opts.kind || '', opts.size || '', opts.cls || ''].join(' ').trim();
@@ -74,7 +74,8 @@
     },
     table(cols, rows, opts) {
       opts = opts || {};
-      const th = cols.map((c) => { const o = typeof c === 'string' ? { label: c } : c; return '<th' + (o.right ? ' class="r"' : '') + (o.width ? ' style="width:' + o.width + '"' : '') + '>' + esc(o.label) + '</th>'; }).join('');
+      // An empty header (an actions column) still gets a name for screen readers.
+      const th = cols.map((c) => { const o = typeof c === 'string' ? { label: c } : c; return '<th scope="col"' + (o.right ? ' class="r"' : '') + (o.width ? ' style="width:' + o.width + '"' : '') + '>' + (o.label ? esc(o.label) : '<span class="sr">' + esc(o.srLabel || 'Actions') + '</span>') + '</th>'; }).join('');
       const tr = rows.map((r, i) => {
         const cells = Array.isArray(r) ? r : r.cells;
         const attrs = Array.isArray(r) ? '' : (r.attrs || '');
@@ -85,25 +86,37 @@
       return '<div class="tablewrap ' + (opts.cls || '') + '" ' + (opts.attrs || '') + '><table class="dt" style="' + (opts.minWidth ? 'min-width:' + opts.minWidth : '') + '"><thead><tr>' + th + '</tr></thead><tbody>' + tr + empty + '</tbody></table></div>';
     },
     tabs(items, active, attrs) {
-      return '<nav class="tabs" aria-label="Sections" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; return '<button type="button" data-tab="' + esc(o.id) + '" class="' + (o.id === active ? 'active' : '') + '">' + esc(o.label) + (o.count != null ? ' <span class="count">' + o.count + '</span>' : '') + '</button>'; }).join('') + '</nav>';
+      return '<nav class="tabs" aria-label="Sections" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; return '<button type="button" data-tab="' + esc(o.id) + '" class="' + (o.id === active ? 'active' : '') + '"' + (o.id === active ? ' aria-current="true"' : '') + '>' + esc(o.label) + (o.count != null ? ' <span class="count">' + o.count + '</span>' : '') + '</button>'; }).join('') + '</nav>';
     },
     seg(items, active, attrs) {
-      return '<div class="seg" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; return '<button type="button" data-seg="' + esc(o.id) + '" class="' + (o.id === active ? 'active' : '') + '">' + esc(o.label) + '</button>'; }).join('') + '</div>';
+      return '<div class="seg" role="group" ' + (attrs || '') + '>' + items.map((t) => { const o = typeof t === 'string' ? { id: t, label: t } : t; return '<button type="button" data-seg="' + esc(o.id) + '" class="' + (o.id === active ? 'active' : '') + '" aria-pressed="' + (o.id === active ? 'true' : 'false') + '">' + esc(o.label) + '</button>'; }).join('') + '</div>';
     },
-    field(label, control, hint) { const id = uid('f'); return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' + control.replace('<input', '<input id="' + id + '"').replace('<select', '<select id="' + id + '"').replace('<textarea', '<textarea id="' + id + '"') + (hint ? '<div class="hint">' + hint + '</div>' : '') + '</div>'; },
+    // The label points at the first form control in `control` (reusing its id if it has one) and the hint describes it.
+    // A control that is not a form element (a toggle, a group of checks) is labelled as a group instead.
+    field(label, control, hint) {
+      const hid = hint ? uid('fh') : null;
+      const hintHtml = hint ? '<div class="hint" id="' + hid + '">' + hint + '</div>' : '';
+      const m = /<(input|select|textarea)\b([^>]*)>/i.exec(control);
+      if (!m) { const gid = uid('fl'); return '<div class="field" role="group" aria-labelledby="' + gid + '"' + (hid ? ' aria-describedby="' + hid + '"' : '') + '><span class="fl" id="' + gid + '">' + esc(label) + '</span>' + control + hintHtml + '</div>'; }
+      const own = /\sid="([^"]+)"/.exec(m[2]);
+      const id = own ? own[1] : uid('f');
+      const add = (own ? '' : ' id="' + id + '"') + (hid && !/aria-describedby=/.test(m[2]) ? ' aria-describedby="' + hid + '"' : '');
+      const ctl = control.slice(0, m.index) + '<' + m[1] + add + control.slice(m.index + 1 + m[1].length);
+      return '<div class="field"><label for="' + esc(id) + '">' + esc(label) + '</label>' + ctl + hintHtml + '</div>';
+    },
     input(value, opts) { opts = opts || {}; return '<input class="input" type="' + (opts.type || 'text') + '" value="' + esc(value) + '" placeholder="' + esc(opts.placeholder || '') + '" ' + (opts.attrs || '') + (opts.readonly ? ' readonly' : '') + '>'; },
     textarea(value, opts) { opts = opts || {}; return '<textarea class="textarea" placeholder="' + esc(opts.placeholder || '') + '" ' + (opts.attrs || '') + ' style="' + (opts.rows ? 'min-height:' + (opts.rows * 20 + 16) + 'px' : '') + '">' + esc(value) + '</textarea>'; },
     select(options, value, attrs) { return '<select class="select" ' + (attrs || '') + '>' + options.map((o) => { const v = typeof o === 'string' ? o : o.value, l = typeof o === 'string' ? o : o.label; return '<option value="' + esc(v) + '"' + (v === value ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('') + '</select>'; },
     toggle(label, on, attrs) { return '<button type="button" class="toggle' + (on ? ' on' : '') + '" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" ' + (attrs || '') + '><span class="sw"></span><span>' + esc(label) + '</span></button>'; },
     check(label, on, attrs) { return '<label class="check"><input type="checkbox"' + (on ? ' checked' : '') + ' ' + (attrs || '') + '><span>' + esc(label) + '</span></label>'; },
     search(placeholder, attrs, value) { return '<div class="search">' + icon('search', 14) + '<input type="search" placeholder="' + esc(placeholder) + '" value="' + esc(value || '') + '" aria-label="' + esc(placeholder) + '" ' + (attrs || '') + '></div>'; },
-    meter(label, valueText, pct, tone) { return '<div class="meter ' + (tone || '') + '"><div class="mrow"><span>' + esc(label) + '</span><span class="num">' + esc(valueText) + '</span></div><div class="track"><div class="fill" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></div></div></div>'; },
+    meter(label, valueText, pct, tone) { return '<div class="meter ' + (tone || '') + '"><div class="mrow"><span>' + esc(label) + '</span><span class="num">' + esc(valueText) + '</span></div><div class="track" aria-hidden="true"><div class="fill" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></div></div></div>'; },
     notice(text, kind, action) { return '<div class="notice ' + (kind || 'info') + '">' + icon(kind === 'danger' || kind === 'warn' ? 'warn' : 'info', 15) + '<span class="grow">' + text + '</span>' + (action || '') + '</div>'; },
     empty(title, text, action) { return '<div class="empty"><h3>' + esc(title) + '</h3><p>' + esc(text) + '</p>' + (action ? '<div>' + action + '</div>' : '') + '</div>'; },
     // trace === false omits the trace row (for problems that did not come from a request).
     problem(title, text, trace) { return '<div class="problem"><div class="ptitle">' + esc(title) + '</div><div class="ptext">' + esc(text) + '</div>' + (trace === false ? '</div>' : '<div class="trace"><span>Trace</span><span class="mono">' + esc(trace || '4bf92f3577b34da6a3ce929d0e0e4736') + '</span>' + UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + esc(trace || '4bf92f3577b34da6a3ce929d0e0e4736') + '"' }) + '</div></div>'); },
     ctx(title, body, level) { return '<div class="ctxblock"><div class="chead"><span><span class="eyebrow">Context data</span>' + esc(title) + '</span>' + (level ? UI.label(level, { sm: true }) : '') + '</div><pre>' + esc(body) + '</pre></div>'; },
-    code(text, lang) { const lines = String(text).split('\n'); return '<pre class="codebox" data-lang="' + esc(lang || '') + '">' + lines.map((l, i) => '<span class="ln">' + (i + 1) + '</span>' + esc(l)).join('\n') + '</pre>'; },
+    code(text, lang) { const lines = String(text).split('\n'); return '<pre class="codebox" data-lang="' + esc(lang || '') + '">' + lines.map((l, i) => '<span class="ln" aria-hidden="true">' + (i + 1) + '</span>' + esc(l)).join('\n') + '</pre>'; },
     reviewbar(text, actions) { return '<div class="reviewbar"><span class="grow">' + text + '</span>' + (actions || '') + '</div>'; },
     stat(n, label, detail) { return '<div class="stat"><div class="n">' + n + '</div><div class="l">' + esc(label) + '</div>' + (detail ? '<div class="d">' + detail + '</div>' : '') + '</div>'; },
     spark(values, hiIndex) { const m = Math.max.apply(null, values) || 1; return '<span class="spark" aria-hidden="true">' + values.map((v, i) => '<i style="height:' + Math.max(2, Math.round((v / m) * 22)) + 'px" class="' + (i === hiIndex ? 'hi' : '') + '"></i>').join('') + '</span>'; },
@@ -143,9 +156,9 @@
       { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },
       { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', live: true }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', live: true }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', live: true },
       { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', live: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', live: true }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
-      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', sprint: 9 }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
-      { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', sprint: 9 },
-      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', sprint: 9 }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', sprint: 9 }
+      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
+      { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
+      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));
@@ -156,6 +169,26 @@
   const screens = {};
   const state = { route: null, params: {}, screenState: {}, theme: null, signedIn: false, navOpen: false, csrf: null, booted: false };
   try { state.theme = localStorage.getItem('exprsn.theme'); } catch (e) { /* storage unavailable */ }
+
+  // ---------- Accessibility preferences ----------
+  // state.a11y is 'aa' (Standard), 'aaa' (Enhanced) or null (follow the system: Enhanced when the browser asks for more
+  // contrast). Stored in this browser like the theme. state.singleKeys turns the "?" shortcut on or off (WCAG 2.1.4).
+  state.a11y = null; state.singleKeys = true;
+  try {
+    const a = localStorage.getItem('exprsn.a11y');
+    if (a === 'aa' || a === 'aaa') state.a11y = a;
+    else { const old = JSON.parse(localStorage.getItem('exprsn.prefs') || '{}'); if (old && old.contrast === 'AAA') state.a11y = 'aaa'; }
+    state.singleKeys = localStorage.getItem('exprsn.singlekeys') !== 'off';
+  } catch (e) { /* storage unavailable */ }
+  const media = (q) => (window.matchMedia ? window.matchMedia(q) : null);
+  const moreContrast = media('(prefers-contrast: more)');
+  const applyA11y = () => {
+    const eff = state.a11y === 'aaa' || (!state.a11y && moreContrast && moreContrast.matches) ? 'aaa' : 'aa';
+    document.documentElement.setAttribute('data-a11y', eff);
+    return eff;
+  };
+  applyA11y();
+  if (moreContrast) { const f = () => { if (!state.a11y) applyA11y(); }; if (moreContrast.addEventListener) moreContrast.addEventListener('change', f); else if (moreContrast.addListener) moreContrast.addListener(f); }
 
   // ---------- API client ----------
   // JSON over fetch with the session cookie; unsafe methods carry the session's CSRF token.
@@ -281,14 +314,35 @@
       const r = App.parse().route; if (r !== 'signin') { state.afterSignIn = r; state.afterSignInHash = location.hash || null; }
       App.navigate('signin'); App.render();
     },
+    /** Sets the accessibility mode: 'aa', 'aaa' or null to follow the system. */
+    setA11y(mode) {
+      state.a11y = mode === 'aa' || mode === 'aaa' ? mode : null; applyA11y();
+      try { state.a11y ? localStorage.setItem('exprsn.a11y', state.a11y) : localStorage.removeItem('exprsn.a11y'); localStorage.removeItem('exprsn.prefs'); } catch (e) { /* storage unavailable */ }
+    },
+    /** The mode in effect: 'aaa' or 'aa'. */
+    a11yMode() { return document.documentElement.getAttribute('data-a11y') === 'aaa' ? 'aaa' : 'aa'; },
+    prefersReducedMotion() { const m = media('(prefers-reduced-motion: reduce)'); return App.a11yMode() === 'aaa' || !!(m && m.matches); },
+    setSingleKeys(on) { state.singleKeys = !!on; try { localStorage.setItem('exprsn.singlekeys', on ? 'on' : 'off'); } catch (e) { /* storage unavailable */ } },
     setTheme(t) { state.theme = t; if (t) document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme'); try { t ? localStorage.setItem('exprsn.theme', t) : localStorage.removeItem('exprsn.theme'); } catch (e) {} App.renderHeader(); },
     isDark() { return state.theme === 'dark' || (!state.theme && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); },
 
     // ----- toasts -----
+    // #toasts is a polite live region; a danger toast is an alert. A toast stays while hovered or focused, has a close
+    // button, and lasts longer in Enhanced mode (WCAG 2.2.1).
     toast(msg, kind, ms) {
       const host = $('#toasts');
-      const el = document.createElement('div'); el.className = 'toast ' + (kind || ''); el.setAttribute('role', 'status'); el.innerHTML = msg;
-      host.appendChild(el); setTimeout(() => { el.remove(); }, ms || 3200);
+      const el = document.createElement('div'); el.className = 'toast ' + (kind || '');
+      if (kind === 'danger') el.setAttribute('role', 'alert');
+      el.innerHTML = '<span class="tmsg">' + msg + '</span><button type="button" class="tclose" aria-label="Dismiss">' + icon('x', 13) + '</button>';
+      host.appendChild(el);
+      let left = (ms || 3200) * (App.a11yMode() === 'aaa' ? 3 : 1), started = Date.now(), timer = null;
+      const start = () => { started = Date.now(); timer = setTimeout(() => el.remove(), left); };
+      const pause = () => { if (timer) { clearTimeout(timer); timer = null; left = Math.max(1500, left - (Date.now() - started)); } };
+      el.addEventListener('mouseenter', pause); el.addEventListener('focusin', pause);
+      el.addEventListener('mouseleave', () => { if (!timer && !el.contains(document.activeElement)) start(); });
+      el.addEventListener('focusout', (e) => { if (!timer && !el.contains(e.relatedTarget)) start(); });
+      el.querySelector('.tclose').addEventListener('click', () => { pause(); el.remove(); });
+      start();
     },
 
     // ----- modal / confirm / drawer -----
@@ -298,6 +352,8 @@
       App.closeOverlay();
       ov.id = 'overlay'; ov._onClose = opts.onClose || null; ov._returnTo = document.activeElement;
       document.body.appendChild(ov);
+      // Everything behind the dialog is inert while it is open (aria-modal alone is not honoured everywhere).
+      const appEl = $('#app'); if (appEl) appEl.setAttribute('inert', '');
       ov.addEventListener('click', (e) => { if (e.target === ov) App.closeOverlay(); });
       on(ov, 'click', '[data-close]', () => App.closeOverlay());
       ov.addEventListener('keydown', (e) => {
@@ -309,12 +365,13 @@
         else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
       });
       if (opts.onMount) opts.onMount(ov.firstChild, ov);
-      const f = ov.querySelector('input,select,textarea,button'); if (f) f.focus();
+      if (!ov.contains(document.activeElement)) { const f = ov.querySelector('[autofocus]') || ov.querySelector('input:not([type="hidden"]),select,textarea,button'); if (f) f.focus(); else { ov.firstChild.setAttribute('tabindex', '-1'); ov.firstChild.focus(); } }
       return ov.firstChild;
     },
     modal(opts) {
       const ov = document.createElement('div'); ov.className = 'overlay' + (opts.center ? ' center' : '');
-      ov.innerHTML = '<div class="modal ' + (opts.cls || '') + '" role="dialog" aria-modal="true" aria-label="' + esc(opts.title || 'Dialog') + '">' + (opts.title ? '<h2>' + opts.title + '</h2>' : '') + '<div class="vstack gap12">' + (opts.body || '') + '</div>' + (opts.actions ? '<div class="mfoot">' + opts.actions + '</div>' : '') + '</div>';
+      const hid = uid('dlg');
+      ov.innerHTML = '<div class="modal ' + (opts.cls || '') + '" role="dialog" aria-modal="true" ' + (opts.title ? 'aria-labelledby="' + hid + '"' : 'aria-label="' + esc(opts.label || 'Dialog') + '"') + '>' + (opts.title ? '<h2 id="' + hid + '">' + opts.title + '</h2>' : '') + '<div class="vstack gap12">' + (opts.body || '') + '</div>' + (opts.actions ? '<div class="mfoot">' + opts.actions + '</div>' : '') + '</div>';
       return App.openOverlay(ov, opts);
     },
     confirm(opts) {
@@ -331,7 +388,8 @@
     },
     drawer(opts) {
       const ov = document.createElement('div'); ov.className = 'overlay'; ov.style.padding = '0';
-      ov.innerHTML = '<aside class="drawer" role="dialog" aria-modal="true" aria-label="' + esc(opts.title || 'Panel') + '"><div class="hstack"><h2 class="grow">' + (opts.title || '') + '</h2>' + UI.iconbtn('x', 'Close', { attrs: 'data-close', cls: 'ghost' }) + '</div>' + (opts.body || '') + (opts.actions ? '<div class="hstack wrap" style="margin-top:auto">' + opts.actions + '</div>' : '') + '</aside>';
+      const hid = uid('dlg');
+      ov.innerHTML = '<div class="drawer" role="dialog" aria-modal="true" ' + (opts.title ? 'aria-labelledby="' + hid + '"' : 'aria-label="' + esc(opts.label || 'Panel') + '"') + '><div class="hstack"><h2 class="grow" id="' + hid + '">' + (opts.title || '') + '</h2>' + UI.iconbtn('x', 'Close', { attrs: 'data-close', cls: 'ghost' }) + '</div>' + (opts.body || '') + (opts.actions ? '<div class="hstack wrap" style="margin-top:auto">' + opts.actions + '</div>' : '') + '</div>';
       return App.openOverlay(ov, opts);
     },
     closeOverlay() {
@@ -339,7 +397,9 @@
       if (o) {
         const back = o._returnTo, done = o._onClose; o._onClose = null;
         o.remove();
+        const appEl = $('#app'); if (appEl) appEl.removeAttribute('inert');
         if (back && back.focus && document.contains(back)) back.focus({ preventScroll: true });
+        else { const m = $('#main'); const h = m && m.querySelector('h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } else if (m) m.focus({ preventScroll: true }); }
         if (done) done();
       }
       $$('.popover').forEach((p) => p.remove());
@@ -355,18 +415,33 @@
       Object.keys(screens).filter((id) => App.canOpen(id)).forEach((id) => (screens[id].commands || []).forEach((c) => items.push({ group: 'Commands', label: c.label, sub: c.sub || screens[id].title, run: () => { if (c.route !== false) App.navigate(id, c.params); setTimeout(() => c.run && c.run(App), 60); } })));
       items.push({ group: 'Commands', label: 'Switch theme', sub: 'Light, dark or system', run: () => App.setTheme(App.isDark() ? 'light' : 'dark') });
       items.push({ group: 'Commands', label: 'Sign out', sub: 'End this session', run: () => App.signOut() });
+      // An ARIA 1.2 combobox: focus stays in the input, arrows move aria-activedescendant through the listbox.
       let active = 0, filtered = items;
-      const m = App.modal({ cls: 'palette-host', body: '' });
+      const m = App.modal({ cls: 'palette-host', body: '', label: 'Command palette' });
       m.className = 'palette';
-      m.innerHTML = '<input type="text" placeholder="Search or run a command" aria-label="Search or run a command" id="palette-input"><div class="plist" id="palette-list"></div>';
-      const list = m.querySelector('#palette-list'), input = m.querySelector('input');
+      m.innerHTML = '<input type="text" placeholder="Search or run a command" aria-label="Search or run a command" id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">'
+        + '<div class="plist" id="palette-list" role="listbox" aria-label="Screens and commands"></div><div class="sr" role="status" aria-live="polite" id="palette-count"></div>';
+      const list = m.querySelector('#palette-list'), input = m.querySelector('input'), count = m.querySelector('#palette-count');
       const draw = () => {
         let g = null; let html = '';
-        filtered.forEach((it, i) => { if (it.group !== g) { g = it.group; html += '<div class="pgroup">' + g + '</div>'; } html += '<div class="pitem ' + (i === active ? 'active' : '') + '" data-i="' + i + '"><span>' + esc(it.label) + '</span><span class="ps">' + esc(it.sub || '') + '</span>' + (i === active ? '<span class="pk">↵</span>' : '') + '</div>'; });
+        filtered.forEach((it, i) => {
+          if (it.group !== g) { if (g !== null) html += '</div>'; g = it.group; html += '<div role="group" aria-label="' + esc(g) + '"><div class="pgroup" aria-hidden="true">' + esc(g) + '</div>'; }
+          html += '<div class="pitem ' + (i === active ? 'active' : '') + '" role="option" id="palette-opt-' + i + '" aria-selected="' + (i === active ? 'true' : 'false') + '" data-i="' + i + '"><span>' + esc(it.label) + '</span><span class="ps">' + esc(it.sub || '') + '</span>' + (i === active ? '<span class="pk" aria-hidden="true">↵</span>' : '') + '</div>';
+        });
+        if (g !== null) html += '</div>';
         list.innerHTML = html || '<div class="pgroup">No matches</div>';
+        if (filtered.length) { input.setAttribute('aria-activedescendant', 'palette-opt-' + active); const a = list.querySelector('#palette-opt-' + active); if (a && a.scrollIntoView) a.scrollIntoView({ block: 'nearest' }); }
+        else input.removeAttribute('aria-activedescendant');
       };
-      input.addEventListener('input', () => { const q = input.value.toLowerCase().trim(); filtered = items.filter((it) => !q || (it.label + ' ' + (it.sub || '')).toLowerCase().includes(q)); active = 0; draw(); });
-      input.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { active = Math.min(filtered.length - 1, active + 1); draw(); e.preventDefault(); } else if (e.key === 'ArrowUp') { active = Math.max(0, active - 1); draw(); e.preventDefault(); } else if (e.key === 'Enter') { const it = filtered[active]; if (it) { App.closeOverlay(); it.run(); } } });
+      const announce = () => { count.textContent = filtered.length ? filtered.length + (filtered.length === 1 ? ' result' : ' results') : 'No matches'; };
+      input.addEventListener('input', () => { const q = input.value.toLowerCase().trim(); filtered = items.filter((it) => !q || (it.label + ' ' + (it.sub || '')).toLowerCase().includes(q)); active = 0; draw(); announce(); });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') { active = Math.min(filtered.length - 1, active + 1); draw(); e.preventDefault(); }
+        else if (e.key === 'ArrowUp') { active = Math.max(0, active - 1); draw(); e.preventDefault(); }
+        else if (e.key === 'Home' && e.ctrlKey) { active = 0; draw(); e.preventDefault(); }
+        else if (e.key === 'End' && e.ctrlKey) { active = Math.max(0, filtered.length - 1); draw(); e.preventDefault(); }
+        else if (e.key === 'Enter') { const it = filtered[active]; if (it) { App.closeOverlay(); it.run(); } }
+      });
       on(list, 'click', '.pitem', (e, t) => { const it = filtered[+t.dataset.i]; App.closeOverlay(); it.run(); });
       draw(); input.focus();
     },
@@ -382,19 +457,32 @@
       App.modal({ cls: 'wide', title: 'Screen map', body: '<p class="fg2" style="margin:0">Every screen you can open. Screens marked as prototype data still show the design boards\' example content; the <b>States</b> button shows the states each board lists.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
     },
 
+    // ----- popovers -----
+    // Opens `pop` inside `host` for the button `trigger`: marks the trigger expanded, moves focus to the first item and
+    // lets Esc close it and return focus to the trigger (see the keydown handler below).
+    openPopover(trigger, host, pop) {
+      pop._trigger = trigger; pop.setAttribute('role', 'dialog'); if (!pop.hasAttribute('aria-label')) pop.setAttribute('aria-label', (pop.querySelector('.ph') || {}).textContent || 'Menu');
+      host.appendChild(pop); trigger.setAttribute('aria-expanded', 'true');
+      const first = pop.querySelector('button:not([disabled]),a[href]'); if (first) first.focus(); else { pop.setAttribute('tabindex', '-1'); pop.focus(); }
+      return pop;
+    },
+    closePopovers(refocus) {
+      $$('.popover').forEach((p) => { const t = p._trigger; p.remove(); if (t) { t.setAttribute('aria-expanded', 'false'); if (refocus && document.contains(t)) t.focus(); } });
+    },
+
     // ----- shell rendering -----
     renderSidebar() {
       const cur = state.route;
       const side = $('#sidebar');
-      side.innerHTML = '<button type="button" class="tenant" id="tenant-btn" aria-haspopup="true"><span><b>' + esc(DATA.tenant.workspace) + '</b><small>' + esc(DATA.tenant.name) + ' tenant</small></span><span class="sw">switch</span></button>'
-        + NAV.map((g) => ({ group: g.group, items: g.items.filter((it) => App.can(it.perm)) })).filter((g) => g.items.length).map((g) => (g.group ? '<div class="navhead">' + g.group + '</div>' : '') + '<div class="navlist">' + g.items.map((it) => '<a href="' + App.hrefFor(it.id) + '" class="' + (cur === it.id ? 'active' : '') + '">' + icon(it.icon) + esc(it.label) + (it.count ? '<span class="count ' + (it.hot ? 'hot' : '') + '">' + it.count + '</span>' : '') + '</a>').join('') + '</div>').join('')
-        + '<a href="' + App.hrefFor('settings') + '" class="me ' + (cur === 'settings' ? 'active' : '') + '"><span class="avatar">' + DATA.user.initials + '</span><span>' + esc(DATA.user.name) + '</span></a>';
+      side.innerHTML = '<button type="button" class="tenant" id="tenant-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Workspace: ' + esc(DATA.tenant.workspace) + ', ' + esc(DATA.tenant.name) + ' tenant. Switch workspace"><span><b>' + esc(DATA.tenant.workspace) + '</b><small>' + esc(DATA.tenant.name) + ' tenant</small></span><span class="sw">switch</span></button>'
+        + NAV.map((g) => ({ group: g.group, items: g.items.filter((it) => App.can(it.perm)) })).filter((g) => g.items.length).map((g) => (g.group ? '<div class="navhead" id="navhead-' + esc(g.group) + '">' + g.group + '</div>' : '') + '<div class="navlist"' + (g.group ? ' role="group" aria-labelledby="navhead-' + esc(g.group) + '"' : '') + '>' + g.items.map((it) => '<a href="' + App.hrefFor(it.id) + '" class="' + (cur === it.id ? 'active' : '') + '"' + (cur === it.id ? ' aria-current="page"' : '') + '>' + icon(it.icon) + esc(it.label) + (it.count ? '<span class="count ' + (it.hot ? 'hot' : '') + '">' + it.count + '</span>' : '') + '</a>').join('') + '</div>').join('')
+        + '<a href="' + App.hrefFor('settings') + '" class="me ' + (cur === 'settings' ? 'active' : '') + '"' + (cur === 'settings' ? ' aria-current="page"' : '') + ' aria-label="Settings for ' + esc(DATA.user.name) + '"><span class="avatar" aria-hidden="true">' + DATA.user.initials + '</span><span>' + esc(DATA.user.name) + '</span></a>';
       $('#tenant-btn').addEventListener('click', (e) => {
         e.stopPropagation();
-        const existing = $('.popover', side); if (existing) { existing.remove(); return; }
+        const existing = $('.popover', side); if (existing) { App.closePopovers(); return; }
         const pop = document.createElement('div'); pop.className = 'popover'; pop.style.cssText = 'position:fixed;left:8px;top:52px;right:auto;width:260px';
         pop.innerHTML = '<div class="ph">Switch workspace</div>' + DATA.workspaces.map((w) => '<button type="button" class="pi" data-ws="' + esc(w.id) + '"><span class="hstack"><span class="t grow">' + esc(w.name) + '</span>' + UI.label(w.label, { sm: true }) + '</span><span class="s">' + esc(w.tenant) + '</span></button>').join('') + (DATA.workspaces.length ? '' : '<div class="pi"><span class="s">No workspaces yet. A tenant admin creates them.</span></div>') + (App.can('tenant:manage') ? '<div class="divider"></div><button type="button" class="pi" data-go="tenants"><span class="t">Manage tenants and workspaces</span></button>' : '');
-        side.appendChild(pop);
+        App.openPopover(e.currentTarget, side, pop);
         on(pop, 'click', '[data-ws]', (ev, t) => { pop.remove(); if (t.dataset.ws !== DATA.tenant.workspaceId) App.switchWorkspace(t.dataset.ws); });
         on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); App.navigate(t.dataset.go); });
       });
@@ -403,25 +491,28 @@
       const s = screens[state.route]; if (!s) return;
       const crumb = typeof s.crumb === 'function' ? s.crumb(App.stateFor(s.id), state.params) : (s.crumb || [s.section === 'admin' ? 'Admin' : null, s.title]);
       const lbl = typeof s.label === 'function' ? s.label(App.stateFor(s.id), state.params) : s.label;
-      $('#header').innerHTML = '<div class="hstack" style="min-width:0">' + UI.iconbtn('menu', 'Menu', { cls: 'menubtn', attrs: 'id="menu-btn"' }) + '<div class="crumbs">' + crumb.filter(Boolean).map((c, i, a) => (i < a.length - 1 ? '<span class="c1">' + esc(c) + '</span><span class="sep">/</span>' : '<span class="c2">' + esc(c) + '</span>')).join('') + (lbl ? UI.label(lbl) : '') + '</div></div>'
-        + '<div class="htools relative">' + ((s.states || []).length ? UI.btn('States', { size: 'sm', icon: 'grid', attrs: 'id="states-btn" title="Design states listed on this board"' }) : '') + '<button type="button" class="cmdbtn" id="cmd-btn"><span>Search or run a command</span><kbd>Ctrl K</kbd></button>' + UI.iconbtn(App.isDark() ? 'sun' : 'moon', App.isDark() ? 'Switch to light theme' : 'Switch to dark theme', { attrs: 'id="theme-btn"' }) + UI.iconbtn('bell', 'Notifications', { attrs: 'id="bell-btn"', dot: DATA.notifications.length > 0 }) + '</div>';
+      // Re-rendering the header replaces its buttons; keep keyboard focus on the one that had it (theme, bell).
+      const had = document.activeElement && $('#header').contains(document.activeElement) ? document.activeElement.id : null;
+      $('#header').innerHTML = '<div class="hstack" style="min-width:0">' + UI.iconbtn('menu', 'Menu', { cls: 'menubtn', attrs: 'id="menu-btn" aria-controls="sidebar" aria-expanded="' + (state.navOpen ? 'true' : 'false') + '"' }) + '<nav class="crumbs" aria-label="Breadcrumb">' + crumb.filter(Boolean).map((c, i, a) => (i < a.length - 1 ? '<span class="c1">' + esc(c) + '</span><span class="sep" aria-hidden="true">/</span>' : '<span class="c2" aria-current="page">' + esc(c) + '</span>')).join('') + (lbl ? UI.label(lbl) : '') + '</nav></div>'
+        + '<div class="htools relative">' + ((s.states || []).length ? UI.btn('States', { size: 'sm', icon: 'grid', attrs: 'id="states-btn" title="Design states listed on this board" aria-haspopup="dialog" aria-expanded="false"' }) : '') + '<button type="button" class="cmdbtn" id="cmd-btn" aria-label="Search or run a command" aria-keyshortcuts="Control+K" aria-haspopup="dialog"><span>Search or run a command</span><kbd aria-hidden="true">Ctrl K</kbd></button>' + UI.iconbtn(App.isDark() ? 'sun' : 'moon', App.isDark() ? 'Switch to light theme' : 'Switch to dark theme', { attrs: 'id="theme-btn"' }) + UI.iconbtn('bell', DATA.notifications.length ? 'Notifications, ' + DATA.notifications.length + ' unread' : 'Notifications', { attrs: 'id="bell-btn" aria-haspopup="dialog" aria-expanded="false"', dot: DATA.notifications.length > 0 }) + '</div>';
+      if (had) { const f = document.getElementById(had); if (f) f.focus(); }
       $('#cmd-btn').addEventListener('click', () => App.palette());
       $('#theme-btn').addEventListener('click', () => App.setTheme(App.isDark() ? 'light' : 'dark'));
-      $('#menu-btn').addEventListener('click', () => { state.navOpen = !state.navOpen; $('#app').classList.toggle('nav-open', state.navOpen); });
+      $('#menu-btn').addEventListener('click', (e) => { state.navOpen = !state.navOpen; $('#app').classList.toggle('nav-open', state.navOpen); e.currentTarget.setAttribute('aria-expanded', state.navOpen ? 'true' : 'false'); if (state.navOpen) { const a = $('#sidebar a.active') || $('#sidebar a,#sidebar button'); if (a) a.focus(); } });
       $('#bell-btn').addEventListener('click', (e) => {
-        e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { ex.remove(); return; }
-        const pop = document.createElement('div'); pop.className = 'popover';
+        e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { App.closePopovers(); return; }
+        const trigger = e.currentTarget; const pop = document.createElement('div'); pop.className = 'popover';
         pop.innerHTML = '<div class="ph">Notifications</div>' + (DATA.notifications.length ? '' : '<div class="pi"><span class="s">Nothing new.</span></div>') + DATA.notifications.map((n) => '<button type="button" class="pi" data-go="' + esc(n.route) + '" data-nid="' + esc(n.id) + '"><span class="t">' + esc(n.title) + '</span><span class="s">' + esc(n.sub) + '</span></button>').join('') + '<div class="divider"></div><div class="hstack"><span class="muted grow" style="font-size:12px">Delivered live to the console' + (DATA.notificationEmail ? ' and by email.' : '.') + '</span>' + UI.btn('Mark all read', { kind: 'ghost', size: 'sm', attrs: 'data-read' + (DATA.notifications.length ? '' : ' disabled') }) + '</div>';
-        host.appendChild(pop);
+        App.openPopover(trigger, host, pop);
         const markRead = (ids) => api('POST', '/api/me/notifications/read', ids ? { ids } : {}).catch((err) => App.fail(err, 'Could not mark read'));
         on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); DATA.notifications = DATA.notifications.filter((n) => n.id !== t.dataset.nid); markRead([t.dataset.nid]); App.renderHeader(); if (t.dataset.go && App.canOpen(t.dataset.go)) App.navigate(t.dataset.go); });
         on(pop, 'click', '[data-read]', () => { pop.remove(); DATA.notifications = []; markRead(); App.renderHeader(); });
       });
       const sb = $('#states-btn'); if (sb) sb.addEventListener('click', (e) => {
-        e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { ex.remove(); return; }
-        const pop = document.createElement('div'); pop.className = 'popover';
+        e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { App.closePopovers(); return; }
+        const trigger = e.currentTarget; const pop = document.createElement('div'); pop.className = 'popover';
         pop.innerHTML = '<div class="ph">States to design from this page</div>' + s.states.map((st, i) => '<button type="button" class="pi" data-state="' + i + '"><span class="t" style="color:var(--' + ({ danger: 'danger-fg', warn: 'warn-fg', ok: 'ok-fg', info: 'info-fg' }[st.tone] || 'fg') + ')">' + esc(st.title) + '</span><span class="s">' + esc(st.text) + '</span></button>').join('') + '<div class="divider"></div><button type="button" class="pi" data-reset><span class="t">Reset to the board\'s default state</span></button>';
-        host.appendChild(pop);
+        App.openPopover(trigger, host, pop);
         on(pop, 'click', '[data-state]', (ev, t) => { pop.remove(); App.applyState(+t.dataset.state); });
         on(pop, 'click', '[data-reset]', () => { pop.remove(); state.screenState[s.id] = {}; App.render(); App.toast('Reset'); });
       });
@@ -439,7 +530,7 @@
       };
     },
     render() {
-      const r = App.parse(); const entering = r.route !== state.route || location.hash !== state.lastHash;
+      const r = App.parse(); const entering = r.route !== state.route || location.hash !== state.lastHash; const prevRoute = state.route;
       state.route = r.route; state.params = r.params; state.lastHash = location.hash;
       // Live screens refetch whenever they are entered, so data is never older than the visit.
       if (entering && state.screenState[r.route]) state.screenState[r.route].loaded = false;
@@ -454,7 +545,14 @@
       // A fresh element each render: listeners a screen attached through ctx.on (or directly on root) go with the old one,
       // so a re-render or a route change never leaves a previous render's handlers running.
       if (App._banner) { App._banner.remove(); App._banner = null; }
-      const main = document.createElement('div'); main.id = 'main'; main.className = 'main'; $('#main').replaceWith(main);
+      const old = $('#main');
+      // A re-render of the same screen puts keyboard focus back on the matching element; entering a screen moves focus
+      // to its heading so screen readers announce it (WCAG 2.4.3). The first render after boot leaves focus alone.
+      const routeChanged = state.route !== prevRoute;
+      const keep = routeChanged || !old.contains(document.activeElement) ? null : document.activeElement === old ? { main: true } : App.focusKey(document.activeElement, old);
+      const moveFocus = routeChanged && state.rendered && !$('#overlay');
+      const main = document.createElement('main'); main.id = 'main'; main.className = 'main'; main.setAttribute('tabindex', '-1'); main.setAttribute('aria-label', s.title || 'Exprsn-AI');
+      old.replaceWith(main);
       document.title = (s.title || 'Exprsn-AI') + ' · Exprsn-AI';
       if (state.route !== 'signin') { App.renderSidebar(); App.renderHeader(); }
       if (state.signedIn && !App.isLive(s.id) && s.id !== 'forbidden') {
@@ -468,6 +566,48 @@
       // global delegated behaviours inside main
       main.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => App.toast('Copied ' + esc(b.dataset.copy))));
       window.scrollTo(0, 0);
+      App.a11yPass(main);
+      if (!main.contains(document.activeElement) && !$('#overlay')) {
+        if (keep) App.restoreFocus(keep, main);
+        else if (moveFocus) { const h = main.querySelector('h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } else main.focus({ preventScroll: true }); }
+      }
+      state.rendered = true;
+    },
+
+    // ----- accessibility helpers -----
+    /** Describes a focused element well enough to find its counterpart after the screen re-renders. */
+    focusKey(el, root) {
+      const cssq = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/["\\]/g, '\\$&'));
+      const caret = typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
+      if (el.tagName === 'H1') return { sel: 'h1', index: 0 };
+      // Ids that uid() made change on every render, so they cannot find the element again.
+      if (el.id && !/^[a-z]+-\d+$/.test(el.id)) return { sel: '#' + cssq(el.id), index: 0, caret };
+      const attrs = Array.prototype.filter.call(el.attributes, (a) => /^data-/.test(a.name) || a.name === 'name' || a.name === 'aria-label');
+      if (attrs.length) { const sel = el.tagName.toLowerCase() + attrs.map((a) => '[' + a.name + '="' + cssq(a.value) + '"]').join(''); return { sel, index: Math.max(0, $$(sel, root).indexOf(el)), caret }; }
+      const path = []; let n = el; while (n && n !== root && n.parentNode) { path.unshift(Array.prototype.indexOf.call(n.parentNode.children, n)); n = n.parentNode; }
+      return { path, tag: el.tagName, text: (el.textContent || '').trim().slice(0, 60), caret };
+    },
+    restoreFocus(key, root) {
+      let el = null;
+      if (key.main) { root.focus({ preventScroll: true }); return; }
+      try { if (key.sel) { const all = $$(key.sel, root); el = all[key.index] || all[0] || null; } } catch (e) { el = null; }
+      if (el && el.tagName === 'H1') el.setAttribute('tabindex', '-1');
+      if (!el && key.path) { el = root; for (const i of key.path) { el = el && el.children[i]; } if (el && (el.tagName !== key.tag || (el.textContent || '').trim().slice(0, 60) !== key.text)) el = null; }
+      if (!el || typeof el.focus !== 'function') return;
+      el.focus({ preventScroll: true });
+      if (key.caret && typeof el.setSelectionRange === 'function') { try { el.setSelectionRange(key.caret[0], key.caret[1]); } catch (e) { /* not a text field */ } }
+      const r = el.getBoundingClientRect(); if ((r.bottom < 0 || r.top > window.innerHeight) && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    },
+    /** Fills in what screens leave out: names for icon-only buttons and placeholder-only fields, header scope, and
+     *  keyboard access to clickable table rows (Enter or Space clicks the row; see the keydown handler). */
+    a11yPass(root) {
+      if (!root) return;
+      $$('button:not([aria-label]):not([aria-labelledby])', root).forEach((b) => { if (!b.textContent.trim() && b.title) b.setAttribute('aria-label', b.title); });
+      $$('input:not([type="hidden"]):not([aria-label]):not([aria-labelledby]),select:not([aria-label]):not([aria-labelledby]),textarea:not([aria-label]):not([aria-labelledby])', root).forEach((f) => {
+        if (f.labels && f.labels.length) return; const n = f.getAttribute('placeholder') || f.getAttribute('title'); if (n) f.setAttribute('aria-label', n);
+      });
+      $$('thead th:not([scope])', root).forEach((th) => th.setAttribute('scope', 'col'));
+      $$('table.dt tbody tr.row:not([tabindex])', root).forEach((tr) => tr.setAttribute('tabindex', '0'));
     }
   };
 
@@ -479,14 +619,27 @@
   window.addEventListener('hashchange', App.render);
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if ($('#palette-input')) App.closeOverlay(); else App.palette(); }
-    else if (e.key === 'Escape') { App.closeOverlay(); }
-    else if (e.key === '?' && !/input|textarea|select/i.test(document.activeElement.tagName)) { App.map(); }
+    else if (e.key === 'Escape') {
+      if ($('.popover') && !$('#overlay')) { App.closePopovers(true); return; }
+      if (state.navOpen && !$('#overlay')) { state.navOpen = false; $('#app').classList.remove('nav-open'); const mb = $('#menu-btn'); if (mb) { mb.setAttribute('aria-expanded', 'false'); mb.focus(); } return; }
+      App.closeOverlay();
+    }
+    else if (e.key === '?' && state.singleKeys && !e.ctrlKey && !e.metaKey && !e.altKey && !/input|textarea|select/i.test(document.activeElement.tagName) && !document.activeElement.isContentEditable && !$('#overlay')) { App.map(); }
+    else if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('table.dt tbody tr.row')) { e.preventDefault(); e.target.click(); }
   });
-  document.addEventListener('click', (e) => { if (!e.target.closest('.popover') && !e.target.closest('#tenant-btn') && !e.target.closest('#bell-btn') && !e.target.closest('#states-btn')) $$('.popover').forEach((p) => p.remove()); });
+  // Screens that update part of their DOM without a full render (streaming, lazy panels) still get the a11y pass.
+  let passTimer = null;
+  const schedulePass = () => { if (passTimer) return; passTimer = setTimeout(() => { passTimer = null; App.a11yPass($('#main')); App.a11yPass($('#overlay')); }, 150); };
+  if (window.MutationObserver) document.addEventListener('DOMContentLoaded', () => new MutationObserver(schedulePass).observe(document.body, { childList: true, subtree: true }));
+  document.addEventListener('click', (e) => {
+    const sk = e.target.closest && e.target.closest('#skip-link');
+    if (sk) { e.preventDefault(); const m = $('#main'); if (m) { const h = m.querySelector('h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus(); } else m.focus(); } }
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.popover') && !e.target.closest('#tenant-btn') && !e.target.closest('#bell-btn') && !e.target.closest('#states-btn')) App.closePopovers(); });
   // generic behaviours: toggles, tabs, segs, chips
   document.addEventListener('click', (e) => {
     const tg = e.target.closest('.toggle'); if (tg && !tg.dataset.manual) { tg.classList.toggle('on'); tg.setAttribute('aria-checked', tg.classList.contains('on') ? 'true' : 'false'); }
-    const ch = e.target.closest('.chip[data-toggle]'); if (ch) ch.classList.toggle('on');
+    const ch = e.target.closest('.chip[data-toggle]'); if (ch) { ch.classList.toggle('on'); ch.setAttribute('aria-pressed', ch.classList.contains('on') ? 'true' : 'false'); }
   });
   document.addEventListener('DOMContentLoaded', () => {
     if (state.theme) document.documentElement.setAttribute('data-theme', state.theme);

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { LoginThrottle } from '../identity/lockout.js';
 import { provision } from '../identity/provisioning.js';
+import { isFederatedKind } from '../identity/providers/types.js';
 import type { SessionRow } from '../identity/sessions.js';
 import { rolesRequireMfa } from '../authz/permissions.js';
 import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
@@ -119,6 +120,8 @@ export function authRoutes(s: Services): Router {
       throw forbidden(REFUSALS[prov.reason] ?? 'Sign-in refused.', { reason: prov.reason });
     }
     await s.throttle.succeed(keys.account);
+    // A new sign-in in this browser ends the session its cookie held before (ASVS 3.2.1), as federated sign-ins do.
+    if (req.authSession) await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
 
     const methods = await s.mfa.methods(prov.user.id);
     const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);
@@ -173,6 +176,48 @@ export function authRoutes(s: Services): Router {
     const ok = await s.mfa.verifyAuthentication(req.authSession!.user_id, challenge, response as never).catch(() => false);
     if (ok) return completeMfa(req, res, 'passkey');
     await failMfa(req, res, 'passkey');
+  });
+
+  // ---------- Sprint 9: federation ----------
+
+  /** What the sign-in screen can offer besides a password: upstream identity providers and Kerberos. Public. */
+  r.get('/sign-in-options', async (req, res) => {
+    const slug = typeof req.query.tenant === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(req.query.tenant) ? req.query.tenant : s.cfg.DEFAULT_TENANT;
+    const t = await s.federation.tenantBySlug(slug);
+    if (!t) return void res.json({ upstream: [], kerberos: false });
+    const base = slug === s.cfg.DEFAULT_TENANT ? '' : `/t/${slug}`;
+    const rows = (await s.providers.list(t.id)).filter((p) => p.enabled && isFederatedKind(p.kind));
+    const settings = await s.federation.settings(t.id);
+    const kerberos = settings.kerberos.enabled && (await s.kerberos.status()).available;
+    res.json({
+      upstream: rows.map((p) => ({ id: p.id, name: p.name, protocol: p.kind, start: `${base}/federation/${p.kind}/start?provider=${p.id}` })),
+      kerberos: kerberos ? { start: `${base}/auth/negotiate` } : false
+    });
+  });
+
+  const userCodeSchema = z.string().trim().min(8).max(12);
+  const signedIn = (req: Request) => {
+    const session = req.authSession as SessionRow;
+    return { tenantId: session.tenant_id, userId: session.user_id, sessionId: session.id, method: session.method, authTime: session.created_at };
+  };
+
+  /** The device request behind a user code, for the approval page (RFC 8628 verification). */
+  r.get('/device', requireAuth({ sessionOnly: true }), async (req, res) => {
+    const code = parseBody(userCodeSchema, req.query.user_code);
+    const p = req.principal!;
+    const found = await s.federation.oidc.deviceLookup(p.tenantId, code);
+    if (!found) throw new HttpProblem(404, 'Not found', 'No pending request has that code in your tenant. Check the code, or start again on the device.');
+    res.json({ client: { name: found.client.name, type: found.client.type }, scopes: await s.federation.oidc.grantableScopes(p.tenantId, p.userId, found.client, found.scopes), expiresAt: found.expiresAt });
+  });
+
+  /** Approves or denies a device request as the signed-in user. */
+  r.post('/device', requireAuth({ sessionOnly: true }), async (req, res) => {
+    const body = parseBody(z.object({ userCode: userCodeSchema, approve: z.boolean() }), req.body);
+    const p = req.principal!;
+    const out = await s.federation.oidc.deviceDecide(p.tenantId, body.userCode, signedIn(req), body.approve);
+    if (!out) throw new HttpProblem(404, 'Not found', 'No pending request has that code in your tenant. Check the code, or start again on the device.');
+    await s.audit.append({ tenantId: p.tenantId, action: body.approve ? 'oidc.device.approved' : 'oidc.device.denied', kind: 'auth', actor: actorFrom(p, ip(req)), target: { client: out.client.client_id, name: out.client.name }, detail: { scopes: out.scopes }, traceId: req.traceId });
+    res.json({ approved: body.approve, client: out.client.name, scopes: out.scopes });
   });
 
   r.post('/logout', async (req, res) => {

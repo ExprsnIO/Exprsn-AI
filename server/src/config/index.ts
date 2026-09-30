@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN'] as const;
+const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -127,6 +127,74 @@ const schema = z
     IMAGE_BACKENDS: z.string().default('[]'),
     IMAGE_SAFETY_URL: z.url().optional(),
     IMAGE_SAFETY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+
+    // --- Sprint 9: training (edit only inside this block) ---
+    /** Training: the Python GPU worker's base URL (unset: training jobs queue and say no worker is configured). */
+    TRAINER_URL: z.url().optional(),
+    /** Bearer token the worker expects, when it expects one. */
+    TRAINER_TOKEN: z.string().optional(),
+    TRAINER_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
+    /** How often the orchestrator syncs runs, opens and closes windows, fires recurring jobs and dispatches the queue. */
+    TRAINING_TICK_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+    // --- end training ---
+
+    // --- Sprint 9: zones (edit only inside this block) ---
+    /** Air-gapped posture: no zone may have internet egress and the external zone stays empty. */
+    ZONES_AIR_GAPPED: bool.default(true),
+    /** Comma-separated CIDRs of the corporate network, rendered where a zone accepts traffic from it. */
+    ZONES_CORPORATE_CIDRS: z.string().default(''),
+    /** Health checks of registered zone endpoints: interval (0 turns the sweep off), timeout, failures to unhealthy. */
+    ZONE_HEALTH_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(1),
+    ZONE_HEALTH_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(3000),
+    ZONE_HEALTH_FAILURES: z.coerce.number().int().min(1).max(20).default(3),
+    // --- end zones ---
+
+    // --- Sprint 9: platform operations (edit only inside this block) ---
+    /** Import bundles: size cap, Trivy for the SBOM scan (unset: reported as not configured), licence allow-list, staging hook. */
+    PLATFORM_BUNDLE_MAX_BYTES: z.coerce.number().int().min(1024).max(2 * 1024 ** 3 - 1).default(1024 ** 3),
+    PLATFORM_TRIVY_BIN: z.string().optional(),
+    PLATFORM_TRIVY_CACHE_DIR: z.string().optional(),
+    PLATFORM_SCAN_FAIL_SEVERITY: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).default('HIGH'),
+    PLATFORM_LICENCE_ALLOW: z.string().default('MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,0BSD,Unlicense,CC0-1.0,Zlib,MPL-2.0,Python-2.0,PSF-2.0,BlueOak-1.0.0,OpenSSL'),
+    PLATFORM_STAGING_URL: z.url().optional(),
+    PLATFORM_STAGING_TIMEOUT_MS: z.coerce.number().int().min(1000).max(4 * 3600_000).default(30 * 60_000),
+    /** Mirrors, the staging hook and ACME must be internal hosts; this comma list (hosts, *.domain, CIDRs) adds exceptions. */
+    PLATFORM_ALLOWED_HOSTS: z.string().default(''),
+    PLATFORM_MIRROR_CHECK_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(60),
+    PLATFORM_KEY_ROTATION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+    /** ACME (RFC 8555) for platform certificates: the internal CA's directory, http-01 answered by this server. */
+    ACME_DIRECTORY_URL: z.url().optional(),
+    ACME_CONTACT: z.email().optional(),
+    ACME_CA_FILE: z.string().optional(),
+    ACME_RENEW_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    ACME_CHECK_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(360),
+    ACME_POLL_MS: z.coerce.number().int().min(10).max(60_000).default(2000),
+    /** Backups of the application database into the blob store, and restore drills into a scratch SQLite database. */
+    PLATFORM_BACKUP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(24 * 60),
+    PLATFORM_BACKUP_RETAIN: z.coerce.number().int().min(1).max(1000).default(14),
+    PLATFORM_BACKUP_RPO_MINUTES: z.coerce.number().int().min(1).max(30 * 24 * 60).default(24 * 60),
+    PLATFORM_BACKUP_RTO_MINUTES: z.coerce.number().int().min(1).max(30 * 24 * 60).default(4 * 60),
+    PLATFORM_DRILL_MINUTES: z.coerce.number().int().min(0).max(90 * 24 * 60).default(7 * 24 * 60),
+    PLATFORM_DRILL_DIR: z.string().optional(),
+    // --- end platform operations ---
+
+    // --- Sprint 9: federation (edit only inside this block) ---
+    /** OIDC issuer and SAML IdP base; defaults to PUBLIC_URL. Other tenants use <issuer>/t/<tenant>. */
+    FEDERATION_ISSUER: z.url().optional(),
+    /** Signing keys rotate on this schedule; the next key is published this many days before it signs. */
+    OIDC_KEY_ROTATION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+    OIDC_KEY_OVERLAP_DAYS: z.coerce.number().int().min(0).max(365).default(14),
+    /** RFC 8628 device codes: lifetime and the minimum polling interval. */
+    DEVICE_CODE_MINUTES: z.coerce.number().int().min(1).max(60).default(15),
+    DEVICE_POLL_SECONDS: z.coerce.number().int().min(1).max(60).default(5),
+    SAML_ASSERTION_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
+    /** Upstream identity providers must be internal hosts unless this comma list (hosts, *.domain, CIDRs) names them. */
+    FEDERATION_ALLOWED_HOSTS: z.string().default(''),
+    FEDERATION_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(5000),
+    /** Kerberos SPNEGO: service principal (HTTP@host) and keytab; needs the optional kerberos module. */
+    KERBEROS_SERVICE: z.string().optional(),
+    KERBEROS_KEYTAB: z.string().optional(),
+    // --- end federation ---
 
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),

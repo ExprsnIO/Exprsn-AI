@@ -25,9 +25,12 @@ ENV NODE_ENV=production \
     SQLITE_FILENAME=/var/lib/exprsn-ai/exprsn-ai.sqlite \
     BLOB_DIR=/var/lib/exprsn-ai/blobs
 WORKDIR /app
+# The server never runs npm, yarn or corepack, so they and their bundled dependencies leave the runtime image.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates git \
  && rm -rf /var/lib/apt/lists/* \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg \
  && mkdir -p /var/lib/exprsn-ai \
  && chown node:node /var/lib/exprsn-ai
 COPY --from=build --chown=root:root /app/package.json /app/package.json

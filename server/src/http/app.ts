@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { ZodError } from 'zod';
-import { traceIdFrom } from '../observability/index.js';
+import { redactRequest, traceIdFrom } from '../observability/index.js';
 import { authRoutes } from '../routes/auth.js';
 import { meRoutes } from '../routes/me.js';
 import { healthRoutes } from '../routes/health.js';
@@ -28,8 +28,13 @@ import { imageRoutes } from '../routes/images.js';
 import { knowledgeRoutes } from '../routes/knowledge.js';
 import { memoryRoutes } from '../routes/memory.js';
 import { connectionAdminRoutes } from '../routes/admin/connections.js';
+import { trainingRoutes } from '../routes/training.js';
+import { zoneAdminRoutes } from '../routes/admin/zones.js';
+import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
+import { federationAdminRoutes } from '../routes/admin/federation.js';
+import { federationPublicRoutes } from '../routes/federation-public.js';
 import type { Services } from '../services.js';
-import { authenticate, csrfProtection } from './middleware.js';
+import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -54,6 +59,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
     pinoHttp({
       logger: s.log,
       genReqId: (req) => (req as express.Request).traceId,
+      // Authorization codes, SAML messages, device codes and similar never reach the logs.
+      serializers: { req: redactRequest },
       autoLogging: { ignore: (req) => req.url === '/healthz' || req.url === '/readyz' },
       customLogLevel: (_req, res, err) => (err || res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info')
     })
@@ -87,12 +94,18 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(compression());
 
   app.use(healthRoutes(s, state));
+  // OIDC, SAML and device-flow protocol endpoints: public paths with their own parsing and checks.
+  app.use(federationPublicRoutes(s));
+  // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
+  app.use(acmeChallengeRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
+  // API answers carry per-user data: never stored by the browser or an intermediary (routes may override).
+  api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path)) ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path)) ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -108,8 +121,11 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
     }
   };
 
-  api.use('/auth', limit(authLimiter), authRoutes(s));
-  api.use(limit(general));
+  // Credential attempts share the strict limiter; reads (the session check every page load makes) the general one.
+  const authLimit = limit(authLimiter);
+  const generalLimit = limit(general);
+  api.use('/auth', (req, res, next) => (req.method === 'GET' ? generalLimit(req, res, next) : authLimit(req, res, next)), authRoutes(s));
+  api.use(generalLimit);
   api.use('/me', meRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
   api.use('/admin', userAdminRoutes(s));
@@ -129,6 +145,10 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', connectionAdminRoutes(s));
   api.use(knowledgeRoutes(s));
   api.use(memoryRoutes(s));
+  api.use(trainingRoutes(s));
+  api.use('/admin', zoneAdminRoutes(s));
+  api.use('/admin', platformAdminRoutes(s));
+  api.use('/admin', federationAdminRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

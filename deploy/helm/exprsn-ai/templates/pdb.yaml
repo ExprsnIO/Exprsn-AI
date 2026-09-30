@@ -1,0 +1,13 @@
+{{- if and .Values.podDisruptionBudget.enabled (gt (int (include "exprsn-ai.minReplicas" .)) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "exprsn-ai.serverSelectorLabels" . | nindent 6 }}
+{{- end }}

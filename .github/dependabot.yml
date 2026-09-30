@@ -1,0 +1,59 @@
+# Dependency updates. Security updates are raised as soon as an advisory is published; version updates weekly.
+version: 2
+updates:
+  # The npm workspace (root package.json, lockfile and server/).
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Etc/UTC }
+    open-pull-requests-limit: 10
+    labels: [dependencies]
+    commit-message: { prefix: "deps", include: scope }
+    groups:
+      # Tooling moves together and never ships in the image.
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+      production-patch:
+        dependency-type: production
+        update-types: [patch]
+    ignore:
+      # Major versions of the framework and database layers need a planned upgrade.
+      - dependency-name: express
+        update-types: [version-update:semver-major]
+      - dependency-name: knex
+        update-types: [version-update:semver-major]
+      - dependency-name: socket.io*
+        update-types: [version-update:semver-major]
+
+  # The design prototype's Playwright smoke test.
+  - package-ecosystem: npm
+    directory: /design/prototype
+    schedule: { interval: monthly }
+    labels: [dependencies]
+    commit-message: { prefix: "deps", include: scope }
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Etc/UTC }
+    labels: [dependencies, ci]
+    commit-message: { prefix: "ci" }
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images of the application image and the Compose stack.
+  - package-ecosystem: docker
+    directories: [/deploy/docker]
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Etc/UTC }
+    labels: [dependencies, docker]
+    commit-message: { prefix: "image" }
+    ignore:
+      # Node.js stays on the 22 LTS line until a planned move.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: docker-compose
+    directories: [/deploy/docker]
+    schedule: { interval: monthly }
+    labels: [dependencies, docker]
+    commit-message: { prefix: "image" }
