@@ -95,7 +95,9 @@
           + '<div class="hstack">' + UI.btn('Save threshold', { kind: 'primary', size: 'sm', attrs: 'data-savethr', disabled: thr === lab.threshold || !canWrite }) + UI.btn('Reset', { kind: 'ghost', size: 'sm', attrs: 'data-resetthr', disabled: thr === lab.threshold }) + '<span class="muted" style="font-size:12px">' + (canWrite ? 'Saving creates version ' + (c.version + 1) + ' and re-labels nothing until a batch run.' : 'Platform classifiers are changed by platform admins.') + '</span></div>') + '</div>'
         + '<div style="width:360px;flex-shrink:0">' + UI.panel('Tenant names for the four levels',
           (st.reorder ? UI.notice('<b>Reorder refused.</b> ' + esc(st.reorder), 'danger', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-reorderok' })) : '')
-          + LEVELS.map((lv) => '<div class="hstack" draggable="true" data-drag="' + lv + '">' + UI.icon('sort', 12) + UI.label(lv, { sm: true }) + '<span style="color:var(--muted);white-space:nowrap">is shown as</span><div class="field grow"><label class="sr" for="name-' + lv + '">Name for ' + lv + '</label>' + UI.input(names[lv], { attrs: 'data-name="' + lv + '"' }).replace('<input', '<input id="name-' + lv + '"') + '</div></div>').join('')
+          + LEVELS.map((lv, i) => '<div class="hstack" draggable="true" data-drag="' + lv + '">' + UI.icon('sort', 12) + UI.label(lv, { sm: true }) + '<span style="color:var(--muted);white-space:nowrap">is shown as</span><div class="field grow"><label class="sr" for="name-' + lv + '">Name for ' + lv + '</label>' + UI.input(names[lv], { attrs: 'data-name="' + lv + '"' }).replace('<input', '<input id="name-' + lv + '"') + '</div>'
+            // Buttons do what dragging does (WCAG 2.5.7); the server explains why the order is fixed.
+            + UI.btn('Up', { size: 'xs', kind: 'ghost', attrs: 'data-levelmove="' + lv + ',-1" aria-label="Move ' + lv + ' up"' + (i === 0 ? ' disabled' : '') }) + UI.btn('Down', { size: 'xs', kind: 'ghost', attrs: 'data-levelmove="' + lv + ',1" aria-label="Move ' + lv + ' down"' + (i === LEVELS.length - 1 ? ' disabled' : '') }) + '</div>').join('')
           + '<span class="muted" style="font-size:12px">Levels can be renamed. Their order is fixed.</span>') + '</div></div>';
 
       const detail = c.engine === 'deterministic' ? (c.family === 'secrets' ? 'Private key headers, cloud key shapes, bearer token formats, Shannon entropy over 20+ character tokens' : 'Patterns with Luhn and IBAN checksums and national identifier check digits')
@@ -181,6 +183,11 @@
         if (!st.dragging || st.dragging === t.dataset.drag) return;
         const order = LEVELS.filter((x) => x !== st.dragging); order.splice(order.indexOf(t.dataset.drag), 0, st.dragging);
         tryReorder(ctx, order);
+      });
+      ctx.on('click', '[data-levelmove]', (e, t) => {
+        const [lv, d] = t.dataset.levelmove.split(','); const order = LEVELS.slice(); const i = order.indexOf(lv); const j = i + Number(d);
+        if (i < 0 || j < 0 || j >= order.length) return;
+        order.splice(i, 1); order.splice(j, 0, lv); tryReorder(ctx, order);
       });
       ctx.on('click', '[data-reorderok]', () => { st.reorder = null; ctx.rerender(); });
       ctx.on('click', '[data-test]', () => openTest(ctx, c));

@@ -418,6 +418,8 @@
           + UI.kv([['Label in', UI.label(v.labels[n.id] || wf.label, { sm: true })], ['Runs as', n.kind === 'trigger' ? 'not applicable' : 'the person who started the run'], ['Retry', esc(retry)]], 1)
           + (outs.length ? '<div class="eyebrow">Connects to</div><div class="vstack gap4">' + outs.map((e) => '<div class="hstack gap6" style="font-size:12px"><span class="grow">' + esc((byId(e.to) || {}).title || e.to) + '</span>' + (n.kind === 'branch' ? UI.btn(e.branch || 'set', { size: 'xs', kind: 'ghost', attrs: 'data-flip="' + esc(e.to) + '"' + (editable ? '' : ' disabled'), title: 'Switch between true and false' }) : '') + (editable ? UI.iconbtn('x', 'Remove the edge to ' + ((byId(e.to) || {}).title || e.to), { cls: 'sm ghost', attrs: 'data-unlink="' + esc(e.to) + '"' }) : '') + '</div>').join('') + '</div>' : '')
           + '<div class="hstack wrap">' + (editable ? UI.btn(st.connectFrom === n.id ? 'Pick a target' : 'Connect from here', { size: 'sm', icon: 'link', attrs: 'data-connect', cls: st.connectFrom === n.id ? 'active' : '' }) : '') + (n.kind !== 'trigger' ? UI.btn('Replay step', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-replaystepbtn' }) : '') + '</div>'
+          // Moving a step without dragging (WCAG 2.5.7): one button press per 20 px.
+          + (editable ? '<div class="hstack wrap gap6" role="group" aria-label="Move this step on the canvas"><span class="muted" style="font-size:12px">Move</span>' + [['left', -20, 0], ['up', 0, -20], ['down', 0, 20], ['right', 20, 0]].map((d) => UI.btn(d[0].charAt(0).toUpperCase() + d[0].slice(1), { size: 'xs', kind: 'ghost', attrs: 'data-nudge="' + d[1] + ',' + d[2] + '" aria-label="Move step ' + d[0] + '"' })).join('') + '</div>' : '')
           + limits;
       } else insp = UI.empty('No steps', 'Add a step from the palette.');
 
@@ -633,6 +635,12 @@
       });
       ctx.on('click', '[data-unlink]', (e, t) => { const n = selNode(); if (!n) return; st.draft.edges = st.draft.edges.filter((x) => !(x.from === n.id && x.to === t.dataset.unlink)); changed('Edge removed.'); });
       ctx.on('click', '[data-flip]', (e, t) => { const n = selNode(); const ed = n && st.draft.edges.find((x) => x.from === n.id && x.to === t.dataset.flip); if (!ed) return; ed.branch = ed.branch === 'true' ? 'false' : 'true'; changed(); });
+      ctx.on('click', '[data-nudge]', (e, t) => {
+        if (!editable) return;
+        const n = st.draft.nodes.find((x) => x.id === st.sel); if (!n) return;
+        const d = t.dataset.nudge.split(',').map(Number);
+        n.x = Math.max(0, (n.x || 0) + d[0]); n.y = Math.max(0, (n.y || 0) + d[1]); st.unsaved = true; ctx.rerender();
+      });
       ctx.on('click', '[data-connect]', () => { st.connectFrom = st.connectFrom === st.sel ? null : st.sel; ctx.rerender(); });
       ctx.on('click', '[data-cancelconnect]', () => { st.connectFrom = null; ctx.rerender(); });
       ctx.on('click', '[data-dismisskbd]', () => { st.kbd = false; ctx.rerender(); });
