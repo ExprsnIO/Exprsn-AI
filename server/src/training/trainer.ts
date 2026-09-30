@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { fetch, type Dispatcher } from 'undici';
 import type { Config } from '../config/index.js';
+import { literalProblem, serviceAgent, servicePolicy, type ServicePolicy } from '../platform/egress.js';
 
 /*
  * The GPU training worker. The TypeScript side orchestrates and governs (datasets, approval, windows, quotas, the
@@ -14,8 +17,18 @@ import type { Config } from '../config/index.js';
  *   POST /v1/evals                one suite on one hardware class → score, base score, cases
  *   POST /v1/convert              a checkpoint to GGUF (llama.cpp convert + quantize), pushed where Ollama pulls from
  *
- * The worker never sees the tenant keys: the orchestrator opens the sealed dataset and sends the scrubbed rows in
- * the submit request.
+ * Contract versions (the worker reports `contract` in /v1/info; absent means 1):
+ *
+ *   1  POST /v1/runs carries { spec, data }: the scrubbed rows in plaintext. Refused unless
+ *      TRAINER_PLAINTEXT_FALLBACK is set.
+ *   2  (Sprint 18, B-905) POST /v1/runs carries { spec, contract: 2, sealed }: the rows encrypted with a fresh
+ *      AES-256-GCM run key. The worker fetches that key once (POST sealed.key.url with the bearer sealed.key.token,
+ *      over mTLS) and uploads checkpoints and GGUF files to sealed.artifacts.url (PUT <url>/<name>?kind=...), where
+ *      they are sealed under the tenant key in the platform's blob store; a checkpoint's `ref` is then
+ *      `exprsn-artifact:<name>`, read back with GET <url>/<name> to resume or convert. docs/training-worker.md has the
+ *      whole contract.
+ *
+ * The worker never sees the tenant keys.
  */
 
 export type RunState = 'queued' | 'running' | 'checkpointed' | 'preempted' | 'succeeded' | 'failed' | 'cancelled';
@@ -58,6 +71,8 @@ export interface RunStatus {
 }
 
 export interface TrainerInfo {
+  /** The contract version the worker speaks (1 when it does not say). */
+  contract?: number;
   container: string | null;
   trainers: string[];
   accelerators: string[];
@@ -100,6 +115,27 @@ export interface ConvertResult {
   tool: string;
 }
 
+/** Contract 2 (B-905): the dataset as the submit request carries it, encrypted with a run key the worker fetches once. */
+export interface SealedDataset {
+  contract: 2;
+  cipher: 'aes-256-gcm';
+  /** Base64 of the 12-byte IV, the 16-byte GCM tag and the encrypted JSON Lines. */
+  iv: string;
+  tag: string;
+  ciphertext: string;
+  /** Associated data bound into the GCM tag. */
+  aad: string;
+  /** SHA-256 of the plaintext JSON Lines, to check after decrypting. */
+  sha256: string;
+  rows: number;
+  /** POST once with `Authorization: Bearer <token>` → { key (base64), cipher, aad }. */
+  key: { url: string; token: string; expiresAt: number };
+  /** PUT <url>/<name>?kind=checkpoint|gguf to store an artefact, GET <url>/<name> to read it back, same bearer. */
+  artifacts: { url: string; token: string; expiresAt: number };
+}
+
+export const ARTIFACT_REF = 'exprsn-artifact:';
+
 /** The GPU training worker the orchestrator drives (a Python trainer over HTTP; a fake in tests). */
 export interface TrainerBackend {
   readonly kind: string;
@@ -107,7 +143,8 @@ export interface TrainerBackend {
   readonly available: boolean;
   readonly reason: string | null;
   info(): Promise<TrainerInfo>;
-  submit(spec: TrainSpec, data: Buffer): Promise<{ id: string }>;
+  /** Contract 1 takes the rows (a Buffer); contract 2 the sealed dataset. */
+  submit(spec: TrainSpec, data: Buffer | SealedDataset): Promise<{ id: string }>;
   status(id: string): Promise<RunStatus>;
   checkpoint(id: string, reason: 'pause' | 'preempt' | 'window' | 'quota' | 'duration'): Promise<Checkpoint>;
   cancel(id: string): Promise<void>;
@@ -151,7 +188,7 @@ export class UnavailableTrainer implements TrainerBackend {
 }
 
 const checkpointSchema = z.object({ step: z.number().int().min(0), ref: z.string().min(1).max(1000), at: z.number().optional() }).transform((c) => ({ step: c.step, ref: c.ref, at: c.at ?? Date.now() }));
-const infoSchema = z.object({ container: z.string().max(300).nullable().default(null), trainers: z.array(z.string()).default([]), accelerators: z.array(z.string()).default([]), gpus: z.object({ total: z.number().int().min(0), free: z.number().int().min(0) }) });
+const infoSchema = z.object({ contract: z.number().int().min(1).max(100).default(1), container: z.string().max(300).nullable().default(null), trainers: z.array(z.string()).default([]), accelerators: z.array(z.string()).default([]), gpus: z.object({ total: z.number().int().min(0), free: z.number().int().min(0) }) });
 const statusSchema = z.object({
   state: z.enum(['queued', 'running', 'checkpointed', 'preempted', 'succeeded', 'failed', 'cancelled']),
   step: z.number().int().min(0),
@@ -173,16 +210,27 @@ export class HttpTrainer implements TrainerBackend {
   readonly available = true;
   readonly reason = null;
 
-  constructor(private readonly o: { url: string; token?: string; timeoutMs: number }) {}
+  private readonly dispatcher: Dispatcher;
+  private readonly refused: string | null;
+
+  constructor(private readonly o: { url: string; token?: string; timeoutMs: number; policy?: ServicePolicy; tls?: { caFile?: string; certFile?: string; keyFile?: string } }) {
+    const policy = o.policy ?? servicePolicy();
+    // B-905: mutual TLS to the worker when TRAINER_CA_FILE / TRAINER_CERT_FILE / TRAINER_KEY_FILE are set.
+    const t = o.tls ?? {};
+    this.dispatcher = serviceAgent(policy, { ...(t.caFile ? { ca: readFileSync(t.caFile) } : {}), ...(t.certFile ? { cert: readFileSync(t.certFile) } : {}), ...(t.keyFile ? { key: readFileSync(t.keyFile) } : {}) });
+    this.refused = literalProblem(o.url, policy);
+  }
 
   private async call<T extends z.ZodType>(method: 'GET' | 'POST', path: string, schema: T, body?: unknown): Promise<z.infer<T>> {
-    let res: Response;
+    if (this.refused) throw new TrainerError(`The training worker's address is refused: ${this.refused}`);
+    let res: Awaited<ReturnType<typeof fetch>>;
     try {
       res = await fetch(new URL(path, this.o.url.endsWith('/') ? this.o.url : `${this.o.url}/`), {
         method,
         headers: { accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...(this.o.token ? { authorization: `Bearer ${this.o.token}` } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(this.o.timeoutMs)
+        signal: AbortSignal.timeout(this.o.timeoutMs),
+        dispatcher: this.dispatcher
       });
     } catch (err) {
       throw new TrainerError(`The training worker could not be reached: ${(err as Error).message}`);
@@ -207,8 +255,9 @@ export class HttpTrainer implements TrainerBackend {
     return this.call('GET', 'v1/info', infoSchema);
   }
 
-  submit(spec: TrainSpec, data: Buffer) {
-    return this.call('POST', 'v1/runs', z.object({ id: z.string().min(1).max(200) }), { spec, data: data.toString('utf8') });
+  submit(spec: TrainSpec, data: Buffer | SealedDataset) {
+    const body = Buffer.isBuffer(data) ? { spec, data: data.toString('utf8') } : { spec, contract: 2, sealed: data };
+    return this.call('POST', 'v1/runs', z.object({ id: z.string().min(1).max(200) }), body);
   }
 
   status(id: string) {
@@ -234,5 +283,5 @@ export class HttpTrainer implements TrainerBackend {
 
 export function createTrainer(cfg: Config): TrainerBackend {
   if (!cfg.TRAINER_URL) return new UnavailableTrainer();
-  return new HttpTrainer({ url: cfg.TRAINER_URL, ...(cfg.TRAINER_TOKEN ? { token: cfg.TRAINER_TOKEN } : {}), timeoutMs: cfg.TRAINER_TIMEOUT_MS });
+  return new HttpTrainer({ url: cfg.TRAINER_URL, ...(cfg.TRAINER_TOKEN ? { token: cfg.TRAINER_TOKEN } : {}), timeoutMs: cfg.TRAINER_TIMEOUT_MS, policy: servicePolicy(cfg), tls: { ...(cfg.TRAINER_CA_FILE ? { caFile: cfg.TRAINER_CA_FILE } : {}), ...(cfg.TRAINER_CERT_FILE ? { certFile: cfg.TRAINER_CERT_FILE } : {}), ...(cfg.TRAINER_KEY_FILE ? { keyFile: cfg.TRAINER_KEY_FILE } : {}) } });
 }

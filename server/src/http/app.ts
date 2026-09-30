@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { scrubSecrets } from '../platform/diagnostics.js';
 import path from 'node:path';
 import express, { type ErrorRequestHandler, type Express } from 'express';
 import compression from 'compression';
@@ -33,6 +34,7 @@ import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platfo
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
+import { trainerWorkerRoutes } from '../routes/trainer-worker.js';
 import { openAiRoutes } from '../openai/routes.js';
 import { sharingRoutes } from '../routes/sharing.js';
 import { promptRoutes } from '../routes/prompts.js';
@@ -112,6 +114,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(acmeChallengeRoutes(s));
   // Sprint 19: published webhook signing keys and the Stripe webhook (public; signatures are the authentication).
   app.use(integrationPublicRoutes(s));
+  // Sprint 18 (B-905): the training worker's callbacks (run keys, artefacts), grant tokens only.
+  app.use(trainerWorkerRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -204,6 +208,9 @@ export function errorHandler(s: Pick<Services, 'log'>): ErrorRequestHandler {
       return;
     }
     for (const [k, v] of Object.entries(problem.headers)) res.setHeader(k, v);
-    res.status(problem.status).type('application/problem+json').send(JSON.stringify(problem.toBody(req.traceId, req.originalUrl)));
+    const body = problem.toBody(req.traceId, req.originalUrl) as { detail?: unknown };
+    // Sprint 18 (B-907): credentials in a detail (a URL with a password, password=...) never reach the client.
+    if (typeof body.detail === 'string') body.detail = scrubSecrets(body.detail);
+    res.status(problem.status).type('application/problem+json').send(JSON.stringify(body));
   };
 }

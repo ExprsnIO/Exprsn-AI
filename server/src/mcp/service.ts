@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { scrubSecrets } from '../platform/diagnostics.js';
 import type { Logger } from 'pino';
 import type { Agent } from 'undici';
 import { json, type Db } from '../db/knex.js';
@@ -268,7 +269,7 @@ export class McpService {
   }
 
   private async finish(s: ServerRow, report: CheckLine[], health: ServerHealth, detail: string | null, upd: Partial<ServerRow>): Promise<CheckLine[]> {
-    await this.db('mcp_servers').where({ id: s.id }).update({ ...upd, health, health_detail: detail?.slice(0, 500) ?? null, updated_at: Date.now() });
+    await this.db('mcp_servers').where({ id: s.id }).update({ ...upd, health, health_detail: detail ? scrubSecrets(detail).slice(0, 500) : null, updated_at: Date.now() });
     if (health !== s.health) {
       const tone = health === 'healthy' ? 'ok' : health === 'changed' ? 'danger' : health === 'registering' ? '' : 'danger';
       const title = health === 'healthy' ? (s.health === 'registering' ? 'Compatibility passed' : 'Health restored') : health === 'unreachable' ? 'Health check failing' : health === 'incompatible' ? 'Compatibility failed' : 'Tool schema changed';

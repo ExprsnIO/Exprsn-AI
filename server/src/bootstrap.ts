@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import YAML from 'yaml';
+import { parseYamlSafely } from './platform/yaml.js';
 import { z } from 'zod';
 import { LABELS } from './authz/labels.js';
 import { isRole } from './authz/permissions.js';
@@ -50,7 +50,8 @@ const fileSchema = z
 export type IdentityFile = z.infer<typeof fileSchema>;
 
 export function parseIdentityFile(text: string): IdentityFile {
-  const data = fileSchema.parse(YAML.parse(text));
+  // B-907: the identity file is capped too (anchors are allowed for shared mappings, but only a few).
+  const data = fileSchema.parse(parseYamlSafely(text, { maxBytes: 4 * 1024 * 1024, maxDepth: 24, maxAliases: 50 }));
   for (const t of data.tenants) for (const p of t.providers) parseProviderConfig(p.kind, p.config);
   return data;
 }

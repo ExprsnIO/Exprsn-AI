@@ -30,8 +30,9 @@ Commands:
     at first sign-in.
   audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
   kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
-  kms:rewrap                   Re-wrap every data key (and re-sign checkpoints and backup manifests) from the
-                               previous key-encryption key to the current one, then verify. Set the new DATA_KEY (or
+  kms:rewrap                   Re-wrap every data key (and re-sign checkpoints, backup manifests, image provenance and
+                               training model cards) from the previous key-encryption key to the current one, then
+                               verify. Set the new DATA_KEY (or
                                KMS_PROVIDER) and the old one as DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER). Safe to
                                repeat; once it reports verified, the previous key can be removed.
   backup:create                Back up the application database into the blob store (sealed, KMS-signed)
@@ -180,9 +181,9 @@ async function main(): Promise<void> {
         const previous = createPreviousKms(cfg);
         if (!previous) throw new Error('No previous key-encryption key is configured: set DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER).');
         const target = createKms(cfg);
-        const r = await rewrapAll({ db, blobs: s.blobs, target, previous, kekName: (scope) => s!.keys.kekName(scope), progress: (m) => void process.stderr.write(`${m}\n`) });
+        const r = await rewrapAll({ db, blobs: s.blobs, target, previous, kekName: (scope) => s!.keys.kekName(scope), progress: (m) => void process.stderr.write(`${m}\n`), keys: s.keys });
         const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
-        if (tenant) await s.audit.append({ tenantId: tenant.id, action: 'kms.rewrapped', kind: 'system', actor: { service: 'cli' }, target: { kms: target.kind }, detail: { previous: previous.kind, dataKeys: { ...r.dataKeys, failed: r.dataKeys.failed.length }, checkpoints: { ...r.checkpoints, failed: r.checkpoints.failed.length }, backups: { ...r.backups, failed: r.backups.failed.length }, verified: r.verified } });
+        if (tenant) await s.audit.append({ tenantId: tenant.id, action: 'kms.rewrapped', kind: 'system', actor: { service: 'cli' }, target: { kms: target.kind }, detail: { previous: previous.kind, dataKeys: { ...r.dataKeys, failed: r.dataKeys.failed.length }, checkpoints: { ...r.checkpoints, failed: r.checkpoints.failed.length }, backups: { ...r.backups, failed: r.backups.failed.length }, images: { ...r.images, failed: r.images.failed.length }, modelCards: { ...r.modelCards, failed: r.modelCards.failed.length }, verified: r.verified } });
         process.stdout.write(JSON.stringify(r, null, 2) + '\n');
         process.stdout.write(r.verified ? 'Every data key opens with the new key-encryption key. The previous key can be removed.\n' : 'Not finished: fix the failures above and run kms:rewrap again. Keep the previous key until it reports verified.\n');
         if (!r.verified) process.exitCode = 2;

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ACME_EAB_HMAC_KEY'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -272,6 +272,35 @@ const base = z.object({
     /** OpenBao database secrets engine mount for dynamic data-connection credentials. */
     OPENBAO_DATABASE_MOUNT: z.string().regex(/^[a-z0-9_/-]+$/).default('database'),
     // --- end operations ---
+    // --- Sprint 18: platform hardening (edit only inside this block) ---
+    /** B-901: operator-chosen service URLs (pool instances, zone endpoints, image backends, the trainer). This comma list (hosts, *.domain, CIDRs) admits link-local hosts and, with SERVICE_INTERNAL_ONLY, public ones; metadata addresses are never admitted. */
+    SERVICE_ALLOWED_HOSTS: z.string().default(''),
+    SERVICE_INTERNAL_ONLY: bool.default(false),
+    /** B-902: in production, refuse plaintext links to PostgreSQL, MySQL, Redis, S3 and OpenBao. */
+    REQUIRE_BACKEND_TLS: bool.default(false),
+    /** Links exempt from REQUIRE_BACKEND_TLS (comma list of database, redis, s3, openbao), e.g. a Redis sidecar on loopback. */
+    BACKEND_TLS_EXEMPT: z.string().regex(/^\s*((database|redis|s3|openbao)\s*(,\s*|$))*$/, 'BACKEND_TLS_EXEMPT takes database, redis, s3 and openbao').default(''),
+    /** B-904: ACME external account binding (RFC 8555 section 7.3.4): the key id and base64url HMAC key the CA gave out. */
+    ACME_EAB_KID: z.string().max(500).optional(),
+    ACME_EAB_HMAC_KEY: z.string().regex(/^[A-Za-z0-9_=+/-]+$/, 'ACME_EAB_HMAC_KEY is base64url').optional(),
+    /** RFC 2136 transport: auto (UDP, then TCP when the answer is truncated or UDP gets none), udp or tcp. */
+    ACME_DNS_RFC2136_TRANSPORT: z.enum(['auto', 'udp', 'tcp']).default('auto'),
+    /** Certificate push hooks: named reload commands as JSON {"name": ["/usr/sbin/nginx", "-s", "reload"]} (argument arrays, no shell). */
+    ACME_RELOAD_COMMANDS: z.string().default('{}'),
+    ACME_HOOK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
+    /** B-905: training worker contract 2. Where the worker fetches run keys and stores artefacts (defaults to PUBLIC_URL). */
+    TRAINER_CALLBACK_URL: z.url().optional(),
+    /** Let a contract-1 worker receive dataset rows in plaintext (off: such a worker is refused). */
+    TRAINER_PLAINTEXT_FALLBACK: bool.default(false),
+    TRAINER_KEY_TTL_SECONDS: z.coerce.number().int().min(30).max(24 * 3600).default(900),
+    /** SHA-256 fingerprint of the worker's client certificate; when set, key and artefact calls must present it. */
+    TRAINER_CLIENT_CERT_SHA256: z.string().regex(/^([0-9A-Fa-f]{2}:?){31}[0-9A-Fa-f]{2}$/).optional(),
+    TRAINER_ARTIFACT_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 ** 4).default(64 * 1024 ** 3),
+    /** Mutual TLS from the orchestrator to the worker. */
+    TRAINER_CA_FILE: z.string().optional(),
+    TRAINER_CERT_FILE: z.string().optional(),
+    TRAINER_KEY_FILE: z.string().optional(),
+    // --- end Sprint 18 ---
 
     // --- Sprint 19: knowledge, integrations and workflows ---
     /** Logical replication for PostgreSQL knowledge sources: off, or on for sources that ask for it. */
@@ -376,8 +405,20 @@ const schema = base
     if (c.ACME_DNS_PROVIDER === 'webhook' && (!c.ACME_DNS_WEBHOOK_URL || !c.ACME_DNS_WEBHOOK_SECRET)) {
       ctx.addIssue({ code: 'custom', path: ['ACME_DNS_WEBHOOK_URL'], message: 'ACME_DNS_PROVIDER=webhook needs ACME_DNS_WEBHOOK_URL and ACME_DNS_WEBHOOK_SECRET' });
     }
-    if (c.ACME_DNS_PROVIDER === 'rfc2136' && (!c.ACME_DNS_RFC2136_SERVER || !c.ACME_DNS_RFC2136_ZONE || !c.ACME_DNS_TSIG_NAME || !c.ACME_DNS_TSIG_SECRET)) {
-      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_RFC2136_SERVER'], message: 'ACME_DNS_PROVIDER=rfc2136 needs ACME_DNS_RFC2136_SERVER, ACME_DNS_RFC2136_ZONE, ACME_DNS_TSIG_NAME and ACME_DNS_TSIG_SECRET' });
+    // Sprint 18 (B-904): the zone may be left out and is then found from the SOA record.
+    if (c.ACME_DNS_PROVIDER === 'rfc2136' && (!c.ACME_DNS_RFC2136_SERVER || !c.ACME_DNS_TSIG_NAME || !c.ACME_DNS_TSIG_SECRET)) {
+      ctx.addIssue({ code: 'custom', path: ['ACME_DNS_RFC2136_SERVER'], message: 'ACME_DNS_PROVIDER=rfc2136 needs ACME_DNS_RFC2136_SERVER, ACME_DNS_TSIG_NAME and ACME_DNS_TSIG_SECRET (ACME_DNS_RFC2136_ZONE is optional)' });
+    }
+    if (!!c.ACME_EAB_KID !== !!c.ACME_EAB_HMAC_KEY) ctx.addIssue({ code: 'custom', path: ['ACME_EAB_KID'], message: 'ACME_EAB_KID and ACME_EAB_HMAC_KEY go together' });
+    try {
+      const cmds = JSON.parse(c.ACME_RELOAD_COMMANDS) as unknown;
+      if (!cmds || typeof cmds !== 'object' || Array.isArray(cmds) || !Object.entries(cmds).every(([k, v]) => /^[a-z0-9][a-z0-9_-]{0,62}$/.test(k) && Array.isArray(v) && v.length > 0 && v.every((a) => typeof a === 'string'))) throw new Error('shape');
+    } catch {
+      ctx.addIssue({ code: 'custom', path: ['ACME_RELOAD_COMMANDS'], message: 'ACME_RELOAD_COMMANDS is a JSON object of names (lower case) to argument arrays, e.g. {"nginx":["/usr/sbin/nginx","-s","reload"]}' });
+    }
+    // Sprint 18 (B-902): plaintext links to the backing services are refused in production when asked to.
+    if (c.NODE_ENV === 'production' && c.REQUIRE_BACKEND_TLS) {
+      for (const p of backendTlsProblems(c)) ctx.addIssue({ code: 'custom', path: [p.path], message: p.message });
     }
     if (c.NODE_ENV === 'production' && !c.COOKIE_SECURE) {
       ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'Production requires HTTPS (PUBLIC_URL https://) or COOKIE_SECURE=true behind a TLS proxy' });
@@ -385,6 +426,41 @@ const schema = base
   });
 
 export type Config = z.infer<typeof schema>;
+
+/**
+ * B-902: which backing-service links would carry plaintext (ASVS 1.9.1). SQLite is a local file and exempt; each
+ * other link can be exempted in BACKEND_TLS_EXEMPT (a sidecar on loopback, a service mesh that adds mTLS).
+ *   database  PostgreSQL: sslmode require, verify-ca or verify-full (or ssl=true); MySQL: an ssl parameter
+ *   redis     rediss://
+ *   s3        an https:// S3_ENDPOINT
+ *   openbao   an https:// OPENBAO_ADDR
+ */
+export function backendTlsProblems(c: { DB_CLIENT: string; DATABASE_URL?: string | undefined; REDIS_URL?: string | undefined; BLOB_STORE: string; S3_ENDPOINT?: string | undefined; OPENBAO_ADDR?: string | undefined; BACKEND_TLS_EXEMPT: string }): { path: string; message: string }[] {
+  const exempt = new Set(c.BACKEND_TLS_EXEMPT.split(',').map((x) => x.trim()).filter(Boolean));
+  const out: { path: string; message: string }[] = [];
+  const hint = (link: string) => ` (REQUIRE_BACKEND_TLS is on; add ${link} to BACKEND_TLS_EXEMPT to allow this link in plaintext)`;
+  if (c.DB_CLIENT !== 'sqlite' && c.DATABASE_URL && !exempt.has('database')) {
+    let q: URLSearchParams | null;
+    try {
+      q = new URL(c.DATABASE_URL).searchParams;
+    } catch {
+      q = null;
+    }
+    if (c.DB_CLIENT === 'pg') {
+      const mode = (q?.get('sslmode') ?? '').toLowerCase();
+      const ssl = (q?.get('ssl') ?? '').toLowerCase();
+      const ok = ['require', 'verify-ca', 'verify-full'].includes(mode) || (!mode && (ssl === 'true' || ssl === '1'));
+      if (!ok) out.push({ path: 'DATABASE_URL', message: `PostgreSQL link without TLS (sslmode=${mode || 'unset'}); use sslmode=verify-full${hint('database')}` });
+    } else {
+      const ssl = q?.get('ssl');
+      if (ssl == null || ['', 'false', '0'].includes(ssl.toLowerCase())) out.push({ path: 'DATABASE_URL', message: `MySQL link without TLS; add ?ssl={"rejectUnauthorized":true}${hint('database')}` });
+    }
+  }
+  if (c.REDIS_URL && !exempt.has('redis') && !/^rediss:\/\//i.test(c.REDIS_URL)) out.push({ path: 'REDIS_URL', message: `Redis link without TLS; use rediss://${hint('redis')}` });
+  if (c.BLOB_STORE === 's3' && c.S3_ENDPOINT && !exempt.has('s3') && !/^https:\/\//i.test(c.S3_ENDPOINT)) out.push({ path: 'S3_ENDPOINT', message: `S3 endpoint without TLS; use https://${hint('s3')}` });
+  if (c.OPENBAO_ADDR && !exempt.has('openbao') && !/^https:\/\//i.test(c.OPENBAO_ADDR)) out.push({ path: 'OPENBAO_ADDR', message: `OpenBao without TLS; use https://${hint('openbao')}` });
+  return out;
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(readEnv(env));

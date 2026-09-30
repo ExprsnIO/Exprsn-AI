@@ -88,6 +88,16 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `STRIPE_WEBHOOK_SECRET` (`_FILE`), `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | —, `300` | Sprint 19: the signing secret of the Stripe webhook endpoint pointed at `https://<host>/billing/stripe/webhook` (events `invoice.paid`, `invoice.payment_failed`, `invoice.voided`); unset, the route answers 404 |
 | `IMAGE_SAFETY_REQUIRED` | `false` | Sprint 19: without an image-safety classifier, withhold generated images and sampled video frames instead of marking them "not classified" |
 | `SCRIPT_RUNTIME` | — | Sprint 19: OCI runtime for script containers, e.g. `runsc` for gVisor (install it and register it with the engine, `docker info` must list it); runs are refused when the engine does not know it |
+| `SERVICE_ALLOWED_HOSTS`, `SERVICE_INTERNAL_ONLY` | —, `false` | Sprint 18: pool instance, zone endpoint, image backend and trainer URLs may point at loopback, private and (unless `SERVICE_INTERNAL_ONLY`) public addresses, never at cloud metadata (169.254.169.254, fd00:ec2::254, 100.100.100.200, 192.0.0.192), link-local or unspecified ones. The list (hosts, `*.domain`, CIDRs) admits a link-local service network and, with `SERVICE_INTERNAL_ONLY`, public hosts; metadata addresses are never admitted. Names are checked when saved and again at every connection |
+| `REQUIRE_BACKEND_TLS`, `BACKEND_TLS_EXEMPT` | `false`, — | Sprint 18: with `NODE_ENV=production`, refuse to start when a link to PostgreSQL (`sslmode=require`, `verify-ca` or `verify-full`), MySQL (an `ssl` parameter, e.g. `?ssl={"rejectUnauthorized":true}`), Redis (`rediss://`), S3 (`https://`) or OpenBao (`https://`) would be plaintext. SQLite is exempt. Exempt one link by name (`database`, `redis`, `s3`, `openbao`), for example a Redis sidecar on loopback or a mesh that adds mTLS |
+| `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY` (`_FILE`) | — | Sprint 18: external account binding for CAs that require it (the key id and base64url MAC key they issue); used when the ACME account is first created |
+| `ACME_DNS_RFC2136_TRANSPORT` | `auto` | Sprint 18: `auto` sends updates over UDP and repeats them over TCP when the answer is truncated or UDP gets none; `udp` or `tcp` force one. `ACME_DNS_RFC2136_ZONE` may be left out: the zone is then the owner of the SOA record the server returns for `_acme-challenge.<name>` |
+| `ACME_RELOAD_COMMANDS`, `ACME_HOOK_TIMEOUT_MS` | `{}`, `30000` | Sprint 18: reload commands certificates can name as push hooks, as JSON `{"name": ["/path", "arg"]}` (argument arrays, no shell; run on every instance after its sink writes the files, with `CERT_NAME`, `CERT_SERIAL`, `CERT_NOT_AFTER` and `CERT_DIR` set) |
+| `TRAINER_CALLBACK_URL` | `PUBLIC_URL` | Sprint 18: the base URL the training worker calls back for run keys and artefacts (`/trainer/v1/...`, outside `/api`) |
+| `TRAINER_PLAINTEXT_FALLBACK` | `false` | Sprint 18: let a worker on contract 1 receive dataset rows in plaintext; off, such a worker is refused and jobs wait saying so |
+| `TRAINER_KEY_TTL_SECONDS`, `TRAINER_ARTIFACT_MAX_BYTES` | `900`, 64 GiB | Sprint 18: how long a run key waits to be fetched (once); the largest checkpoint or GGUF upload |
+| `TRAINER_CLIENT_CERT_SHA256` | — | Sprint 18: SHA-256 fingerprint of the worker's client certificate; key and artefact calls must present it (on this server's TLS socket, or as `X-Client-Cert-SHA256` from a proxy that `TRUST_PROXY` trusts and that verified the certificate) |
+| `TRAINER_CA_FILE`, `TRAINER_CERT_FILE`, `TRAINER_KEY_FILE` | — | Sprint 18: mutual TLS from the orchestrator to the worker |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -235,6 +245,11 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   `ACME_DNS_PROVIDER=rfc2136` (a TSIG key allowed to update `_acme-challenge` TXT records in the zone, for example BIND
   `update-policy { grant acme-update. wildcard *.corp.internal. TXT; };`) or `ACME_DNS_PROVIDER=webhook` (an internal
   hook that verifies `X-Exprsn-Signature` and updates your DNS; see `docs/api.md`).
+- Sprint 18: a CA that requires external account binding gets it from `ACME_EAB_KID` and `ACME_EAB_HMAC_KEY`. RFC 2136
+  updates fall back to TCP (the TSIG key must be allowed over TCP too) and can find the zone from the SOA record.
+  Certificates can have push hooks (Platform screen, Certificates, Hooks): a reload command from `ACME_RELOAD_COMMANDS`
+  runs on every instance after the new files are written, and a signed webhook tells deploy tooling on another host;
+  its secret is shown once and verifies `X-Exprsn-Signature` exactly like the DNS hook.
 
 ### Import bundles
 
@@ -244,3 +259,22 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   `PLATFORM_STAGING_URL` is an internal service that receives `{bundle, digest, contents, files}` and answers
   `{ok, detail}`. Mirror URLs, the staging hook and probes must resolve to internal addresses; `PLATFORM_ALLOWED_HOSTS`
   adds exceptions.
+- Sprint 18: an image, npm or PyPI mirror can have a push target (Platform screen, Mirrors, Push target): after each
+  promotion the files go to Harbor (an OCI registry: give the project and a robot account; images must be OCI image
+  layout tars), Verdaccio (a token) or devpi (the `user/index` and a user's password) through their HTTP APIs. The
+  target must be an internal host (`PLATFORM_ALLOWED_HOSTS` for others); the secret is stored sealed. Every file's
+  outcome is listed on the bundle, and a push can be repeated.
+
+### Backups (Sprint 18)
+
+- The dump now reads one snapshot for the whole database (repeatable read on PostgreSQL and MySQL; on SQLite a read
+  transaction on a second connection, which needs the default WAL mode), and the blob archive holds exactly the
+  objects the snapshot's rows name (plus `mirrors/` and `training/staging/`, which no row names). An object written
+  during the backup, or one with no row, is left out.
+
+### Training worker (Sprint 18)
+
+- The worker speaks contract 2 ([training-worker.md](training-worker.md)): rows are sent encrypted and it fetches the run key
+  once from `TRAINER_CALLBACK_URL`; checkpoints and GGUF files are uploaded back and sealed under the tenant key. Route
+  `/trainer/v1/` from the training zone to the app, require the worker's client certificate at the proxy and set
+  `TRAINER_CLIENT_CERT_SHA256`. A contract-1 worker is refused unless `TRAINER_PLAINTEXT_FALLBACK=true`.
