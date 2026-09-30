@@ -145,12 +145,12 @@
         const direct = u.roles.filter((r) => r.source === 'direct').map((r) => r.role);
         const mapped = u.roles.filter((r) => r.source === 'mapping').map((r) => r.role);
         ctx.drawer({ title: esc(u.displayName) + ' ' + UI.pill(u.state === 'active' ? 'active' : 'disabled', u.state === 'active' ? 'ok' : 'danger'),
-          body: UI.kv([['Username', '<span class="mono">' + esc(u.username) + '</span>'], ['Email', esc(u.email || '')], ['Clearance', UI.label(u.clearance, { sm: true })], ['Last sign-in', esc(when(u.lastLoginAt))], ['From groups', esc(mapped.map(roleName).join(', ') || 'none')], ['Second factors', u.factors.length ? esc(u.factors.map((f) => f.label).join(', ')) : (u.mfaRequired ? UI.pill('required, not set up', 'warn') : 'none')]], 2)
+          body: UI.kv([['Username', '<span class="mono">' + esc(u.username) + '</span>'], ['Email', esc(u.email || '')], ['Clearance', UI.label(u.clearance, { sm: true })], ['Last sign-in', esc(when(u.lastLoginAt))], ['From groups', esc(mapped.map(roleName).join(', ') || 'none')], ['Second factors', u.factors.length ? esc(u.factors.map((f) => f.label).join(', ')) : (u.mfaRequired ? UI.pill('required, not set up', 'warn') : 'none')], ['Password', u.password && u.password.local ? (u.password.mustChange ? UI.pill('must change at next sign-in', 'warn') : 'kept here') : 'kept by the directory']], 2)
             + (u.disabledReason ? UI.notice('Disabled: ' + esc(u.disabledReason), 'danger') : '')
             + '<div class="eyebrow">Identity links</div>' + UI.table(['Store', 'External id', 'Last seen'], u.identities.map((i) => [esc(i.provider), '<span class="mono" style="overflow-wrap:anywhere">' + esc(i.externalId) + '</span>', esc(when(i.lastSeenAt))]), { minWidth: '0', cls: 'bare', clickable: false })
             + (self ? UI.notice('You cannot change your own roles, clearance or state.', 'info') : '<div class="eyebrow">Directly granted roles</div><div class="hstack wrap gap6" style="row-gap:6px">' + (st.roles || []).map((r) => UI.check(r.name, direct.indexOf(r.id) >= 0, 'data-drole="' + esc(r.id) + '"')).join('') + '</div>'
               + UI.field('Direct clearance', UI.select([{ value: '', label: 'From groups only' }, 'public', 'internal', 'confidential', 'restricted'], u.clearanceDirect || '', 'data-dclear'), 'Raises the clearance from group mappings; never lowers it at sign-in.')),
-          actions: self ? UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }) : UI.btn('Save access', { kind: 'primary', attrs: 'data-saveuser' }) + UI.btn(u.state === 'active' ? 'Disable user' : 'Enable user', { kind: u.state === 'active' ? 'danger' : '', attrs: 'data-userstate' }) + (u.factors.length ? UI.btn('Reset second factors', { kind: 'ghost', attrs: 'data-resetmfa' }) : '') + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+          actions: self ? UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }) : UI.btn('Save access', { kind: 'primary', attrs: 'data-saveuser' }) + UI.btn(u.state === 'active' ? 'Disable user' : 'Enable user', { kind: u.state === 'active' ? 'danger' : '', attrs: 'data-userstate' }) + (u.factors.length ? UI.btn('Reset second factors', { kind: 'ghost', attrs: 'data-resetmfa' }) : '') + (u.password && u.password.local ? UI.btn('Reset password', { kind: 'ghost', attrs: 'data-resetpw' }) : '') + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
           onMount(d) {
             const $d = (sel2) => d.querySelector(sel2);
             if (self) return;
@@ -170,19 +170,39 @@
                 if (ok) act(() => App.patch('/api/admin/users/' + encodeURIComponent(u.id), { state: 'disabled', disabledReason: reason || undefined }), u.username + ' disabled. Sessions and API keys revoked.');
               } else act(() => App.patch('/api/admin/users/' + encodeURIComponent(u.id), { state: 'active' }), u.username + ' enabled.');
             });
+            const rp = $d('[data-resetpw]');
+            if (rp) rp.addEventListener('click', () => {
+              ctx.modal({ title: 'Reset the password for ' + esc(u.username), body: UI.notice('The current password stops working at once and every session and application of this account is signed out.', 'warn')
+                + UI.field('How', UI.select([{ value: 'temporary', label: 'Set a temporary password they change at next sign-in' }, { value: 'link', label: 'Email them a single-use link' + (u.email ? '' : ' (no email address)') }], 'temporary', 'data-rpmode'))
+                + '<div data-rptemp>' + UI.field('Temporary password', UI.input('', { type: 'password', attrs: 'data-rppw autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.') + '</div>',
+                actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reset password', { kind: 'danger', attrs: 'data-rpgo' }),
+                onMount(m) {
+                  const mode = m.querySelector('[data-rpmode]'); const temp = m.querySelector('[data-rptemp]');
+                  mode.addEventListener('change', () => { temp.hidden = mode.value !== 'temporary'; });
+                  m.querySelector('[data-rpgo]').addEventListener('click', async () => {
+                    const body = mode.value === 'temporary' ? { mode: 'temporary', password: m.querySelector('[data-rppw]').value } : { mode: 'link' };
+                    if (body.mode === 'temporary' && !body.password) { ctx.toast('Enter a temporary password.', 'warn'); return; }
+                    try { const r = await App.post('/api/admin/users/' + encodeURIComponent(u.id) + '/password', body); App.closeOverlay(); ctx.toast(r.mode === 'link' ? (r.linkSent ? 'Password reset. A link was emailed to ' + esc(u.username) + '.' : 'Password reset, but the email could not be sent. Set a temporary password instead.') : 'Temporary password set. ' + esc(u.username) + ' changes it at next sign-in.', r.mode === 'link' && !r.linkSent ? 'warn' : 'ok'); reload(); } catch (err) { App.fail(err, 'Password not reset'); }
+                  });
+                } });
+            });
             const rm = $d('[data-resetmfa]'); if (rm) rm.addEventListener('click', async () => { const ok = await ctx.confirm({ title: 'Reset second factors for ' + u.username + '?', tone: 'danger', body: '<div class="fg2">Their factors and recovery codes are removed and their sessions end. If their roles need a second factor they enrol a new one at next sign-in.</div>', ok: 'Reset' }); if (ok) act(() => App.post('/api/admin/users/' + encodeURIComponent(u.id) + '/reset-mfa'), 'Second factors reset.'); });
           } });
       });
       ctx.on('click', '[data-newuser]', () => {
         ctx.modal({ title: 'Create local account', body: UI.notice('Local accounts are for bootstrap and break-glass use. Everyone else should come from a directory.', 'info')
           + '<div class="formgrid">' + UI.field('Username', UI.input('', { attrs: 'data-nu maxlength="190" autocomplete="off"' })) + UI.field('Display name', UI.input('', { attrs: 'data-nd maxlength="200"' })) + UI.field('Email', UI.input('', { type: 'email', attrs: 'data-ne' })) + UI.field('Clearance', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal', 'data-nc')) + '</div>'
-          + UI.field('Initial password', UI.input('', { type: 'password', attrs: 'data-np autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.')
+          + UI.check('Email an invitation to set a password instead (needs an email address)', false, 'data-ninv')
+          + '<div data-npwrap>' + UI.field('Initial password', UI.input('', { type: 'password', attrs: 'data-np autocomplete="new-password"' }), 'At least 12 characters. Share it out of band.')
+          + UI.check('Must change it at first sign-in', true, 'data-nmc') + '</div>'
           + '<div class="hstack wrap gap6" style="row-gap:6px">' + (st.roles || []).map((r) => UI.check(r.name, r.id === 'member', 'data-nr="' + esc(r.id) + '"')).join('') + '</div>',
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create account', { kind: 'primary', attrs: 'data-nsave' }),
           onMount(m) {
+            const inv = m.querySelector('[data-ninv]'); inv.addEventListener('change', () => { m.querySelector('[data-npwrap]').hidden = inv.checked; });
             m.querySelector('[data-nsave]').addEventListener('click', async () => {
-              const body = { username: m.querySelector('[data-nu]').value.trim(), displayName: m.querySelector('[data-nd]').value.trim(), email: m.querySelector('[data-ne]').value.trim() || null, clearance: m.querySelector('[data-nc]').value, password: m.querySelector('[data-np]').value, roles: Array.prototype.slice.call(m.querySelectorAll('[data-nr]:checked')).map((c) => c.dataset.nr) };
-              try { await App.post('/api/admin/users', body); App.closeOverlay(); ctx.toast('Account ' + esc(body.username) + ' created.', 'ok'); reload(); } catch (err) { App.fail(err, 'Account not created'); }
+              const body = { username: m.querySelector('[data-nu]').value.trim(), displayName: m.querySelector('[data-nd]').value.trim(), email: m.querySelector('[data-ne]').value.trim() || null, clearance: m.querySelector('[data-nc]').value, roles: Array.prototype.slice.call(m.querySelectorAll('[data-nr]:checked')).map((c) => c.dataset.nr) };
+              if (inv.checked) body.invite = true; else { body.password = m.querySelector('[data-np]').value; body.mustChange = m.querySelector('[data-nmc]').checked; }
+              try { const r = await App.post('/api/admin/users', body); App.closeOverlay(); ctx.toast('Account ' + esc(body.username) + ' created.' + (body.invite ? (r.invited ? ' Invitation sent.' : ' The invitation email could not be sent.') : ''), body.invite && !r.invited ? 'warn' : 'ok'); reload(); } catch (err) { App.fail(err, 'Account not created'); }
             });
           } });
       });

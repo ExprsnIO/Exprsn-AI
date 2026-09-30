@@ -54,6 +54,12 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `IMAGE_SAFETY_URL`, `IMAGE_SAFETY_THRESHOLD` | —, `0.5` | Image-safety classifier for generated images and video frames; without it images are marked "not classified" |
 | `SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_HOURS` | `30`, `12` | Session lifetime |
 | `LOCKOUT_MAX_ATTEMPTS`, `LOCKOUT_WINDOW_MINUTES`, `LOCKOUT_DURATION_MINUTES` | `5`, `15`, `15` | Sign-in lockout |
+| `STEPUP_WINDOW_SECONDS` | `300` | Creating API keys, removing a second factor and regenerating recovery codes need a password or factor check this recent (signing in counts) |
+| `BREACHED_PASSWORDS` | `off` | Breached-password check for new local passwords: `hibp` (the k-anonymity range API: only the first five hex characters of the SHA-1 leave the server), `file` (a local list), `both`, or `off`. If a source cannot be reached the password is accepted and `password.breach_check.unavailable` is audited |
+| `BREACHED_HIBP_URL`, `BREACHED_TIMEOUT_MS` | `https://api.pwnedpasswords.com`, `3000` | Range API base (`GET <url>/range/<prefix>`); point it at an internal mirror in air-gapped sites |
+| `BREACHED_FILE` | — | Required for `file` and `both`: uppercase SHA-1 hashes, one per line, sorted, optionally followed by `:count` (the format of HIBP's "ordered by hash" download). Searched in place by binary search, never loaded into memory |
+| `PASSWORD_RESET_MINUTES`, `PASSWORD_RESET_PER_HOUR` | `60`, `5` | Lifetime of emailed reset links; reset requests per hour per identifier and per account (four times that per client address). Needs `SMTP_URL` |
+| `PASSWORD_INVITE_HOURS` | `72` | Lifetime of invitation links for local accounts created without a password |
 | `DEFAULT_TENANT` | `default` | Tenant used when sign-in names none |
 | `IDENTITY_CONFIG` | — | Path to the identity YAML ([identity.md](identity.md)) |
 | `METRICS_TOKEN` (`_FILE`) | — | Bearer token for `/metrics`; without it `/metrics` is off in production |

@@ -201,6 +201,22 @@ const base = z.object({
     /** How old a DPoP proof may be (RFC 9449 iat window); its jti is remembered this long so it cannot be replayed. */
     DPOP_PROOF_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
     // --- end Sprint 14 federation ---
+    // --- Sprint 11: account self-service (edit only inside this block) ---
+    /** Breached-password check for new passwords: HIBP k-anonymity range API, a local sorted SHA-1 file, both, or off. */
+    BREACHED_PASSWORDS: z.enum(['off', 'hibp', 'file', 'both']).default('off'),
+    /** Base URL of the range API (GET <url>/range/<first 5 hex of SHA-1>); point it at an internal mirror if you have one. */
+    BREACHED_HIBP_URL: z.url().default('https://api.pwnedpasswords.com'),
+    BREACHED_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(3000),
+    /** Uppercase SHA-1 hashes, one per line and sorted, optionally followed by :count (the HIBP "ordered by hash" download). */
+    BREACHED_FILE: z.string().optional(),
+    /** Sensitive account changes need a password or factor check this recent (ASVS 3.7.1). */
+    STEPUP_WINDOW_SECONDS: z.coerce.number().int().min(30).max(24 * 3600).default(300),
+    /** Password reset links by email: lifetime, and requests per hour per identifier and per account (four times that per address). */
+    PASSWORD_RESET_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(60),
+    PASSWORD_RESET_PER_HOUR: z.coerce.number().int().min(1).max(100).default(5),
+    /** Invitations to set a first password (local accounts created with an email instead of a password). */
+    PASSWORD_INVITE_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(72),
+    // --- end account ---
 
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
@@ -258,6 +274,9 @@ const schema = base
     }
     if (c.JOB_QUEUE === 'bullmq' && !c.REDIS_URL) {
       ctx.addIssue({ code: 'custom', path: ['REDIS_URL'], message: 'REDIS_URL is required when JOB_QUEUE=bullmq' });
+    }
+    if ((c.BREACHED_PASSWORDS === 'file' || c.BREACHED_PASSWORDS === 'both') && !c.BREACHED_FILE) {
+      ctx.addIssue({ code: 'custom', path: ['BREACHED_FILE'], message: `BREACHED_FILE is required when BREACHED_PASSWORDS=${c.BREACHED_PASSWORDS}` });
     }
     if (c.NODE_ENV === 'production' && !c.COOKIE_SECURE) {
       ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'Production requires HTTPS (PUBLIC_URL https://) or COOKIE_SECURE=true behind a TLS proxy' });

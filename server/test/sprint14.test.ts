@@ -213,7 +213,7 @@ describe('Sprint 14: federation', () => {
       expect((await u.agent.get(`/oauth/authorize?${q}`)).text).toContain('Allow Notebook');
       const user = await h.s.users.byUsername(h.tenantId, 'grantuser');
       const notes = await h.s.db('notifications').where({ user_id: user!.id, kind: 'security' }).orderBy('created_at');
-      expect(notes.map((n: { title: string }) => n.title)).toEqual(['Notebook can now act as you', 'Access removed for Notebook']);
+      expect(notes.map((n: { title: string }) => n.title)).toEqual(['An application can now act as you', 'An application lost access to your account']);
       expect((await h.s.db('audit_events').where({ action: 'oidc.grant.revoked_by_user' })).length).toBe(1);
     });
   });

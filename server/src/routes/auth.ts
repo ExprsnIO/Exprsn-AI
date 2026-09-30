@@ -9,6 +9,7 @@ import { rolesRequireMfa } from '../authz/permissions.js';
 import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
 import { forbidden, HttpProblem, tooManyRequests, unauthorized } from '../http/problem.js';
 import type { Services } from '../services.js';
+import { securityAlert } from '../identity/security-alerts.js';
 
 const loginSchema = z.object({
   tenant: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
@@ -47,7 +48,10 @@ export function authRoutes(s: Services): Router {
   /** Completes a pending-MFA session: new token, stage active. */
   const completeMfa = async (req: Request, res: Response, method: string) => {
     const session = req.authSession as SessionRow;
-    const { token, session: next } = await s.sessions.rotate(session, { stage: 'active', method: `${session.method}, ${method}`, mfaVerified: true });
+    // A password an admin set or reset must be changed next (after the factor, so a leaked temporary password alone
+    // cannot take over the account).
+    const stage = await s.account.stageAfterFactor(session.user_id);
+    const { token, session: next } = await s.sessions.rotate(session, { stage, method: `${session.method}, ${method}`, mfaVerified: true });
     setSessionCookie(res, s, token, next.expires_at);
     await s.throttle.succeed(`mfa:${session.id}`);
     await s.audit.append({ tenantId: session.tenant_id, action: 'auth.mfa.verified', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { method }, traceId: req.traceId });
@@ -139,7 +143,8 @@ export function authRoutes(s: Services): Router {
 
     const methods = await s.mfa.methods(prov.user.id);
     const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);
-    const stage = methods.length ? 'mfa' : needsMfa ? 'enroll' : 'active';
+    const mustChange = result.provider.kind === 'local' && (await s.account.mustChange(prov.user.id));
+    const stage = methods.length ? 'mfa' : needsMfa ? 'enroll' : mustChange ? 'password' : 'active';
     const { token, session } = await s.sessions.create({
       userId: prov.user.id,
       tenantId: tenant.id,
@@ -152,7 +157,7 @@ export function authRoutes(s: Services): Router {
     setSessionCookie(res, s, token, session.expires_at);
     await s.audit.append({
       tenantId: tenant.id,
-      action: stage === 'active' ? 'auth.login' : 'auth.login.pending_mfa',
+      action: stage === 'active' ? 'auth.login' : stage === 'password' ? 'auth.login.pending_password' : 'auth.login.pending_mfa',
       kind: 'auth',
       actor: { user: prov.user.id, username: prov.user.username, name: prov.user.display_name, session: session.id, roles: prov.roles, ip: ip(req) },
       target: { provider: result.provider.name, kind: result.provider.kind },
@@ -193,6 +198,69 @@ export function authRoutes(s: Services): Router {
     const ok = await s.mfa.verifyAuthentication(req.authSession!.user_id, challenge, response as never).catch(() => false);
     if (ok) return completeMfa(req, res, 'passkey');
     await failMfa(req, res, 'passkey');
+  });
+
+  // ---------- Sprint 11: password reset by email (public, outside a session) ----------
+
+  const tenantSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+
+  /** One user by username or (unambiguous) email address, in a tenant. */
+  const byIdentifier = async (tenantId: string, identifier: string) => {
+    const byName = await s.users.byUsername(tenantId, identifier);
+    if (byName) return byName;
+    if (!identifier.includes('@')) return undefined;
+    const rows = (await s.db('users').where({ tenant_id: tenantId }).whereRaw('LOWER(email) = ?', [identifier.toLowerCase()]).limit(2).select('id')) as { id: string }[];
+    return rows.length === 1 ? s.users.get(tenantId, rows[0]!.id) : undefined;
+  };
+
+  /**
+   * Asks for a reset link. The answer is the same whether or not the account exists, has a local password or an
+   * email address. Throttled per client address and per identifier (answering 429, which says nothing about the
+   * account), and per account (silently: no second email).
+   */
+  r.post('/password/forgot', async (req, res) => {
+    const body = parseBody(z.object({ tenant: tenantSlug.optional(), identifier: z.string().trim().min(1).max(320) }), req.body);
+    const hour = 3600_000;
+    const per = s.cfg.PASSWORD_RESET_PER_HOUR;
+    const slug = body.tenant ?? s.cfg.DEFAULT_TENANT;
+    const okAddr = await s.account.hit(`pwreset:ip:${ip(req) ?? 'unknown'}`, per * 4, hour);
+    const okId = await s.account.hit(`pwreset:id:${slug}:${body.identifier.toLowerCase()}`, per, hour);
+    if (!okAddr || !okId) throw tooManyRequests('Too many reset requests. Try again in an hour.', 3600);
+    const tenant = await s.tenants.bySlug(slug);
+    const user = tenant && tenant.state === 'active' ? await byIdentifier(tenant.id, body.identifier) : undefined;
+    if (tenant && user) {
+      const local = await s.account.localCredential(user.id);
+      const reason = user.state !== 'active' ? 'disabled' : !local ? 'directory_account' : !user.email ? 'no_email' : !s.notifications.emailEnabled ? 'email_not_configured' : null;
+      if (!reason && (await s.account.hit(`pwreset:user:${user.id}`, per, hour))) {
+        const { token } = await s.account.issueToken({ tenantId: tenant.id, userId: user.id, kind: 'reset', ttlMs: s.cfg.PASSWORD_RESET_MINUTES * 60_000 });
+        void s.notifications.sendTemplate(user.email, 'password-reset', { name: user.display_name, username: user.username, minutes: s.cfg.PASSWORD_RESET_MINUTES, link: s.account.resetLink(token, tenant.slug) });
+        await s.audit.append({ tenantId: tenant.id, action: 'password.reset.requested', kind: 'auth', actor: { ip: ip(req) }, target: { user: user.id, username: user.username }, traceId: req.traceId });
+      } else {
+        await s.audit.append({ tenantId: tenant.id, action: 'password.reset.ignored', kind: 'auth', actor: { ip: ip(req) }, target: { user: user.id, username: user.username }, detail: { reason: reason ?? 'throttled' }, traceId: req.traceId });
+      }
+    }
+    res.status(202).json({ accepted: true, detail: `If an account with a password kept here matches, a reset link is on its way to its email address. The link works once, for ${s.cfg.PASSWORD_RESET_MINUTES} minutes.` });
+  });
+
+  /** Sets a new password with a reset, admin or invite link. Ends every session and OAuth grant of the account. */
+  r.post('/password/reset', async (req, res) => {
+    const body = parseBody(z.object({ token: z.string().min(1).max(200), password: z.string().min(1).max(1024) }), req.body);
+    const invalid = () => new HttpProblem(400, 'Invalid link', 'This link is invalid, has expired or was already used. Ask for a new one.');
+    const found = await s.account.findToken(body.token);
+    const user = found ? await s.users.get(found.tenant_id, found.user_id) : undefined;
+    if (!found || !user || user.state !== 'active' || !(await s.account.localCredential(user.id))) throw invalid();
+    await s.account.checkNewPassword({ tenantId: user.tenant_id, username: user.username, password: body.password, ip: ip(req), traceId: req.traceId });
+    const row = await s.account.consumeToken(body.token);
+    if (!row) throw invalid();
+    await s.account.setPassword(user.id, body.password, false);
+    const sessions = await s.sessions.revokeAllForUser(user.id);
+    const grants = await s.account.revokeGrants(user.tenant_id, user.id);
+    // A reset lifts a lockout on the account.
+    await s.throttle.succeed(LoginThrottle.keys(user.tenant_id, user.username, null).account);
+    await s.audit.append({ tenantId: user.tenant_id, action: row.kind === 'invite' ? 'password.invite.accepted' : 'password.reset.completed', kind: 'auth', actor: { user: user.id, username: user.username, ip: ip(req) }, target: { user: user.id, username: user.username }, detail: { link: row.kind, sessionsRevoked: sessions, grantsRevoked: grants }, traceId: req.traceId });
+    if (row.kind !== 'invite') await securityAlert(s, { tenantId: user.tenant_id, userId: user.id, event: 'password.reset', detail: 'The password was set with a reset link and every session was signed out.', ip: ip(req) });
+    const tenant = await s.tenants.byId(user.tenant_id);
+    res.json({ reset: true, username: user.username, tenant: tenant?.slug ?? null });
   });
 
   // ---------- Sprint 9: federation ----------

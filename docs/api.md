@@ -974,3 +974,55 @@ request path.
 Audit actions: `oidc.token.revoked` (`detail.token`), `oidc.par.pushed`, `oidc.reauth.required`,
 `oidc.grant.revoked_by_user`, `oidc.logout.backchannel`, `auth.logout` (`detail.via: end_session`), `saml.slo`,
 `saml.slo.upstream`, `saml.slo.refused`.
+
+## Sprint 11: Account self-service
+
+Password routes apply to accounts in the tenant's local user store. For an LDAP, SQL or upstream account the password
+is kept by the directory: the change route answers `409 Managed by the directory` naming the stores, and the admin
+reset answers `409`.
+
+### Me
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /me` | Now also returns `preferences {a11y: system\|aa\|aaa}`, `password` (`{managedHere: true, mustChange}` or `{managedHere: false, stores}`) and `stepUp {windowSeconds, authAt, methods}` (`password`, `totp`, `webauthn`) |
+| `PATCH /me/preferences` `{a11y}` | Stores the accessibility mode with the account (it follows the user to every browser) |
+| `POST /me/password` `{currentPassword, newPassword}` | Changes the local password. A wrong current password counts toward the sign-in lockout (`400 Wrong password` with `attempts_remaining`, `429` once locked); the new one must differ from the current one (`reason: reuse`), pass the policy (`reason: policy`) and the breached-password check (`reason: breached`). Ends every other session and every OAuth grant of the user: `{changed, stage, sessionsRevoked, grantsRevoked, csrf?}`. Also serves a session in the `password` stage, which becomes `active` under a new cookie (`csrf` is then the new token) |
+| `POST /me/step-up` `{password}` or `{code}` or `{response}` | Confirms the signed-in user with the password (checked by the store that owns the account), a TOTP code or a passkey assertion; wrong answers count toward the lockout. `{authAt, windowSeconds, method}` |
+| `POST /me/step-up/webauthn/options` | Passkey assertion options for step-up |
+
+Step-up: `POST /me/api-keys`, `DELETE /me/mfa/:id` and `POST /me/mfa/recovery-codes` need a password or factor check
+within `STEPUP_WINDOW_SECONDS` (signing in counts). Outside it they answer `401` with title `Step-up required` and
+`step_up: true`; the session itself stays valid. The password change is its own re-authentication (it requires the
+current password).
+
+### Sign-in (`/api/auth`, public)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /auth/password/forgot` `{identifier, tenant?}` | Username or email. Always `202 {accepted, detail}`, whether or not a matching local account with an email address exists; when one does, a single-use link valid for `PASSWORD_RESET_MINUTES` is emailed. `429` after `PASSWORD_RESET_PER_HOUR` requests an hour for one identifier, or four times that from one address; a third, per-account limit silently stops further emails |
+| `POST /auth/password/reset` `{token, password}` | Sets the password with a reset, admin or invite link. `400 Invalid link` for an unknown, used or expired token. Ends every session and OAuth grant and lifts a sign-in lockout: `{reset, username, tenant}` |
+
+The link is `<PUBLIC_URL>/#/signin?reset=<token>[&tenant=<slug>]`: the token travels in the URL fragment, which
+browsers never send to a server, and the console removes it from the address bar as soon as it loads. Only
+`sha256(token)` is stored.
+
+`POST /auth/login` and the second-factor routes answer `stage: password` when the account's password was set or reset
+by an admin. In that stage the session reaches only `POST /me/password` and `/auth/*` (every other route answers
+`401` with `stage: password`); the second factor, when the account has one, is asked first.
+
+### Users (`users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/users` | Now takes `mustChange` (default `true`: the initial password must be changed at first sign-in), or `invite: true` with an `email` and no `password` to email a single-use link valid for `PASSWORD_INVITE_HOURS` (`{…, invited}`; `409` without an email address or SMTP) |
+| `GET /admin/users/:id` | Now also returns `password {local, mustChange}` |
+| `POST /admin/users/:id/password` `{mode: temporary, password}` or `{mode: link}` | Admin reset of a local account (not your own; only for someone whose roles you could grant). The old password stops working at once and every session and OAuth grant ends. `temporary` sets a password the user must change at next sign-in; `link` emails a single-use link (the admin never sees it). `{mode, mustChange, linkSent, sessionsRevoked, grantsRevoked}` |
+
+Audit actions: `password.changed`, `password.change.failed`, `password.reset.requested`, `password.reset.ignored`,
+`password.reset.completed`, `password.invite.accepted`, `password.breach_check.unavailable`, `user.password_reset`,
+`user.invited`, `auth.step_up`, `auth.step_up.failed`, `auth.login.pending_password`, `user.preferences.updated`.
+
+Security notices (`kind: security`, console and email, never carrying a secret) go to the account owner when their
+password is changed or reset, a factor is added or removed or all are reset by an admin, recovery codes are
+regenerated, an API key is created or revoked, or their sessions are signed out.

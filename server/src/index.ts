@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   services.gateway.start();
 
   const housekeeping = setInterval(() => {
-    void Promise.all([services.sessions.purge(), services.throttle.purge()]).catch((err) => log.warn({ err }, 'housekeeping failed'));
+    void Promise.all([services.sessions.purge(), services.throttle.purge(), services.account.purge()]).catch((err) => log.warn({ err }, 'housekeeping failed'));
   }, 15 * 60_000);
   housekeeping.unref();
 

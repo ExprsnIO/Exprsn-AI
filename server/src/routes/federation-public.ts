@@ -14,6 +14,7 @@ import { JwtError } from '../federation/jose.js';
 import { UpstreamError, type SamlSubject } from '../federation/upstream.js';
 import { CONSENT_REMEMBER_DAYS } from '../federation/service.js';
 import type { SessionRow } from '../identity/sessions.js';
+import { securityAlert } from '../identity/security-alerts.js';
 import type { Services } from '../services.js';
 
 const REFUSALS: Record<string, string> = {
@@ -308,9 +309,8 @@ export function federationPublicRoutes(s: Services): Router {
     const settings = await fed().settings(t.id);
     await fed().oidc.recordConsent(t.id, client, signed.user.userId, data.scopes, settings.consent.remember ? CONSENT_REMEMBER_DAYS : 0);
     await s.audit.append({ tenantId: t.id, action: 'oidc.consent.granted', kind: 'auth', actor: { user: signed.user.userId, ip: req.ip ?? null }, target: { client: client.client_id, name: client.name }, detail: { scopes: data.scopes, remembered: settings.consent.remember }, traceId: req.traceId });
-    // Grants changed (B-107): the user is told, and can revoke the access under Settings. Sprint 11's security-notice
-    // helper replaces this direct call when it merges.
-    await s.notifications.notify({ tenantId: t.id, userIds: [signed.user.userId], kind: 'security', title: `${client.name} can now act as you`, body: `You allowed ${client.name}: ${data.scopes.join(', ')}. You can remove its access under Settings, Connected applications.`, route: 'settings' });
+    // Grants changed (B-107): the user is told, and can revoke the access under Settings.
+    await securityAlert(s, { tenantId: t.id, userId: signed.user.userId, event: 'grant.added', detail: `You allowed ${client.name}: ${data.scopes.join(', ')}. You can remove its access under Settings, Connected applications.`, ip: req.ip ?? null });
     return issueAndRedirect(req, res, t, client.client_id, data.req, signed.user, data.scopes);
   });
 

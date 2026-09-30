@@ -271,7 +271,7 @@
             + (isDraft ? (z.draft && z.draft.mine ? UI.btn('Withdraw draft', { kind: 'danger', attrs: 'data-withdraw' }) : UI.btn('Reject draft', { kind: 'danger', attrs: 'data-reject' }) + UI.btn('Approve and apply', { kind: 'primary', attrs: 'data-approve' })) : ''),
           onClose,
           onMount(m) {
-            App.on(m, 'click', '#zn-difftabs [data-tab]', (e, t) => { tab = t.dataset.tab; m.querySelectorAll('#zn-difftabs [data-tab]').forEach((b) => b.classList.toggle('active', b === t)); m.querySelector('#zn-diff').innerHTML = view(tab); m.querySelector('#zn-stats').innerHTML = stats(tab); });
+            App.on(m, 'click', '#zn-difftabs [data-tab]', (e, t) => { tab = t.dataset.tab; m.querySelectorAll('#zn-difftabs [data-tab]').forEach((b) => { b.classList.toggle('active', b === t); b.setAttribute('aria-selected', b === t ? 'true' : 'false'); b.setAttribute('tabindex', b === t ? '0' : '-1'); }); m.querySelector('#zn-diff').innerHTML = view(tab); m.querySelector('#zn-stats').innerHTML = stats(tab); });
             m.querySelector('[data-dl]').addEventListener('click', () => download('/api/admin/zones/' + enc(z.id) + '/rendered/' + tab + '?version=' + d.to.version));
             const act = async (path, body, msg, kind) => {
               try { await App.post('/api/admin/zones/' + enc(z.id) + '/draft/' + path, body); App.closeOverlay(); st.refused = null; ctx.toast(msg, kind, 5000); quiet(); } catch (err) { App.fail(err); }

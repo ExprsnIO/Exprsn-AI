@@ -653,7 +653,7 @@
       root.innerHTML = '<style>'
         + '.ch-list{display:flex;flex-direction:column;gap:2px}'
         + '.ch-page{display:flex;flex-direction:column;min-height:0}.ch-page>.ch-scroll{flex:1 1 auto;min-height:0;overflow:auto}'
-        + '.ch-head{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line);min-height:44px}.ch-head .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+        + '.ch-head{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line);min-height:44px}.ch-head .t{margin:0;font-size:inherit;line-height:inherit;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
         + '.ch-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto;box-sizing:border-box}'
         + '.ch-user{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.ch-bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px;overflow-wrap:anywhere}'
         + '.ch-uact{display:flex;align-items:center;gap:4px;opacity:.55}.ch-user:hover .ch-uact,.ch-uact:focus-within{opacity:1}'
@@ -686,9 +686,9 @@
         + '<div class="ch-list" data-region="list">' + listHtml(st) + '</div></div>'
         + '<div class="page tight ch-page">'
         + '<div class="ch-head">' + UI.iconbtn('menu', 'Conversations', { cls: 'sm ghost ch-listbtn', attrs: 'data-showlist' })
-          + (conv ? '<span class="t grow">' + esc(conv.title || 'Untitled conversation') + '</span>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
+          + (conv ? '<h1 class="t grow">' + esc(conv.title || 'Untitled conversation') + '</h1>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
             + (App.can('chat:write') ? UI.iconbtn('edit', 'Rename', { cls: 'sm ghost', attrs: 'data-rename' }) + UI.btn(conv.archived ? 'Unarchive' : 'Archive', { kind: 'ghost', size: 'sm', attrs: 'data-archive' }) + UI.iconbtn('trash', 'Delete conversation', { cls: 'sm ghost', attrs: 'data-delete' }) : '')
-            : '<span class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</span>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
+            : '<h1 class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</h1>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
         + '<div class="ch-scroll"><div class="ch-thread" data-region="thread">' + threadHtml(st) + '</div></div>'
         + '<div class="ch-composer"><div class="ch-inner">'
         + '<div data-region="notice">' + noticeHtml(st) + '</div>'
