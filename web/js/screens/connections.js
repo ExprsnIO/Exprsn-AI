@@ -109,7 +109,9 @@
 
       const auditLink = '<div class="muted" style="font-size:12px">Refusals are written to the audit log with the query text and the actor.' + (App.canOpen('usage-audit') ? ' <a href="#" data-audit>Open in Usage and audit</a>' : '') + '</div>';
       let resultHtml = '';
-      if (above) resultHtml = UI.notice('This connection is labelled <b>' + esc(conn.label) + '</b> and your clearance is ' + esc(myClearance) + '. The schema is listed; queries and results are withheld.', 'warn');
+      // With no connection registered there is nothing to show (and no conn to read limits from).
+      if (!conn) resultHtml = '';
+      else if (above) resultHtml = UI.notice('This connection is labelled <b>' + esc(conn.label) + '</b> and your clearance is ' + esc(myClearance) + '. The schema is listed; queries and results are withheld.', 'warn');
       else if (st.running) resultHtml = UI.notice('Running on the read-only account…', 'info');
       else if (!r) resultHtml = '<div class="muted" style="font-size:12px">Run the query to see results. Row limit ' + conn.rowLimit + ', timeout ' + conn.timeoutS + ' s, results labelled ' + esc(conn.label) + '.</div>';
       else if (r.ok) {

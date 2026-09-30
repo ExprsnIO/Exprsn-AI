@@ -1,0 +1,13 @@
+{
+  "name": "exprsn-ai-e2e",
+  "private": true,
+  "description": "Playwright end-to-end suite across every console screen, against an in-process server on SQLite and the test fakes.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
