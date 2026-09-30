@@ -20,6 +20,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 8 | Workflows, media, images | Workflows, Media, Images | **Done** |
 | 9 | Training, zones, platform, federation | Training, Zones, Platform, Identity | **Done** |
 | 10 | Hardening and release | all | **Release candidate** (1.0.0-rc.1) |
+| 11–15 | 1.1.0: account self-service, chat, integrations, federation, operations | see [Backlog-1.1.0.md](Backlog-1.1.0.md) | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
