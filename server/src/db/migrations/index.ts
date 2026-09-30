@@ -7,6 +7,10 @@ import * as m006 from './006_knowledge.js';
 import * as m005 from './005_guardrails.js';
 import * as m007 from './007_registry.js';
 import * as m008 from './008_workflows.js';
+import * as m009 from './009_training.js';
+import * as m010 from './010_zones.js';
+import * as m011 from './011_platform_ops.js';
+import * as m012 from './012_federation.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -22,7 +26,11 @@ const MIGRATIONS: Record<string, Migration> = {
   '005_guardrails': m005,
   '006_knowledge': m006,
   '007_registry': m007,
-  '008_workflows': m008
+  '008_workflows': m008,
+  '009_training': m009,
+  '010_zones': m010,
+  '011_platform_ops': m011,
+  '012_federation': m012
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

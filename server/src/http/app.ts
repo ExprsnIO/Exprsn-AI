@@ -28,6 +28,11 @@ import { imageRoutes } from '../routes/images.js';
 import { knowledgeRoutes } from '../routes/knowledge.js';
 import { memoryRoutes } from '../routes/memory.js';
 import { connectionAdminRoutes } from '../routes/admin/connections.js';
+import { trainingRoutes } from '../routes/training.js';
+import { zoneAdminRoutes } from '../routes/admin/zones.js';
+import { platformAdminRoutes } from '../routes/admin/platform.js';
+import { federationAdminRoutes } from '../routes/admin/federation.js';
+import { federationPublicRoutes } from '../routes/federation-public.js';
 import type { Services } from '../services.js';
 import { authenticate, csrfProtection } from './middleware.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
@@ -87,6 +92,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(compression());
 
   app.use(healthRoutes(s, state));
+  // OIDC, SAML and device-flow protocol endpoints: public paths with their own parsing and checks.
+  app.use(federationPublicRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
@@ -129,6 +136,10 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', connectionAdminRoutes(s));
   api.use(knowledgeRoutes(s));
   api.use(memoryRoutes(s));
+  api.use(trainingRoutes(s));
+  api.use('/admin', zoneAdminRoutes(s));
+  api.use('/admin', platformAdminRoutes(s));
+  api.use('/admin', federationAdminRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

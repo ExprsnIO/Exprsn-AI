@@ -50,6 +50,13 @@ import { KnowledgeService } from './knowledge/service.js';
 import { CliGit, type GitFetcher } from './knowledge/sources.js';
 import { MemoryService } from './memory/service.js';
 import { effectivePermissions } from './authz/policy.js';
+import { TrainingService } from './training/service.js';
+import { createTrainer, type TrainerBackend } from './training/trainer.js';
+import { ZoneService } from './zones/service.js';
+import { OpsService } from './ops/service.js';
+import { createAcme, type AcmeClient } from './ops/acme.js';
+import { FederationService } from './federation/service.js';
+import { createKerberos, type KerberosVerifier } from './federation/kerberos.js';
 
 export interface Services {
   cfg: Config;
@@ -105,6 +112,17 @@ export interface Services {
   connections: ConnectionService;
   knowledge: KnowledgeService;
   memory: MemoryService;
+  /** Sprint 9: datasets, training jobs, windows, evals and packaging. */
+  training: TrainingService;
+  trainer: TrainerBackend;
+  /** Sprint 9: network zones, ceilings, proposals and rendered configuration. */
+  zones: ZoneService;
+  /** Sprint 9: import bundles, mirrors, ACME certificates, backups and restore drills. */
+  ops: OpsService;
+  acme: AcmeClient;
+  /** Sprint 9: OIDC provider, SAML IdP, upstream federation, Kerberos SPNEGO and device flow. */
+  federation: FederationService;
+  kerberos: KerberosVerifier;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -119,6 +137,9 @@ export interface ServiceOverrides {
   /** Data connection drivers by engine (tests use in-process fakes). */
   drivers?: Partial<Record<'postgres' | 'opensearch', DriverFactory>>;
   git?: GitFetcher;
+  trainer?: TrainerBackend;
+  acme?: AcmeClient;
+  kerberos?: KerberosVerifier;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -236,6 +257,14 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     connections,
     knowledge,
     memory,
+    // Sprint 9 services read their collaborators through `s`.
+    training: new TrainingService(() => s),
+    trainer: overrides.trainer ?? createTrainer(cfg),
+    zones: new ZoneService(() => s),
+    ops: new OpsService(() => s),
+    acme: overrides.acme ?? createAcme(cfg),
+    federation: new FederationService(() => s),
+    kerberos: overrides.kerberos ?? createKerberos(cfg),
     close: async () => {
       scheduler.stop();
       chat.close();
@@ -251,6 +280,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   registerPlatformJobs(s);
   scripts.registerJobs();
   agents.registerJobs();
+  s.training.registerJobs();
+  s.zones.registerJobs();
+  s.ops.registerJobs();
+  s.federation.registerJobs();
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
 }
@@ -281,4 +314,8 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
+  s.training.schedule(s.scheduler, activeTenants);
+  s.zones.schedule(s.scheduler, activeTenants);
+  s.ops.schedule(s.scheduler, activeTenants);
+  s.federation.schedule(s.scheduler, activeTenants);
 }

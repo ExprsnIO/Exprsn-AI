@@ -128,6 +128,18 @@ const schema = z
     IMAGE_SAFETY_URL: z.url().optional(),
     IMAGE_SAFETY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
 
+    // --- Sprint 9: training (edit only inside this block) ---
+    // --- end training ---
+
+    // --- Sprint 9: zones (edit only inside this block) ---
+    // --- end zones ---
+
+    // --- Sprint 9: platform operations (edit only inside this block) ---
+    // --- end platform operations ---
+
+    // --- Sprint 9: federation (edit only inside this block) ---
+    // --- end federation ---
+
     COOKIE_SECURE: bool.optional(),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(30),
     SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
