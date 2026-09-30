@@ -19,15 +19,15 @@
   const A11Y = [{ value: 'system', label: 'Follow system' }, { value: 'aa', label: 'Standard (AA)' }, { value: 'aaa', label: 'Enhanced (AAA)' }];
 
   App.register({
-    id: 'settings', title: 'Settings', summary: 'Profile, appearance, second factors, API keys, sessions', crumb: ['Settings'], live: true,
+    id: 'settings', title: 'Settings', summary: 'Profile, appearance, second factors, API keys, connected applications, sessions', crumb: ['Settings'], live: true,
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     render(root, ctx) {
       const st = ctx.state;
       const me = App.me;
       if (!st.loaded && !st.loading) {
         st.loading = true;
-        Promise.all([App.get('/api/me/api-keys'), App.get('/api/me/sessions'), App.get('/api/me/mfa'), App.get('/api/me')])
-          .then(([keys, sessions, mfa, fresh]) => { st.keys = keys; st.sessions = sessions; st.mfa = mfa; App.setMe(fresh); st.loaded = true; })
+        Promise.all([App.get('/api/me/api-keys'), App.get('/api/me/sessions'), App.get('/api/me/mfa'), App.get('/api/me'), App.get('/api/me/grants')])
+          .then(([keys, sessions, mfa, fresh, grants]) => { st.keys = keys; st.sessions = sessions; st.mfa = mfa; st.grants = grants; App.setMe(fresh); st.loaded = true; })
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (App.state.route === 'settings') ctx.rerender(); });
       }
@@ -60,6 +60,10 @@
         + UI.table(['Name', 'Scopes', 'Expires', 'Last used', { label: '', right: true }], keyRows, { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No API keys', emptyText: 'Keys are bearer tokens for scripts and the CLI.' })
         + '<span class="muted" style="font-size:12px">Each key carries a subset of your own permissions and your clearance. Expired and revoked keys stay listed for 30 days; calls with them get <span class="mono">401 invalid_token</span>.</span>');
 
+      const grants = st.grants || [];
+      const grantsPanel = UI.panel('Connected applications', UI.table(['Application', 'Can do', 'Allowed', 'Last used', { label: '', right: true }], grants.map((g) => ({ cells: [esc(g.name) + '<div class="mono muted" style="font-size:11px">' + esc(g.clientId) + '</div>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(g.scopes.join(' ')) + '</span>', esc(when(g.consentedAt || g.createdAt)) + (g.consentExpiresAt ? '<div class="muted" style="font-size:11px">asks again ' + esc(new Date(g.consentExpiresAt).toLocaleDateString()) + '</div>' : ''), esc(when(g.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Remove access', { kind: 'ghost', size: 'sm', attrs: 'data-rmgrant="' + esc(g.clientId) + '" aria-label="Remove access for ' + esc(g.name) + '"' }) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No connected applications', emptyText: 'Applications you allow to act as you through single sign-on are listed here.' })
+        + '<span class="muted" style="font-size:12px">Removing access ends the application\'s tokens at once and forgets your consent; it asks again next time.</span>');
+
       const sessions = st.sessions || [];
       const sessionsPanel = UI.panel('Sessions', UI.table(['Client', 'Signed in with', 'Address', 'Started', 'Last activity', { label: '', right: true }], sessions.map((s) => ({ cells: [esc(client(s.userAgent)) + (s.current ? ' ' + UI.pill('this session', 'accent') : ''), esc(s.method), '<span class="mono">' + esc(s.ip || '') + '</span>', esc(when(s.createdAt)), esc(when(s.lastSeenAt)), '<span class="hstack" style="justify-content:flex-end">' + (s.current ? '' : UI.btn('Sign out', { kind: 'ghost', size: 'sm', attrs: 'data-endsession="' + esc(s.id) + '"' })) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No sessions', emptyText: '' })
         + '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Signing a session out ends it at once, including its live connection. API keys are not affected.</span>' + UI.btn('Sign out other sessions', { kind: 'ghost', size: 'sm', attrs: 'data-signoutothers' }) + UI.btn('Sign out', { size: 'sm', icon: 'lock', attrs: 'data-signout' }) + '</div>');
@@ -67,7 +71,7 @@
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(me.user.displayName))
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + keysPanel + '</div></div>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + keysPanel + grantsPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       const reload = () => { st.loaded = false; ctx.rerender(); };
@@ -114,6 +118,11 @@
       ctx.on('click', '[data-copykey]', () => { if (navigator.clipboard && st.revealed) navigator.clipboard.writeText(st.revealed.key).then(() => ctx.toast('Copied.', 'ok')); });
       ctx.on('click', '[data-revealdone]', () => { st.revealed = null; ctx.rerender(); });
 
+      ctx.on('click', '[data-rmgrant]', async (e, t) => {
+        const g = grants.find((x) => x.clientId === t.dataset.rmgrant);
+        const ok = await ctx.confirm({ title: 'Remove access for ' + g.name + '?', tag: 'ends its tokens now', tone: 'danger', body: '<div class="fg2">' + esc(g.name) + ' can no longer act as you. Its access and refresh tokens stop working at once, and it asks for your consent again next time.</div>', kv: [['Can do', '<span class="mono">' + esc(g.scopes.join(' ')) + '</span>'], ['Last used', esc(when(g.lastUsedAt))]], ok: 'Remove access' });
+        if (ok) act(() => App.del('/api/me/grants/' + encodeURIComponent(g.clientId)), 'Access removed for ' + esc(g.name) + '.');
+      });
       ctx.on('click', '[data-endsession]', async (e, t) => { const s = sessions.find((x) => x.id === t.dataset.endsession); const ok = await ctx.confirm({ title: 'Sign out ' + client(s.userAgent) + '?', tag: 'ends the session', tone: 'danger', kv: [['Signed in with', esc(s.method)], ['Address', esc(s.ip || '')], ['Last activity', esc(when(s.lastSeenAt))]], ok: 'Sign out that session' }); if (ok) act(() => App.del('/api/me/sessions/' + encodeURIComponent(s.id)), 'Session ended.'); });
       ctx.on('click', '[data-signoutothers]', async () => { const ok = await ctx.confirm({ title: 'Sign out other sessions?', tag: 'all but this one', tone: 'danger', body: '<div class="fg2">Every other session for <span class="mono">' + esc(me.user.username) + '</span> ends now. API keys are not affected.</div>', ok: 'Sign out other sessions' }); if (ok) act(async () => { const r = await App.post('/api/me/sessions/revoke-others'); ctx.toast(r.revoked + ' session' + (r.revoked === 1 ? '' : 's') + ' ended.', 'ok'); }); });
       ctx.on('click', '[data-signout]', () => App.signOut());
