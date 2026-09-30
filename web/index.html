@@ -9,14 +9,15 @@
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
+<a class="skip" id="skip-link" href="#main">Skip to main content</a>
 <div class="app signed-out" id="app">
   <nav class="sidebar" id="sidebar" aria-label="Primary"></nav>
   <div class="body">
     <header class="header" id="header"></header>
-    <div class="main" id="main"></div>
+    <main class="main" id="main" tabindex="-1"></main>
   </div>
 </div>
-<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="toasts" id="toasts" role="region" aria-label="Messages" aria-live="polite"></div>
 <script src="/socket.io/socket.io.min.js"></script>
 <script src="/js/app.js"></script>
 <!-- screens -->

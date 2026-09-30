@@ -9,7 +9,8 @@
   --danger-bg:#FBE7E5; --danger-fg:#A01E18;
   --info-bg:#E6EEF8; --info-fg:#1B4C8C;
   --ok-bg:#E6F2EA; --ok-fg:#1C6A38;
-  --meter:#8F8F89; --bar:#1A1A19; --bar-off:#DCDCDA;
+  --meter:#80807A; --bar:#1A1A19; --bar-off:#DCDCDA;
+  --control:#80807A; --focus:#B4380A; --focus-w:2px; --target:24px;
   --shadow:0 8px 24px rgba(26,26,25,.14);
   --sans:'Source Sans 3','Segoe UI',system-ui,sans-serif;
   --serif:'Source Serif 4',Georgia,serif;
@@ -28,6 +29,7 @@
     --info-bg:#172A44; --info-fg:#8FB6EE;
     --ok-bg:#12301C; --ok-fg:#7FCB98;
     --meter:#8A8A84; --bar:#EFEFEC; --bar-off:#31312F;
+    --control:#75756F; --focus:#FF8150;
     --shadow:0 8px 24px rgba(0,0,0,.5);
     color-scheme:dark;
   }
@@ -42,8 +44,36 @@
   --info-bg:#172A44; --info-fg:#8FB6EE;
   --ok-bg:#12301C; --ok-fg:#7FCB98;
   --meter:#8A8A84; --bar:#EFEFEC; --bar-off:#31312F;
+  --control:#75756F; --focus:#FF8150;
   --shadow:0 8px 24px rgba(0,0,0,.5);
   color-scheme:dark;
+}
+/* Enhanced (AAA) accessibility mode: App.setA11y sets data-a11y="aaa" on <html> when the user picks it in Settings,
+   or when they follow the system and the browser asks for more contrast. Text tokens reach 7:1 on every surface,
+   control borders and the focus ring reach 4.5:1, and shadows go (they read as glass on some displays). */
+:root[data-a11y="aaa"]{
+  --line:#8A8A84; --line2:#C4C4BF; --faint:#6E6E68;
+  --fg:#111110; --fg2:#3E3E3A; --muted:#4A4A45;
+  --accent:#8A2A07; --accent-fg:#FFFFFF;
+  --warn-fg:#5F4000; --danger-fg:#8E1A14; --info-fg:#17427A; --ok-fg:#155229;
+  --meter:#66665F; --control:#5C5C57; --focus:#111110; --focus-w:3px; --target:44px;
+  --shadow:none;
+}
+@media (prefers-color-scheme:dark){
+  :root[data-a11y="aaa"]:not([data-theme="light"]){
+    --line:#75756F; --line2:#4A4A46; --faint:#8F8F89;
+    --fg:#F7F7F4; --fg2:#D4D4CE; --muted:#BDBDB7;
+    --accent:#FFA27E; --accent-fg:#1A0D06;
+    --warn-fg:#EDC66E; --danger-fg:#F7A59E; --info-fg:#9EC1F2; --ok-fg:#8ED6A5;
+    --meter:#A5A59F; --control:#9A9A94; --focus:#F7F7F4;
+  }
+}
+:root[data-a11y="aaa"][data-theme="dark"]{
+  --line:#75756F; --line2:#4A4A46; --faint:#8F8F89;
+  --fg:#F7F7F4; --fg2:#D4D4CE; --muted:#BDBDB7;
+  --accent:#FFA27E; --accent-fg:#1A0D06;
+  --warn-fg:#EDC66E; --danger-fg:#F7A59E; --info-fg:#9EC1F2; --ok-fg:#8ED6A5;
+  --meter:#A5A59F; --control:#9A9A94; --focus:#F7F7F4;
 }
 
 *,*::before,*::after{box-sizing:border-box}
@@ -51,8 +81,12 @@ html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.4;overflow:hidden}
 a{color:var(--accent)}a:hover{color:var(--fg)}
 button,input,select,textarea{font-family:inherit;font-size:13px;color:inherit}
-:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}
+.sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+.skip{position:fixed;left:8px;top:8px;z-index:100;padding:8px 14px;border-radius:6px;background:var(--panel);color:var(--fg);border:var(--focus-w) solid var(--focus);font-weight:600;text-decoration:none;transform:translateY(-200%)}
+.skip:focus{transform:none}
+.main:focus,.main:focus-visible{outline:none}
+h1:focus{outline:none}
 .mono{font-family:var(--mono);font-size:12px}
 .serif{font-family:var(--serif)}
 .muted{color:var(--muted)}.fg2{color:var(--fg2)}
@@ -64,7 +98,7 @@ button,input,select,textarea{font-family:inherit;font-size:13px;color:inherit}
 .wrap{flex-wrap:wrap}
 .right{margin-left:auto}
 .gap4{gap:4px}.gap6{gap:6px}.gap12{gap:12px}.gap16{gap:16px}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 /* ---------- Shell ---------- */
 .app{display:flex;height:100%;width:100%}
@@ -123,9 +157,10 @@ button,input,select,textarea{font-family:inherit;font-size:13px;color:inherit}
 .pagehead .sub{font-size:13px;color:var(--muted);margin-top:2px}
 .pagehead .actions{display:flex;gap:8px;flex-wrap:wrap}
 .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.search{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);width:300px;max-width:100%}
+.search{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--control);border-radius:5px;background:var(--panel);color:var(--muted);width:300px;max-width:100%}
 .search input{border:0;background:transparent;outline:none;flex-grow:1;min-width:0;color:var(--fg)}
 .search input::placeholder{color:var(--muted)}
+.search:focus-within{outline:var(--focus-w) solid var(--focus);outline-offset:-1px}
 
 /* ---------- Buttons ---------- */
 .btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;background:var(--panel);color:var(--fg);border:1px solid var(--line);text-decoration:none}
@@ -137,7 +172,7 @@ button,input,select,textarea{font-family:inherit;font-size:13px;color:inherit}
 .btn.ghost:hover{background:var(--sel)}
 .btn.danger{color:var(--danger-fg)}
 .btn.sm{height:26px;padding:0 10px}
-.btn.xs{height:20px;padding:0 6px;font-size:12px}
+.btn.xs{height:24px;padding:0 6px;font-size:12px}
 .btn[disabled],.btn.disabled{opacity:.5;cursor:not-allowed;pointer-events:none}
 .btn.active{background:var(--sel);border-color:var(--muted)}
 .btn.block{width:100%;justify-content:center}
@@ -180,6 +215,8 @@ table.dt td{padding:6px 10px;font-size:13px;border-bottom:1px solid var(--line2)
 table.dt tr:last-child td{border-bottom:0}
 table.dt tbody tr.row{cursor:pointer}
 table.dt tbody tr.row:hover td{background:var(--sel)}
+table.dt tbody tr.row:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:calc(-1 * var(--focus-w))}
+table.dt tbody tr.row:focus-visible td{background:var(--sel)}
 table.dt tbody tr.selected td{background:var(--accent-tint)}
 table.dt td.r,table.dt th.r{text-align:right}
 table.dt .actions{white-space:nowrap}
@@ -199,12 +236,13 @@ table.dt .actions{white-space:nowrap}
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .field label,.field .fl{font-size:12px;font-weight:600;color:var(--fg2)}
 .field .hint{font-size:12px;color:var(--muted)}
-.input,.select,.textarea{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--fg);width:100%}
+.input,.select,.textarea{height:30px;padding:0 10px;border:1px solid var(--control);border-radius:5px;background:var(--panel);color:var(--fg);width:100%}
 .textarea{height:auto;min-height:72px;padding:8px 10px;resize:vertical;line-height:1.4}
-.input:focus,.select:focus,.textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.input:focus,.select:focus,.textarea:focus{outline:var(--focus-w) solid var(--focus);outline-offset:-1px}
+.input::placeholder,.textarea::placeholder{color:var(--muted);opacity:1}
 .select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 14px) 12px,calc(100% - 10px) 12px;background-size:4px 4px;background-repeat:no-repeat;padding-right:26px}
-.toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px}
-.toggle .sw{width:30px;height:18px;border-radius:9px;background:var(--line);position:relative;transition:background .15s;flex-shrink:0}
+.toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;border:0;background:transparent;padding:2px 0;color:var(--fg);text-align:left}
+.toggle .sw{width:30px;height:18px;border-radius:9px;background:var(--control);position:relative;transition:background .15s;flex-shrink:0}
 .toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--panel);transition:left .15s}
 .toggle.on .sw{background:var(--accent)}
 .toggle.on .sw::after{left:14px}
@@ -285,10 +323,12 @@ table.dt .actions{white-space:nowrap}
 .drawer h2{margin:0;font-size:16px;font-weight:600}
 .palette{width:min(620px,100%);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
 .palette input{width:100%;height:44px;padding:0 16px;border:0;border-bottom:1px solid var(--line);background:transparent;font-size:15px;outline:none;color:var(--fg)}
+.palette input:focus-visible{box-shadow:inset 0 calc(-1 * var(--focus-w)) 0 var(--focus)}
 .palette .plist{max-height:min(420px,60vh);overflow:auto;padding:6px}
 .palette .pgroup{padding:8px 10px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .palette .pitem{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:5px;cursor:pointer;color:var(--fg)}
 .palette .pitem:hover,.palette .pitem.active{background:var(--sel)}
+.palette .pitem.active{box-shadow:inset 3px 0 0 var(--focus)}
 .palette .pitem .pk{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted)}
 .palette .pitem .ps{font-size:12px;color:var(--muted)}
 .toasts{position:fixed;bottom:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
@@ -296,6 +336,9 @@ table.dt .actions{white-space:nowrap}
 .toast.warn{background:var(--warn-bg);color:var(--warn-fg)}
 .toast.danger{background:var(--danger-bg);color:var(--danger-fg)}
 .toast.ok{background:var(--ok-bg);color:var(--ok-fg)}
+.toast .tmsg{flex-grow:1;min-width:0}
+.toast .tclose{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;border:0;border-radius:4px;background:transparent;color:inherit;cursor:pointer;opacity:.8}
+.toast .tclose:hover{opacity:1}
 @keyframes tin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .popover{position:absolute;top:calc(100% + 6px);right:0;width:340px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:10px;z-index:40;display:flex;flex-direction:column;gap:6px}
 .popover .ph{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:2px 4px}
@@ -327,8 +370,9 @@ table.dt .actions{white-space:nowrap}
   .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (max-width:900px){
-  .sidebar{position:fixed;top:0;bottom:0;left:0;z-index:55;transform:translateX(-100%);transition:transform .18s;box-shadow:none;width:240px}
-  .app.nav-open .sidebar{transform:none;box-shadow:var(--shadow)}
+  /* Hidden off-canvas links must not take keyboard focus: visibility follows the slide. */
+  .sidebar{position:fixed;top:0;bottom:0;left:0;z-index:55;transform:translateX(-100%);visibility:hidden;transition:transform .18s,visibility 0s .18s;box-shadow:none;width:240px}
+  .app.nav-open .sidebar{transform:none;visibility:visible;transition:transform .18s;box-shadow:var(--shadow)}
   .menubtn{display:inline-flex}
   .cmdbtn{width:36px;padding:0}
   .cmdbtn span,.cmdbtn kbd{display:none}
@@ -343,4 +387,33 @@ table.dt .actions{white-space:nowrap}
   .cols > *{width:100%!important}
   .search{width:100%}
   .drawer{width:100%}
+}
+
+/* ---------- Accessibility ---------- */
+/* Enhanced (AAA) mode: larger targets, a focus ring on every focused element (not only keyboard focus), underlined
+   links and no motion. The colour tokens for it are at the top of this file. */
+:root[data-a11y="aaa"] :focus{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
+:root[data-a11y="aaa"] .input:focus,:root[data-a11y="aaa"] .select:focus,:root[data-a11y="aaa"] .textarea:focus,:root[data-a11y="aaa"] table.dt tbody tr.row:focus{outline-offset:-3px}
+:root[data-a11y="aaa"] .main:focus{outline:none}
+:root[data-a11y="aaa"] .search input:focus,:root[data-a11y="aaa"] .palette input:focus{outline:none}
+:root[data-a11y="aaa"] a:not(.btn):not(.skip):not(.me):not(.navlist a):not(.tabs a){text-decoration:underline;text-underline-offset:2px}
+:root[data-a11y="aaa"] .btn,:root[data-a11y="aaa"] .btn.sm,:root[data-a11y="aaa"] .btn.xs,:root[data-a11y="aaa"] .input,:root[data-a11y="aaa"] .select,:root[data-a11y="aaa"] .search,
+:root[data-a11y="aaa"] .cmdbtn,:root[data-a11y="aaa"] .tenant,:root[data-a11y="aaa"] .me,:root[data-a11y="aaa"] .navlist a,:root[data-a11y="aaa"] .chip,:root[data-a11y="aaa"] .seg button,
+:root[data-a11y="aaa"] .tabs a,:root[data-a11y="aaa"] .tabs button,:root[data-a11y="aaa"] .popover .pi,:root[data-a11y="aaa"] .dropdown button,:root[data-a11y="aaa"] .palette .pitem,
+:root[data-a11y="aaa"] .listlink,:root[data-a11y="aaa"] .toggle,:root[data-a11y="aaa"] .check,:root[data-a11y="aaa"] .toast .tclose{height:auto;min-height:var(--target)}
+:root[data-a11y="aaa"] .iconbtn,:root[data-a11y="aaa"] .iconbtn.sm{width:auto;height:auto;min-width:var(--target);min-height:var(--target)}
+:root[data-a11y="aaa"] .toast .tclose{min-width:var(--target)}
+:root[data-a11y="aaa"] .check input{width:20px;height:20px}
+:root[data-a11y="aaa"] .navlist{gap:2px}
+:root[data-a11y="aaa"] .toggle .sw{outline:1px solid var(--control);outline-offset:1px}
+:root[data-a11y="aaa"] *,:root[data-a11y="aaa"] *::before,:root[data-a11y="aaa"] *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+:root[data-a11y="aaa"] .overlay{background:rgba(0,0,0,.6)}
+/* Windows high contrast and other forced-colour modes: keep state that is otherwise drawn with backgrounds. */
+@media (forced-colors:active){
+  .toggle .sw{border:1px solid CanvasText}
+  .toggle.on .sw{background:Highlight}
+  .toggle .sw::after{background:CanvasText}
+  .label .bars i.on,.meter .fill,.spark i{background:CanvasText;forced-color-adjust:none}
+  .navlist a.active,.listlink.active,.tabs .active,.seg button.active,.chip.on,.palette .pitem.active,table.dt tbody tr.selected td{outline:2px solid Highlight;outline-offset:-2px}
+  .btn[disabled]{color:GrayText}
 }

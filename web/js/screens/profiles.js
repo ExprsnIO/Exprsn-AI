@@ -244,7 +244,7 @@
             + '<div class="hstack wrap gap6">' + UI.btn(p.canary ? 'Change canary' : 'Start canary', { size: 'sm', icon: 'branch', attrs: 'data-canary', disabled: !p.model || dirty, title: dirty ? 'Save or reset your changes first' : '' }) + UI.btn('Promote', { size: 'sm', attrs: 'data-promote', disabled: !p.canary || dirty }) + UI.btn('Stop canary', { size: 'sm', kind: 'ghost', attrs: 'data-stopcanary', disabled: !p.canary || dirty }) + '</div>')
           + wsPanel(p, 'Your workspaces and this profile')
           + versionsPanel(p)
-          + '</div><div class="pf-side">' + UI.panel('Saved version', '<pre class="pf-yaml">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy' }) }) + '</div></div>';
+          + '</div><div class="pf-side">' + UI.panel('Saved version', '<pre class="pf-yaml" tabindex="0" aria-label="Saved version as YAML">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy' }) }) + '</div></div>';
       }
 
       root.innerHTML = '<style>'
