@@ -29,18 +29,23 @@ from prototype data to live only when every control on it is backed by the serve
 | 17 | Identity, security and accessibility: sign-in notices, strength meter, upstream step-up, DPoP nonces, SAML metadata, enrolment links, automated WCAG checks and reflow (1.2.0) | Sign in, Settings, User stores, Identity, Platform; accessibility in Pools, Media, Models, Workflows | **Done** |
 | 18 | Platform hardening: service URL checks, backend TLS, consistent backups, ACME binding and hooks, sealed training data, input caps, zone re-checks, registry pushes (1.2.0) | Platform, Zones | **Done** |
 | 19 | Knowledge, integrations and workflows: MySQL sources, row access, logical replication, ordered and Ed25519 webhooks, price books and Stripe reconciliation, awaited workflow tools (1.2.0) | Knowledge, Tenants, Usage and audit, Runs, Workflows, Images | **Done** |
-| 20–23 | 1.3.0: keys and supply chain, AI, operations, knowledge and integrations | see [Backlog-1.3.0.md](Backlog-1.3.0.md) | Planned |
+| 20 | Keys and supply chain: a signer process, KMS-held webhook keys, HTTP Message Signatures, image provenance, `DATA_KEY` out of the environment (1.3.0) | Settings, Tenants | **Done** |
+| 21 | AI: held `/v1` requests and compare prompts, the Responses API, evaluations, thinking at the full output check, membership changes ending watches, scheduled agents (1.3.0) | Compare, Flags, Profiles, Runs | **Done** |
+| 22 | Operations: tracing, dashboards and alerts, safe upgrades, key escrow, zones applied in-cluster, NTP quorum, rate-limit health (1.3.0) | Platform, Zones | **Done** |
+| 23 | Knowledge, integrations and accessibility: S3 and web-crawl sources, PostgreSQL row security, webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow (1.3.0) | Knowledge, Usage and audit; accessibility in Profiles, Workflows and the header | **Done** |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
 servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform), plus the signed-out Shared page for
-anonymous links; twenty-one database migrations (`001_core` to `021_integrations2`); 477 unit and API tests (against a
+anonymous links; twenty-five database migrations (`001_core` to `025_integrations3`); 532 unit and API tests (against a
 fake Ollama, a fake MCP server, fake script, media, image and training workers, a fake ACME directory, a fake upstream
-identity provider, a fake OpenBao, and fake mail, HIBP range, webhook, Stripe, DNS, Harbor, Verdaccio and devpi
-endpoints) plus the integration suite against PostgreSQL, MySQL, OpenLDAP and Redis; 55 Playwright tests across the
-console, including the accessibility and reflow checks; a Helm chart, supply-chain CI and a streaming load test. The
-version is `1.2.0`: Sprints 16 to 19 delivered the [1.2.0 backlog](Backlog-1.2.0.md), after Sprints 11 to 15 delivered
-the [1.1.0 backlog](Backlog-1.1.0.md).
+identity provider, a fake OpenBao, a fake OTLP collector, Kubernetes API, SNTP server and Redis, a fake S3 bucket and
+web site, and fake mail, HIBP range, webhook, Stripe, DNS, Harbor, Verdaccio and devpi endpoints) plus the integration
+suite against PostgreSQL, MySQL, OpenLDAP and Redis; 57 Playwright tests across the console, including axe-core, the
+in-page accessibility checker and the reflow checks for screens, dialogs and drawers; a Helm chart with an optional
+signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a streaming load test. The version is
+`1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
+[1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md).
 
 ---
 
@@ -920,4 +925,169 @@ gaps ([docs/security.md](docs/security.md)) and [docs/accessibility.md](docs/acc
 Sprints 16 to 19 closed. `API_RATE_PER_MINUTE` (600) now sets the `/api` limit per user (per address when signed
 out), which was fixed at 600, and the console suite's server raises it to 6000. A flake in `memory.test.ts` (a random sealed value could contain the searched substring) is fixed.
 The suite: 477 tests passed and 1 skipped across 37 files, and 55 Playwright tests passed. Tagging `v1.0.0` and
+publishing the image and chart (B-601) remain with the maintainers.
+
+## Sprint 20: Keys and supply chain (done)
+
+Delivered in `server/src/signer` (`server.ts`, `client.ts`, `protocol.ts`), `server/src/crypto/httpsig.ts`,
+`server/src/platform/kms.ts`, `server/src/federation` (`keys.ts`, `upstream.ts`, `xmlenc.ts`),
+`server/src/webhooks/service.ts`, `server/src/identity` (`apikeys.ts`, `security-alerts.ts`),
+`server/src/http/middleware.ts`, `server/src/openai/routes.ts`, `server/src/routes` (`me.ts`, `admin/federation.ts`,
+`admin/integrations.ts`), `server/src/config/index.ts`, `server/src/cli.ts` (migration `022_keys`), the console screens
+`settings.js` and `tenants.js`, `.github/workflows/ci.yml`, `deploy/baremetal/exprsn-signer.service` and the Helm
+chart's `signer.*` sidecar (`ci/signer-values.yaml`). New settings `SIGNER_SOCKET`, `SIGNER_TOKEN` (or
+`SIGNER_TOKEN_FILE`), `SIGNER_TIMEOUT_MS` (5000) and `HTTP_SIGNATURE_MAX_AGE_SECONDS` (300); the signer itself reads
+`SIGNER_KEY_FILE`, `SIGNER_TOKEN_FILE`, `SIGNER_SOCKET_MODE` and `SIGNER_ALLOW_GROUP_READ`. New CLI command `signer`
+and notice `api_key.changed`. No new permissions or dependencies.
+
+- Signer process (B-1201): `exprsn-ai signer` holds the local key-encryption key and every OIDC, SAML, SAML SP
+  decryption and webhook private key, and signs and decrypts over a UNIX socket that checks a shared token on every
+  connection. With `SIGNER_SOCKET` set the app holds no private key and no key-encryption key, only wrapped blobs it
+  cannot open. Node cannot read a socket peer's uid, so access rests on the socket's permissions, a separate user and
+  the token. The signer signs bytes (at most 64 KiB), not digests, and the app fails closed when it is gone.
+- Webhook Ed25519 keys (B-1202) are made and used in OpenBao transit or the signer; keys sealed before are retired but
+  stay published.
+- HTTP Message Signatures (B-1203): an RFC 9421 subset with an RFC 8941 parser and RFC 9530 `Content-Digest`
+  (`crypto/httpsig.ts`). An API key may register an Ed25519 public key; `/v1` then accepts only requests signed over
+  `@method`, `@target-uri`, `authorization` and `content-digest`, and the key is refused outside `/v1`. Webhooks can add
+  RFC 9421 signatures (HMAC-SHA256 or Ed25519) next to their own headers.
+- Supply chain (B-1204): `npm audit signatures` in CI; on `main` and `v*` tags a `publish-image` job pushes the image to
+  GHCR with a SLSA build provenance attestation and a keyless cosign signature, then checks both with `cosign verify`
+  and `gh attestation verify`; a `release-sboms` job attaches the SBOMs to tagged releases. These steps were validated
+  with actionlint and a YAML parse only; they have not run on GitHub, and they assume the image is
+  `ghcr.io/<owner>/<repo>`.
+- `DATA_KEY` out of the environment (B-1205): production refuses `DATA_KEY`, `DATA_KEY_PREVIOUS` and `SIGNER_TOKEN`
+  given inline (use the `_FILE` forms), and with the signer refuses `DATA_KEY` from any source. The signer's key file is
+  the old `DATA_KEY`, so moving to the signer needs no re-wrap.
+
+**Done when:** with `SIGNER_SOCKET` set the app signs ID tokens and SAML assertions and decrypts assertions with no
+private key in its memory; with OpenBao a webhook signature is made in transit; a signed `/v1` request verifies and an
+unsigned one or a tampered header is refused; production refuses `DATA_KEY` inline and accepts `DATA_KEY_FILE`
+(`server/test/sprint20.test.ts`, 16 tests). CI fails on a package with an invalid registry signature and verifies the
+image with `cosign verify` once the workflow runs on GitHub.
+
+## Sprint 21: AI (done)
+
+Delivered in `server/src/openai` (`holds.ts`, `responses.ts`, `routes.ts`, `service.ts`), `server/src/evals/service.ts`,
+`server/src/routes/admin/evals.ts`, `server/src/agents` (`schedules.ts`, `service.ts`), `server/src/chat/service.ts`,
+`server/src/guardrails/flags.ts`, `server/src/platform/bus.ts`, `server/src/realtime/socket.ts`,
+`server/src/repos/users.ts`, `server/src/routes` (`agents.ts`, `guardrails.ts`, `admin/gateway.ts`,
+`admin/tenants.ts`) (migration `023_ai`) and the console screens `compare.js`, `flags.js`, `profiles.js` and `runs.js`.
+New setting `AGENT_SCHEDULE_TICK_SECONDS` (60); no new permissions or dependencies.
+
+- Held `/v1` requests and compare prompts (B-1301): a `/v1` request sent with an API key that `require-approval`
+  stops answers `202` with a held-request id and `GET /v1/held/:id`; another reviewer approves it in Flags, and it runs
+  as its sender (job `openai.held`) with the key's scopes at approval time; the answer is kept sealed for the client.
+  Compare holds the prompt and every column. A request sent with an OAuth access token is still refused.
+- Responses API (B-1302): `POST` and `GET /v1/responses`, a documented subset (string or item input, `instructions`,
+  function tools, the `response.created`, `response.output_text.delta` and `response.completed` events); `store: true`
+  (needs `chat:write`, off by default) saves the exchange to Chat, and `previous_response_id` continues it.
+- Evaluations (B-1303): eval sets per profile (contains and not-contains, RE2 regex, JSON schema, a judge rubric
+  through a judge profile), run as `evals.run` jobs and scored per profile version and settings hash. Publishing
+  answers `409 eval_gate` unless the gated sets pass or a second profile admin approves an override. The Profiles
+  screen gains an Evaluations tab.
+- The full `model-output` check covers thinking (B-1304): thinking it blocks or holds is withheld or redacted, with a
+  `guard.thinking` entry.
+- The bus topic `workspace.membership` (admin removal, group mappings, directory sync) ends a removed reader's shared
+  watches at once (B-1305).
+- Scheduled agent runs (B-1306): UTC cron schedules on agents (the training cron parser), run as the owner with their
+  current roles and memberships, with a run history and skips; each due time is claimed once across instances.
+  `/api/agent-schedules`, and a Schedules dialog on the Runs screen.
+
+**Done when:** a held `/v1` request completes after approval and the client fetches the answer, and compare holds both
+columns; a response stored through `/v1/responses` appears in Chat and can be continued; a profile version whose eval
+score is below its threshold cannot be published; thinking a guard-model rule blocks is withheld after the answer
+finishes; removing a reader from the shared workspace ends their stream without a reload; a scheduled agent runs at its
+time with the owner's permissions and is skipped when the owner is disabled (`server/test/sprint21.test.ts`, 9 tests).
+
+## Sprint 22: Operations (done)
+
+Delivered in `server/src/observability` (`tracing.ts`, `ops-metrics.ts`), `server/src/db/schema.ts`,
+`server/src/platform` (`shamir.ts`, `escrow.ts`, `jobs.ts`, `ntp.ts`, `ratelimit.ts`), `server/src/zones`
+(`kube.ts`, `cluster.ts`), `server/src/routes/admin/zones-cluster.ts`, `server/src/ops` (`service.ts`, `watch.ts`),
+`server/src/gateway/ollama.ts`, `server/src/http/app.ts`, `server/src/routes/health.ts`, `server/src/index.ts`,
+`server/src/cli.ts` (migration `024_ops2`), the console screens `platform.js` and `zones.js`, `deploy/observability/`
+(Prometheus rules with promtool unit tests, two Grafana dashboards), the Helm chart's optional `zonesApply` RBAC, the CI
+job `observability` (promtool from `prom/prometheus` v3.5.0, pinned by digest) and the runbook
+[docs/runbooks/alerts.md](docs/runbooks/alerts.md). New settings `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_SERVICE_NAME`,
+`OTEL_TRACES_SAMPLE_RATIO`, `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_SCHEDULE_DELAY`, `SCHEMA_CHECK_SECONDS`, `ZONES_APPLY`,
+`ZONES_APPLY_API_URL`, `ZONES_APPLY_TOKEN_FILE`, `ZONES_APPLY_CA_FILE`, `ZONES_APPLY_FIELD_MANAGER`,
+`ZONES_APPLY_DRIFT_MINUTES`, `NTP_OUTLIER_MS` and `RATELIMIT_PROBE_SECONDS`; `NTP_SERVER` takes a comma-separated list.
+New CLI commands `migrate --check`, `kms:escrow` and `kms:recover`. No new permissions or dependencies.
+
+- Tracing (B-1401): OpenTelemetry spans over OTLP/HTTP JSON without the SDK (`observability/tracing.ts`) for requests,
+  jobs (the parent carried in `jobs.trace_parent`), Ollama calls (which receive `traceparent`), guardrail checks and
+  database queries (operation and table only), with an attribute allow-list and no tenant content.
+- Dashboards and alerts (B-1402): Prometheus recording and alert rules with promtool unit tests, overview and
+  operations Grafana dashboards in `deploy/observability/`, and the metrics they need (`observability/ops-metrics.ts`).
+- Safe upgrades (B-1403): `migrate --check` lists pending migrations and their destructive steps (exit 0, 2, 3 or 4);
+  the schema guard (`db/schema.ts`) stops an instance older than the schema from claiming jobs, answers `/readyz` with
+  503 and `checks.schema`, and refuses to start it. The expand/contract rule is in `docs/PLAN.md`, and a lint test
+  refuses a dropping or renaming migration without the `// contract:` marker.
+- Key escrow (B-1404): `kms:escrow` splits the local key-encryption key into k-of-n Shamir shares over GF(256)
+  (`platform/shamir.ts`, `platform/escrow.ts`), each with a share check value and a key check value; `kms:recover`
+  writes the rebuilt key to a new 0600 file, never to standard output. At the merge, `kms:escrow` gained
+  `--key-file <signer key file>`, so a deployment whose key lives only in the signer can escrow it (checked end to end:
+  three of five shares rebuilt the signer key file).
+- Zones in-cluster (B-1405): with `ZONES_APPLY=kubernetes`, each zone's NetworkPolicy is applied with server-side
+  apply, and drift is reported in the audit chain, as a notification, on the Zones screen and as an alert
+  (`/api/admin/zones-cluster`).
+- NTP quorum (B-1406): several `NTP_SERVER`s, the median skew, and outliers named.
+- Rate-limit health (B-1407): a Redis probe, the `exprsn_ratelimit_degraded` metric and alert, and a Platform warning
+  while limits count per instance.
+
+**Done when:** a chat request is one trace across HTTP, guardrails, the gateway, the database and the job, with no
+message text; the rules parse and `promtool check rules` and `promtool test rules` pass, and the dashboards load; an
+instance older than the schema stops taking jobs and says why; three of five shares rebuild a key that opens a backup
+and two do not; against a fake API server a zone change applies its NetworkPolicy and a manual edit shows as drift;
+with one lying server out of three the reported skew is the honest one; stopping Redis shows the warning within a
+minute (`server/test/sprint22-ops.test.ts`, 19 tests, with a fake OTLP collector, Kubernetes API, SNTP server and Redis
+in `sprint22-fakes.ts`).
+
+## Sprint 23: Knowledge, integrations and accessibility (done)
+
+Delivered in `server/src/knowledge` (`crawl.ts`, `sources.ts`, `service.ts`), `server/src/connections` (`drivers.ts`,
+`service.ts`), `server/src/webhooks/service.ts`, `server/src/billing/service.ts`, `server/src/routes`
+(`knowledge.ts`, `integrations-public.ts`, `admin/billing.ts`) (migration `025_integrations3`), the console screens
+`knowledge.js`, `usage-audit.js`, `profiles.js` and `workflows.js` and `web/css/app.css`, and in `e2e/`
+(`tests/support/axe.ts`, `tests/y-accessibility.spec.ts`, `tests/y-reflow-overlays.spec.ts`). New settings
+`KNOWLEDGE_ALLOWED_HOSTS` and `KNOWLEDGE_FETCH_TIMEOUT_MS`; no new permissions. New dependency: `axe-core` 4.13.0 in
+the e2e package only.
+
+- S3 buckets (B-1501): S3-compatible bucket sources with their own endpoint and sealed keys, include patterns and
+  ETag change detection; removed objects are dropped. Endpoints must be internal or in `KNOWLEDGE_ALLOWED_HOSTS`.
+- Web crawler (B-1502, `knowledge/crawl.ts`): same origin, robots.txt (RFC 9309) and sitemaps, depth, page and path
+  limits, `noindex` and `nofollow`, conditional re-fetch, and every dialled address checked.
+- PostgreSQL row security (B-1503): `roleMappings` from group to role; reads run under `SET LOCAL ROLE` in a read-only
+  transaction. The setup is validated (membership, no superuser or `BYPASSRLS`, row security on and forced,
+  `security_invoker` views) and documented in [docs/deploy.md](docs/deploy.md).
+- Webhook order across instances (B-1504): a position counter (`webhook_order`) and a delivery lease per endpoint.
+- Billing (B-1505): price book versions with `effectiveFrom` prorate the month; Stripe refunds mark a statement partly
+  refunded or refunded, credit notes are recorded, and disputes are reconciled and audited.
+- axe-core (B-1506): axe-core 4.13.0 runs beside the in-page checker on every screen and design state, sign-in and a
+  streaming chat, in Standard and Enhanced (AAA contrast), light and dark. Fixed on the way: a field-hint link on
+  Profiles below the 24 px target size and the unlabelled workflow picker on Workflows.
+- Dialogs and drawers (B-1507) are measured for reflow at 320 and 640 px; a long breadcrumb that pushed the page sideways at
+  640 px and below now shrinks and clips.
+
+**Done when:** a file added to a fake S3 bucket is indexed and a removed one is dropped; a two-level internal site is
+indexed within its limits and never leaves its host; a row a policy hides from a group's role never reaches that
+group's chunks; ordered events raised on two instances arrive in order; a refunded invoice marks the statement
+refunded with the amount (`server/test/sprint23-knowledge.test.ts`, 6 tests,
+`server/test/sprint23-integrations.test.ts`, 5 tests, with a fake S3 bucket and web site in `sprint23-fakes.ts`, and
+`server/test/integration/rls.test.ts` and
+`integration/webhooks.test.ts` against PostgreSQL); the suite fails on any axe-core WCAG 2.2 A/AA violation and on AAA
+contrast in Enhanced, and each screen's dialogs and drawers open at 320 px without sideways scrolling
+(`e2e/tests/y-accessibility.spec.ts`, `e2e/tests/y-reflow-overlays.spec.ts`).
+
+## Release 1.3.0
+
+The workspace, the server and the chart are versioned `1.3.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
+the backlog in [Backlog-1.3.0.md](Backlog-1.3.0.md). The ASVS assessment ([docs/asvs.md](docs/asvs.md)), the known
+gaps ([docs/security.md](docs/security.md)) and [docs/accessibility.md](docs/accessibility.md) are updated for what
+Sprints 20 to 23 closed. The release line starts from `main` with 1.2.0 and the dependency fixes (PR #20: otplib 13
+through `server/src/identity/totp.ts`, `@types/node` 26, TypeScript 7). The suite after the merge: 532 tests passed and
+1 skipped across 42 files, and 57 Playwright tests passed (with axe-core in Standard and Enhanced, light and dark, and
+the dialog and drawer reflow spec). The supply-chain steps of B-1204 have not yet run on GitHub. Tagging `v1.0.0` and
 publishing the image and chart (B-601) remain with the maintainers.

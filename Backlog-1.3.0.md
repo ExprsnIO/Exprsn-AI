@@ -11,10 +11,34 @@ dependency fixes (PR #20).
 
 | Sprint | Theme | Migration | Status |
 | --- | --- | --- | --- |
-| 20 | Keys and supply chain: a signer process, KMS-held webhook keys, signed messages, provenance | `022_keys` | Planned |
-| 21 | AI: held prompts everywhere, a stored-response API, evaluations, sharper streaming checks, scheduled agents | `023_ai` | Planned |
-| 22 | Operations: tracing, safe upgrades, key escrow, zones applied in-cluster, NTP quorum | `024_ops2` | Planned |
-| 23 | Knowledge, integrations and accessibility | `025_integrations3` | Planned |
+| 20 | Keys and supply chain: a signer process, KMS-held webhook keys, signed messages, provenance | `022_keys` | **Done** |
+| 21 | AI: held prompts everywhere, a stored-response API, evaluations, sharper streaming checks, scheduled agents | `023_ai` | **Done** |
+| 22 | Operations: tracing, safe upgrades, key escrow, zones applied in-cluster, NTP quorum | `024_ops2` | **Done** |
+| 23 | Knowledge, integrations and accessibility | `025_integrations3` | **Done** |
+
+**Status (1.3.0).** Every item from B-1201 to B-1507 is delivered; what each sprint built and its tests are in
+[Sprints.md](Sprints.md), and the changes are in [CHANGELOG.md](CHANGELOG.md). Two items deviate from their wording.
+B-1201's signer does not check its caller's credentials: Node cannot read a UNIX socket peer's uid, so access rests on
+the socket's permissions, a separate user and a shared token. B-1204's supply-chain steps (`npm audit signatures`,
+the SLSA provenance attestation, the cosign signature and its verification, and the release SBOMs) were validated with
+actionlint and a YAML parse only; they have not run on GitHub, and they assume the image is `ghcr.io/<owner>/<repo>`.
+What each sprint left open is in the "Known gaps" of [docs/security.md](docs/security.md) and under "Follow-ups not
+fixed" in [docs/asvs.md](docs/asvs.md).
+
+- Sprint 20: done. B-1201 and B-1204 as above. Open: the signer is optional, and without it local mode is unchanged;
+  with OpenBao the SAML SP decryption key is still sealed locally; signed `/v1` requests can be replayed within
+  `HTTP_SIGNATURE_MAX_AGE_SECONDS`.
+- Sprint 21: done. Open: a `/v1` request sent with an OAuth access token is refused rather than held; held API
+  requests have no retention period; canary models are not evaluated; a missed schedule time fires once; eval runs are
+  metered as `api` usage.
+- Sprint 22: done. `kms:escrow` also takes `--key-file <signer key file>` (added at the merge), so a deployment whose
+  key-encryption key lives only in the signer can escrow it. Open: zones applied in-cluster do not create namespaces
+  or delete the policies of removed zones; `OTEL_EXPORTER_OTLP_HEADERS` has no `_FILE` form; escrow covers only the
+  local key-encryption key (with OpenBao, use its recovery shares).
+- Sprint 23: done. Open: the crawler does not sign in or run JavaScript; role-mapped sources read up to 5000 rows per
+  role in full; moving a tenant to another price book mid-month is not prorated; credit notes do not change a
+  statement's state; axe-core's "needs review" results are not checked automatically; dialogs that open only after a
+  server-side change are not measured for reflow.
 
 ---
 
