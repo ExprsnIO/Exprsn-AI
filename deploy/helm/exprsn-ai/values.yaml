@@ -330,5 +330,26 @@ networkPolicy:
     siem:
       to: []
       ports: []
+    # Sprint 22: the Kubernetes API server, needed only with zonesApply.enabled. Give the API server's address
+    # (kubectl get endpoints kubernetes -n default), for example [{ ipBlock: { cidr: 10.0.0.1/32 } }].
+    kubernetesApi:
+      to: []
+      ports:
+        - { port: 443, protocol: TCP }
+        - { port: 6443, protocol: TCP }
     # Further egress rules, as NetworkPolicy egress rules.
     extra: []
+
+# ---------------------------------------------------------------------------------------------------------------
+# Sprint 22: zones applied in-cluster (ZONES_APPLY=kubernetes). The server applies each zone's rendered NetworkPolicy
+# through the Kubernetes API with server-side apply when a zone changes, and checks for drift. Off by default: the
+# server then never talks to the Kubernetes API and gets no service-account token.
+# ---------------------------------------------------------------------------------------------------------------
+zonesApply:
+  enabled: false
+  # The zone namespaces (one per zone id: edge, app, data, directory, inference, sandbox, training). For each, a Role
+  # allowing get, list, create and patch on networkpolicies (nothing else) is bound to the server's service account.
+  # The namespaces must already exist (the server does not create namespaces).
+  namespaces: []
+  # How often live policies are compared with what was applied (minutes; 0: only when asked).
+  driftMinutes: 15

@@ -1,0 +1,129 @@
+# Prometheus recording and alert rules for Exprsn-AI (Sprint 22, B-1402).
+#
+# Load with `rule_files: [exprsn-ai.rules.yml]`, or through the Prometheus Operator as a PrometheusRule (the chart's
+# ServiceMonitor scrapes /metrics with METRICS_TOKEN). Every metric here is served by /metrics; the `job` label is
+# whatever your scrape config gives the server (the chart's ServiceMonitor uses the release's fullname).
+# CI runs `promtool check rules` on this file. What to do for each alert: docs/runbooks/alerts.md.
+
+groups:
+  - name: exprsn-ai.recording
+    interval: 30s
+    rules:
+      - record: exprsn:http_requests:rate5m
+        expr: sum by (job) (rate(exprsn_http_request_duration_seconds_count[5m]))
+      - record: exprsn:http_errors:ratio_rate5m
+        expr: |
+          sum by (job) (rate(exprsn_http_request_duration_seconds_count{status=~"5.."}[5m]))
+            / clamp_min(sum by (job) (rate(exprsn_http_request_duration_seconds_count[5m])), 1e-9)
+      - record: exprsn:http_request_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (job, le) (rate(exprsn_http_request_duration_seconds_bucket{route!="unmatched"}[5m])))
+
+  - name: exprsn-ai.availability
+    rules:
+      - alert: ExprsnHighErrorRate
+        expr: exprsn:http_errors:ratio_rate5m > 0.05 and exprsn:http_requests:rate5m > 0.2
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: More than 5% of requests to {{ $labels.job }} fail with a server error
+          description: "{{ $value | humanizePercentage }} of requests answered 5xx over the last 5 minutes. Quote a trace id from the logs when you look for the cause."
+          runbook: docs/runbooks/alerts.md#exprsnhigherrorrate
+      - alert: ExprsnSlowRequests
+        expr: exprsn:http_request_duration_seconds:p95_5m > 2.5
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: The 95th percentile request time of {{ $labels.job }} is above 2.5 s
+          description: "p95 is {{ $value | humanizeDuration }}. Streamed answers are not counted here (their request returns at once)."
+          runbook: docs/runbooks/alerts.md#exprsnslowrequests
+      - alert: ExprsnEventLoopLag
+        expr: exprsn_nodejs_eventloop_lag_p99_seconds > 0.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Event loop lag on {{ $labels.instance }} is above 500 ms
+          description: "p99 lag is {{ $value | humanizeDuration }}: the instance answers slowly and may miss heartbeats."
+          runbook: docs/runbooks/alerts.md#exprsneventlooplag
+      - alert: ExprsnMemoryHigh
+        expr: exprsn_process_resident_memory_bytes > 1.5e9
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }} uses more than 1.5 GB of memory"
+          description: "Resident memory is {{ $value | humanize1024 }}B."
+          runbook: docs/runbooks/alerts.md#exprsnmemoryhigh
+      - alert: ExprsnSignInFailures
+        expr: sum by (job) (rate(exprsn_logins_total{result=~"invalid|locked|disabled|mfa_failed"}[5m])) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: More than one failed sign-in a second on {{ $labels.job }}
+          description: "Failed sign-ins run at {{ $value | humanize }} a second: a password-guessing run, or a broken user store."
+          runbook: docs/runbooks/alerts.md#exprsnsigninfailures
+
+  - name: exprsn-ai.operations
+    rules:
+      - alert: ExprsnJobBacklog
+        expr: max by (job) (exprsn_jobs_oldest_queued_seconds) > 900
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: A job has waited more than 15 minutes to start
+          description: "The oldest due job has waited {{ $value | humanizeDuration }}. Check that workers run (WORKERS_ENABLED) and are not refusing jobs (ExprsnSchemaBehind)."
+          runbook: docs/runbooks/alerts.md#exprsnjobbacklog
+      - alert: ExprsnJobsFailing
+        expr: max by (job) (exprsn_jobs{state="failed_1h"}) > 10
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: More than 10 jobs failed in the last hour
+          description: "{{ $value }} jobs failed in the last hour (each after its retries)."
+          runbook: docs/runbooks/alerts.md#exprsnjobsfailing
+      - alert: ExprsnRateLimitsPerInstance
+        expr: max by (job, instance) (exprsn_ratelimit_degraded) > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: Rate limits on {{ $labels.instance }} count per instance because Redis does not answer
+          description: Limits still apply, but each instance counts on its own, so a client spread over N instances gets N times the limit.
+          runbook: docs/runbooks/alerts.md#exprsnratelimitsperinstance
+      - alert: ExprsnSchemaBehind
+        expr: max by (job, instance) (exprsn_schema_behind) > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }} is older than the database schema and takes no jobs"
+          description: A newer release migrated the database. Finish the rollout (or roll the database back) so every instance runs a build that knows the schema.
+          runbook: docs/runbooks/alerts.md#exprsnschemabehind
+      - alert: ExprsnZonePolicyDrift
+        expr: max by (job) (exprsn_zone_cluster_objects{state=~"drift|missing"}) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} zone NetworkPolicies differ from what was applied"
+          description: Someone changed or deleted a zone NetworkPolicy in the cluster. Review it under Zones, then apply again.
+          runbook: docs/runbooks/alerts.md#exprsnzonepolicydrift
+      - alert: ExprsnZonePolicyApplyFailing
+        expr: max by (job) (exprsn_zone_cluster_objects{state="error"}) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: Zone NetworkPolicies could not be applied in the cluster
+          description: The Kubernetes API refused or did not answer. Check the service account's Role (zonesApply in the chart) and that the zone namespaces exist.
+          runbook: docs/runbooks/alerts.md#exprsnzonepolicyapplyfailing
+      - alert: ExprsnClockSkew
+        expr: max by (job, instance) (abs(exprsn_clock_offset_seconds)) > 2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: The clock of {{ $labels.instance }} is more than 2 s away from NTP
+          description: "The median offset against the NTP servers is {{ $value | humanize }} s. TOTP, Kerberos and certificate checks fail at 5 s."
+          runbook: docs/runbooks/alerts.md#exprsnclockskew
+      - alert: ExprsnTraceExportDropping
+        expr: sum by (job, instance) (increase(exprsn_trace_spans_total{outcome=~"dropped|failed"}[15m])) > 0
+        for: 15m
+        labels: { severity: info }
+        annotations:
+          summary: "{{ $labels.instance }} is dropping trace spans"
+          description: The OTLP collector is slow, refusing or unreachable, so spans are dropped rather than held in memory. Requests are not affected.
+          runbook: docs/runbooks/alerts.md#exprsntraceexportdropping

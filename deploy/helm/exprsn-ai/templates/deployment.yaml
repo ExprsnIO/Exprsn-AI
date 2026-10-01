@@ -36,7 +36,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "exprsn-ai.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      automountServiceAccountToken: {{ or .Values.serviceAccount.automountServiceAccountToken .Values.zonesApply.enabled }}
       enableServiceLinks: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

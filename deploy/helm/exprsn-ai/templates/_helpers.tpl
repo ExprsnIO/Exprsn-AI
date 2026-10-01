@@ -74,6 +74,12 @@ app.kubernetes.io/part-of: exprsn-ai
 {{/* Refuses combinations the server would reject at start, so the failure shows at install time. */}}
 {{- define "exprsn-ai.validate" -}}
 {{- $v := .Values }}
+{{- if and $v.zonesApply.enabled (not $v.zonesApply.namespaces) }}
+{{- fail "zonesApply.namespaces must list the zone namespaces when zonesApply.enabled" }}
+{{- end }}
+{{- if and $v.zonesApply.enabled (not $v.serviceAccount.create) (not $v.serviceAccount.name) }}
+{{- fail "zonesApply.enabled needs a service account (serviceAccount.create or serviceAccount.name)" }}
+{{- end }}
 {{- if not $v.config.publicUrl }}
 {{- fail "config.publicUrl is required (the https:// address users open)" }}
 {{- end }}
@@ -163,6 +169,10 @@ SIEM_URL: {{ $c.siemUrl | quote }}
 {{- end }}
 SCRIPT_RUNNER: {{ $c.scriptRunner | quote }}
 IDENTITY_CONFIG: {{ ternary "/etc/exprsn-ai/identity.yaml" "" (or (not (empty .Values.identity.config)) (not (empty .Values.identity.existingConfigMap))) | quote }}
+{{- if .Values.zonesApply.enabled }}
+ZONES_APPLY: "kubernetes"
+ZONES_APPLY_DRIFT_MINUTES: {{ .Values.zonesApply.driftMinutes | toString | quote }}
+{{- end }}
 {{- range $k, $val := $c.extra }}
 {{ $k }}: {{ $val | toString | quote }}
 {{- end }}
