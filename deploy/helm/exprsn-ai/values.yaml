@@ -108,6 +108,24 @@ secrets:
   SMTP_URL: { name: "", key: smtp_url }
   SIEM_TOKEN: { name: "", key: siem_token }
 
+# ---------------------------------------------------------------------------------------------------------------
+# Signer sidecar (Sprint 20, B-1201 and B-1205). With kms.provider=local, a second container in each pod runs
+# `exprsn-ai signer`: it alone holds the key-encryption key (what DATA_KEY was) and the OIDC, SAML and webhook
+# private keys, and the server reaches it on a UNIX socket in a shared emptyDir. Leave secrets.DATA_KEY empty when
+# this is on: the key is mounted into the signer container only. The token is mounted into both.
+# ---------------------------------------------------------------------------------------------------------------
+signer:
+  enabled: false
+  # The key-encryption key (openssl rand -base64 32; reuse the old DATA_KEY so existing data keys still open).
+  keySecret: { name: "", key: data_key }
+  # The shared token the server presents first on every connection (openssl rand -base64 48).
+  tokenSecret: { name: "", key: signer_token }
+  # A user of its own, so the server container's user is not the key's owner. It shares the pod's fsGroup.
+  runAsUser: 1001
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
 # Further files for the identity YAML and friends, mounted at /run/secrets/<path>.
 extraSecretFiles: []
   # - { name: exprsn-ai-ldap, key: bind_password, path: ldap_bind_password }

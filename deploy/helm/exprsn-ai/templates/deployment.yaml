@@ -48,8 +48,46 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- if eq .Values.migrations.mode "initContainer" }}
+      {{- if or (eq .Values.migrations.mode "initContainer") .Values.signer.enabled }}
       initContainers:
+      {{- end }}
+      {{- if .Values.signer.enabled }}
+        # Sprint 20 (B-1201): the signer, a native sidecar (restartPolicy: Always), started and answering before the
+        # server starts. It alone mounts the key-encryption key; the server shares only the socket's emptyDir.
+        - name: signer
+          image: {{ include "exprsn-ai.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          restartPolicy: Always
+          command: ["/usr/bin/tini", "--", "node", "server/dist/cli.js", "signer"]
+          env:
+            - name: SIGNER_SOCKET
+              value: /run/exprsn-signer/s/signer.sock
+            - name: SIGNER_SOCKET_MODE
+              value: "0660"
+            - name: SIGNER_KEY_FILE
+              value: /run/signer/data_key
+            - name: SIGNER_TOKEN_FILE
+              value: /run/signer/signer_token
+            # Secret volumes are group-readable by the pod's fsGroup; this one is mounted into this container only.
+            - name: SIGNER_ALLOW_GROUP_READ
+              value: "true"
+          securityContext:
+            {{- toYaml (merge (dict "runAsUser" (int .Values.signer.runAsUser)) (deepCopy .Values.securityContext)) | nindent 12 }}
+          volumeMounts:
+            - name: signer-socket
+              mountPath: /run/exprsn-signer
+            - name: signer-keys
+              mountPath: /run/signer
+              readOnly: true
+          startupProbe:
+            exec:
+              command: ["node", "-e", "require('net').connect(process.argv[1]).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))", "/run/exprsn-signer/s/signer.sock"]
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.signer.resources | nindent 12 }}
+      {{- end }}
+      {{- if eq .Values.migrations.mode "initContainer" }}
         - name: migrate
           image: {{ include "exprsn-ai.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}

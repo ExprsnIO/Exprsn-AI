@@ -11,6 +11,7 @@ server depends on is external and referenced from `values.yaml`:
 | Redis | The `REDIS_URL` secret. Required whenever more than one replica can run (`replicaCount` or `autoscaling.maxReplicas` above 1): the Socket.io adapter, the BullMQ job queue and the cross-instance bus use it |
 | Blob store | `config.blobStore.type`: `s3` (MinIO, Ceph, SeaweedFS, AWS) or `pvc` (a volume at `/var/lib/exprsn-ai`, `ReadWriteMany` with more than one replica) |
 | KMS | `config.kms.provider`: `local` with the `DATA_KEY` secret, or `openbao` with `config.kms.openbao.addr` and the `OPENBAO_TOKEN` secret |
+| Signer (Sprint 20) | `signer.enabled` with `kms.provider=local`: a native sidecar (`exprsn-ai signer`, Kubernetes 1.29 or later) holds the key-encryption key (`signer.keySecret`, mounted into it alone) and the OIDC, SAML and webhook private keys; the server reaches it on a UNIX socket in a shared in-memory `emptyDir` with the token in `signer.tokenSecret`. Leave `secrets.DATA_KEY` empty (the chart refuses both) |
 | Directory | The identity YAML (`identity.config` or `identity.existingConfigMap`) and its secret files (`extraSecretFiles`) |
 | Ollama | External GPU nodes or another namespace. Instances are registered in the console under Admin > Pools, not in this chart |
 

@@ -1,7 +1,7 @@
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as cryptoSign, type KeyObject } from 'node:crypto';
+import { constants, createPrivateKey, createPublicKey, generateKeyPairSync, privateDecrypt, randomBytes, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import type { Services } from '../services.js';
 import { PLATFORM_SCOPE } from '../platform/datakeys.js';
-import type { SigningKeyType } from '../platform/kms.js';
+import type { HeldKeyType, SigningKeyType } from '../platform/kms.js';
 import type { Jwk, JwsSigner } from './jose.js';
 import { selfSignedCertificate, selfSignedRsaCertificate } from './x509.js';
 
@@ -10,6 +10,11 @@ export type KeyUse = 'oidc' | 'saml' | 'saml-enc';
 
 /** A signing key that lives in the KMS: `private_sealed` holds this prefix and the KMS key name, never key material. */
 const KMS_REF = 'kms:';
+/**
+ * Sprint 20 (B-1201): a key held by the signer process: `private_sealed` holds this prefix and the blob the signer
+ * wrapped the key in, which this process cannot open (the signer's key-encryption key never leaves the signer).
+ */
+const SIGNER_REF = 'signer:';
 
 /** A signer for the current key: JWS (and XML-DSig) signatures through a local key or the KMS. */
 export interface KeySigner extends JwsSigner {
@@ -93,7 +98,14 @@ export class SigningKeys {
     let publicKey: KeyObject;
     let privateSealed: string;
     let certificate: string | null = null;
-    if (this.kmsSigns(use)) {
+    const held = this.s().kms.heldKeys;
+    if (held) {
+      const host = new URL(this.s().cfg.FEDERATION_ISSUER ?? this.s().cfg.PUBLIC_URL).hostname;
+      const r = await held.create(SigningKeys.heldName(tenantId, kid), SigningKeys.heldType(use), use === 'oidc' ? undefined : { commonName: `${host} SAML ${use === 'saml' ? 'IdP' : 'SP encryption'}`, organization: (await this.s().tenants.byId(tenantId))?.name ?? 'Exprsn-AI', days: 3 * 365 });
+      publicKey = createPublicKey(r.publicKey);
+      certificate = r.certificate;
+      privateSealed = `${SIGNER_REF}${r.wrapped}`;
+    } else if (this.kmsSigns(use)) {
       const kms = this.s().kms;
       const name = `${this.s().cfg.OPENBAO_KEY_PREFIX}fed-${kid}`.toLowerCase();
       const type: SigningKeyType = use === 'oidc' ? 'ecdsa-p256' : 'rsa-2048';
@@ -135,6 +147,26 @@ export class SigningKeys {
     return row.private_sealed.startsWith(KMS_REF);
   }
 
+  /** Sprint 20 (B-1201): is this key held by the signer process? */
+  static inSigner(row: Pick<KeyRow, 'private_sealed'>): boolean {
+    return row.private_sealed.startsWith(SIGNER_REF);
+  }
+
+  /** The name a held key is bound to in the signer: its wrapped blob opens under this name only. */
+  static heldName(tenantId: string, kid: string): string {
+    return `fed:${tenantId}:${kid}`;
+  }
+
+  static heldType(use: KeyUse): HeldKeyType {
+    return use === 'oidc' ? 'ecdsa-p256' : use === 'saml' ? 'rsa-2048' : 'rsa-oaep-2048';
+  }
+
+  /** Does the current KMS want this key replaced (its private half is somewhere the KMS does not hold it)? */
+  private misplaced(row: KeyRow): boolean {
+    if (this.s().kms.heldKeys) return !SigningKeys.inSigner(row);
+    return this.kmsSigns(row.use) && !SigningKeys.inKms(row);
+  }
+
   async list(tenantId: string, use: KeyUse = 'oidc'): Promise<KeyRow[]> {
     const rows = await this.db('federation_keys').where({ tenant_id: tenantId, use }).orderBy('activates_at', 'desc');
     const now = Date.now();
@@ -158,9 +190,9 @@ export class SigningKeys {
       keys = await this.list(tenantId, use);
     }
     const signing = keys.find((k) => k.state === 'signing');
-    if (signing && this.kmsSigns(use) && !SigningKeys.inKms(signing)) {
-      // KMS signing was turned on: a key whose private half is in this process stops signing now (it stays published
-      // for the overlap window, so what it signed keeps verifying) and a key held in the KMS replaces it.
+    if (signing && this.misplaced(signing)) {
+      // KMS signing (or the signer) was turned on: a key whose private half is in this process stops signing now (it
+      // stays published for the overlap window, so what it signed keeps verifying) and a key held there replaces it.
       const next = await this.insert(tenantId, use, now);
       await this.db('federation_keys').where({ kid: signing.kid }).update({ state: 'retired', retires_at: now, removes_at: now + Math.max(this.overlapMs(), DAY) });
       this.cache.delete(signing.kid);
@@ -174,6 +206,14 @@ export class SigningKeys {
   async signer(tenantId: string, use: 'oidc' | 'saml' = 'oidc'): Promise<KeySigner> {
     const row = await this.advance(tenantId, use);
     const alg = use === 'oidc' ? 'ES256' : 'RS256';
+    if (SigningKeys.inSigner(row)) {
+      const held = this.s().kms.heldKeys;
+      if (!held) throw new Error(`Key ${row.kid} is held by the signer, which is no longer configured (SIGNER_SOCKET).`);
+      const name = SigningKeys.heldName(row.tenant_id, row.kid);
+      const type: SigningKeyType = use === 'oidc' ? 'ecdsa-p256' : 'rsa-2048';
+      const wrapped = row.private_sealed.slice(SIGNER_REF.length);
+      return { row, kid: row.kid, alg, remote: true, sign: (data) => held.sign(name, type, wrapped, data) };
+    }
     if (SigningKeys.inKms(row)) {
       const kms = this.s().kms;
       if (!kms.sign) throw new Error(`Key ${row.kid} is held in a KMS that is no longer configured.`);
@@ -185,10 +225,39 @@ export class SigningKeys {
     return { row, kid: row.kid, alg, remote: false, sign: async (data) => (alg === 'ES256' ? cryptoSign('sha256', data, { key, dsaEncoding: 'ieee-p1363' }) : cryptoSign('sha256', data, key)) };
   }
 
-  /** The tenant's SAML SP decryption key (RSA-OAEP) and its certificate, for upstream encrypted assertions. */
-  async decrypter(tenantId: string): Promise<{ row: KeyRow; key: KeyObject }> {
+  /**
+   * The tenant's SAML SP decryption key (RSA-OAEP), for upstream encrypted assertions: `decrypt` unwraps a content
+   * key with the current key, in the signer when one runs (B-1201). A key replaced when the signer was turned on is
+   * tried next while it is still published, so an IdP that has not re-read our metadata yet keeps working.
+   */
+  async decrypter(tenantId: string): Promise<{ row: KeyRow; decrypt: (ciphertext: Buffer, oaepHash: 'sha1' | 'sha256') => Promise<Buffer> }> {
     const row = await this.advance(tenantId, 'saml-enc');
-    return { row, key: await this.privateKey(row) };
+    const older = (await this.list(tenantId, 'saml-enc')).filter((k) => k.kid !== row.kid && k.state === 'retired');
+    const one = async (k: KeyRow, ct: Buffer, hash: 'sha1' | 'sha256'): Promise<Buffer> => {
+      if (SigningKeys.inSigner(k)) {
+        const held = this.s().kms.heldKeys;
+        if (!held) throw new Error(`Key ${k.kid} is held by the signer, which is no longer configured (SIGNER_SOCKET).`);
+        return held.decrypt(SigningKeys.heldName(k.tenant_id, k.kid), k.private_sealed.slice(SIGNER_REF.length), ct, hash);
+      }
+      return privateDecrypt({ key: await this.privateKey(k), padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: hash }, ct);
+    };
+    return {
+      row,
+      decrypt: async (ct, hash) => {
+        try {
+          return await one(row, ct, hash);
+        } catch (err) {
+          for (const k of older) {
+            try {
+              return await one(k, ct, hash);
+            } catch {
+              /* next */
+            }
+          }
+          throw err;
+        }
+      }
+    };
   }
 
   /** Key ids whose private key is held in this process right now (tests: none for signing keys with KMS signing). */
@@ -197,7 +266,7 @@ export class SigningKeys {
   }
 
   private async privateKey(row: KeyRow): Promise<KeyObject> {
-    if (SigningKeys.inKms(row)) throw new Error(`Key ${row.kid} is held in the KMS.`);
+    if (SigningKeys.inKms(row) || SigningKeys.inSigner(row)) throw new Error(`Key ${row.kid} is held outside this process.`);
     const hit = this.cache.get(row.kid);
     if (hit) return hit;
     const pem = await this.s().keys.sealer(PLATFORM_SCOPE).open(row.private_sealed, this.aad(row.tenant_id, row.kid));

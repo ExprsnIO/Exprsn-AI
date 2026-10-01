@@ -360,6 +360,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await counters.close();
       await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
+      // Sprint 20: the signer connection, when the KMS is the signer.
+      (kms as { client?: { close(): void } }).client?.close();
     }
   };
   registerPlatformJobs(s);

@@ -1518,3 +1518,38 @@ Audit actions: `auth.login.new_context`, `auth.step_up.started`, `password.enrol
 `federation.proposal.rejected`, `federation.proposal.withdrawn`, `federation.metadata.refreshed`,
 `federation.metadata.failed`, `federation.metadata.source_set`, `federation.metadata.source_removed`,
 `federation.saml_sp.metadata_applied`, `identity.provider.metadata_applied`.
+
+## Sprint 20: Keys and supply chain
+
+### Signed `/v1` requests (RFC 9421)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /me/api-keys` | Now takes `signatureKey` (an Ed25519 public key: its JWK `x` value, or a PEM). Lists and the answer show `signatureKey` |
+| `PUT /me/api-keys/:id/signature-key` `{publicKey: string \| null}` | Sets or (with `null`) removes the key's public key. Browser session with a recent sign-in, like creating a key; a security notice is sent |
+
+When an API key has a public key, every `/v1` request made with it must carry `Signature-Input` and `Signature`
+(HTTP Message Signatures, RFC 9421) by that key, `alg="ed25519"`, covering at least `"@method"`, `"@target-uri"` (the
+URL under `PUBLIC_URL` the client called) and `"authorization"`, plus `"content-digest"` when there is a body, with a
+`Content-Digest` header (RFC 9530, `sha-256` or `sha-512`) that matches it. `created` is required and must be within
+`HTTP_SIGNATURE_MAX_AGE_SECONDS`; `keyid`, if given, is the key's id or its `exai_k1_<prefix>`. Any other signed
+header field may be added (`x-data-label`, `content-type`). Otherwise the answer is `401` with
+`error.code = invalid_signature` and a message that says what was wrong. OAuth access tokens are not affected. Such a key is
+refused (`401 invalid_token`) everywhere outside `/v1`, where signatures are not checked.
+
+### Webhooks
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/webhooks`, `PATCH /admin/webhooks/:id` | Now take `messageSignatures` (boolean, default `false`); the webhook view shows it |
+| `GET /admin/webhooks/signing-key` | `active.store` says where the Ed25519 private key is: `signer`, `kms` (OpenBao transit) or `sealed` |
+
+With `messageSignatures`, each delivery also carries `Content-Digest`, `Signature-Input` and `Signature` under the label
+`exprsn`, covering `"@method" "@target-uri" "content-type" "content-digest" "x-exprsn-delivery-id"` with `created` set to
+`x-exprsn-timestamp`: `alg="hmac-sha256"` with the webhook's secret and `keyid` the webhook id, or `alg="ed25519"` with
+the tenant's published key and `keyid` its kid (the JWKS at `/webhooks/keys/:tenant`). The existing headers are sent as
+before. With OpenBao, or with the signer, Ed25519 keys are created and used there; a key sealed before is retired (it
+stays in the JWKS) and replaced on the next signature.
+
+Audit actions: `apikey.signature_key.set`, `apikey.signature_key.removed`; `webhook.signing-key.created` (also when a
+key moves to the KMS or the signer, with `detail.retired`).

@@ -108,7 +108,7 @@
       const keys = st.keys || [];
       const keyRows = keys.map((k) => {
         const action = k.state === 'active' ? UI.btn('Revoke', { kind: 'ghost', size: 'sm', attrs: 'data-revoke="' + esc(k.id) + '"' }) : UI.pill(k.state, k.state === 'expired' ? 'warn' : 'danger');
-        return { cells: [esc(k.name) + '<div class="mono muted" style="font-size:11px">' + esc(k.prefix) + '…</div>', '<span class="mono">' + esc(k.scopes.join(' ')) + '</span>', k.state === 'expired' ? '<span style="color:var(--warn-fg)">' + esc(when(k.expiresAt)) + '</span>' : esc(new Date(k.expiresAt).toLocaleDateString()), esc(when(k.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + action + '</span>'] };
+        return { cells: [esc(k.name) + (k.signatureKey ? ' ' + UI.pill('signed requests', 'outline') : '') + '<div class="mono muted" style="font-size:11px">' + esc(k.prefix) + '…</div>', '<span class="mono">' + esc(k.scopes.join(' ')) + '</span>', k.state === 'expired' ? '<span style="color:var(--warn-fg)">' + esc(when(k.expiresAt)) + '</span>' : esc(new Date(k.expiresAt).toLocaleDateString()), esc(when(k.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + action + '</span>'] };
       });
       const keysPanel = UI.panel('API keys', '<div>' + UI.btn('Create key', { kind: 'primary', size: 'sm', icon: 'key', attrs: 'data-create' }) + '</div>'
         + (st.revealed ? UI.notice('<b>Key <span class="mono">' + esc(st.revealed.name) + '</span> created. Copy it now; it is shown once.</b><div class="mono" style="margin-top:4px;overflow-wrap:anywhere">' + esc(st.revealed.key) + '</div>', 'warn', UI.btn('Copy', { size: 'sm', attrs: 'data-copykey' }) + UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-revealdone' })) : '')
@@ -172,6 +172,7 @@
         ctx.modal({ title: 'Create API key', body: UI.field('Name', UI.input('', { placeholder: 'for example notebook-desk', attrs: 'data-name maxlength="100"' }), 'Shown in the audit log next to every call made with the key.')
           + '<div class="field"><span class="fl">Scopes, a subset of your own</span><div class="hstack wrap gap6" style="row-gap:6px">' + scopes.map((s) => UI.check(s, s === 'inference:invoke' || s === 'chat:read', 'data-scope="' + esc(s) + '"')).join('') + '</div></div>'
           + UI.field('Expires', UI.select([{ value: '30', label: '30 days' }, { value: '90', label: '90 days' }, { value: '180', label: '180 days' }, { value: '365', label: '1 year' }], '90', 'data-exp'))
+          + UI.field('Public key for signed requests (optional)', UI.input('', { placeholder: 'Ed25519 public key, JWK x value or PEM', attrs: 'data-sigkey maxlength="400" autocomplete="off" spellcheck="false"' }), 'With a key here, every /v1 call made with this API key must carry an HTTP message signature (RFC 9421) by it.')
           + UI.notice('The key is shown once after creation. It inherits your clearance ceiling of ' + UI.label(me.user.clearance, { sm: true }) + '.', 'info'),
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create key', { kind: 'primary', attrs: 'data-go' }),
           onMount(m) {
@@ -181,6 +182,8 @@
               if (!name) { ctx.toast('Give the key a name.', 'warn'); return; }
               if (!chosen.length) { ctx.toast('Pick at least one scope.', 'warn'); return; }
               const body = { name, scopes: chosen, ttlDays: Number(m.querySelector('[data-exp]').value) };
+              const sigKey = m.querySelector('[data-sigkey]').value.trim();
+              if (sigKey) body.signatureKey = sigKey;
               const created = (r) => { st.revealed = { name, key: r.key }; App.closeOverlay(); reload(); ctx.toast('Key created. Copy it now; it will not be shown again.', 'warn', 5000); };
               try { created(await App.post('/api/me/api-keys', body)); } catch (err) {
                 if (!(err.problem && err.problem.step_up)) { App.fail(err, 'Key not created'); return; }

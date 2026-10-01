@@ -71,11 +71,17 @@ function oaepHash(method: XmlElement | undefined): 'sha1' | 'sha256' {
   return digest;
 }
 
+/** Unwraps a content key with RSA-OAEP: a local key, or (B-1201) a call to the signer that holds it. */
+export type OaepDecrypt = (ciphertext: Buffer, oaepHash: 'sha1' | 'sha256') => Promise<Buffer>;
+
+/** An `OaepDecrypt` over a private key in this process. */
+export const localOaep = (key: KeyObject): OaepDecrypt => async (ct, hash) => privateDecrypt({ key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: hash }, ct);
+
 /**
  * Decrypts a `<saml:EncryptedAssertion>` with our RSA private key and returns the plaintext XML of the assertion.
  * The EncryptedKey may sit in the EncryptedData's KeyInfo or next to the EncryptedData.
  */
-export function decryptAssertion(encrypted: XmlElement, key: KeyObject): string {
+export async function decryptAssertion(encrypted: XmlElement, decryptKey: OaepDecrypt): Promise<string> {
   const data = child(encrypted, NS.xenc, 'EncryptedData');
   if (!data) throw new XmlEncError('The EncryptedAssertion has no EncryptedData.');
   const dataAlg = attr(child(data, NS.xenc, 'EncryptionMethod'), 'Algorithm');
@@ -88,7 +94,7 @@ export function decryptAssertion(encrypted: XmlElement, key: KeyObject): string 
   for (const ek of encKeys) {
     try {
       const hash = oaepHash(child(ek, NS.xenc, 'EncryptionMethod'));
-      cek = privateDecrypt({ key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: hash }, cipherValue(ek));
+      cek = await decryptKey(cipherValue(ek), hash);
       break;
     } catch (err) {
       if (err instanceof XmlEncError) lastError = err.message;
