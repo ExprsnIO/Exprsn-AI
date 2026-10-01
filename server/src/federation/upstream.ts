@@ -390,7 +390,7 @@ export class Upstream {
     if (encrypted.length) {
       let xml: string;
       try {
-        xml = decryptAssertion(encrypted[0]!, (await this.s().federation.keys.decrypter(t.id)).key);
+        xml = await decryptAssertion(encrypted[0]!, (await this.s().federation.keys.decrypter(t.id)).decrypt);
       } catch (err) {
         if (err instanceof XmlEncError) throw new UpstreamError(`The encrypted assertion was refused: ${err.message}`);
         throw err;

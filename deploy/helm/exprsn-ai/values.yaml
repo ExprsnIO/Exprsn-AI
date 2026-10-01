@@ -108,6 +108,24 @@ secrets:
   SMTP_URL: { name: "", key: smtp_url }
   SIEM_TOKEN: { name: "", key: siem_token }
 
+# ---------------------------------------------------------------------------------------------------------------
+# Signer sidecar (Sprint 20, B-1201 and B-1205). With kms.provider=local, a second container in each pod runs
+# `exprsn-ai signer`: it alone holds the key-encryption key (what DATA_KEY was) and the OIDC, SAML and webhook
+# private keys, and the server reaches it on a UNIX socket in a shared emptyDir. Leave secrets.DATA_KEY empty when
+# this is on: the key is mounted into the signer container only. The token is mounted into both.
+# ---------------------------------------------------------------------------------------------------------------
+signer:
+  enabled: false
+  # The key-encryption key (openssl rand -base64 32; reuse the old DATA_KEY so existing data keys still open).
+  keySecret: { name: "", key: data_key }
+  # The shared token the server presents first on every connection (openssl rand -base64 48).
+  tokenSecret: { name: "", key: signer_token }
+  # A user of its own, so the server container's user is not the key's owner. It shares the pod's fsGroup.
+  runAsUser: 1001
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
 # Further files for the identity YAML and friends, mounted at /run/secrets/<path>.
 extraSecretFiles: []
   # - { name: exprsn-ai-ldap, key: bind_password, path: ldap_bind_password }
@@ -330,5 +348,26 @@ networkPolicy:
     siem:
       to: []
       ports: []
+    # Sprint 22: the Kubernetes API server, needed only with zonesApply.enabled. Give the API server's address
+    # (kubectl get endpoints kubernetes -n default), for example [{ ipBlock: { cidr: 10.0.0.1/32 } }].
+    kubernetesApi:
+      to: []
+      ports:
+        - { port: 443, protocol: TCP }
+        - { port: 6443, protocol: TCP }
     # Further egress rules, as NetworkPolicy egress rules.
     extra: []
+
+# ---------------------------------------------------------------------------------------------------------------
+# Sprint 22: zones applied in-cluster (ZONES_APPLY=kubernetes). The server applies each zone's rendered NetworkPolicy
+# through the Kubernetes API with server-side apply when a zone changes, and checks for drift. Off by default: the
+# server then never talks to the Kubernetes API and gets no service-account token.
+# ---------------------------------------------------------------------------------------------------------------
+zonesApply:
+  enabled: false
+  # The zone namespaces (one per zone id: edge, app, data, directory, inference, sandbox, training). For each, a Role
+  # allowing get, list, create and patch on networkpolicies (nothing else) is bound to the server's service account.
+  # The namespaces must already exist (the server does not create namespaces).
+  namespaces: []
+  # How often live policies are compared with what was applied (minutes; 0: only when asked).
+  driftMinutes: 15

@@ -3,8 +3,9 @@
 This is the Sprint 10 review of the application server (`server/src`) and its deployment files against the
 [OWASP Application Security Verification Standard 4.0.3](https://github.com/OWASP/ASVS/tree/v4.0.3/4.0), level 2.
 It covers the code on the `claude/determined-hawking-n7wmk1` branch as of 30 September 2026, and was updated for
-release 1.1.0 (the `release/1.1.0` branch) and release 1.2.0 (the `release/1.2.0` branch): rows changed by Sprints 11
-to 15 say "since 1.1.0", rows changed by Sprints 16 to 19 say "since 1.2.0", and both cite their tests.
+release 1.1.0 (the `release/1.1.0` branch), release 1.2.0 (the `release/1.2.0` branch) and release 1.3.0 (the
+`release/1.3.0` branch): rows changed by Sprints 11 to 15 say "since 1.1.0", rows changed by Sprints 16 to 19 say
+"since 1.2.0", rows changed by Sprints 20 to 23 say "since 1.3.0", and each cites its tests.
 Where the review found a gap that was safe to close, the fix landed with it (listed under
 [Fixes from this review](#fixes-from-this-review), tested in `server/test/asvs.test.ts`). The rest are follow-ups at
 the end of each chapter and in [security.md](security.md#known-gaps-tracked-in-the-plan).
@@ -23,7 +24,7 @@ Evidence cites `file:line` under `server/src/` unless another root is named, and
 | Chapter | Met | Partly | Not met | N/A |
 | --- | ---: | ---: | ---: | ---: |
 | V1 Architecture | 10 | 2 | 0 | 2 |
-| V2 Authentication | 7 | 2 | 0 | 1 |
+| V2 Authentication | 8 | 1 | 0 | 1 |
 | V3 Session management | 6 | 0 | 0 | 1 |
 | V4 Access control | 3 | 0 | 0 | 0 |
 | V5 Validation, sanitization and encoding | 4 | 1 | 0 | 0 |
@@ -34,9 +35,9 @@ Evidence cites `file:line` under `server/src/` unless another root is named, and
 | V10 Malicious code | 2 | 0 | 0 | 1 |
 | V11 Business logic | 1 | 0 | 0 | 0 |
 | V12 Files and resources | 5 | 1 | 0 | 0 |
-| V13 API and web service | 1 | 1 | 0 | 2 |
+| V13 API and web service | 2 | 0 | 0 | 2 |
 | V14 Configuration | 4 | 1 | 0 | 0 |
-| **Total (71 groups)** | **54** | **10** | **0** | **7** |
+| **Total (71 groups)** | **56** | **8** | **0** | **7** |
 
 The 1.0 review (37 met, 27 partly) named individual requirements that were not met: self-service password change
 (2.1.5), a full breached-password check (2.1.7), user notification of authentication changes (2.2.3), user revocation
@@ -49,7 +50,12 @@ sign-ins from a new browser or network (2.2.3), a password strength meter (2.1.8
 (5.5), secrets masked in admin diagnostics (7.4.1) and an optional gVisor runtime for scripts (1.14.5); four more groups
 moved from partly to met (1.14, 2.2, 5.5, 7.4). It also added address checks for operator-chosen service URLs (5.2.6,
 12.6.1) and a setting that refuses plaintext backend links (1.9.1), which advance their groups without completing them.
-No group is "not met"; what remains is named in the partly rows and under
+Release 1.3.0 (Sprints 20 to 23, [Backlog-1.3.0.md](../Backlog-1.3.0.md)) made the key-encryption key file-only in
+production (2.10.4) and added HTTP Message Signatures for `/v1` and webhooks (13.2.6); two more groups moved from
+partly to met (2.10, 13.2). It also added a signer process that keeps the key-encryption key and every private key out
+of the application with `KMS_PROVIDER=local` (6.4.2), and CI steps for registry signatures, build provenance and image
+signing (14.2.4), which advance their groups without completing them: the signer is optional, and the CI steps have
+not yet run on GitHub. No group is "not met"; what remains is named in the partly rows and under
 [Follow-ups not fixed](#follow-ups-not-fixed).
 
 ## Fixes from this review
@@ -78,11 +84,11 @@ No group is "not met"; what remains is named in the partly rows and under
 | 1.4 Access control architecture | Met | Single policy decision point `authz/policy.ts` (role, scopes, tenant, clearance, zone), enforced server-side by `requirePermission` (`http/middleware.ts:339`); denials audited | |
 | 1.5 Input and output architecture | Met | zod validation at every route (`parseBody`), output encoding by the console (`UI.esc`) and the federation pages (`routes/federation-public.ts:23` `esc`); no serialization of untrusted objects | |
 | 1.6 Cryptographic architecture | Met | Per-tenant data keys wrapped by a KMS (`platform/datakeys.ts`, `platform/kms.ts`), key rotation by version (`cli.ts kms:rotate`), key-encryption keys re-wrapped under a new `DATA_KEY` or KMS by `kms:rewrap` (`platform/rewrap.ts`, 1.1.0), offboarding destroys keys; test "re-wraps every data key under a new DATA_KEY…" (`sprint15-ops.test.ts`) | |
-| 1.7 Errors, logging and auditing architecture | Met | pino JSON logs with trace ids (`observability/index.ts`), audit hash chain with KMS-signed checkpoints (`audit/chain.ts`, `audit/checkpoints.ts`), SIEM stream (`audit/siem.ts`) | |
+| 1.7 Errors, logging and auditing architecture | Met | pino JSON logs with trace ids (`observability/index.ts`), audit hash chain with KMS-signed checkpoints (`audit/chain.ts`, `audit/checkpoints.ts`), SIEM stream (`audit/siem.ts`); since 1.3.0 optional OpenTelemetry traces over OTLP/HTTP for requests, jobs, gateway calls, guardrail checks and database queries, with an attribute allow-list that keeps out SQL text, query strings, message text and error messages (`observability/tracing.ts`, B-1401); tests "a chat request is one trace across HTTP, guardrails, the gateway, the database and the job, with no message text", "records only allow-listed attributes, never SQL text…" (`sprint22-ops.test.ts`) | `OTEL_EXPORTER_OTLP_HEADERS` has no `_FILE` form yet |
 | 1.8 Data protection and privacy architecture | Met | Labels `public < internal < confidential < restricted` on data, clearance on users (`authz/labels.ts`); sealed content at rest | |
 | 1.9 Communications architecture | Partly | Internal networks for database and Ollama in Compose (`deploy/docker/compose.yml`), mTLS per Ollama instance (`gateway/ollama.ts:121`), LDAPS with verification (`identity/providers/ldap.ts:49`); since 1.2.0 `REQUIRE_BACKEND_TLS` refuses to start in production with a plaintext PostgreSQL, MySQL, Redis, S3 or OpenBao link, with per-link exemptions in `BACKEND_TLS_EXEMPT` and SQLite exempt (1.9.1, B-902, `config/index.ts`); tests "production with sslmode=disable refuses to start with REQUIRE_BACKEND_TLS on", "checks MySQL, Redis, S3 and OpenBao links; SQLite is exempt" (`sprint18.test.ts`) | 1.9.1: `REQUIRE_BACKEND_TLS` is off by default, so without it links to PostgreSQL, MySQL, Redis, S3 and OpenBao are encrypted only when the operator's URL asks for it |
 | 1.10 Malicious software architecture | Met | Source control with CI gates and dependency review (Dependabot, `npm audit`) | |
-| 1.11 Business logic architecture | Met | Business flows are documented in `docs/api.md`; jobs and runs are checkpointed and idempotent (`platform/jobs.ts`); since 1.1.0 rate limits, the failed-credential throttle and the denial cap share one atomic Redis counter across instances when `REDIS_URL` is set (`platform/ratelimit.ts`), and the Helm chart refuses several replicas without Redis; tests "shares one counter between limiters on the same store…" (`sprint15-access.test.ts`), "two instances share one limit…" (`integration/operations.test.ts`) | While Redis is unreachable each instance counts in memory (see [security.md](security.md#known-gaps-tracked-in-the-plan)) |
+| 1.11 Business logic architecture | Met | Business flows are documented in `docs/api.md`; jobs and runs are checkpointed and idempotent (`platform/jobs.ts`); since 1.1.0 rate limits, the failed-credential throttle and the denial cap share one atomic Redis counter across instances when `REDIS_URL` is set (`platform/ratelimit.ts`), and the Helm chart refuses several replicas without Redis; tests "shares one counter between limiters on the same store…" (`sprint15-access.test.ts`), "two instances share one limit…" (`integration/operations.test.ts`) | While Redis is unreachable each instance counts in memory (see [security.md](security.md#known-gaps-tracked-in-the-plan)); since 1.3.0 that state is probed, shown on Platform and exported as `exprsn_ratelimit_degraded` with an alert (B-1407; test "stopping Redis shows the per-instance warning on Platform within a minute, and recovers" in `sprint22-ops.test.ts`) |
 | 1.12 Secure file upload architecture | Met | Uploads stored sealed in the blob store outside the web root, served with server-chosen types; since 1.1.0 every media file, preview and image is served with `Content-Security-Policy: sandbox` and `nosniff` (`media/origin.ts` `sandboxHeaders`, `routes/media.ts` `sendBytes`), and optionally from a separate origin through signed, short-lived URLs (`MEDIA_ORIGIN`); tests in `sprint15-access.test.ts` ("serves media and previews with a sandbox CSP and nosniff…") | Without `MEDIA_ORIGIN` downloads stay on the app origin, sandboxed |
 | 1.13 API architecture | N/A | Placeholder group in 4.0.3 | |
 | 1.14 Configuration architecture | Met | Container and systemd hardening (`deploy/`), Helm chart with NetworkPolicy, zod-validated configuration (`config/index.ts`); no unsupported client-side technology (1.14.6); scripts run in a network-less, read-only, capability-free docker or podman container, and since 1.2.0 optionally under gVisor (`SCRIPT_RUNTIME=runsc`, B-1008, `scripts/runner.ts`), refusing to run when the engine lacks the runtime (1.14.5); tests "passes --runtime=runsc to docker and reports it", "refuses runs when docker does not know the runtime, rather than running under runc" (`sprint19-workflows.test.ts`) | gVisor is opt-in; the default is the engine's runc runtime. Firecracker is not supported |
@@ -100,7 +106,7 @@ No group is "not met"; what remains is named in the partly rows and under
 | 2.7 Out-of-band verifier | N/A | No SMS, email or push authenticators | |
 | 2.8 One-time verifier | Met | TOTP 30 s step, window 1, single use per step (`identity/mfa.ts:16`, `:98`), sealed seeds; five failures end the pending session (`routes/auth.ts:59`); test "requires TOTP on later sign-ins and rejects a replayed code"; the last factor of an admin cannot be removed (this review) | |
 | 2.9 Cryptographic verifier | Met | WebAuthn passkeys with signature counters and origin and RP ID checks (`identity/mfa.ts:130-160`) | |
-| 2.10 Service authentication | Partly | API keys are 256-bit, HMAC'd, scoped, expiring (`identity/apikeys.ts:55`); OAuth client secrets shown once and stored as digests (test "shows a client secret once and stores only its digest"); service secrets passed as files; with `KMS_PROVIDER=openbao`, OIDC and SAML signing happens in OpenBao transit and no private signing key enters the process (`federation/keys.ts`, 1.1.0; test "signs ID tokens and SAML assertions in the KMS…" in `sprint14.test.ts`) | With `KMS_PROVIDER=local` the signing keys are sealed with the platform data key and unsealed in memory while in use |
+| 2.10 Service authentication | Met | API keys are 256-bit, HMAC'd, scoped, expiring (`identity/apikeys.ts:55`); OAuth client secrets shown once and stored as digests (test "shows a client secret once and stores only its digest"); service secrets passed as files; with `KMS_PROVIDER=openbao`, OIDC and SAML signing happens in OpenBao transit and no private signing key enters the process (`federation/keys.ts`, 1.1.0; test "signs ID tokens and SAML assertions in the KMS…" in `sprint14.test.ts`). Since 1.3.0 production refuses `DATA_KEY`, `DATA_KEY_PREVIOUS` and `SIGNER_TOKEN` given inline in the environment and takes them only as files (2.10.4, B-1205, `config/index.ts` `inlineKeyProblems`), and with `KMS_PROVIDER=local` the signer process (`exprsn-ai signer`, `signer/`, B-1201) can hold the key-encryption key and the OIDC, SAML, SAML SP decryption and webhook private keys, so the application holds none of them; tests "refuses DATA_KEY in the environment in production, and accepts DATA_KEY_FILE", "signs ID tokens and SAML assertions and decrypts assertions with no private key in the app" (`sprint20.test.ts`) | Without the signer, local mode still unseals the signing keys in memory while in use; that is tracked under 6.4.2 |
 
 ## V3 Session management
 
@@ -139,7 +145,7 @@ No group is "not met"; what remains is named in the partly rows and under
 | 6.1 Data classification | Met | Labels on conversations, attachments, knowledge and exports; tenant content sealed at rest (`platform/datakeys.ts`) | |
 | 6.2 Algorithms | Met | AES-256-GCM with row-bound associated data (`platform/datakeys.ts:125-140`, `crypto/index.ts:21`), HMAC-SHA-256, argon2id, ES256 and RS256 signatures; no ECB, CBC or MD5 for security (MD5 appears only as a feature hash in `guardrails/linear.ts:18`) | |
 | 6.3 Random values | Met | `crypto.randomBytes` for tokens, keys, nonces and codes (`crypto/index.ts:7`); the one security-adjacent `Math.random` (the password-timing dummy) replaced (this review) | |
-| 6.4 Secret management | Partly | OpenBao transit adapter for key-encryption keys (`platform/kms.ts`), secrets as files (`config/index.ts:7`), secret references in configuration (`identity/secrets.ts`); since 1.1.0, with OpenBao, OIDC and SAML signing happens in transit (`federation/keys.ts`, B-408), and `kms:rewrap` moves every data key, checkpoint signature and backup to a new key-encryption key (`platform/rewrap.ts`, B-407); tests in `sprint14.test.ts` (with `fake-openbao.ts`) and `sprint15-ops.test.ts` | 6.4.2: with `KMS_PROVIDER=local` the key-encryption key is `DATA_KEY` in process memory and the signing keys are unsealed in memory; the SAML SP decryption key for upstream encrypted assertions is sealed locally even with OpenBao |
+| 6.4 Secret management | Partly | OpenBao transit adapter for key-encryption keys (`platform/kms.ts`), secrets as files (`config/index.ts:7`), secret references in configuration (`identity/secrets.ts`); since 1.1.0, with OpenBao, OIDC and SAML signing happens in transit (`federation/keys.ts`, B-408), and `kms:rewrap` moves every data key, checkpoint signature and backup to a new key-encryption key (`platform/rewrap.ts`, B-407); tests in `sprint14.test.ts` (with `fake-openbao.ts`) and `sprint15-ops.test.ts`. Since 1.3.0, with `KMS_PROVIDER=local` and `SIGNER_SOCKET`, a separate signer process on a token-checked UNIX socket holds the key-encryption key and every OIDC, SAML, SAML SP decryption and webhook private key, signs and decrypts for the application and never exports a key; the application stores only wrapped blobs it cannot open, and production refuses `DATA_KEY` from any source when the signer is configured (6.4.2, B-1201, B-1205, `signer/`); webhook Ed25519 keys are made and used in OpenBao transit or the signer (B-1202); `kms:escrow` splits the local key-encryption key into k-of-n Shamir shares and `kms:recover` rebuilds it into a 0600 file (6.4.1, B-1404, `platform/shamir.ts`, `platform/escrow.ts`); tests "signs ID tokens and SAML assertions and decrypts assertions with no private key in the app", "fails closed when the signer is gone", "makes the webhook signature in transit, with no private key in the database or the process" (`sprint20.test.ts`), "three of five shares rebuild a key that opens a backup; two do not" (`sprint22-ops.test.ts`) | 6.4.2: the signer is optional; without it, local mode keeps the key-encryption key in process memory and unseals the signing keys while in use, as before. With OpenBao, the SAML SP decryption key for upstream encrypted assertions is still sealed locally. Data keys are unwrapped into the application's memory in every mode (envelope encryption). The signer cannot check its caller's uid (Node has no `SO_PEERCRED`); access rests on socket permissions, a separate user and the token |
 
 ## V7 Error handling and logging
 
@@ -147,7 +153,7 @@ No group is "not met"; what remains is named in the partly rows and under
 | --- | --- | --- | --- |
 | 7.1 Log content | Met | Authorization and cookie headers, CSRF tokens, passwords, secrets, tokens and codes redacted, and credential-bearing query parameters removed from logged URLs (`observability/index.ts:9-58`, this review); session ids in audit are HMACs, never tokens | |
 | 7.2 Log processing | Met | Every sign-in success and failure, MFA step, and access-control denial is audited (`routes/auth.ts`, `http/middleware.ts:347`); tests "writes sign-ins to the audit chain", "keeps members out of admin routes and audits the denial" | |
-| 7.3 Log protection | Met | pino writes JSON (no log injection through newlines); the audit chain is append-only and hash-linked with KMS-signed checkpoints, and verification is read-only (`audit/chain.ts`, `audit/checkpoints.ts`, tests in `audit.test.ts`); time from the server clock with skew measured against the database and, since 1.1.0, against NTP when `NTP_SERVER` is set (`platform/ntp.ts`, `ops/service.ts`; tests "measures the offset by SNTP…", "shows NTP skew on the platform status" in `sprint15-access.test.ts`) | The SNTP query is unauthenticated (no NTS); it is a check, not a time source |
+| 7.3 Log protection | Met | pino writes JSON (no log injection through newlines); the audit chain is append-only and hash-linked with KMS-signed checkpoints, and verification is read-only (`audit/chain.ts`, `audit/checkpoints.ts`, tests in `audit.test.ts`); time from the server clock with skew measured against the database and, since 1.1.0, against NTP when `NTP_SERVER` is set (`platform/ntp.ts`, `ops/service.ts`; tests "measures the offset by SNTP…", "shows NTP skew on the platform status" in `sprint15-access.test.ts`) | SNTP is unauthenticated (no NTS); it is a check, not a time source. Since 1.3.0 several `NTP_SERVER`s give a median with outliers named, so one lying server no longer hides skew (B-1406; test "with one lying server out of three, the reported skew is the honest one" in `sprint22-ops.test.ts`) |
 | 7.4 Error handling | Met | One error handler returns RFC 9457 problems with a trace id and a generic message for unexpected errors (`http/app.ts:165-180`); public readiness, federation error pages and userinfo no longer echo internal errors (this review); since 1.2.0 diagnostic messages, health details and every problem detail are masked for credentials before they leave the server (7.4.1, B-907, `platform/diagnostics.ts`: known secret values, credentials in URLs, secret-named keys, authorization values, private-key blocks); test "a driver message with a password shows it masked" (`sprint18.test.ts`) | Admin-only diagnostic routes (store tests, MCP and connection checks, `routes/admin/identity.ts:125`, `routes/admin/federation.ts:474`) still show driver messages, masked, to identity and platform admins by design |
 
 ## V8 Data protection
@@ -177,7 +183,7 @@ No group is "not met"; what remains is named in the partly rows and under
 
 | Group | Status | Evidence | Follow-up |
 | --- | --- | --- | --- |
-| 11.1 Business logic security | Met | Sequential flows enforced server-side (sign-in stages, lifecycles, approvals, dual control); quotas shared through the database (`tenancy/quotas.ts`); rate limits on `/api` (`API_RATE_PER_MINUTE`, 600 a minute per user or address by default), `/api/auth` (30), OAuth token endpoints (60) and browser sign-in endpoints (120, this review); since 1.1.0 they share one atomic Redis counter (a Lua script) across instances when `REDIS_URL` is set (11.1.4, `platform/ratelimit.ts`, B-406), and failed bearer, API-key and DPoP credentials are throttled to 20 a minute per address (B-111); guardrail and flag queues alert on anomalies; tests in `sprint15-access.test.ts` and `integration/operations.test.ts` | Without Redis, or while it is down, limits count per instance; the failed-credential throttle is per address, so clients behind one NAT share it |
+| 11.1 Business logic security | Met | Sequential flows enforced server-side (sign-in stages, lifecycles, approvals, dual control); quotas shared through the database (`tenancy/quotas.ts`); rate limits on `/api` (`API_RATE_PER_MINUTE`, 600 a minute per user or address by default), `/api/auth` (30), OAuth token endpoints (60) and browser sign-in endpoints (120, this review); since 1.1.0 they share one atomic Redis counter (a Lua script) across instances when `REDIS_URL` is set (11.1.4, `platform/ratelimit.ts`, B-406), and failed bearer, API-key and DPoP credentials are throttled to 20 a minute per address (B-111); guardrail and flag queues alert on anomalies; tests in `sprint15-access.test.ts` and `integration/operations.test.ts`; since 1.3.0 a Redis outage is probed, shown on Platform and alerted (`exprsn_ratelimit_degraded`, B-1407, `sprint22-ops.test.ts`) | Without Redis, or while it is down, limits count per instance; the failed-credential throttle is per address, so clients behind one NAT share it |
 
 ## V12 Files and resources
 
@@ -195,7 +201,7 @@ No group is "not met"; what remains is named in the partly rows and under
 | Group | Status | Evidence | Follow-up |
 | --- | --- | --- | --- |
 | 13.1 Generic web service security | Met | One encoding (UTF-8 JSON), admin URLs under `/api/admin` with MFA-gated permissions, API keys in the `Authorization` header only, authorization checked per request (not only per URL) | |
-| 13.2 RESTful web service | Partly | HTTP methods match actions; zod validates every JSON body; `Content-Type` of JSON routes enforced by `express.json`; CSRF tokens plus `Origin` for cookie sessions; OAuth and SAML endpoints validate their own inputs | 13.2.5 met; 13.2.6: message headers are not signed (not needed for TLS-protected, bearer-authenticated calls) |
+| 13.2 RESTful web service | Met | HTTP methods match actions; zod validates every JSON body; `Content-Type` of JSON routes enforced by `express.json` (13.2.5); CSRF tokens plus `Origin` for cookie sessions; OAuth and SAML endpoints validate their own inputs. Since 1.3.0 HTTP Message Signatures (RFC 9421, with RFC 9530 `Content-Digest`) protect message headers and bodies where TLS alone is not wanted (13.2.6, B-1203, `crypto/httpsig.ts`): an API key that registers an Ed25519 key is accepted on `/v1` only for requests signed over `@method`, `@target-uri`, `authorization` and `content-digest`, and refused outside `/v1`; webhooks can add RFC 9421 signatures (HMAC-SHA256 or Ed25519); tests "a signed /v1 request verifies; an unsigned one and a tampered header are refused", "signs and verifies with Ed25519 and HMAC-SHA256, and refuses a changed component" (`sprint20.test.ts`) | Signatures are opt-in per key and per webhook. Nonces are not remembered, so a captured signed request can be replayed within `HTTP_SIGNATURE_MAX_AGE_SECONDS`; `@target-uri` is checked against `PUBLIC_URL` |
 | 13.3 SOAP web service | N/A | No SOAP or XML web services beyond SAML, which is covered in 5.5 | |
 | 13.4 GraphQL | N/A | No GraphQL endpoints | |
 
@@ -203,8 +209,8 @@ No group is "not met"; what remains is named in the partly rows and under
 
 | Group | Status | Evidence | Follow-up |
 | --- | --- | --- | --- |
-| 14.1 Build and deploy | Met | Repeatable builds (`npm ci`, Dockerfile), CI gates, non-root read-only container with dropped capabilities and `no-new-privileges`, systemd sandbox (`deploy/`), Helm chart | |
-| 14.2 Dependency | Partly | Lockfile, `npm audit` and Trivy in CI, Dependabot, CycloneDX SBOM (`.github/workflows/ci.yml:89-120`); the console has no third-party assets | 14.2.4: dependency provenance (signatures) is not verified; 14.2.6: sandboxing of third-party libraries is not attempted |
+| 14.1 Build and deploy | Met | Repeatable builds (`npm ci`, Dockerfile), CI gates, non-root read-only container with dropped capabilities and `no-new-privileges`, systemd sandbox (`deploy/`), Helm chart; since 1.3.0 CI pushes the image on `main` and `v*` tags with a SLSA build provenance attestation and a keyless cosign signature, both verified before the job passes, and attaches the SBOMs to tagged releases (B-1204, `.github/workflows/ci.yml` `publish-image`, `release-sboms`) | The publishing jobs were validated with actionlint and have not yet run on GitHub; they assume the image is `ghcr.io/<owner>/<repo>` |
+| 14.2 Dependency | Partly | Lockfile, `npm audit` and Trivy in CI, Dependabot, CycloneDX SBOM (`.github/workflows/ci.yml:89-120`); the console has no third-party assets | 14.2.4: since 1.3.0 CI runs `npm audit signatures`, which fails on an installed package with an invalid registry signature or provenance attestation (B-1204), but the step has only been validated with actionlint and has not yet run on GitHub; 14.2.6: sandboxing of third-party libraries is not attempted |
 | 14.3 Unintended security disclosure | Met | Generic 500 answers with trace id (`http/app.ts:174`); `X-Powered-By` off (`http/app.ts:46`); debug off in production (pretty logs only when asked); `/metrics` needs a token and is off in production without one (`routes/health.ts`); `/readyz` no longer echoes errors (this review) | |
 | 14.4 HTTP security headers | Met | Helmet on every answer, including root-mounted federation and ACME routes (applied before them in `http/app.ts:70`): CSP with `default-src 'self'`, `script-src 'self'`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`; `X-Content-Type-Options: nosniff`; `Referrer-Policy: no-referrer`; HSTS behind HTTPS; UTF-8 content types; test "sends security headers and a trace id" | `style-src 'unsafe-inline'` is needed for element style attributes set by the console |
 | 14.5 HTTP request header validation | Met | Only the methods each route defines; `Origin` checked on state changes (`http/middleware.ts:306`) and on Socket.io handshakes (`realtime/socket.ts`); CORS `*` only on discovery and JWKS, which carry no credentials | |
@@ -217,13 +223,18 @@ password change, admin reset and forced change (2.1.5, 2.1.6, 2.3.1, 3.3.3, Spri
 (2.2.3, Sprint 11), sandboxed media (12.5.2, Sprint 15), conversation retention (8.3.8, Sprint 12) and connected
 applications (3.5.1, Sprint 14). Release 1.2.0 closed new-sign-in notices (2.2.3, Sprint 17), the strength meter
 (2.1.8, Sprint 17), YAML caps (5.5, Sprint 18), masked diagnostics (7.4.1, Sprint 18) and gVisor for scripts (1.14.5,
-Sprint 19), and narrowed the first two items below. These remain:
+Sprint 19), and narrowed the first two items below. Release 1.3.0 closed signed messages (13.2.6, Sprint 20) and the
+key-encryption key in the environment (2.10.4, Sprint 20), and narrowed the third item below with the signer
+(Sprint 20). These remain:
 
 1. Pinning git's connection to the checked address (5.2.6, 12.6.1). Operator-chosen service URLs are checked at save
    and at connect since 1.2.0 (Sprint 18), and SQL user stores dial the checked address (Sprint 17).
 2. Backend TLS on by default (1.9.1, 9.2.2). `REQUIRE_BACKEND_TLS` (Sprint 18) refuses plaintext database, Redis, S3
    and OpenBao links in production, but only when the operator turns it on.
-3. Key material outside the process with `KMS_PROVIDER=local`, and the SAML SP decryption key in the KMS (6.4.2);
-   OpenBao covers key-encryption keys and signing.
-4. The breached-password check on by default where a mirror or the offline file is available (2.1.7).
-5. A written threat model per feature (1.1.2).
+3. Key material outside the process by default (6.4.2). Since 1.3.0 the signer keeps the key-encryption key and every
+   private key out of the application with `KMS_PROVIDER=local`, but it is optional; with OpenBao, the SAML SP
+   decryption key is still sealed locally.
+4. Registry signatures and build provenance verified in a CI run (14.2.4). The steps are in `.github/workflows/ci.yml`
+   since 1.3.0 (Sprint 20) but have only been validated with actionlint; they have not yet run on GitHub.
+5. The breached-password check on by default where a mirror or the offline file is available (2.1.7).
+6. A written threat model per feature (1.1.2).

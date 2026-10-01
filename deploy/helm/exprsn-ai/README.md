@@ -1,6 +1,6 @@
 # Exprsn-AI Helm chart
 
-Chart version `1.2.0`, application version `1.2.0`. Kubernetes 1.27 or later.
+Chart version `1.3.0`, application version `1.3.0`. Kubernetes 1.27 or later.
 
 The chart runs the Exprsn-AI application server as a Deployment behind a Service and an Ingress. Everything the
 server depends on is external and referenced from `values.yaml`:
@@ -11,6 +11,7 @@ server depends on is external and referenced from `values.yaml`:
 | Redis | The `REDIS_URL` secret. Required whenever more than one replica can run (`replicaCount` or `autoscaling.maxReplicas` above 1): the Socket.io adapter, the BullMQ job queue and the cross-instance bus use it |
 | Blob store | `config.blobStore.type`: `s3` (MinIO, Ceph, SeaweedFS, AWS) or `pvc` (a volume at `/var/lib/exprsn-ai`, `ReadWriteMany` with more than one replica) |
 | KMS | `config.kms.provider`: `local` with the `DATA_KEY` secret, or `openbao` with `config.kms.openbao.addr` and the `OPENBAO_TOKEN` secret |
+| Signer (Sprint 20) | `signer.enabled` with `kms.provider=local`: a native sidecar (`exprsn-ai signer`, Kubernetes 1.29 or later) holds the key-encryption key (`signer.keySecret`, mounted into it alone) and the OIDC, SAML and webhook private keys; the server reaches it on a UNIX socket in a shared in-memory `emptyDir` with the token in `signer.tokenSecret`. Leave `secrets.DATA_KEY` empty (the chart refuses both) |
 | Directory | The identity YAML (`identity.config` or `identity.existingConfigMap`) and its secret files (`extraSecretFiles`) |
 | Ollama | External GPU nodes or another namespace. Instances are registered in the console under Admin > Pools, not in this chart |
 
@@ -195,3 +196,20 @@ CI runs both for every file in `ci/`.
 - Backup and restore: [docs/runbooks/backup-restore.md](../../../docs/runbooks/backup-restore.md)
 - Incidents: [docs/runbooks/incident-response.md](../../../docs/runbooks/incident-response.md)
 - Upgrades and rollback: [docs/runbooks/upgrade.md](../../../docs/runbooks/upgrade.md)
+
+## Zones applied in-cluster (1.3.0)
+
+```yaml
+zonesApply:
+  enabled: true
+  namespaces: [edge, app, data, directory, inference, sandbox, training]   # must exist
+networkPolicy:
+  egress:
+    kubernetesApi:
+      to: [{ ipBlock: { cidr: 10.96.0.1/32 } }]   # kubectl get endpoints kubernetes -n default
+```
+
+The server then applies each zone's rendered NetworkPolicy through the Kubernetes API (server-side apply) after every
+approved zone change and reports drift on the Zones screen. Each listed namespace gets a Role allowing get, list,
+create and patch on networkpolicies only, bound to the server's service account, whose token is mounted in the pod
+(it is not otherwise). Dashboards and alert rules for the ServiceMonitor's metrics are in `deploy/observability/`.

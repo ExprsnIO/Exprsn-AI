@@ -1,5 +1,108 @@
 # Changelog
 
+## 1.3.0
+
+Sprints 20 to 23: the [1.3.0 backlog](Backlog-1.3.0.md), which keeps key material out of the application, adds the
+operational features a production install still lacked (tracing, dashboards and alerts, safe upgrades, key escrow) and
+deepens AI, knowledge and integrations. This release line starts from `main` with 1.2.0 and the dependency fixes (PR
+#20: otplib 13 through `server/src/identity/totp.ts`, `@types/node` 26, TypeScript 7). Sprint details are in
+[Sprints.md](Sprints.md); the remaining gaps are in [docs/security.md](docs/security.md), [docs/asvs.md](docs/asvs.md)
+(now 56 groups met, 8 partly, 7 not applicable) and [docs/accessibility.md](docs/accessibility.md).
+
+### Keys and supply chain
+- An optional signer process (`exprsn-ai signer`, `SIGNER_SOCKET`) holds the local key-encryption key and every OIDC,
+  SAML, SAML SP decryption and webhook private key, and signs and decrypts over a token-checked UNIX socket; with it the
+  application holds no private key and no key-encryption key. A systemd unit (`deploy/baremetal/exprsn-signer.service`)
+  and a Helm sidecar (`signer.*`) run it as its own user.
+- Webhook Ed25519 keys are made and used in OpenBao transit or the signer; keys sealed before stay published.
+- HTTP Message Signatures (RFC 9421, with RFC 9530 `Content-Digest`): an API key may register an Ed25519 public key,
+  after which `/v1` accepts only signed requests from it; webhooks can add RFC 9421 signatures (HMAC-SHA256 or
+  Ed25519).
+- Production refuses `DATA_KEY`, `DATA_KEY_PREVIOUS` and `SIGNER_TOKEN` given inline in the environment; with the
+  signer it refuses `DATA_KEY` from any source.
+- CI runs `npm audit signatures`; on `main` and `v*` tags it pushes the image to GHCR with a SLSA build provenance
+  attestation and a keyless cosign signature, verifies both, and attaches the SBOMs to the release. These steps were
+  validated with actionlint and a YAML parse only and have not yet run on GitHub; they assume the image is
+  `ghcr.io/<owner>/<repo>`.
+
+### AI
+- A `/v1` request sent with an API key that `require-approval` stops answers `202` with a held-request id; another
+  reviewer approves it in Flags and the client fetches the answer from `GET /v1/held/:id`. Compare holds the prompt and
+  every column.
+- `POST /v1/responses` and `GET /v1/responses/:id`: a documented subset of the Responses API with streaming events and
+  function tools; `store: true` (off by default) saves the exchange to Chat, and `previous_response_id` continues it.
+- Evaluations per profile (contains, regex, JSON schema, a judge rubric), scored per profile version; a profile version
+  whose gated eval sets do not pass cannot be published unless a second profile admin approves an override. The
+  Profiles screen gains an Evaluations tab.
+- The full `model-output` check covers thinking as well as the answer.
+- A reader removed from a shared workspace (by an admin, a group mapping or directory sync) loses an open watch at once.
+- Scheduled agent runs: UTC cron schedules on agents, run as the owner with their current roles, with a run history;
+  each due time runs once across instances.
+
+### Operations
+- OpenTelemetry tracing over OTLP/HTTP (`OTEL_EXPORTER_OTLP_ENDPOINT`) for requests, jobs, Ollama calls, guardrail
+  checks and database queries, with an attribute allow-list and no tenant content.
+- Prometheus recording and alert rules with promtool unit tests, and overview and operations Grafana dashboards, in
+  `deploy/observability/`; the alerts runbook is [docs/runbooks/alerts.md](docs/runbooks/alerts.md).
+- `migrate --check` lists pending migrations and their destructive steps. An instance older than the database schema
+  stops taking jobs, reports not ready (`/readyz` 503 with `checks.schema`) and refuses to start. Migrations follow an
+  expand/contract rule, linted by a test.
+- `kms:escrow` splits the local key-encryption key into k-of-n Shamir shares (`--key-file` takes the signer's key file),
+  and `kms:recover` rebuilds it into a new 0600 file.
+- `ZONES_APPLY=kubernetes` applies each zone's NetworkPolicy with server-side apply and reports drift.
+- `NTP_SERVER` takes several servers; the reported skew is their median, with outliers named.
+- A Redis outage that leaves rate limits counting per instance shows on Platform and as the
+  `exprsn_ratelimit_degraded` metric and alert.
+
+### Knowledge and integrations
+- S3-compatible bucket sources with their own endpoint and sealed keys, include patterns and ETag change detection.
+- An internal web crawler: same origin, robots.txt and sitemaps, depth and page limits, conditional re-fetch.
+- PostgreSQL row security for database sources: reads run as a mapped database role per group.
+- Ordered webhook delivery across instances, with a position counter and a delivery lease per endpoint.
+- Price book versions prorate mid-month price changes; Stripe refunds, credit notes and disputes are reconciled.
+
+### Accessibility
+- axe-core 4.13.0 runs beside the in-page checker on every screen and design state, sign-in and a streaming chat, in
+  Standard and Enhanced (with AAA contrast), light and dark; any violation fails the suite.
+- Dialogs and drawers are checked for reflow at 320 and 640 px.
+- Fixed: a Profiles hint link below the 24 px target size, the unlabelled workflow picker on Workflows, and a long
+  breadcrumb that pushed the page sideways at 640 px and below.
+
+### Testing
+- 532 unit and API tests (1 skipped) across 42 files, with new suites `sprint20.test.ts`, `sprint21.test.ts`,
+  `sprint22-ops.test.ts`, `sprint23-knowledge.test.ts` and `sprint23-integrations.test.ts`, and fakes for an OTLP
+  collector, the Kubernetes API, SNTP and Redis (`sprint22-fakes.ts`) and for an S3 bucket and a web site
+  (`sprint23-fakes.ts`).
+- `integration/rls.test.ts` (row security by role) and `integration/webhooks.test.ts` (ordered delivery across
+  instances) against PostgreSQL.
+- 57 Playwright tests, with axe-core in `y-accessibility.spec.ts` and the new `y-reflow-overlays.spec.ts`.
+- A CI job checks and unit-tests the Prometheus rules with promtool.
+
+### Upgrade notes
+- Migrations `022_keys` to `025_integrations3` run on start (`DB_MIGRATE_ON_START`) or with `exprsn-ai migrate`.
+- Production refuses `DATA_KEY`, `DATA_KEY_PREVIOUS` and `SIGNER_TOKEN` given inline in the environment. Give them as
+  files (`DATA_KEY_FILE`, `DATA_KEY_PREVIOUS_FILE`, `SIGNER_TOKEN_FILE`) before upgrading.
+- The signer is optional. To use it, run `exprsn-ai signer` as its own user with the old `DATA_KEY` as its key file (no
+  re-wrap is needed), then remove `DATA_KEY` and `DATA_KEY_FILE` from the application and set `SIGNER_SOCKET` and
+  `SIGNER_TOKEN_FILE`: on bare metal with `deploy/baremetal/exprsn-signer.service` and the commented lines in
+  `exprsn-ai.service`, in Kubernetes with the chart's `signer.enabled`. Turning it on replaces the federation signing
+  keys: SAML service providers re-import the IdP metadata.
+- An instance whose build is older than the database schema now stops taking jobs and reports not ready. For a rolling
+  upgrade, run `exprsn-ai migrate --check` first: expand-only migrations (all of 1.3.0's) keep the previous release
+  working while instances are replaced; a contract step needs every old instance stopped first
+  ([docs/runbooks/upgrade.md](docs/runbooks/upgrade.md)).
+- Publishing a profile version that has gated eval sets now answers `409 eval_gate` until they pass or a second profile
+  admin approves an override. Profiles without gated sets publish as before.
+- New settings, all optional with safe defaults: signer and signatures (`SIGNER_SOCKET`, `SIGNER_TOKEN_FILE`,
+  `SIGNER_TIMEOUT_MS`, `HTTP_SIGNATURE_MAX_AGE_SECONDS`; in the signer `SIGNER_KEY_FILE`, `SIGNER_SOCKET_MODE`,
+  `SIGNER_ALLOW_GROUP_READ`), scheduled agents (`AGENT_SCHEDULE_TICK_SECONDS`), tracing (`OTEL_EXPORTER_OTLP_*`,
+  `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLE_RATIO`, `OTEL_BSP_*`), upgrades (`SCHEMA_CHECK_SECONDS`), zones
+  (`ZONES_APPLY`, `ZONES_APPLY_*`), time and rate limits (`NTP_OUTLIER_MS`, `RATELIMIT_PROBE_SECONDS`; `NTP_SERVER`
+  takes a list) and knowledge (`KNOWLEDGE_ALLOWED_HOSTS`, `KNOWLEDGE_FETCH_TIMEOUT_MS`). See
+  [docs/deploy.md](docs/deploy.md).
+- The e2e package adds `axe-core` to its devDependencies; run `npm ci` in `e2e/` again.
+- No new permissions.
+
 ## 1.2.0
 
 Sprints 16 to 19: the [1.2.0 backlog](Backlog-1.2.0.md), which closes most of the known gaps and ASVS follow-ups left

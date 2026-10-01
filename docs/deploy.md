@@ -19,7 +19,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `SQLITE_FILENAME` | `./data/exprsn-ai.sqlite` | For `sqlite` |
 | `DB_MIGRATE_ON_START` | `true` | Otherwise run `exprsn-ai migrate` before starting |
 | `SESSION_SECRET` (`_FILE`) | — | 32+ random bytes; keys session, CSRF and API-key digests |
-| `DATA_KEY` (`_FILE`) | — | 32 bytes, base64; the local KMS master key that wraps each tenant's data key. Required with `KMS_PROVIDER=local` |
+| `DATA_KEY` (`_FILE`) | — | 32 bytes, base64; the local KMS master key that wraps each tenant's data key. Required with `KMS_PROVIDER=local` unless the signer runs (`SIGNER_SOCKET`). Since Sprint 20, production accepts it only as `DATA_KEY_FILE`, and not at all with the signer |
 | `KMS_PROVIDER` | `local` | `local` or `openbao` (OpenBao or Vault transit) |
 | `OPENBAO_ADDR`, `OPENBAO_TOKEN` (`_FILE`), `OPENBAO_TRANSIT_MOUNT`, `OPENBAO_KEY_PREFIX`, `OPENBAO_CA_FILE` | —, —, `transit`, `exprsn-`, — | Transit engine address and token; one key per tenant (`exprsn-tenant-<id>`), one for audit checkpoints. The token needs create, encrypt, decrypt, hmac, verify, update-config and delete on those keys |
 | (OpenBao signing, Sprint 14) | — | With `KMS_PROVIDER=openbao` the OIDC (ES256, `ecdsa-p256`) and SAML (RS256, `rsa-2048`) signing keys are created in transit as `<OPENBAO_KEY_PREFIX>fed-<kid>` and every token, assertion and logout message is signed there (`sign/<key>/sha2-256`), so no private signing key enters the process. The token also needs create, read and sign on those keys. The SAML SP decryption key stays sealed locally |
@@ -78,8 +78,11 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `LOG_LEVEL` | `info` | pino level |
 | `CHAT_STREAM_LEASE_SECONDS`, `CHAT_RETENTION_SWEEP_MINUTES` | `30`, `60` | Sprint 12: a streaming answer whose instance has been silent this long is marked interrupted (the user can continue it); how often each tenant's conversation retention policy runs (0 turns it off). The stream catch-up buffer uses Redis when `REDIS_URL` is set, otherwise the database |
 | `CHAT_GUARD_HOLDBACK_SENTENCES`, `CHAT_GUARD_STREAM_CONCURRENCY` | `1`, `16` | Sprint 16: the guard-model and classifier rules check streamed answers in the background. Hold-back is how many screened sentences may wait for a verdict before generation pauses (0 shows each sentence at once, so a verdict can only stop what follows); the concurrency caps background checks per instance (further checks queue, they never block the event loop) |
+| `AGENT_SCHEDULE_TICK_SECONDS` | `60` | Sprint 21: how often due agent schedules are looked for; a scheduled run starts at most this long after its time (UTC cron, as the owner with their roles at that moment) |
 | `SHARE_ANONYMOUS_PER_MINUTE` | `30` | Sprint 16: anonymous share links opened per client address per minute (anonymous links are off until a tenant admin allows them; set `TRUST_PROXY` correctly so the address is the client's) |
 | `DATA_KEY_PREVIOUS` (`_FILE`), `KMS_PREVIOUS_PROVIDER` | — | Sprint 15: the previous key-encryption key while `kms:rewrap` runs (below). Reads fall back to it; nothing new is wrapped with it |
+| `SIGNER_SOCKET`, `SIGNER_TOKEN` (`_FILE`), `SIGNER_TIMEOUT_MS` | —, —, `5000` | Sprint 20: the signer process's UNIX socket and the token it expects (production: `SIGNER_TOKEN_FILE` only). With `KMS_PROVIDER=local` the key-encryption key and the OIDC, SAML and webhook private keys then stay in the signer (below) |
+| `HTTP_SIGNATURE_MAX_AGE_SECONDS` | `300` | Sprint 20: how far a `/v1` request's RFC 9421 `created` time may be from the server's clock |
 | `NTP_SERVER`, `NTP_TIMEOUT_MS` | —, `2000` | Sprint 15: SNTP server (`host` or `host:port`) for the clock-skew check on the Platform screen |
 | `MEDIA_ORIGIN`, `MEDIA_URL_TTL_SECONDS` | —, `300` | Sprint 15: a second host name for this deployment that serves media and images through signed short-lived URLs (point it at the same instances; it answers `/media-content/*` only) |
 | `OPENBAO_DATABASE_MOUNT` | `database` | Sprint 15: OpenBao database secrets engine for dynamic data-connection credentials (uses `OPENBAO_ADDR` and `OPENBAO_TOKEN`; the token needs read on `<mount>/creds/<role>` and update on `sys/leases/renew` and `sys/leases/revoke`) |
@@ -103,6 +106,16 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `TRAINER_KEY_TTL_SECONDS`, `TRAINER_ARTIFACT_MAX_BYTES` | `900`, 64 GiB | Sprint 18: how long a run key waits to be fetched (once); the largest checkpoint or GGUF upload |
 | `TRAINER_CLIENT_CERT_SHA256` | — | Sprint 18: SHA-256 fingerprint of the worker's client certificate; key and artefact calls must present it (on this server's TLS socket, or as `X-Client-Cert-SHA256` from a proxy that `TRUST_PROXY` trusts and that verified the certificate) |
 | `TRAINER_CA_FILE`, `TRAINER_CERT_FILE`, `TRAINER_KEY_FILE` | — | Sprint 18: mutual TLS from the orchestrator to the worker |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | — | Sprint 22: OpenTelemetry tracing over OTLP/HTTP JSON. Spans go to `<endpoint>/v1/traces` (or the full traces URL); unset, nothing is traced. Requests, jobs, gateway calls, guardrail checks and database queries are spans of the request's W3C trace (the `X-Trace-Id`); no tenant content is recorded |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_SERVICE_NAME` | —, `10000`, `exprsn-ai` | Sprint 22: collector request headers (`name=value,…`, e.g. an API key), the export timeout (ms) and the `service.name` resource attribute |
+| `OTEL_TRACES_SAMPLE_RATIO`, `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_SCHEDULE_DELAY` | `1`, `2048`, `5000` | Sprint 22: share of new traces recorded (a caller's sampled flag wins); spans held for export (more are dropped and counted); the export interval (ms) |
+| `SCHEMA_CHECK_SECONDS` | `30` | Sprint 22: how often each instance compares its migrations with the database's; an instance older than the schema takes no jobs and is not ready (0: at start and on `/readyz` only) |
+| `ZONES_APPLY` | `off` | Sprint 22: `kubernetes` applies each zone's rendered NetworkPolicy through the Kubernetes API (server-side apply) after every approved change and checks for drift. Needs a service account allowed to get, list, create and patch networkpolicies in the zone namespaces (the chart's `zonesApply`) |
+| `ZONES_APPLY_API_URL`, `ZONES_APPLY_TOKEN_FILE`, `ZONES_APPLY_CA_FILE` | in-cluster | Sprint 22: the API server (default `https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT`), the bearer token file (re-read on every call) and the CA, defaulting to the pod's service-account files |
+| `ZONES_APPLY_FIELD_MANAGER`, `ZONES_APPLY_DRIFT_MINUTES` | `exprsn-ai`, `15` | Sprint 22: the server-side apply field manager; how often live policies are compared with what was applied (0: on request) |
+| `NTP_SERVER`, `NTP_OUTLIER_MS` | —, `1000` | Sprint 22: `NTP_SERVER` takes a comma list; with three or more servers the clock skew is the median of those that agree, and a server further than `NTP_OUTLIER_MS` from the median is named as an outlier |
+| `RATELIMIT_PROBE_SECONDS` | `15` | Sprint 22: how often each instance pings Redis, so the Platform warning and `exprsn_ratelimit_degraded` show that limits count per instance within a minute of Redis stopping |
+| `KNOWLEDGE_ALLOWED_HOSTS`, `KNOWLEDGE_FETCH_TIMEOUT_MS` | —, `30000` | Sprint 23: knowledge sources that fetch over HTTP (a bucket on its own S3-compatible endpoint, an internal web site) reach internal addresses only, unless this list (hosts, `*.domain`, CIDRs) names them; link-local and cloud metadata addresses never. Every connection's address is checked when it is dialled. The timeout applies to each request |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -180,6 +193,10 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   fill in (data, directory, inference, sandbox, KMS, mail, SIEM). Nothing allows the internet.
 - `SCRIPT_RUNNER` is `none` in the chart, since the pod has no container runtime; run script runners in the sandbox
   zone.
+- Zones applied in-cluster (Sprint 22): `zonesApply.enabled` with `zonesApply.namespaces` (the zone namespaces, which
+  must exist) creates in each a Role allowing get, list, create and patch on networkpolicies and binds it to the
+  server's service account, mounts that account's token and sets `ZONES_APPLY=kubernetes`. Allow egress to the API
+  server in `networkPolicy.egress.kubernetesApi`. Off by default: the pod then has no token.
 
 ## Runbooks and load testing
 
@@ -194,7 +211,18 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
 ## Operations
 
 - **Health:** `/healthz` (process up), `/readyz` (database reachable and migrated, KMS and blob store answering; 503 while draining).
-- **Metrics:** `/metrics` with `Authorization: Bearer $METRICS_TOKEN`.
+- **Metrics:** `/metrics` with `Authorization: Bearer $METRICS_TOKEN`. Sprint 22 adds job, rate-limit, schema, zone
+  drift, clock and trace-export series; Grafana dashboards and Prometheus alert rules for them are in
+  [deploy/observability](../deploy/observability/README.md), each alert explained in
+  [runbooks/alerts.md](runbooks/alerts.md).
+- **Tracing (Sprint 22):** set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OpenTelemetry collector (or Tempo, Jaeger with
+  OTLP/HTTP). A chat request is one trace: the HTTP span, guardrail checks, the gateway's Ollama calls (which receive
+  the `traceparent`), database queries and the jobs it queued. Attributes are a fixed allow-list of metadata.
+- **Upgrades (Sprint 22):** `exprsn-ai migrate --check` lists what `migrate` would apply and any destructive
+  (contract) steps; an instance older than the database schema stops taking jobs and reports not ready
+  ([upgrade.md](runbooks/upgrade.md)).
+- **Key escrow (Sprint 22):** `exprsn-ai kms:escrow --shares 5 --threshold 3` splits `DATA_KEY` into Shamir shares
+  and `kms:recover` rebuilds it ([backup-restore.md](runbooks/backup-restore.md#keys)).
 - **Logs:** JSON on stdout; every line carries the request's trace id, which is also in every error response.
 - **Shutdown:** SIGTERM stops accepting connections, closes sockets and the database, and exits within 25 s.
 - **Audit:** `exprsn-ai audit:verify --tenant <slug>` checks the chain and its signed checkpoints and exits 2 when
@@ -209,9 +237,19 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   `KMS_PROVIDER=openbao` with `KMS_PREVIOUS_PROVIDER=local` (the old `DATA_KEY` stays set, or goes in
   `DATA_KEY_PREVIOUS`); from OpenBao to local, `KMS_PROVIDER=local`, the new `DATA_KEY` and
   `KMS_PREVIOUS_PROVIDER=openbao` with `OPENBAO_ADDR` and `OPENBAO_TOKEN` still set.
+- **The signer (Sprint 20):** `exprsn-ai signer` is a separate process that holds the local key-encryption key (what
+  `DATA_KEY` was; the same value keeps every existing data key readable, no re-wrap needed) and every private key the
+  app creates: OIDC (ES256), SAML (RS256), the SAML SP decryption key (RSA-OAEP) and webhook Ed25519 keys. It needs
+  only `SIGNER_SOCKET`, `SIGNER_KEY_FILE` and `SIGNER_TOKEN_FILE` (both files mode 0600), plus `SIGNER_SOCKET_MODE=0660`
+  when the app runs as another user in the socket directory's group. The app then sets `SIGNER_SOCKET` and
+  `SIGNER_TOKEN_FILE` (the same token) and no `DATA_KEY`. Bare metal: `deploy/baremetal/exprsn-signer.service` (its
+  header has the setup); Kubernetes: `signer.enabled` in the Helm chart runs it as a native sidecar with the key mounted
+  into it alone. Existing federation and webhook keys sealed in the app are replaced by signer-held ones on first use
+  (the old public keys stay published for the overlap window; SAML partners re-import the metadata). If the signer is
+  down, everything that needs a key fails closed and `/readyz` reports the KMS unavailable.
 - **Rate limits (Sprint 15):** with `REDIS_URL` set, the API limits, the failed-credential throttle and the denial
   cap are shared by all instances (one atomic Lua script per hit); if Redis stops answering they fall back to
-  per-instance memory counters rather than letting requests through.
+  per-instance memory counters rather than letting requests through. Since Sprint 22 the Platform screen warns while that lasts.
 - **Backups:** back up the application database and the blob store together, and the KMS (OpenBao) or `DATA_KEY`
   separately from both: without the key, sealed conversations, attachments and exports cannot be read. Sessions,
   lockout counters and Redis can be lost safely; the audit chain and users cannot.
@@ -287,3 +325,43 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   once from `TRAINER_CALLBACK_URL`; checkpoints and GGUF files are uploaded back and sealed under the tenant key. Route
   `/trainer/v1/` from the training zone to the app, require the worker's client certificate at the proxy and set
   `TRAINER_CLIENT_CERT_SHA256`. A contract-1 worker is refused unless `TRAINER_PLAINTEXT_FALLBACK=true`.
+
+### Knowledge sources (Sprint 23)
+
+- **S3-compatible buckets.** A source can name its own endpoint (MinIO, Ceph, another account's S3) with an access key
+  that is sealed with the tenant key; include patterns (`**/*.md`) narrow the prefix. Endpoints outside the internal
+  network need `KNOWLEDGE_ALLOWED_HOSTS` (for AWS, e.g. `*.amazonaws.com`).
+- **Internal web sites.** The crawler sends `User-Agent: ExprsnAI-Knowledge/1.0`, so a site can give it its own
+  robots.txt group. It stays on the start page's scheme, host and port, follows robots.txt and the sitemap, and
+  re-checks pages with `If-None-Match`/`If-Modified-Since`. A robots.txt that answers 5xx or not at all stops the crawl
+  (the site is treated as closed); a missing one (4xx) allows everything.
+- **Row security through PostgreSQL roles.** A PostgreSQL source can map directory groups to database roles; each
+  sync reads the table once per role inside a read-only transaction under `SET LOCAL ROLE`, so the table's row
+  security policies decide which group retrieves which row. The database owner sets it up once:
+
+  ```sql
+  ALTER TABLE notices ENABLE ROW LEVEL SECURITY;            -- FORCE as well if a mapped role owns the table
+  CREATE ROLE kb_finance NOLOGIN;                            -- one role per group, never superuser or BYPASSRLS
+  CREATE POLICY finance_rows ON notices FOR SELECT TO kb_finance USING (region IN ('finance', 'all'));
+  GRANT SELECT ON notices TO kb_finance;
+  -- The connection's login: a member of each mapped role, without inheriting it (PostgreSQL 16+), and SELECT on the
+  -- table only so that schema introspection lists it; no policy names the login, so it reads no rows by itself.
+  GRANT kb_finance TO exprsn_reader WITH INHERIT FALSE;
+  GRANT SELECT ON notices TO exprsn_reader;
+  ```
+
+  The server refuses a mapping when the role does not exist, the login is not a member, the role is a superuser or
+  has BYPASSRLS, the role may not select the table, the table does not enable row security (or a mapped role owns it
+  without FORCE), or the object is a view that is not `security_invoker` (PostgreSQL 15+). With OpenBao dynamic
+  credentials, put the `GRANT … TO "{{name}}" WITH INHERIT FALSE` in the role's creation statements. Role-mapped
+  sources sync by full reads (up to 5000 rows per role) and cannot use logical replication, which bypasses policies.
+
+### Webhooks and billing (Sprint 23)
+
+- Ordered webhooks now take their positions from a counter row per endpoint (`webhook_order`) and send under a lease
+  in that row, so several instances deliver one endpoint's events strictly in order, one at a time. A lease outlives a
+  crashed holder by `WEBHOOK_TIMEOUT_MS` plus 30 seconds.
+- Price book changes can take effect from an earlier moment of the current month; the month's statement is prorated
+  by the prices in effect when each usage record was written. Subscribe the Stripe endpoint also to `charge.refunded`,
+  `credit_note.created`, `credit_note.updated`, `credit_note.voided`, `charge.dispute.created`,
+  `charge.dispute.updated` and `charge.dispute.closed` to reconcile refunds, credit notes and disputes.

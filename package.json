@@ -1,7 +1,7 @@
 {
   "name": "exprsn-ai",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.",
   "license": "SEE LICENSE IN LICENSE",
   "workspaces": ["server"],

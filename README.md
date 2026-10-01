@@ -2,7 +2,7 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** version `1.2.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+**Status:** version `1.3.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
 and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
 the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
 rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
@@ -22,7 +22,12 @@ new-sign-in notices, a password strength meter, upstream step-up, DPoP nonces, S
 links; automated WCAG A/AA and reflow checks; checks on operator service URLs, backend TLS, consistent backups, ACME
 account binding and certificate hooks, and sealed training data; and MySQL and replicated PostgreSQL knowledge sources
 with row access, ordered and Ed25519-signed webhooks, per-tenant price books with Stripe reconciliation, and workflow
-tools agent runs can await. See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
+tools agent runs can await. Sprints 20 to 23 make up 1.3.0: an optional signer process that keeps private keys out of
+the application, KMS-held webhook keys, HTTP Message Signatures and CI steps that sign and attest the image; held `/v1`
+requests, a Responses API subset, profile evaluations with a publish gate and scheduled agent runs; OpenTelemetry
+tracing, Prometheus rules and Grafana dashboards, safe rolling upgrades, key escrow, zones applied in-cluster and an NTP
+quorum; and S3 and web-crawl knowledge sources, PostgreSQL row security, webhook order across instances, proration and
+Stripe refunds, and axe-core in the accessibility checks. See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 

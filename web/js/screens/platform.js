@@ -40,7 +40,31 @@
   }
   const busy = (d) => !!d && ((d.bundles || []).some((b) => b.state === 'verifying' || b.state === 'promoting') || (d.certs || []).some((c) => c.status === 'pending' || c.status === 'issuing') || ((d.backups && d.backups.backups) || []).some((b) => b.state === 'queued' || b.state === 'running') || ((d.backups && d.backups.drills) || []).some((x) => x.state === 'queued' || x.state === 'running'));
 
-  App.register({
+  // Sprint 22: warnings for shared rate limits (B-1407), the schema handshake (B-1403) and NTP outliers (B-1406).
+function ops2Notices(sum) {
+  let out = '';
+  const rl = sum.rateLimitHealth;
+  if (rl && rl.degraded) out += UI.notice('<b>Rate limits count per instance.</b> Redis has not answered since ' + esc(new Date(rl.since).toLocaleTimeString()) + (rl.detail ? ' (' + esc(rl.detail) + ')' : '') + '. Limits still apply, but each instance counts on its own until Redis is back, so a client spread over several instances gets more.', 'warn');
+  if (sum.schema && sum.schema.state === 'behind') out += UI.notice('<b>This instance is older than the database schema.</b> ' + esc(sum.schema.reason || ''), 'danger');
+  const ntp = sum.clock && sum.clock.ntp;
+  if (ntp && ntp.warning) out += UI.notice('<b>Clock check:</b> ' + esc(ntp.warning) + (ntp.outliers && ntp.outliers.length ? ' The skew shown is the median of the servers that agree.' : ''), ntp.quorum ? 'info' : 'warn');
+  return out;
+}
+
+function ops2Secrets(sum) {
+  const e = sum.escrow;
+  const day = (t) => new Date(t).toLocaleDateString();
+  const escrow = sum.kms.kind !== 'local'
+    ? '<div class="fg2">The key-encryption key lives in OpenBao; use its own unseal and recovery key shares.</div>'
+    : e
+      ? UI.kv([['Escrow', '<span class="mono">' + esc(e.id) + '</span>'], ['Shares', 'any ' + e.threshold + ' of ' + e.shares + ' rebuild the key'], ['Key check value', '<span class="mono">' + esc(e.keyCheck) + '</span>'], ['Made', esc(day(e.createdAt))], ['Last recovery check', e.verifiedAt ? esc(day(e.verifiedAt)) : 'never']], 1) + '<div class="fg2" style="font-size:12px">Shares are printed once by <span class="mono">exprsn-ai kms:escrow</span> and never stored. <span class="mono">exprsn-ai kms:recover</span> rebuilds the key from enough of them and checks it against this value.</div>'
+      : '<div class="fg2">No escrow yet. Without DATA_KEY no backup can be opened: run <span class="mono">exprsn-ai kms:escrow --shares 5 --threshold 3</span> and give each share to a different custodian.</div>';
+  const t = sum.tracing || {};
+  const tracing = t.enabled ? 'exporting over OTLP: ' + t.exported + ' spans sent' + (t.dropped || t.failed ? ', ' + (t.dropped + t.failed) + ' dropped' : '') : 'off (set OTEL_EXPORTER_OTLP_ENDPOINT)';
+  return '<div class="grid2">' + UI.panel('Key escrow', escrow) + UI.panel('Operations', UI.kv([['Tracing', esc(tracing)], ['Rate limits', sum.rateLimits === 'redis' ? (sum.rateLimitHealth && sum.rateLimitHealth.degraded ? UI.pill('per instance', 'warn') : UI.pill('shared', 'ok')) : esc('this instance only (no REDIS_URL)')], ['Schema', sum.schema ? esc(sum.schema.database || 'none') + (sum.schema.state === 'current' ? ' ' + UI.pill('current', 'ok') : ' ' + UI.pill(sum.schema.state, sum.schema.state === 'behind' ? 'danger' : 'warn')) : 'unknown'], ['Zones in-cluster', sum.zonesApply === 'kubernetes' ? 'applied through the Kubernetes API' : 'download only']], 1)) + '</div>';
+}
+
+App.register({
     id: 'platform', title: 'Platform', section: 'admin', live: true, summary: 'Import bundles and signatures, mirrors, certificates, secrets health, backups and restore drills',
     commands: [
       { label: 'Start an expedited import', sub: 'Platform', run(app) { app.stateFor('platform').openExpedited = true; app.render(); } },
@@ -112,7 +136,8 @@
       // With NTP_SERVER set the clock is measured against NTP; the database check stays as a second opinion.
       const ntp = sum.clock.ntp || null;
       const skew = ntp && ntp.skewMs != null ? ntp.skewMs : sum.clock.skewMs;
-      const skewAgainst = ntp ? (ntp.error ? 'NTP ' + ntp.server + ' did not answer; database: ' + (sum.clock.skewMs == null ? 'unknown' : (sum.clock.skewMs / 1000).toFixed(1) + ' s') : 'NTP ' + ntp.server + ' (stratum ' + ntp.stratum + ')') : sum.clock.against;
+      const ntpCount = ntp && ntp.servers ? ntp.servers.length : 1;
+      const skewAgainst = ntp ? (ntp.error ? 'NTP ' + ntp.server + ' did not answer; database: ' + (sum.clock.skewMs == null ? 'unknown' : (sum.clock.skewMs / 1000).toFixed(1) + ' s') : ntpCount > 1 ? 'the median of ' + (ntpCount - (ntp.outliers || []).length) + ' of ' + ntpCount + ' NTP servers' : 'NTP ' + ntp.server + ' (stratum ' + ntp.stratum + ')') : sum.clock.against;
       const nextExpiry = sum.certificates.nextExpiry;
       const strip = '<div class="stats">'
         + UI.stat(esc(sum.acme.directoryUrl ? sum.acme.directoryUrl.replace(/^https?:\/\//, '').split('/')[0] : 'Not configured'), 'Internal CA', sum.certificates.total + ' certificates' + (nextExpiry ? ', next expiry in ' + nextExpiry.days + ' days' : ''))
@@ -167,6 +192,7 @@
           + (pending.length ? UI.table(['Change', 'Key', 'Fingerprint', 'Proposed', 'Reason', ''], pending.map((p) => [p.action === 'add' ? UI.pill('add', 'info') : UI.pill('revoke', 'danger'), '<span class="mono">' + esc(p.name) + '</span>', '<span class="mono" title="' + esc(p.fingerprint || '') + '">' + esc(p.short || '') + '</span>', esc((p.proposedByName || 'someone') + ', ' + ago(p.proposedAt)), esc(p.reason || ''), '<span class="hstack gap6">' + (p.mine ? UI.btn('Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-withdraw-signer="' + esc(p.id) + '"' }) : UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-approve-signer="' + esc(p.id) + '"' }) + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-reject-signer="' + esc(p.id) + '"' })) + '</span>']), { clickable: false, minWidth: '720px' }) : '')
           + UI.table(['Key', 'Algorithm', 'Fingerprint', 'Added', 'State', ''], d.signers.map((k) => ['<span class="mono">' + esc(k.name) + '</span>', esc(k.algorithm === 'ed25519' ? 'Ed25519 verify' : 'ECDSA P-256 verify'), '<span class="mono" title="' + esc(k.fingerprint) + '">' + esc(k.short) + '</span>', esc(day(k.createdAt)), k.state === 'revoked' ? UI.pill('revoked', 'danger') + (k.revokeReason ? '<div class="muted" style="font-size:11px">' + esc(k.revokeReason) + '</div>' : '') : UI.pill('active', 'ok'), k.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-revoke-signer="' + esc(k.id) + '"' }) : '']), { clickable: false, minWidth: '640px', emptyTitle: 'No signer keys', emptyText: 'Register the public half of the offline key that signs import bundles. Until then every bundle fails its signature check.' })
           + '<div class="grid2">' + UI.panel('Health checks', UI.kv([['KMS', UI.pill(sum.kms.ok ? 'healthy' : 'unhealthy', sum.kms.ok ? 'ok' : 'danger') + ' ' + esc(sum.kms.detail)], ['Blob store', UI.pill(sum.blobs.ok ? 'healthy' : 'unhealthy', sum.blobs.ok ? 'ok' : 'danger') + ' ' + esc(sum.blobs.detail)], ['Backups', lastBackup ? 'last ' + esc(ago(lastBackup.createdAt)) + ', KMS-signed' : 'none yet'], ['Secrets as files', files.length ? files.map((f) => '<span class="mono">' + esc(f.name) + '</span> ' + (f.file ? UI.pill('file', 'ok') : UI.pill('env', 'warn'))).join(' ') : 'none set']], 1)) + UI.panel('Where keys are used', '<div class="fg2">Tenant data keys never leave the KMS unwrapped for longer than a cache lifetime. Destroying a tenant key crypto-shreds that tenant. Signer keys only ever verify; their private halves stay offline. To change the key-encryption key (a new DATA_KEY, or moving to OpenBao), set the old one as DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER) and run <span class="mono">exprsn-ai kms:rewrap</span>; once it reports verified, the old key can be removed.</div><div class="hstack gap6">' + UI.btn('Open identity keys', { size: 'sm', attrs: 'data-go="identity"' }) + UI.btn('Open tenants', { size: 'sm', kind: 'ghost', attrs: 'data-go="tenants"' }) + '</div>') + '</div>';
+        body += ops2Secrets(sum);
       } else {
         const alert = bk.alert;
         const target = 'RPO ' + mins(bk.rpoMinutes) + ', RTO ' + mins(bk.rtoMinutes);
@@ -222,6 +248,7 @@
         + strip
         // B-802: local and reset passwords are only checked against breach lists when BREACHED_PASSWORDS is set.
         + (sum.passwords && sum.passwords.breachedCheck === 'off' ? UI.notice('<b>New passwords are not checked against breached-password lists.</b> Set <span class="mono">BREACHED_PASSWORDS</span> to <span class="mono">hibp</span> (with an internal mirror in <span class="mono">BREACHED_HIBP_URL</span>), <span class="mono">file</span> or <span class="mono">both</span> so that known-breached passwords are refused.', 'warn') : '')
+        + ops2Notices(sum)
         + tabs + body
         + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(self.states) + '</div></div>'
         + '<aside class="inspector">' + insp + '</aside>';

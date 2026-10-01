@@ -22,7 +22,7 @@ import { Metrics } from './observability/index.js';
 import { createKms, type Kms } from './platform/kms.js';
 import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
-import { Bus, TOPICS } from './platform/bus.js';
+import { Bus, TOPICS, type MembershipEvent } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
 import { Notifications, type MailTransport } from './platform/notifications.js';
 import { AccountService } from './identity/account.js';
@@ -42,6 +42,8 @@ import { McpService } from './mcp/service.js';
 import { ScriptService } from './scripts/service.js';
 import { createScriptRunner } from './scripts/runner.js';
 import { AgentService } from './agents/service.js';
+import { AgentSchedules } from './agents/schedules.js';
+import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
 import { MediaService } from './media/service.js';
@@ -74,6 +76,10 @@ import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
 import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
+import { instrumentKnex, parseOtlpHeaders, SpanKind, Tracer, tracesUrl, withSpan } from './observability/tracing.js';
+import { registerOpsMetrics } from './observability/ops-metrics.js';
+import { SchemaGuard } from './db/schema.js';
+import { ZoneCluster } from './zones/cluster.js';
 
 export interface Services {
   cfg: Config;
@@ -155,8 +161,18 @@ export interface Services {
   billing: BillingService;
   /** Sprint 13: the OpenAI-compatible API behind /v1. */
   openai: OpenAiService;
+  /** Sprint 21: scheduled agent runs (B-1306). */
+  agentSchedules: AgentSchedules;
+  /** Sprint 21: eval sets, runs and the publish gate for profiles (B-1303). */
+  evals: EvalService;
   /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
   counters: CounterStore;
+  /** Sprint 22 (B-1401): spans exported over OTLP/HTTP; a no-op without OTEL_EXPORTER_OTLP_ENDPOINT. */
+  tracer: Tracer;
+  /** Sprint 22 (B-1403): the schema version handshake; an instance older than the database takes no jobs. */
+  schema: SchemaGuard;
+  /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
+  zoneCluster: ZoneCluster;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -183,6 +199,9 @@ export interface ServiceOverrides {
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
+  // Sprint 22 (B-1401): tracing, and spans for database queries made inside a trace.
+  const tracer = new Tracer({ url: tracesUrl(cfg), serviceName: cfg.OTEL_SERVICE_NAME, serviceVersion: process.env.npm_package_version ?? '', headers: parseOtlpHeaders(cfg.OTEL_EXPORTER_OTLP_HEADERS), ratio: cfg.OTEL_TRACES_SAMPLE_RATIO, maxQueue: cfg.OTEL_BSP_MAX_QUEUE_SIZE, delayMs: cfg.OTEL_BSP_SCHEDULE_DELAY, timeoutMs: cfg.OTEL_EXPORTER_OTLP_TIMEOUT }, log);
+  if (tracer.enabled) instrumentKnex(db, cfg.DB_CLIENT === 'pg' ? 'postgresql' : cfg.DB_CLIENT);
   const bus = new Bus(log, cfg.REDIS_URL);
   // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
   const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
@@ -196,6 +215,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const denials = new DenialAudit(audit, 20, 60_000, counters);
   const providers = new ProviderRepo(db);
   const users = new UserRepo(db);
+  // Sprint 21 (B-1305): memberships lost through a group mapping or the directory end live shared watches at once.
+  users.onMembershipsLost = (userId, workspaceIds) =>
+    void db('users')
+      .where({ id: userId })
+      .first('tenant_id')
+      .then((u: { tenant_id: string } | undefined) => u && bus.publish(TOPICS.workspaceMembership, { tenantId: u.tenant_id, userId, workspaceIds } satisfies MembershipEvent))
+      .catch((err: Error) => log.warn({ err: err.message }, 'membership event not published'));
   const tenants = new TenantRepo(db);
   const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL, ...(overrides.mail ? { transport: overrides.mail } : {}) });
   configureSecretPolicy(
@@ -230,7 +256,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     },
     streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
-  guard.flags.heldAnswer = (tenantId, messageId) => chat.heldText(tenantId, messageId);
+  // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
+  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
@@ -268,7 +295,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
       ...(cfg.S3_ENDPOINT && cfg.S3_ACCESS_KEY_ID && cfg.S3_SECRET_ACCESS_KEY ? { s3: { endpoint: cfg.S3_ENDPOINT, region: cfg.S3_REGION, accessKeyId: cfg.S3_ACCESS_KEY_ID, secretAccessKey: cfg.S3_SECRET_ACCESS_KEY, pathStyle: cfg.S3_FORCE_PATH_STYLE } } : {}),
       git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 }),
-      replication: { enabled: cfg.KNOWLEDGE_REPLICATION === 'on', tickMs: cfg.KNOWLEDGE_REPLICATION_TICK_MS }
+      replication: { enabled: cfg.KNOWLEDGE_REPLICATION === 'on', tickMs: cfg.KNOWLEDGE_REPLICATION_TICK_MS },
+      // Sprint 23 (B-1501, B-1502): sources' own S3 endpoints and crawled sites.
+      allowedHosts: parseAllowList(cfg.KNOWLEDGE_ALLOWED_HOSTS),
+      fetchTimeoutMs: cfg.KNOWLEDGE_FETCH_TIMEOUT_MS
     }
   );
   const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
@@ -343,8 +373,14 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
     ),
     openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
+    agentSchedules: new AgentSchedules(() => s),
+    evals: new EvalService(() => s),
     counters,
+    tracer,
+    schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
+    zoneCluster: new ZoneCluster(() => s),
     close: async () => {
+      s.schema.stop();
       scheduler.stop();
       s.webhooks.close();
       await denials.flushAll().catch(() => undefined);
@@ -360,9 +396,26 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await counters.close();
       await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
+      // Sprint 20: the signer connection, when the KMS is the signer.
+      (kms as { client?: { close(): void } }).client?.close();
+      await tracer.close();
     }
   };
   registerPlatformJobs(s);
+  // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
+  // checkpoints are spans (checkpoint and outcome only, never the text).
+  jobs.tracer = tracer.enabled ? tracer : null;
+  jobs.gate = () => s.schema.refusal();
+  if (tracer.enabled) {
+    const check = guard.engine.check.bind(guard.engine);
+    guard.engine.check = (input) => withSpan('guardrails check', SpanKind.INTERNAL, { 'exprsn.guardrails.checkpoint': input.checkpoint, 'exprsn.label': input.label }, async (span) => {
+      const d = await check(input);
+      span?.setAttributes({ 'exprsn.guardrails.action': d.action, 'exprsn.guardrails.findings': d.findings.length });
+      return d;
+    });
+  }
+  s.zoneCluster.registerJobs();
+  registerOpsMetrics(s);
   scripts.registerJobs();
   agents.registerJobs();
   s.training.registerJobs();
@@ -372,6 +425,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.webhooks.registerJobs();
   s.webhooks.listen();
   s.sharing.registerJobs();
+  s.openai.holds.registerJobs(); // Sprint 21 (B-1301)
+  s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
+  s.evals.registerJobs(); // Sprint 21 (B-1303)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -418,5 +474,7 @@ export function startSchedules(s: Services): void {
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
   s.federation.schedule(s.scheduler, activeTenants);
+  s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
+  s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
 }

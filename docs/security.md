@@ -119,17 +119,28 @@ filter, private `/tmp`, only the state directory writable.
   `CHAT_GUARD_HOLDBACK_SENTENCES` ≥ 1 (the default) a sentence is shown only after a clean verdict covers it; with 0
   it is shown at once and a verdict can only stop what follows, so text the guard model would block can be shown and
   is replaced afterwards. A background check that cannot run stops release; the rest is shown after the full check.
-  Thinking is screened like the answer, but the full check on the finished answer covers the answer text only. A
-  phrase that spans a sentence boundary is blocked when its second half arrives, but the first half may have been
-  shown. Tool results shown in chat pass the same screen (the model still receives them, checked at `context`). A
-  `require-approval` on the prompt (`user-input`) holds it for a reviewer in chat; a hold that comes from a check that
-  could not run still refuses the turn, and compare and `/v1` still refuse a held prompt.
+  Thinking is screened like the answer, and since 1.3.0 the full check on the finished answer covers the thinking as
+  well: thinking it blocks or holds is withheld (the answer itself is decided by its own check), and thinking already
+  shown while streaming is replaced when the client reloads the answer. A phrase that spans a sentence boundary is
+  blocked when its second half arrives, but the first half may have been shown. Tool results shown in chat pass the
+  same screen (the model still receives them, checked at `context`). A `require-approval` on the prompt (`user-input`)
+  holds it for a reviewer in chat and compare (every column waits), and holds a `/v1` request sent with an API key
+  (`202`, then `GET /v1/held/:id`); a hold that comes from a check that could not run still refuses the turn, and a
+  `/v1` request sent with an OAuth access token is still refused rather than held (the token could expire or be revoked
+  while a reviewer decides). An approved `/v1` request runs as its sender with the key's scopes at approval time; a
+  revoked or expired key, or a disabled owner, fails it. The request and its answer are kept sealed in `api_holds`;
+  there is no retention period for held API requests yet.
 - The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
   labelled cases (the console warns below 200 per label).
 - Knowledge: row-level access for database sources comes from an access column the curator names (groups or users per
-  row), not from the source database's own grants or row-level security policies; groups are matched against the
-  groups the user's identities carried at their last sign-in or directory sync, so a change in the directory applies
-  from then. Rows the reader may not see are dropped after ranking candidates, so a result list can be shorter than
+  row) or, for PostgreSQL (Sprint 23), from the database's own row security: the source reads as one mapped role per
+  group, and a policy change applies at the next sync (sources sync on their schedule, not when a policy changes).
+  Role-mapped sources read the whole object per role (up to 5000 rows each) and cannot replicate. Groups are matched
+  against the groups the user's identities carried at their last sign-in or directory sync, so a change in the
+  directory applies from then. The crawler and buckets on their own endpoints reach internal hosts (and those in
+  `KNOWLEDGE_ALLOWED_HOSTS`) with every dialled address checked; the crawler has no authentication (a site that needs
+  a login cannot be crawled), does not run JavaScript, and indexes what any internal client could fetch, so the
+  source's label floor must reflect the site. Rows the reader may not see are dropped after ranking candidates, so a result list can be shorter than
   asked. Logical replication (PostgreSQL tables with `pgoutput`) needs `wal_level=logical`, a publication the database
   owner creates and the REPLICATION attribute on the connection's account; replicated changes are applied as they
   arrive (no back-pressure beyond one transaction at a time), and a delete is matched by the id column only when it is
@@ -145,7 +156,10 @@ filter, private `/tmp`, only the state directory writable.
   classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
-  to N times each limit. The failed-bearer throttle is per address: clients behind one NAT share it.
+  to N times each limit. Since 1.3.0 an outage is visible: each instance probes Redis every `RATELIMIT_PROBE_SECONDS`,
+  the Platform screen warns, and `exprsn_ratelimit_degraded` drives the `ExprsnRateLimitsPerInstance` alert; the limits
+  themselves are still per instance until Redis answers. The failed-bearer throttle is per address: clients behind one
+  NAT share it.
 - Scripts need docker or podman on the host; with `SCRIPT_RUNNER=none`, or when no runtime answers, runs are refused.
   The sandbox relies on the container runtime's isolation unless `SCRIPT_RUNTIME=runsc` puts containers under gVisor
   (the host must have it installed and registered with the engine); there is no Firecracker option.
@@ -180,8 +194,13 @@ filter, private `/tmp`, only the state directory writable.
   GGUF is still pulled by name from the registry the worker pushes to; the gateway does not import a GGUF file
   directly. The client-certificate check relies on the proxy that terminates mTLS when the server does not.
   `TRAINER_PLAINTEXT_FALLBACK` brings back contract 1 (plaintext rows) for an old worker.
-- Zones: rendered NetworkPolicy, Compose and nftables files are downloaded and deployed by an operator; the platform
-  does not apply them itself (the Helm chart in Sprint 10 can consume them). MCP server and connection registration
+- Zones: rendered Compose and nftables files are downloaded and deployed by an operator. NetworkPolicies are too,
+  unless `ZONES_APPLY=kubernetes` (1.3.0): the server then applies each zone's policy with server-side apply after
+  every approved change and reports drift (edited or deleted policies) on the Zones screen, in the audit chain and as
+  an alert. It does not create the zone namespaces, does not delete policies of zones that are removed, and the drift
+  check compares the fields it set (a field added by hand to an existing rule, without changing a list's length, is
+  not noticed). The service account needs only get, list, create and patch on networkpolicies in the zone namespaces
+  (the chart's `zonesApply` Role); its token is then mounted in the pod. MCP server and connection registration
   are refused in an undefined or external zone, or above its ceiling, only once zones are defined; members registered
   before that are listed on the Zones screen (and admins are told when the first zones appear), each with a move
   proposal that a second system admin approves. MCP servers carry no label, so only their zone is checked.
@@ -214,8 +233,10 @@ filter, private `/tmp`, only the state directory writable.
   refuses a database with tenants, users or audit events unless forced with the confirmation phrase, and blob objects
   are written after the database commits. Tables outside the portable schema (`vectors_pg`) are skipped in the drill
   and rebuilt by reindexing.
-- Clock skew is measured against the database server, and against NTP when `NTP_SERVER` is set: one unauthenticated
-  SNTP query (no NTS), so a spoofed answer on the path could hide skew; it is a check, not a time source.
+- Clock skew is measured against the database server, and against NTP when `NTP_SERVER` is set. SNTP is
+  unauthenticated (no NTS); since 1.3.0 `NTP_SERVER` takes several servers and the reported skew is the median of the
+  ones that agree, with outliers named, so one lying or spoofed server no longer hides skew. An attacker who controls
+  the path to most of the servers still can; it is a check, not a time source.
 - Federation: the SAML IdP signs with RSA-SHA256 only: the assertion always, and the whole response too when the
   service provider is set to it. SP and upstream IdP metadata can be fetched from a URL (through the upstream host
   checks) and are refreshed every `FEDERATION_METADATA_REFRESH_HOURS`; a changed certificate or endpoint waits for an
@@ -241,11 +262,30 @@ filter, private `/tmp`, only the state directory writable.
 - Kerberos needs the optional `kerberos` npm module (GSSAPI bindings) and a keytab on the host; it is not bundled.
   Mapping takes the principal's user part and looks it up in the tenant's user stores; realms map to tenants only
   through the per-tenant realm allow-list.
-- Signing keys: with `KMS_PROVIDER=local` the OIDC and SAML signing keys are sealed with the platform data key and
-  held unsealed in memory while in use (with OpenBao they are signed in transit and never enter the process). The SAML
-  SP decryption key for upstream encrypted assertions is always sealed locally, also with OpenBao (transit's RSA
-  decryption does not offer the OAEP variants IdPs use). Turning on OpenBao replaces the signing keys at once: SAML
-  service providers must re-import the IdP metadata for the new certificate.
+- Signing keys (Sprint 20): with `KMS_PROVIDER=local` and the signer process (`exprsn-ai signer`, `SIGNER_SOCKET`),
+  the key-encryption key and the OIDC, SAML, SAML SP decryption and webhook Ed25519 private keys live only in the
+  signer; the app stores opaque wrapped blobs it cannot open. Data keys are still unwrapped into the app's memory
+  (content is sealed there). Node cannot read a UNIX socket peer's uid (`SO_PEERCRED`), so the signer does not check
+  the caller's credentials: access rests on the socket directory and socket permissions (0700/0600, or 0750/0660 for
+  a shared group) and a shared token every connection must present first; run the signer as its own user so the
+  app's user cannot read the signer's key file. Anyone who can reach the socket with the token can have the signer
+  sign or decrypt (it never exports a key). The signer signs the bytes it is sent (at most 64 KiB), not a digest,
+  because node:crypto cannot sign a precomputed digest with ECDSA or Ed25519. Without the signer, the local KMS keeps
+  the federation and webhook keys sealed with the data keys and unsealed in memory while in use. With OpenBao, OIDC,
+  SAML and webhook signatures are made in transit; the SAML SP decryption key is then still sealed locally (transit's
+  RSA decryption does not offer the OAEP variants IdPs use). Turning on OpenBao or the signer replaces the signing
+  keys at once (the old public keys stay published for the overlap): SAML service providers must re-import the IdP
+  metadata, and upstream IdPs the SP encryption certificate (the replaced decryption key is still tried while it is
+  published).
+- HTTP Message Signatures (RFC 9421, Sprint 20): a subset (`@method`, `@target-uri`, `@authority`, `@path`,
+  `@query`, header fields; no component parameters; `ed25519` and `hmac-sha256`). A signed `/v1` request is accepted
+  within `HTTP_SIGNATURE_MAX_AGE_SECONDS` of its `created` time and nonces are not remembered, so a captured request
+  can be replayed within that window over a broken TLS link. `@target-uri` is checked against `PUBLIC_URL`; a proxy
+  that serves `/v1` under another origin or prefix breaks verification.
+- Supply chain (Sprint 20): `npm audit signatures`, the SLSA provenance attestation, the cosign keyless signature and
+  its verification, and the release SBOM upload run only in GitHub Actions (on pushes to `main` and on `v*` tags, with
+  the workflow's OIDC token) and were validated with actionlint, not run from this repository; they assume the image
+  is published to GHCR as `ghcr.io/<owner>/<repo>`.
 - Key-encryption keys are re-wrapped with `kms:rewrap` (data keys, checkpoint signatures, backup archives and
   manifests). Image provenance manifests (the row and the copy inside the PNG) and training model cards are re-signed
   too; a model card whose signed fields changed after registration cannot be verified with the previous key and is
@@ -280,22 +320,41 @@ filter, private `/tmp`, only the state directory writable.
   check, at the cost of time to first token.
 - Webhooks: a delivery carries the audit event's target and detail (within the webhook's label ceiling) to the
   endpoint, so the endpoint must be trusted with them. Deliveries are not ordered unless the webhook asks for it; ordered
-  delivery keeps the order in which this instance queued events (instances queue independently, so events raised on
-  two instances at the same moment may interleave), and receivers should still de-duplicate by the event id (a replay
-  reuses it). The HMAC secret is sealed at rest and shared with the receiver; Ed25519 signing uses a per-tenant key
+  delivery keeps the order in which events were queued across all instances (a position counter and a delivery lease
+  per endpoint in the database, Sprint 23). Two events raised at the same moment on two instances are ordered by
+  which one queued first, not by a clock, and receivers should still de-duplicate by the event id (a replay reuses
+  it). The HMAC secret is sealed at rest and shared with the receiver; Ed25519 signing uses a per-tenant key
   whose private half is sealed with the tenant key and held in memory while signing (not in the KMS). Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
   against the operator's rules and the tenant's list, as for MCP servers.
 - Conversation sharing: readers of a user or workspace share can watch an answer stream (Sprint 16), answer text only
-  (no thinking); a revocation or a label rising above them ends it at once, but a reader removed from a shared
-  workspace keeps a watch already open until they reload or reconnect. Signed-in link shares open the transcript but
+  (no thinking); a revocation, a label rising above them, or (since 1.3.0) leaving the shared workspace (removed by an
+  admin, or through a group mapping or the directory) ends it at once on every instance. Signed-in link shares open the transcript but
   do not stream. Anonymous links are off by default per tenant, open only conversations labelled `public` at that
   moment, expire within the tenant's limit (72 hours by default), are rate-limited per client address
   (`SHARE_ANONYMOUS_PER_MINUTE`, shared through Redis when set) and are audited with the address; anyone holding the
   link can read the conversation until then, and the address is only as reliable as the proxy settings.
-- Billing: there is no currency conversion or proration; a tenant with a currency is priced only from books in it.
+- Stored API responses (1.3.0): `POST /v1/responses` with `store: true` saves the exchange as a chat conversation of
+  the caller (in the key's workspace, `X-Workspace`), subject to chat retention; `previous_response_id` continues only
+  the caller's own stored responses. Function calls returned to the caller are stored with the answer so a following
+  function result matches them; function results and images in a stored turn are kept as text in the question.
+  `store` defaults to false, unlike OpenAI's API.
+- Evaluations (1.3.0): eval cases and results are sealed with the tenant key. A run answers each case with the saved
+  profile through the gateway and the `model-output` checkpoint and is metered as `api` usage of whoever started it.
+  The publish gate keys runs to a hash of the settings that shape an answer (model, pool, context, temperature,
+  thinking, system prompt, tools, label), not to the canary model: a canary is not evaluated. A judge profile is an
+  LLM: its verdict is only as reliable as the model, and an unreadable verdict scores 0. Overrides need a second
+  profile admin.
+- Scheduled agent runs (1.3.0): a schedule runs as its owner with the roles, clearance and workspace memberships they
+  hold at its due time, never more; a due time missed while no instance was running fires once at the next tick, not
+  once per missed time. Cron expressions are UTC.
+- Billing: there is no currency conversion; a tenant with a currency is priced only from books in it. Proration
+  (Sprint 23) follows price changes within a book by the moment they take effect; moving a tenant to another book
+  mid-month prices the whole month from the book in effect when the statement is computed.
   Taxes are flat percentages of the priced subtotal, without tax registration numbers, exemptions or jurisdictions.
   The Stripe webhook reconciles paid, failed and voided invoices by the Stripe-Signature HMAC with a timestamp
-  tolerance; refunds, credit notes and disputes are not reconciled. Statements are computed from `usage_records`, so usage deleted
+  tolerance, and (Sprint 23) refunds, credit notes and disputes. A refund or dispute is matched only when it names the
+  invoice or the charge or payment intent recorded from the invoice's paid event; credit notes are recorded with their
+  amounts but do not change the statement's state. Statements are computed from `usage_records`, so usage deleted
   with a tenant's data is gone from later recomputations; push a finished month to keep it.
 - Prompt templates pass the `user-input` checkpoint when they are saved and when a version is published (Sprint 16);
   a template published before a rule existed stays usable until it is published again, and the filled text still
@@ -318,3 +377,17 @@ filter, private `/tmp`, only the state directory writable.
 - Security notices cover password, factor, recovery-code, API-key and session changes; a new sign-in does not send
   one. Email notices need `SMTP_URL` and an address on the account.
 - Without `REDIS_URL`, rate limits are per instance (in memory); quotas are shared through the database.
+- Tracing (1.3.0): spans go to `OTEL_EXPORTER_OTLP_ENDPOINT` over OTLP/HTTP JSON with only allow-listed attribute keys
+  (method, route template, status, table and operation, job type, guardrail checkpoint and outcome, model name); SQL
+  text, URLs with query strings, message text and error messages are never recorded. The exporter does not use TLS
+  client certificates; put the collector on the internal network or behind a sidecar, and give an API key through
+  `OTEL_EXPORTER_OTLP_HEADERS` (an environment variable, with no `_FILE` form yet).
+- Key escrow (1.3.0): `kms:escrow` splits only the local key-encryption key, `DATA_KEY` or, when the signer holds it, the signer's key file
+  (`--key-file`; with OpenBao, use its own recovery shares) and
+  prints the shares to standard output once; run it on a terminal, not in a logged CI job. Shares of an earlier escrow
+  stay valid for the key they were made from: after a key change (`kms:rewrap`), make a new escrow and destroy the old
+  shares. `kms:recover` writes the key to a new file with mode 0600, never to standard output.
+- Schema handshake (1.3.0): an instance whose build is older than the database's newest migration stops taking jobs
+  and reports not ready, but keeps answering requests that reach it until its load balancer drains it. Expand-only
+  migrations keep the previous release working during a rolling upgrade; a contract step (marked `// contract:`) needs
+  every old instance stopped first, which `migrate --check` reports.

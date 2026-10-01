@@ -12,7 +12,7 @@ interface TransitKey {
 /**
  * An in-process OpenBao transit engine for tests: enough of its HTTP API for the KMS adapter's data keys (keys,
  * encrypt, decrypt, hmac, verify) and for asymmetric signing (ecdsa-p256 and rsa-2048 keys, read of the public
- * key, sign with the JWS marshaling or PKCS#1 v1.5). Private signing keys stay inside this fake, as in OpenBao.
+ * key, sign with the JWS marshaling or PKCS#1 v1.5), and ed25519 keys (Sprint 20). Private signing keys stay inside this fake, as in OpenBao.
  */
 export class FakeOpenBao {
   url = '';
@@ -50,7 +50,11 @@ export class FakeOpenBao {
             }
             if (m[3] || key) return send(204);
             const type = b.type ?? 'aes256-gcm96';
-            if (type === 'ecdsa-p256' || type === 'rsa-2048') {
+            if (type === 'ed25519') {
+              // Like OpenBao, the Ed25519 public key is read back as the base64 of its 32 raw bytes.
+              const pair = generateKeyPairSync('ed25519');
+              this.keys.set(name!, { type, privateKey: pair.privateKey, publicPem: Buffer.from(String(pair.publicKey.export({ format: 'jwk' }).x), 'base64url').toString('base64') });
+            } else if (type === 'ecdsa-p256' || type === 'rsa-2048') {
               const pair = type === 'ecdsa-p256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('rsa', { modulusLength: 2048 });
               this.keys.set(name!, { type, privateKey: pair.privateKey, publicPem: pair.publicKey.export({ type: 'spki', format: 'pem' }).toString() });
             } else this.keys.set(name!, { type, secret: randomBytes(32) });
@@ -60,6 +64,10 @@ export class FakeOpenBao {
             if (!key?.privateKey) return send(400, { errors: ['not a signing key'] });
             this.signed.push(name!);
             const input = Buffer.from(b.input ?? '', 'base64');
+            if (key.type === 'ed25519') {
+              if (m[3]) return send(400, { errors: ['ed25519 takes no hash algorithm'] });
+              return send(200, { data: { signature: `vault:v1:${sign(null, input, key.privateKey).toString('base64')}` } });
+            }
             if (key.type === 'ecdsa-p256') {
               const sig = sign('sha256', input, { key: key.privateKey, dsaEncoding: b.marshaling_algorithm === 'jws' ? 'ieee-p1363' : 'der' });
               return send(200, { data: { signature: `vault:v1:${b.marshaling_algorithm === 'jws' ? sig.toString('base64url') : sig.toString('base64')}` } });

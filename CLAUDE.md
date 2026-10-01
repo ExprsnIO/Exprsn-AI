@@ -29,7 +29,11 @@ restore) made version `1.1.0`. Sprints 16 to 19 (`Backlog-1.2.0.md`: `/v1` conte
 streaming, held prompts, live and anonymous sharing; sign-in notices, the strength meter, upstream step-up, DPoP nonces,
 SAML metadata, enrolment links and automated accessibility checks; service URL checks, backend TLS, consistent
 backups, ACME binding and hooks, sealed training data; MySQL and replicated knowledge sources with row access, ordered
-and Ed25519 webhooks, price books with Stripe reconciliation, awaited workflow tools) are done in version `1.2.0`.
+and Ed25519 webhooks, price books with Stripe reconciliation, awaited workflow tools) made version `1.2.0`. Sprints 20
+to 23 (`Backlog-1.3.0.md`: the signer process, KMS-held webhook keys, HTTP Message Signatures and image provenance;
+held `/v1` requests, the Responses API, evaluations and scheduled agents; tracing, dashboards and alerts, safe upgrades,
+key escrow, zones applied in-cluster and an NTP quorum; S3 and web-crawl knowledge sources, PostgreSQL row security,
+webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow) are done in version `1.3.0`.
 Every console screen is live. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
 
 ## Commands
@@ -44,7 +48,8 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate | admin:create | audit:verify | kms:rotate | kms:rewrap | backup:create | backup:restore-drill | backup:restore>
+npm run cli -w server -- <migrate [--check] | admin:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
+                             kms:recover | signer | backup:create | backup:restore-drill | backup:restore>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
@@ -61,8 +66,10 @@ that file).
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, build and the console parse check; integration tests
 against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; a container build that must answer `/readyz`; npm audit,
-CycloneDX SBOMs and a Trivy image scan; Helm lint and render; the in-process streaming load test; and the Playwright
-console suite.
+`npm audit signatures`, CycloneDX SBOMs and a Trivy image scan; Helm lint and render; promtool on the Prometheus rules;
+the in-process streaming load test; and the Playwright console suite. On `main` and `v*` tags it also pushes, attests
+and cosign-signs the image and attaches the SBOMs to the release (not yet run on GitHub; it assumes
+`ghcr.io/<owner>/<repo>`).
 
 Tests never need a real Ollama: `server/test/fake-ollama.ts` speaks enough of its API (version, tags, ps, show, pull,
 delete, generate, streamed chat with thinking and tool calls) and is also handy for driving the console by hand
@@ -90,7 +97,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   training, zones, ops and federation, which read their collaborators lazily through `s`) passed to every route factory.
 - **`config/`**: zod-validated environment. Secrets (`SESSION_SECRET`, `DATA_KEY`, `DATABASE_URL`, `METRICS_TOKEN`,
   `OPENBAO_TOKEN`, `REDIS_URL`, `SMTP_URL`, `S3_SECRET_ACCESS_KEY`, `SIEM_TOKEN`) may be given as `<NAME>_FILE`; empty
-  variables count as unset. Production refuses non-HTTPS cookies.
+  variables count as unset. Production refuses non-HTTPS cookies, and `DATA_KEY`, `DATA_KEY_PREVIOUS` and
+  `SIGNER_TOKEN` given inline (only their `_FILE` forms).
 - **`http/app.ts`** composes the app: trace ids, pino-http, Helmet (CSP `script-src 'self'`), compression, health
   routes, then `/api` (JSON 256 kB limit except the raw attachment upload → `authenticate` (which also resolves the
   current workspace) → `csrfProtection` → rate limits → routers), then the static console with SPA fallback.
@@ -165,6 +173,14 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   details); `ops/cert-hooks.ts` (certificate push hooks) and `ops/push.ts` (Harbor, Verdaccio and devpi pushes);
   `training/worker.ts` (worker contract 2, `docs/training-worker.md`); `knowledge/acl.ts` (row access) and
   `knowledge/replication.ts` with `connections/replication.ts` (PostgreSQL logical replication).
+- 1.3.0 modules: **`signer/`** (`server.ts`, `client.ts`, `protocol.ts`: the `exprsn-ai signer` process that holds the
+  local key-encryption key and the private keys, and the app's client for it), `crypto/httpsig.ts` (RFC 9421 message
+  signatures, RFC 9530 `Content-Digest`); `openai/holds.ts` (held `/v1` requests) and `openai/responses.ts` (the
+  Responses API subset); **`evals/`** (eval sets, runs and the publish gate); `agents/schedules.ts` (cron schedules);
+  `observability/tracing.ts` (OTLP/HTTP spans) and `observability/ops-metrics.ts`; `db/schema.ts` (the schema guard and
+  `migrate --check`); `platform/shamir.ts` and `platform/escrow.ts` (`kms:escrow`, `kms:recover`); `zones/kube.ts` and
+  `zones/cluster.ts` (`ZONES_APPLY=kubernetes`); `knowledge/crawl.ts` (the internal web crawler). Prometheus rules and
+  Grafana dashboards are in `deploy/observability/`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -178,7 +194,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   other external workers; `fake-trainer.ts`, `fake-acme.ts` and `fake-idp.ts` stand in for the training worker, an ACME directory and an
   upstream identity provider; `fake-account.ts` (mail, HIBP range API), `sprint13-fakes.ts` (webhook receiver,
   Stripe) and `fake-openbao.ts` (transit) serve the 1.1.0 suites, and `sprint18-fakes.ts` (Harbor, Verdaccio, devpi)
-  the 1.2.0 ones; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
+  the 1.2.0 ones, and `sprint22-fakes.ts` (OTLP collector, Kubernetes API, SNTP, Redis) and `sprint23-fakes.ts` (S3
+  bucket, web site) the 1.3.0 ones; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
   before SuperTest sees it, so another process cannot shadow the port on macOS. `server/test/integration/` runs the
   stores and platform paths against real servers.
 
@@ -210,7 +227,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - Accessibility: `App.setA11y` and the `:root[data-a11y="aaa"]` tokens in `app.css` give the Enhanced (AAA) mode;
   `UI.field` labels its control and dialogs are `inert`-backed with focus return; `App.tabPanel` keeps a tab's content
   in one tabpanel. Keep new markup keyboard-operable and labelled (`docs/accessibility.md`): the e2e suite fails on any
-  finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) and on sideways scrolling at 320 and 640 px.
+  finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) or of axe-core (`e2e/tests/support/axe.ts`, Standard
+  and Enhanced, light and dark), and on sideways scrolling at 320 and 640 px, for screens and, through
+  `e2e/tests/y-reflow-overlays.spec.ts`, their dialogs and drawers.
 - `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`).
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while

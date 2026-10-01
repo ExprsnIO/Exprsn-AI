@@ -18,6 +18,11 @@ LoadCredential=data_key:/etc/exprsn-ai/credentials/data_key
 LoadCredential=database_url:/etc/exprsn-ai/credentials/database_url
 Environment=NODE_ENV=production WEB_ROOT=/opt/exprsn-ai/web
 Environment=SESSION_SECRET_FILE=%d/session_secret DATA_KEY_FILE=%d/data_key DATABASE_URL_FILE=%d/database_url
+# signer (Sprint 20): with exprsn-signer.service running, remove DATA_KEY_FILE and its LoadCredential above and add:
+#   LoadCredential=signer_token:/etc/exprsn-ai/credentials/signer_token
+#   Environment=SIGNER_SOCKET=/run/exprsn-signer/signer.sock SIGNER_TOKEN_FILE=%d/signer_token
+#   SupplementaryGroups=exprsn-signer
+#   After=exprsn-signer.service  Requires=exprsn-signer.service   (in [Unit])
 ExecStart=/usr/bin/node /opt/exprsn-ai/server/dist/index.js
 Restart=on-failure
 RestartSec=5

@@ -17,7 +17,7 @@ const budgets = z.object({ steps: z.number().int().min(1).max(MAX_BUDGETS.steps)
  */
 export function agentRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/agents', '/runs', '/mcp'], noStore, requireAuth());
+  r.use(['/agents', '/runs', '/mcp', '/agent-schedules'], noStore, requireAuth());
   const run = requirePermission(s, 'agents:run');
   const invoke = requirePermission(s, 'tools:invoke');
   /** The first of `perms` the caller holds, checked (and denials audited) like requirePermission. */
@@ -76,6 +76,47 @@ export function agentRoutes(s: Services): Router {
     const n = Number.parseInt(String(req.params.n), 10);
     if (!Number.isInteger(n) || n < 1) throw notFound('Step');
     res.json(await s.agents.decide(principalOf(req), String(req.params.id), n, b.decision, b.note));
+  });
+
+  // ---------- Sprint 21: scheduled runs (B-1306) ----------
+
+  const cron = z.string().trim().min(9).max(120);
+  const scheduleBody = z.object({ name: z.string().trim().min(1).max(120), agent: z.string().trim().min(1).max(120), cron, input: z.string().trim().min(1).max(100_000), label: z.enum(LABELS).default('internal'), budgets: budgets.optional(), enabled: z.boolean().optional() });
+
+  r.get('/agent-schedules', anyOf('agents:run', 'agents:manage'), async (req, res) => {
+    const q = parseBody(z.object({ all: z.enum(['true', 'false']).optional() }), req.query);
+    const p = principalOf(req);
+    res.json(await s.agentSchedules.list(p, { all: q.all === 'true' || !authorize(p, 'agents:run').allow }));
+  });
+
+  r.post('/agent-schedules', run, async (req, res) => {
+    const b = parseBody(scheduleBody, req.body);
+    const out = await s.agentSchedules.create(principalOf(req), { name: b.name, agent: b.agent, cron: b.cron, input: b.input, label: b.label, ...(b.budgets ? { budgets: b.budgets } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}) });
+    await audit(req, 'agent.schedule.created', { schedule: out.id, name: out.name, agent: out.agent }, { cron: out.cron, label: out.label, enabled: out.enabled });
+    res.status(201).json(out);
+  });
+
+  r.get('/agent-schedules/:id', anyOf('agents:run', 'agents:manage'), async (req, res) => {
+    res.json(await s.agentSchedules.get(principalOf(req), String(req.params.id)));
+  });
+
+  r.patch('/agent-schedules/:id', anyOf('agents:run', 'agents:manage'), async (req, res) => {
+    const b = parseBody(scheduleBody.omit({ name: true }).partial().strict(), req.body);
+    const patch = Object.fromEntries(Object.entries(b).filter(([, v]) => v !== undefined));
+    const out = await s.agentSchedules.update(principalOf(req), String(req.params.id), patch);
+    await audit(req, 'agent.schedule.updated', { schedule: out.id, name: out.name, agent: out.agent }, { changed: Object.keys(patch), enabled: out.enabled, cron: out.cron });
+    res.json(out);
+  });
+
+  r.delete('/agent-schedules/:id', anyOf('agents:run', 'agents:manage'), async (req, res) => {
+    const sc = await s.agentSchedules.remove(principalOf(req), String(req.params.id));
+    await audit(req, 'agent.schedule.deleted', { schedule: sc.id, name: sc.name, agent: sc.agent });
+    res.status(204).end();
+  });
+
+  r.get('/agent-schedules/:id/history', anyOf('agents:run', 'agents:manage'), async (req, res) => {
+    const q = parseBody(z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }), req.query);
+    res.json(await s.agentSchedules.history(principalOf(req), String(req.params.id), q.limit));
   });
 
   // ---------- the per-user token vault for MCP servers ----------

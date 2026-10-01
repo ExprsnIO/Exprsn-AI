@@ -1518,3 +1518,206 @@ Audit actions: `auth.login.new_context`, `auth.step_up.started`, `password.enrol
 `federation.proposal.rejected`, `federation.proposal.withdrawn`, `federation.metadata.refreshed`,
 `federation.metadata.failed`, `federation.metadata.source_set`, `federation.metadata.source_removed`,
 `federation.saml_sp.metadata_applied`, `identity.provider.metadata_applied`.
+
+## Sprint 20: Keys and supply chain
+
+### Signed `/v1` requests (RFC 9421)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /me/api-keys` | Now takes `signatureKey` (an Ed25519 public key: its JWK `x` value, or a PEM). Lists and the answer show `signatureKey` |
+| `PUT /me/api-keys/:id/signature-key` `{publicKey: string \| null}` | Sets or (with `null`) removes the key's public key. Browser session with a recent sign-in, like creating a key; a security notice is sent |
+
+When an API key has a public key, every `/v1` request made with it must carry `Signature-Input` and `Signature`
+(HTTP Message Signatures, RFC 9421) by that key, `alg="ed25519"`, covering at least `"@method"`, `"@target-uri"` (the
+URL under `PUBLIC_URL` the client called) and `"authorization"`, plus `"content-digest"` when there is a body, with a
+`Content-Digest` header (RFC 9530, `sha-256` or `sha-512`) that matches it. `created` is required and must be within
+`HTTP_SIGNATURE_MAX_AGE_SECONDS`; `keyid`, if given, is the key's id or its `exai_k1_<prefix>`. Any other signed
+header field may be added (`x-data-label`, `content-type`). Otherwise the answer is `401` with
+`error.code = invalid_signature` and a message that says what was wrong. OAuth access tokens are not affected. Such a key is
+refused (`401 invalid_token`) everywhere outside `/v1`, where signatures are not checked.
+
+### Webhooks
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/webhooks`, `PATCH /admin/webhooks/:id` | Now take `messageSignatures` (boolean, default `false`); the webhook view shows it |
+| `GET /admin/webhooks/signing-key` | `active.store` says where the Ed25519 private key is: `signer`, `kms` (OpenBao transit) or `sealed` |
+
+With `messageSignatures`, each delivery also carries `Content-Digest`, `Signature-Input` and `Signature` under the label
+`exprsn`, covering `"@method" "@target-uri" "content-type" "content-digest" "x-exprsn-delivery-id"` with `created` set to
+`x-exprsn-timestamp`: `alg="hmac-sha256"` with the webhook's secret and `keyid` the webhook id, or `alg="ed25519"` with
+the tenant's published key and `keyid` its kid (the JWKS at `/webhooks/keys/:tenant`). The existing headers are sent as
+before. With OpenBao, or with the signer, Ed25519 keys are created and used there; a key sealed before is retired (it
+stays in the JWKS) and replaced on the next signature.
+
+Audit actions: `apikey.signature_key.set`, `apikey.signature_key.removed`; `webhook.signing-key.created` (also when a
+key moves to the KMS or the signer, with `detail.retired`).
+
+## Sprint 21: AI
+
+### Held `/v1` requests (`require-approval` at `user-input`)
+
+A `/v1` request sent with an API key whose prompt a `require-approval` rule stops is held for review instead of refused
+(`POST /v1/chat/completions` and `POST /v1/responses`, streaming or not). It is filed in the Flags queue as a `hold`
+flag with source `api-request`; approving it (`POST /api/flags/:ref/decide {decision: approved}`, not by the sender)
+runs the request as a job (`openai.held`) as the sender with the key's scopes as they are then; rejecting it ends it.
+A request sent with an OAuth access token is refused as before (`400 content_filter`).
+
+| Method and path | What it does |
+| --- | --- |
+| (any `/v1` request that is held) | `202` with `Location: /v1/held/<id>` and `{id, object: "exprsn.held_request", api (chat.completions\|responses), status: "held", created, poll, message}` |
+| `GET /v1/held/:id` (`inference:invoke`, the sender only) | `200 {id, object, api, status (held\|running\|completed\|failed\|rejected), created, poll, message?, error?, response?}`. When `completed`, `response` is the `chat.completion` or `response` object the request would have returned (never streamed). Another caller gets `404 held_request_not_found` |
+
+Compare (`POST /api/compare`) holds the prompt the same way chat does: `202 {conversationId, userMessageId, columns:
+[{…, state: "awaiting"}], state: "awaiting", reason}`; nothing is generated until a reviewer approves, then every
+column starts (`chat.released` with `answerId` per column); a rejection withdraws every column.
+
+Audit actions: `api.request.held`, `api.hold.approved`, `api.hold.rejected`.
+
+### `POST /v1/responses`: the Responses API subset (`inference:invoke`)
+
+A documented subset of OpenAI's Responses API, translated onto the chat completions path: the same profile
+resolution, clearance, quotas, `user-input` and `model-output` checkpoints, metering (`api`) and `X-Data-Label`,
+`X-Workspace` and `X-Exprsn-*` headers.
+
+| Field | Supported |
+| --- | --- |
+| `model` | A profile or alias, as for chat completions |
+| `input` | A string (one user message), or an array of items: messages `{type?: "message", role: user\|assistant\|system\|developer, content: string \| [{type: input_text\|output_text, text} \| {type: input_image, image_url: "data:…"}]}`, `{type: "function_call", call_id, name, arguments}` and `{type: "function_call_output", call_id, output}` |
+| `instructions` | A system message before everything else; not stored and not carried over by `previous_response_id` |
+| `tools`, `tool_choice` | Function tools only `{type: "function", name, description?, parameters?}`; calls come back as `function_call` output items for the caller to run (never run on the server), and their results go in the next request as `function_call_output` items. `tool_choice`: `none`, `auto`, `required` or `{type: "function", name}` |
+| `temperature`, `top_p`, `max_output_tokens`, `reasoning.effort`, `metadata`, `user` | As in OpenAI's API (`max_output_tokens` caps the answer; the thinking ceiling of the profile still applies) |
+| `store` | Default **false** (OpenAI's default is true). With `true` (needs `chat:write` as well) the exchange is saved as a chat conversation of the caller in the request's workspace: it appears in Chat and can be continued there. The response id is then `resp_<message id>` |
+| `previous_response_id` | A stored response of the caller: its conversation up to that answer comes first (function calls it returned included), and with `store: true` the new turn is saved under it. Anything else is `404 response_not_found` |
+| `stream` | Server-sent events with an `event:` line: `response.created` (`{type, sequence_number, response}` with `status: in_progress`, sent just before the first text), `response.output_text.delta` (`{type, sequence_number, item_id, output_index: 0, content_index: 0, delta}`), `response.completed` (`{type, sequence_number, response}`). No `[DONE]`. With `OPENAI_STREAM_MODE=checked` (default) the text arrives after the output check in one delta. An error after the stream started is an `error` event `{type: "error", code, message, param}` |
+
+The response object: `{id, object: "response", created_at, status (completed\|incomplete), incomplete_details
+({reason: max_output_tokens\|content_filter} or null), error: null, model, instructions, previous_response_id, store,
+output: [{type: "message", id, status, role: "assistant", content: [{type: "output_text", text, annotations: []}]},
+{type: "function_call", id, call_id, name, arguments, status}], tools, tool_choice, temperature, top_p,
+max_output_tokens, metadata, usage: {input_tokens, output_tokens, total_tokens, input_tokens_details, output_tokens_details},
+exprsn?}`.
+
+Not supported: built-in tools (web search, file search, code interpreter, computer use), `background`, `include`,
+`conversation` objects, `truncation`, `parallel_tool_calls`, audio, file inputs, and deleting or cancelling responses.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /v1/responses` | As above |
+| `GET /v1/responses/:id` | A stored response of the caller (`resp_<message id>`); `404 response_not_found` otherwise |
+
+### Evaluations (`profiles:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/profiles/:id/evaluations` | `{profile {id, name, version, status, configHash}, sets, runs (newest first, the score history), overrides, gate {configHash, gated, failing [{setId, set, reason, score, threshold}], overridden, open}}`; sets above the caller's clearance are left out |
+| `POST /api/admin/profiles/:id/eval-sets` `{name, description?, label?, threshold (0–1), gate (default true), judgeProfile?, cases: [{id?, name?, prompt, checks: [...]}]}` | Checks: `{kind: contains\|not-contains, value, caseSensitive?}`, `{kind: regex, pattern}` (RE2), `{kind: json-schema, schema}` (the answer, or its fenced JSON block, must validate), `{kind: judge, rubric, minScore? (0.5)}` (needs `judgeProfile`, a published profile cleared for the set's label). The label defaults to the profile's and may not exceed it or the caller's clearance. Cases are sealed |
+| `PATCH /api/admin/profiles/:id/eval-sets/:sid` | Any of the fields; changing cases, threshold or judge (or turning the gate on) starts a new revision |
+| `DELETE /api/admin/profiles/:id/eval-sets/:sid` | With its runs |
+| `POST /api/admin/profiles/:id/evaluations/run` `{setId?, trigger?}` | `202` with one queued run per set (job `evals.run`) on the profile as saved now: `{id, setId, profileVersion, configHash, setRevision, state, …}` |
+| `GET /api/admin/profiles/:id/evaluations/runs/:rid` | The run with `results: [{caseId, name, passed, checks [{kind, passed, detail}], output, judge, ms}]` |
+| `POST /api/admin/profiles/:id/evaluations/overrides` `{reason}` | Asks to let the saved settings be published without passing evaluations |
+| `POST /api/admin/profiles/:id/evaluations/overrides/:oid/decide` `{decision: approve\|reject}` | Someone other than the requester (`403` with `step: dual-control` otherwise) |
+
+The publish gate: `POST /api/admin/profiles/:id/publish {status: published}`, and any change to a published profile
+(edit, rollback, canary promotion) that changes its settings hash, is refused with `409 {code: eval_gate, failing,
+configHash}` unless, for that hash, the latest run of every gated set at its current revision passed, or an approved
+override exists. Runs are scored on what users would see (each answer passes `model-output`) and metered as `api`.
+
+Audit actions: `profile.eval.set.created`, `profile.eval.set.updated`, `profile.eval.set.deleted`,
+`profile.eval.started`, `profile.eval.passed`, `profile.eval.failed`, `profile.eval.error`,
+`profile.eval.override.requested`, `profile.eval.override.approved`, `profile.eval.override.rejected`.
+
+### Thinking at the full output check
+
+The `model-output` check on a finished chat answer also runs on its thinking (`meta.part: thinking`). Thinking it
+blocks or holds is withheld, a redaction replaces its spans; the message's `guard` gains `thinking {action, reason,
+rules}`, and `chat.done` carries a higher `seq` so clients read the answer again.
+
+### Live watches and workspace membership (socket)
+
+A reader watching a conversation through a workspace share (`shared.watch`) gets `shared.revoked` and leaves the room
+as soon as they stop being a member of that workspace: removed by an admin, or by a group mapping or the directory
+(bus topic `workspace.membership`). A reader still entitled another way (a direct share, another workspace) is let
+back in after a fresh check.
+
+### Scheduled agent runs (`agents:run`; `agents:manage` sees every schedule)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/agent-schedules[?all=true]` | Your schedules (all in the tenant for agent admins with `all`), within your clearance: `{id, name, agent, cron, cronText, label, budgets, enabled, nextRunAt, lastRunAt, lastRunId, lastResult, ownerId, owner, mine, workspaceId, input, createdAt, updatedAt}` |
+| `POST /api/agent-schedules` `{name, agent, cron, input, label?, budgets?, enabled?}` | A five-field UTC cron expression. You must be able to start this run now (the agent, its label against your clearance and ceilings, its profile). The request is sealed. The schedule belongs to your current workspace |
+| `GET /api/agent-schedules/:id` | One schedule |
+| `PATCH /api/agent-schedules/:id` `{agent?, cron?, input?, label?, budgets?, enabled?}` | The owner changes it; an agent admin may only pause or resume someone else's |
+| `DELETE /api/agent-schedules/:id` | The owner or an agent admin |
+| `GET /api/agent-schedules/:id/history[?limit=]` | Each due time: `{dueAt, at, outcome (started\|skipped\|failed), reason, runId, runState}` |
+
+Due schedules are fired by the `agents.schedules` job every `AGENT_SCHEDULE_TICK_SECONDS`; each due time is claimed
+once across instances. The run starts as the owner with the roles, clearance and workspace memberships they hold then;
+a disabled owner, one without `agents:run`, one who left the schedule's workspace or can no longer run the agent at
+that label is skipped (recorded in the history and audited). Runs carry `scheduleId`.
+
+Audit actions: `agent.schedule.created`, `agent.schedule.updated`, `agent.schedule.deleted`, `agent.schedule.started`,
+`agent.schedule.skipped`, `agent.schedule.failed`.
+
+## Sprint 22: Operations, second part
+
+No new permissions. Tracing (B-1401) adds no routes: every request, job, gateway call, guardrail check and database
+query is a span of the request's W3C trace when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (a caller's `traceparent` is
+honoured, and `X-Trace-Id` is its trace id); Ollama calls carry a `traceparent` header.
+
+### Health
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /readyz` | Adds `checks.schema`: `ok`, or `behind: <reason>` when the database has a migration this build does not know (B-1403). Such an instance answers 503 and claims no jobs until the database matches its build again |
+
+### Zones applied in-cluster (`zones:manage`, B-1405)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/zones-cluster` | `{mode: off\|kubernetes, driftMinutes, fieldManager, drift, objects: [{zone, version, namespace, kind, name, state: pending\|applied\|drift\|missing\|error, detail, appliedAt, checkedAt}]}` |
+| `POST /admin/zones-cluster/apply` `{}` | Applies every zone's current NetworkPolicy now with server-side apply (`PATCH … application/apply-patch+yaml`, the field manager, `force=true`): `{applied, failed, objects}`. Also how drift is put right. `409` while `ZONES_APPLY` is off; `502` when the API cannot be reached at all. Audited as `zone.cluster.applied` |
+| `POST /admin/zones-cluster/check` `{}` | Compares each live policy with what was applied: `{checked, drift, missing, errors, objects}`. A policy that differs (the first differing field is named) or was deleted is drift; newly found drift is audited as `zone.cluster.drift` and system admins are notified |
+
+Zone changes (approve, seed) queue the job `zones.cluster.apply` on their own when `ZONES_APPLY=kubernetes`; the job
+`zones.cluster.drift` runs every `ZONES_APPLY_DRIFT_MINUTES`.
+
+### Platform (`platform:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/platform/summary` | Adds `rateLimitHealth {degraded, since, detail, fallbacks}` (B-1407: Redis configured but not answering, so limits count per instance), `schema {code, database, pending, unknown, state: current\|pending\|behind, reason}` (B-1403), `escrow {id, threshold, shares, keyCheck, createdAt, verifiedAt} \| null` (B-1404), `tracing {enabled, exported, dropped, failed}` and `zonesApply`. `clock.ntp` (B-1406) adds `servers [{server, offsetMs, delayMs, stratum, error, outlier}]`, `outliers`, `quorum` and `warning`; with several `NTP_SERVER`s, `offsetMs` and `skewMs` are the median of the servers that agree and `server` lists them all |
+
+CLI (no routes): `migrate --check`, `kms:escrow --shares <n> --threshold <k>`, `kms:recover --out <file>
+[--share …] [--check <value>]`. Audit actions: `zone.cluster.applied`, `zone.cluster.drift`, `kms.escrow.created`.
+
+## Sprint 23: Knowledge, integrations and accessibility
+
+### Knowledge sources (`knowledge:manage` or manage access on the base)
+
+| Route | Notes |
+| --- | --- |
+| `POST /knowledge/bases/:id/sources` `{kind: s3, location: "s3://bucket/prefix/", include?, endpoint?, region?, pathStyle?, accessKeyId?, secretAccessKey?}` | B-1501. `include`: up to 20 patterns relative to the prefix (`*` within a folder, `**` across folders, `?` one character); objects that match none are never fetched. Without `endpoint` the platform's S3 credentials are used (keys are refused, `400`). With `endpoint` (an S3-compatible service; internal, or named in `KNOWLEDGE_ALLOWED_HOSTS`, else `409`; link-local and metadata addresses always `409`) both keys are required and are sealed with the tenant key; responses and the audit entry carry only `ownKeys: true`. Objects are versioned by ETag: an unchanged object is not downloaded again, and one no longer listed is removed from every index |
+| `POST /knowledge/bases/:id/sources` `{kind: web, location: "https://intranet.example.internal/", maxDepth?: 0-5 (2), maxPages?: 1-1000 (100), pathPrefix?, sitemap?: true}` | B-1502. Crawls an internal site from its start page: same scheme, host and port only (links, redirects and sitemap entries elsewhere are skipped), robots.txt honoured (user agent `ExprsnAI-Knowledge`), the sitemap's pages added at depth 1, `pathPrefix` limiting paths. HTML, plain text, Markdown, CSV, JSON and PDF pages are indexed; `noindex` pages are followed but not indexed, `nofollow` links are not followed. Pages are re-checked with `If-None-Match`/`If-Modified-Since`; a 304 keeps the document. Pages no longer reached are removed. The sync job's result lists up to 50 skipped URLs with the reason |
+| `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …", connectionId, roleMappings: [{group, role}]}` | B-1503, PostgreSQL only. Each sync reads the object once per mapped role (`SET LOCAL ROLE` in the read-only transaction); a row's document and chunks may be retrieved by the groups whose role saw it, and a row no role sees is not indexed. `409` when a role is missing, the connection's account is not a member, the role is superuser or BYPASSRLS or may not select the object, the table does not enable row security (or a mapped role owns it without FORCE), a view is not `security_invoker`, or with `accessColumn` or `replication`. Synced by full reads (no watermark) |
+
+### Webhooks (`webhooks:manage`)
+
+Ordered webhooks (B-1504) keep their order across instances: each event's position comes from the endpoint's
+counter in the database, taken in the same transaction that queues the delivery, and only the holder of the
+endpoint's delivery lease sends (one delivery in flight per ordered endpoint). `X-Exprsn-Sequence` is that position.
+No route changes.
+
+### Billing (`billing:manage`, `billing:read`)
+
+| Route | Notes |
+| --- | --- |
+| `PATCH /admin/billing/price-books/:id` `{…, items?, effectiveFrom?}` | B-1505. New `items` take effect at `effectiveFrom` (an ISO date or date-time, UTC unless an offset is given; default now): no earlier than the start of the current month (`409`) and not in the future (`409`); `effectiveFrom` without `items` is `400`. Saving the same items again makes no version. Answers the book with `versions: [{id, items (a count), effectiveFrom, createdAt}]` (null `effectiveFrom`: from the start). Audited with `effectiveFrom` |
+| `GET /admin/billing/statements/:month` | A month whose book changed during it is prorated: `prorated: true`, and each line carries `from` and `to` (ms, end exclusive) for the part of the month it covers, priced with the items in effect then. Also `refundedMicros`, `creditedMicros`, `credits: [{id, amountMicros, state: issued \| void}]`, `disputedMicros`, `disputeStatus`. New states `partly refunded`, `refunded`, `disputed`, `dispute lost` (all final, like `paid`) |
+| `POST /billing/stripe/webhook` (public) | Also: `charge.refunded` (the charge's `amount_refunded` is the running total: the statement becomes `refunded` when it covers the charge's `amount`, else `partly refunded`; an older, smaller total is ignored), `credit_note.created`/`updated`/`voided` (recorded by id; voided notes no longer count), `charge.dispute.created`/`updated` (`disputed`, with the amount and status) and `charge.dispute.closed` (`won` returns the statement to paid, or refunded; `lost` makes it `dispute lost`). The statement is found by invoice id, then by the charge or payment intent remembered from `invoice.paid`, then by `metadata.statement` |
+
+Audit actions: `billing.statement.refunded`, `billing.statement.credited`, `billing.statement.credit-voided`,
+`billing.statement.disputed`, `billing.statement.dispute-updated`, `billing.statement.dispute-closed` (actor
+`service: stripe`, detail with the amounts in micro-units and the statement's state).

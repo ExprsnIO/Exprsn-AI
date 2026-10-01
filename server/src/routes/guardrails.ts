@@ -508,10 +508,16 @@ export function guardrailRoutes(s: Services): Router {
       const decision = body.decision;
       let conversationId: string | null = null;
       const f = await flags.decideHold(p, ref(req), ws, decision, body.reason ?? null, async (flag) => {
+        // Sprint 21 (B-1301): a held /v1 request runs as its sender when approved.
+        if (flag.source_kind === 'api-request' && flag.source_id) {
+          await s.openai.holds.resolve(p, flag.source_id, decision);
+          return;
+        }
         if (flag.source_kind !== 'message' || !flag.source_id) throw conflict(`${flagRef(flag)} has no answer attached.`);
         conversationId = (await s.chat.resolveHold(p, flag.source_id, decision)).conversationId;
       });
-      await audit(req, `chat.hold.${decision}`, { flag: flagRef(f), message: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
+      if (f.source_kind === 'api-request') await audit(req, `api.hold.${decision}`, { flag: flagRef(f), request: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
+      else await audit(req, `chat.hold.${decision}`, { flag: flagRef(f), message: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       res.json(flags.view(f, p));
       return;
     }

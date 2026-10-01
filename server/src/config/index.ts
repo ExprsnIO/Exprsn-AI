@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ACME_EAB_HMAC_KEY'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ACME_EAB_HMAC_KEY', 'SIGNER_TOKEN'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -278,7 +278,7 @@ const base = z.object({
     /** Media previews and downloads from a separate origin through signed, short-lived URLs. */
     MEDIA_ORIGIN: z.url().optional(),
     MEDIA_URL_TTL_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
-    /** SNTP server (host or host:port) for the clock-skew check; unset: the database server only. */
+    /** SNTP servers (host or host:port, comma-separated; Sprint 22: several give a median and outliers) for the clock-skew check; unset: the database server only. */
     NTP_SERVER: z.string().optional(),
     NTP_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
     /** OpenBao database secrets engine mount for dynamic data-connection credentials. */
@@ -328,6 +328,44 @@ const base = z.object({
     SCRIPT_RUNTIME: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,62}$/).optional(),
     // --- end Sprint 19 ---
 
+    // --- Sprint 22: operations, second part ---
+    /** B-1401: OTLP/HTTP collector base URL (spans go to <url>/v1/traces); unset: no tracing. */
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
+    /** The full traces URL, when the collector does not use /v1/traces under the base. */
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: z.url().optional(),
+    /** Extra collector request headers: name=value,name2=value2 (values percent-encoded), e.g. an API key. */
+    OTEL_EXPORTER_OTLP_HEADERS: z.string().optional(),
+    OTEL_EXPORTER_OTLP_TIMEOUT: z.coerce.number().int().min(100).max(120_000).default(10_000),
+    OTEL_SERVICE_NAME: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/).default('exprsn-ai'),
+    /** Fraction of new traces recorded; a caller's sampled flag in traceparent wins. */
+    OTEL_TRACES_SAMPLE_RATIO: z.coerce.number().min(0).max(1).default(1),
+    OTEL_BSP_MAX_QUEUE_SIZE: z.coerce.number().int().min(16).max(1_000_000).default(2048),
+    OTEL_BSP_SCHEDULE_DELAY: z.coerce.number().int().min(10).max(600_000).default(5000),
+    /** B-1403: how often each instance compares its migrations with the database's (0: only at start). */
+    SCHEMA_CHECK_SECONDS: z.coerce.number().int().min(0).max(3600).default(30),
+    /** B-1405: apply rendered zone NetworkPolicies through the Kubernetes API (server-side apply), and report drift. */
+    ZONES_APPLY: z.enum(['off', 'kubernetes']).default('off'),
+    /** The API server; defaults to https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT inside a pod. */
+    ZONES_APPLY_API_URL: z.url().optional(),
+    ZONES_APPLY_TOKEN_FILE: z.string().default('/var/run/secrets/kubernetes.io/serviceaccount/token'),
+    ZONES_APPLY_CA_FILE: z.string().default('/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'),
+    ZONES_APPLY_FIELD_MANAGER: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,127}$/).default('exprsn-ai'),
+    ZONES_APPLY_DRIFT_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /** B-1406: SNTP servers that disagree with the median of the others by more than this are reported as outliers. */
+    NTP_OUTLIER_MS: z.coerce.number().int().min(10).max(3_600_000).default(1000),
+    /** B-1407: how often the shared rate-limit counters check that Redis answers. */
+    RATELIMIT_PROBE_SECONDS: z.coerce.number().int().min(1).max(600).default(15),
+    // --- end Sprint 22 ---
+    // --- Sprint 23: knowledge, integrations and accessibility ---
+    /**
+     * Knowledge sources that fetch over HTTP (an S3-compatible endpoint of a source's own, an internal web site):
+     * internal hosts only, unless this comma list (hosts, *.domain, CIDRs) names them. Link-local never.
+     */
+    KNOWLEDGE_ALLOWED_HOSTS: z.string().default(''),
+    /** Per-request timeout for those fetches (ms). */
+    KNOWLEDGE_FETCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).default(30_000),
+    // --- end Sprint 23 ---
+
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */
     API_RATE_PER_MINUTE: z.coerce.number().int().min(60).max(100_000).default(600),
@@ -369,7 +407,20 @@ const base = z.object({
     /** Sprint 16: anonymous share links opened per client address per minute. */
     SHARE_ANONYMOUS_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /** How often each tenant's conversation retention policy is applied. */
-    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60)
+    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+
+    /**
+     * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and
+     * the OIDC, SAML and webhook private keys stay in the signer (`exprsn-ai signer`) and DATA_KEY is not needed here.
+     * SIGNER_TOKEN (or SIGNER_TOKEN_FILE) is the shared token the signer expects first on every connection.
+     */
+    SIGNER_SOCKET: z.string().startsWith('/').optional(),
+    SIGNER_TOKEN: z.string().min(32).optional(),
+    SIGNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5000),
+    /** Sprint 20 (B-1203): the clock skew allowed for `created` in RFC 9421 signatures on `/v1` requests. */
+    HTTP_SIGNATURE_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+    /** Sprint 21 (B-1306): how often due agent schedules are looked for (a schedule fires at most this late). */
+    AGENT_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(10).max(3600).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
@@ -389,8 +440,18 @@ const schema = base
     if (c.DB_CLIENT !== 'sqlite' && !c.DATABASE_URL) {
       ctx.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: `DATABASE_URL is required when DB_CLIENT=${c.DB_CLIENT}` });
     }
-    if (c.KMS_PROVIDER === 'local' && !c.DATA_KEY) {
-      ctx.addIssue({ code: 'custom', path: ['DATA_KEY'], message: 'DATA_KEY is required when KMS_PROVIDER=local' });
+    if (c.KMS_PROVIDER === 'local' && !c.DATA_KEY && !c.SIGNER_SOCKET) {
+      ctx.addIssue({ code: 'custom', path: ['DATA_KEY'], message: 'DATA_KEY is required when KMS_PROVIDER=local (or run the signer and set SIGNER_SOCKET)' });
+    }
+    // Sprint 20 (B-1201, B-1205): the signer serves the local KMS; OpenBao keeps signing in transit.
+    if (c.SIGNER_SOCKET && c.KMS_PROVIDER !== 'local') {
+      ctx.addIssue({ code: 'custom', path: ['SIGNER_SOCKET'], message: 'SIGNER_SOCKET works with KMS_PROVIDER=local; with OpenBao, transit holds the keys' });
+    }
+    if (c.SIGNER_SOCKET && !c.SIGNER_TOKEN) {
+      ctx.addIssue({ code: 'custom', path: ['SIGNER_TOKEN'], message: 'SIGNER_SOCKET needs SIGNER_TOKEN_FILE (the token the signer expects)' });
+    }
+    if (c.NODE_ENV === 'production' && c.SIGNER_SOCKET && c.DATA_KEY) {
+      ctx.addIssue({ code: 'custom', path: ['DATA_KEY'], message: 'With the signer the key-encryption key lives only in the signer\'s key file: remove DATA_KEY and DATA_KEY_FILE from the app' });
     }
     if (c.KMS_PROVIDER === 'openbao' && (!c.OPENBAO_ADDR || !c.OPENBAO_TOKEN)) {
       ctx.addIssue({ code: 'custom', path: ['OPENBAO_ADDR'], message: 'OPENBAO_ADDR and OPENBAO_TOKEN are required when KMS_PROVIDER=openbao' });
@@ -476,10 +537,24 @@ export function backendTlsProblems(c: { DB_CLIENT: string; DATABASE_URL?: string
   return out;
 }
 
+/**
+ * Sprint 20 (B-1205): in production the key-encryption key never comes from the environment, where every child
+ * process and crash dump sees it: DATA_KEY_FILE (a Docker secret or systemd credential), or the signer.
+ */
+function inlineKeyProblems(env: NodeJS.ProcessEnv): string[] {
+  if (env.NODE_ENV !== 'production') return [];
+  const out: string[] = [];
+  for (const name of ['DATA_KEY', 'DATA_KEY_PREVIOUS', 'SIGNER_TOKEN'] as const) {
+    if (env[name] && !env[`${name}_FILE`]) out.push(`  ${name}: production refuses ${name} given inline in the environment; use ${name}_FILE${name === 'DATA_KEY' ? ' (or the signer, SIGNER_SOCKET)' : ''}`);
+  }
+  return out;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(readEnv(env));
-  if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`);
+  const inline = inlineKeyProblems(env);
+  if (!parsed.success || inline.length) {
+    const lines = [...inline, ...(parsed.success ? [] : parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`))];
     throw new Error(`Invalid configuration:\n${lines.join('\n')}`);
   }
   return parsed.data;

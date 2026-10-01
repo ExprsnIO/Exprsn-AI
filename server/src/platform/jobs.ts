@@ -5,6 +5,7 @@ import { Queue, Worker } from 'bullmq';
 import { json, type Db } from '../db/knex.js';
 import { isUniqueViolation } from '../audit/chain.js';
 import { TOPICS, type Bus } from './bus.js';
+import { activeSpan, SpanKind, type Tracer } from '../observability/tracing.js';
 
 export const JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'preempted'] as const;
 export type JobState = (typeof JOB_STATES)[number];
@@ -105,6 +106,13 @@ export class JobQueue {
   private queue: Queue | null = null;
   private worker: Worker | null = null;
   private readonly offCancel: () => void;
+  /** B-1401: when set, each job runs in a span that joins the trace of the request that queued it. */
+  tracer: Tracer | null = null;
+  /**
+   * B-1403: asked before every claim; a reason (the schema handshake found the database newer than this build) means
+   * this instance takes no jobs. The jobs stay queued for an up-to-date instance.
+   */
+  gate: (() => string | null) | null = null;
 
   constructor(
     private readonly db: Db,
@@ -137,7 +145,9 @@ export class JobQueue {
       created_by: input.createdBy ?? null,
       dedupe_key: input.dedupeKey ?? null,
       run_at: input.runAt ?? t,
-      created_at: t
+      created_at: t,
+      // B-1401: the job's spans join the trace that queued it (only when that trace is recorded).
+      trace_parent: activeSpan()?.traceparent ?? null
     };
     try {
       await this.db('jobs').insert(row);
@@ -226,6 +236,7 @@ export class JobQueue {
 
   private async pollOnce(limit = this.opts.concurrency - this.running.size): Promise<number> {
     if (limit <= 0) return 0;
+    if (this.gate?.()) return 0;
     const types = [...this.handlers.keys()];
     if (!types.length) return 0;
     const due = await this.db('jobs').where({ state: 'queued' }).whereIn('type', types).andWhere('run_at', '<=', Date.now()).orderBy('run_at').limit(limit).select('id');
@@ -252,6 +263,7 @@ export class JobQueue {
 
   /** Returns true when this worker claimed and ran the job. */
   private async claimAndRun(id: string): Promise<boolean> {
+    if (this.gate?.()) return false;
     const row = await this.db('jobs').where({ id }).first();
     if (!row) return false;
     const reg = this.handlers.get(String(row.type));
@@ -268,6 +280,7 @@ export class JobQueue {
     this.running.set(id, ac);
     this.emit(job);
     const log = this.log.child({ job: id, type: job.type, tenant: job.tenant_id });
+    const span = this.tracer?.startRoot(`job ${job.type}`, SpanKind.CONSUMER, { traceparent: (row.trace_parent as string | null | undefined) ?? null, attributes: { 'exprsn.job.type': job.type, 'exprsn.job.id': id, 'exprsn.job.attempt': job.attempts } });
     try {
       const ctx: JobContext = {
         job,
@@ -281,7 +294,7 @@ export class JobQueue {
         }
       };
       const result = await Promise.race([
-        reg.handler(job.payload, ctx),
+        this.tracer ? this.tracer.run(span, () => reg.handler(job.payload, ctx)) : reg.handler(job.payload, ctx),
         new Promise<never>((_, reject) => ac.signal.addEventListener('abort', () => reject(ac.signal.reason as Error), { once: true }))
       ]);
       await this.db('jobs').where({ id }).update({ state: 'succeeded', progress: 100, result: JSON.stringify(result ?? null), finished_at: Date.now(), locked_until: null });
@@ -309,6 +322,12 @@ export class JobQueue {
     } finally {
       clearTimeout(timeout);
       this.running.delete(id);
+      if (span) {
+        span.setAttribute('exprsn.job.outcome', job.state);
+        if (job.state === 'succeeded') span.ok();
+        else if (job.state === 'failed' || job.state === 'queued') span.fail(job.state === 'failed' ? 'JobFailed' : 'JobRetried');
+        span.end();
+      }
       this.emit(job);
     }
     return true;

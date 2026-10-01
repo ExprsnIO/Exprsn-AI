@@ -121,6 +121,8 @@ export function authenticate(s: Services): RequestHandler {
       }
       const key = await s.apiKeys.verify(m[1]);
       if (!key) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
+      // Sprint 20 (B-1203): a key that requires signed requests is checked by /v1 only, so it is accepted nowhere else.
+      if (key.signature_key && !/^\/v1(\/|$|\?)/.test(req.originalUrl)) return refuse(req, new HttpProblem(401, 'Unauthorized', 'This API key requires signed requests, which only /v1 checks; it is not accepted here.', { extensions: { error: 'invalid_token' } }));
       const p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
       if (!p) throw unauthorized('The key owner is disabled.');
       req.apiKey = key;
