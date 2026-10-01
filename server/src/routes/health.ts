@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { safeEqual } from '../crypto/index.js';
-import { pendingMigrations } from '../db/knex.js';
 import { notFound, unauthorized } from '../http/problem.js';
 import type { Services } from '../services.js';
 
@@ -25,9 +24,11 @@ export function healthRoutes(s: Services, state: { shuttingDown: boolean }): Rou
     try {
       await s.db.raw('select 1');
       checks.database = 'ok';
-      const pending = await pendingMigrations(s.db);
-      checks.migrations = pending ? `${pending} pending` : 'ok';
-      if (pending) ok = false;
+      // Sprint 22 (B-1403): the schema handshake. An instance older than the database says so and is not ready.
+      const st = await s.schema.check();
+      checks.migrations = st.pending.length ? `${st.pending.length} pending` : 'ok';
+      checks.schema = st.state === 'behind' ? `behind: ${st.reason}` : 'ok';
+      if (st.state !== 'current') ok = false;
     } catch (err) {
       s.log.warn({ err: (err as Error).message }, 'readiness: database unavailable');
       checks.database = 'unavailable';

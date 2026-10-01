@@ -87,3 +87,75 @@ export function sntpQuery(spec: string, timeoutMs = 2000): Promise<SntpResult> {
     });
   });
 }
+
+/** One server's answer in a quorum check. */
+export interface NtpServerResult {
+  server: string;
+  offsetMs: number | null;
+  delayMs: number | null;
+  stratum: number | null;
+  error: string | null;
+  /** Further than the outlier limit from the median of the answers. */
+  outlier: boolean;
+}
+
+export interface NtpQuorum {
+  servers: NtpServerResult[];
+  /** The median offset of the servers that answered (null when none did). */
+  offsetMs: number | null;
+  skewMs: number | null;
+  /** The servers that disagree with the median. */
+  outliers: string[];
+  /** More than half of the servers answered and agree with the median. */
+  quorum: boolean;
+  /** Plain-language warning, or null when every server answered and agreed. */
+  warning: string | null;
+}
+
+/** The median of some numbers (the mean of the middle two for an even count). */
+export function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const v = [...values].sort((a, b) => a - b);
+  const mid = v.length >> 1;
+  return v.length % 2 ? v[mid]! : (v[mid - 1]! + v[mid]!) / 2;
+}
+
+/**
+ * B-1406: asks several SNTP servers at once and reports the median offset. SNTP is unauthenticated, so one server
+ * (or one spoofed answer) can lie; with three or more servers the median is the honest value as long as most of them
+ * are honest, and the liar is named as an outlier. With two that disagree, nobody can tell which is right: both are
+ * named and there is no quorum.
+ */
+export async function ntpQuorum(specs: string[], o: { timeoutMs: number; outlierMs: number }, query: (spec: string, timeoutMs: number) => Promise<SntpResult> = sntpQuery): Promise<NtpQuorum> {
+  const answers = await Promise.all(
+    specs.map(async (server) => {
+      try {
+        const r = await query(server, o.timeoutMs);
+        return { server, offsetMs: r.offsetMs, delayMs: r.delayMs, stratum: r.stratum, error: null, outlier: false };
+      } catch (err) {
+        return { server, offsetMs: null, delayMs: null, stratum: null, error: (err as Error).message.slice(0, 200), outlier: false };
+      }
+    })
+  );
+  const ok = answers.filter((a) => a.offsetMs !== null);
+  const mid = median(ok.map((a) => a.offsetMs!));
+  if (mid === null) return { servers: answers, offsetMs: null, skewMs: null, outliers: [], quorum: false, warning: specs.length ? 'No NTP server answered.' : null };
+  for (const a of ok) a.outlier = Math.abs(a.offsetMs! - mid) > o.outlierMs;
+  let outliers = ok.filter((a) => a.outlier).map((a) => a.server);
+  const agreeing = ok.length - outliers.length;
+  // Two answers that disagree: the median is their mean, so neither is "the" outlier. Both are named.
+  if (ok.length === 2 && Math.abs(ok[0]!.offsetMs! - ok[1]!.offsetMs!) > o.outlierMs) {
+    for (const a of ok) a.outlier = true;
+    outliers = ok.map((a) => a.server);
+  }
+  const honest = ok.filter((a) => !a.outlier).map((a) => a.offsetMs!);
+  // The reported offset is the median of the agreeing servers (the median of all when nobody agrees).
+  const offsetMs = Math.round(median(honest) ?? mid);
+  const quorum = specs.length > 0 && agreeing * 2 > specs.length && !(ok.length === 2 && outliers.length === 2);
+  const failed = answers.filter((a) => a.error).map((a) => a.server);
+  const parts: string[] = [];
+  if (outliers.length) parts.push(`${outliers.join(', ')} ${outliers.length === 1 ? 'disagrees' : 'disagree'} with the other servers by more than ${o.outlierMs} ms${ok.length === 2 ? '; with two servers it is not possible to tell which is right' : ' and ' + (outliers.length === 1 ? 'is' : 'are') + ' left out'}`);
+  if (failed.length) parts.push(`${failed.join(', ')} did not answer`);
+  if (!quorum && specs.length > 1) parts.push('no majority of servers agrees, so the skew is not trustworthy');
+  return { servers: answers, offsetMs, skewMs: Math.abs(offsetMs), outliers, quorum, warning: parts.length ? parts.join('; ') + '.' : null };
+}

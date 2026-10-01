@@ -17,6 +17,19 @@ export interface CounterStore {
   readonly kind: 'memory' | 'redis';
   hit(key: string, windowMs: number, cost?: number): Promise<CounterState>;
   close(): Promise<void>;
+  /**
+   * B-1407: whether shared counting is degraded (Redis configured but not answering, so each instance counts on its
+   * own), since when, and why. Stores without a shared backend are never degraded.
+   */
+  health?(): CounterHealth;
+}
+
+export interface CounterHealth {
+  degraded: boolean;
+  since: number | null;
+  detail: string | null;
+  /** Hits counted in memory because Redis failed, since start. */
+  fallbacks: number;
 }
 
 /** Counters in this process: exact for one instance, per instance when there are several. */
@@ -75,6 +88,10 @@ export class RedisCounterStore implements CounterStore {
   private readonly redis: Redis;
   private readonly fallback = new MemoryCounterStore();
   private warned = 0;
+  private degradedSince: number | null = null;
+  private lastError: string | null = null;
+  private fallbacks = 0;
+  private probeTimer: NodeJS.Timeout | null = null;
 
   constructor(
     redis: Redis | string,
@@ -89,8 +106,11 @@ export class RedisCounterStore implements CounterStore {
   async hit(key: string, windowMs: number, cost = 1): Promise<CounterState> {
     try {
       const [count, ttl] = await (this.redis as unknown as ScriptRedis).hitCounter(this.prefix + key, Math.max(1, Math.round(windowMs)), cost);
+      this.recovered();
       return { count: Number(count), resetMs: Number(ttl) };
     } catch (err) {
+      this.fallbacks++;
+      this.degrade(err as Error, false); // the warning below covers hits
       // At most one warning a minute, so an outage does not flood the log.
       if (Date.now() - this.warned > 60_000) {
         this.warned = Date.now();
@@ -100,7 +120,47 @@ export class RedisCounterStore implements CounterStore {
     }
   }
 
+  health(): CounterHealth {
+    return { degraded: this.degradedSince !== null, since: this.degradedSince, detail: this.degradedSince !== null ? this.lastError : null, fallbacks: this.fallbacks };
+  }
+
+  private degrade(err: Error, log: boolean): void {
+    this.lastError = (err.message || 'Redis did not answer').slice(0, 200);
+    if (this.degradedSince === null) {
+      this.degradedSince = Date.now();
+      if (log) this.log?.warn({ err: this.lastError }, 'rate-limit counters: Redis unavailable, limits now count per instance');
+    }
+  }
+
+  private recovered(): void {
+    if (this.degradedSince === null) return;
+    this.log?.warn({ since: this.degradedSince }, 'rate-limit counters: Redis answers again, limits are shared');
+    this.degradedSince = null;
+    this.lastError = null;
+  }
+
+  /** One PING: notices an outage (or its end) without waiting for traffic. */
+  async probe(): Promise<boolean> {
+    try {
+      await this.redis.ping();
+      this.recovered();
+      return true;
+    } catch (err) {
+      this.degrade(err as Error, true);
+      return false;
+    }
+  }
+
+  /** B-1407: probes every `everyMs`, so the Platform warning appears within a minute of Redis stopping. */
+  startProbe(everyMs: number): void {
+    if (this.probeTimer) return;
+    this.probeTimer = setInterval(() => void this.probe(), everyMs);
+    this.probeTimer.unref();
+  }
+
   async close(): Promise<void> {
+    if (this.probeTimer) clearInterval(this.probeTimer);
+    this.probeTimer = null;
     await this.redis.quit().catch(() => undefined);
   }
 }

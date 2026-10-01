@@ -10,6 +10,9 @@ import { createAdmin } from './identity/admin-create.js';
 import { createKms } from './platform/kms.js';
 import { FsBlobStore } from './platform/blob.js';
 import { createPreviousKms, rewrapAll } from './platform/rewrap.js';
+import { writeFileSync } from 'node:fs';
+import { migrateCheck, schemaStatus } from './db/schema.js';
+import { decodeShare, escrowById, escrowKey, recordEscrow, recoverKey } from './platform/escrow.js';
 
 const RESTORE_PHRASE = 'replace all data';
 
@@ -36,6 +39,18 @@ Commands:
                                verify. Set the new DATA_KEY (or
                                KMS_PROVIDER) and the old one as DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER). Safe to
                                repeat; once it reports verified, the previous key can be removed.
+  migrate --check              Sprint 22: list pending migrations and their destructive steps without applying anything.
+                               Exit 0 up to date, 2 pending, 3 pending with destructive (contract) steps, 4 the
+                               database is newer than this build
+  kms:escrow --shares <n> --threshold <k>
+                               Sprint 22: split the local key-encryption key (DATA_KEY) into n Shamir shares of which
+                               any k rebuild it. Each share is printed once with its check value; the key check value
+                               is recorded in the database. Hand each share to a different custodian
+  kms:recover --out <file> [--share <text>]... [--check <value>]
+                               Sprint 22: rebuild the key from k shares (as --share, or one per line on stdin), verify
+                               it against the escrow's key check value (from the database, or --check as printed at
+                               escrow time) and write it, base64, to a new file readable by the owner only (for
+                               DATA_KEY_FILE). Works without a database when --check is given
   backup:create                Back up the application database into the blob store (sealed, KMS-signed)
   backup:restore-drill [--backup id]
                                Restore a backup (default: the newest) into a scratch SQLite database and verify
@@ -115,10 +130,96 @@ async function restore(s: Services, argv: string[]): Promise<void> {
   process.stdout.write(`Restored backup ${values.backup}: ${r.rows} rows in ${r.tables} tables${r.blobs ? `, ${r.blobs.objects} blob store objects` : ''}.${r.skipped.length ? ` Not in this schema: ${r.skipped.join(', ')}.` : ''}\n`);
 }
 
+/** Sprint 22 (B-1403): `migrate --check` reports without applying. */
+async function migrateCheckCommand(db: ReturnType<typeof createDb>): Promise<void> {
+  const r = await migrateCheck(db);
+  if (r.state === 'behind') {
+    process.stdout.write(`${r.reason}\n`);
+    process.exitCode = 4;
+    return;
+  }
+  if (!r.pending.length) {
+    process.stdout.write(`Up to date: ${r.database ?? 'no migrations'} is the newest migration this build knows.\n`);
+    return;
+  }
+  process.stdout.write(`Pending (${r.pending.length}), in order:\n${r.pending.map((m) => `  ${m}`).join('\n')}\n`);
+  for (const d of r.destructive) {
+    process.stdout.write(`\n${d.migration} has destructive steps (contract): instances of the previous release must be stopped first.\n`);
+    for (const st of d.steps) process.stdout.write(`  ${st.op}: ${st.line}\n`);
+  }
+  if (!r.destructive.length) process.stdout.write('\nNo destructive steps: instances of the previous release keep working while it runs (expand only).\n');
+  process.exitCode = r.destructive.length ? 3 : 2;
+}
+
+async function readStdinLines(): Promise<string[]> {
+  if (process.stdin.isTTY) {
+    process.stderr.write('Paste one share per line, then an empty line:\n');
+    const rl = createInterface({ input: process.stdin, terminal: false });
+    const out: string[] = [];
+    for await (const line of rl) {
+      if (!line.trim()) break;
+      out.push(line.trim());
+    }
+    rl.close();
+    return out;
+  }
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  return Buffer.concat(chunks).toString('utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
+/** Sprint 22 (B-1404): rebuilds the key-encryption key; needs no configuration when --check is given. */
+async function kmsRecover(argv: string[]): Promise<void> {
+  const { values } = parseArgs({ args: argv, options: { share: { type: 'string', multiple: true }, check: { type: 'string' }, out: { type: 'string' } } });
+  if (!values.out) throw new Error('--out <file> is required: the key is written to a new file, never printed.');
+  const shares = values.share?.length ? values.share : await readStdinLines();
+  if (!shares.length) throw new Error('No shares given (--share, or one per line on stdin).');
+  const escrowId = decodeShare(shares[0]!).escrowId;
+  let check = values.check?.trim().toLowerCase() ?? null;
+  let db: ReturnType<typeof createDb> | null = null;
+  try {
+    if (!check) {
+      try {
+        db = createDb(loadConfig());
+        check = (await escrowById(db, escrowId))?.key_check ?? null;
+      } catch (err) {
+        throw new Error(`The escrow record could not be read (${(err as Error).message.split('\n')[0]}). Pass --check with the key check value printed by kms:escrow.`, { cause: err });
+      }
+      if (!check) throw new Error(`Escrow ${escrowId} is not in this database. Pass --check with the key check value printed by kms:escrow.`);
+    }
+    const r = recoverKey(shares, check);
+    writeFileSync(values.out, r.key.toString('base64') + '\n', { mode: 0o600, flag: 'wx' });
+    if (db) await db('kms_escrows').where({ id: r.escrowId }).update({ verified_at: Date.now() }).catch(() => undefined);
+    process.stdout.write(`Rebuilt the key of escrow ${r.escrowId} from ${r.used} shares; it matches key check value ${check}. Written to ${values.out} (mode 0600). Point DATA_KEY_FILE at it.\n`);
+  } finally {
+    await db?.destroy();
+  }
+}
+
+/** Sprint 22 (B-1404): splits DATA_KEY into shares, printed once. */
+async function kmsEscrow(s: Services, argv: string[]): Promise<void> {
+  const { values } = parseArgs({ args: argv, options: { shares: { type: 'string' }, threshold: { type: 'string' } } });
+  const n = Number(values.shares ?? 5);
+  const k = Number(values.threshold ?? 3);
+  if (!Number.isInteger(n) || !Number.isInteger(k) || k < 2 || n < k || n > 255) throw new Error('--threshold must be at least 2 and at most --shares, and --shares at most 255.');
+  if (s.cfg.KMS_PROVIDER !== 'local' || !s.cfg.DATA_KEY) throw new Error('kms:escrow splits the local key-encryption key (DATA_KEY). With OpenBao, use its own unseal and recovery key shares.');
+  const e = escrowKey(Buffer.from(s.cfg.DATA_KEY, 'base64'), k, n);
+  await recordEscrow(s.db, e, 'cli');
+  const tenant = await s.tenants.bySlug(s.cfg.DEFAULT_TENANT);
+  if (tenant) await s.audit.append({ tenantId: tenant.id, action: 'kms.escrow.created', kind: 'system', actor: { service: 'cli' }, target: { escrow: e.id }, detail: { threshold: k, shares: n, keyCheck: e.keyCheck } });
+  process.stdout.write(`Escrow ${e.id}: ${n} shares, any ${k} rebuild the key-encryption key.\nKey check value: ${e.keyCheck}\n\nEach share is shown this once and is not stored. Give each to a different custodian; keep the key check value with the backup runbook.\n\n`);
+  e.shares.forEach((sh, i) => process.stdout.write(`Share ${i + 1} of ${n}:\n  ${sh}\n`));
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === '--help' || cmd === '-h') {
     process.stdout.write(USAGE);
+    return;
+  }
+  // Sprint 22: recovery runs before the configuration is loaded: in a disaster DATA_KEY is what is missing.
+  if (cmd === 'kms:recover') {
+    await kmsRecover(rest);
     return;
   }
   const cfg = loadConfig();
@@ -126,6 +227,13 @@ async function main(): Promise<void> {
   const db = createDb(cfg);
   let s: Services | undefined;
   try {
+    if (cmd === 'migrate' && rest.includes('--check')) {
+      await migrateCheckCommand(db);
+      return;
+    }
+    // Sprint 22 (B-1403): a build older than the database never runs commands against it.
+    const schema = await schemaStatus(db);
+    if (schema.state === 'behind') throw new Error(schema.reason ?? 'The database schema is newer than this build');
     const applied = await migrate(db);
     if (cmd === 'migrate') {
       process.stdout.write(applied.length ? `Applied: ${applied.join(', ')}\n` : 'Already up to date\n');
@@ -172,6 +280,9 @@ async function main(): Promise<void> {
         if (!r.verified) process.exitCode = 2;
         break;
       }
+      case 'kms:escrow':
+        await kmsEscrow(s, rest);
+        break;
       case 'backup:create': {
         const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
         if (!tenant) throw new Error('Unknown tenant');

@@ -8,7 +8,8 @@ import { CERT_ISSUED, CertificateService, type CertIssuedEvent } from './certs.j
 import { BackupService } from './backups.js';
 import { SignerProposals } from './signers.js';
 import { PushService } from './push.js';
-import { sntpQuery } from '../platform/ntp.js';
+import { ntpQuorum, type NtpServerResult } from '../platform/ntp.js';
+import { latestEscrow } from '../platform/escrow.js';
 import { audit, platformTenant, systemActor, type OpsActor } from './common.js';
 
 type Tenants = () => Promise<{ tenantId: string; payload: Record<string, unknown> }[]>;
@@ -137,6 +138,13 @@ export class OpsService {
       signerProposals: (await s.db('platform_signer_proposals').where({ state: 'pending' }).count({ n: '*' }).first().then((r) => Number((r as { n?: number } | undefined)?.n ?? 0))),
       mediaOrigin: s.cfg.MEDIA_ORIGIN ?? null,
       rateLimits: s.counters.kind,
+      // Sprint 22: rate-limit health (B-1407), the schema handshake (B-1403), key escrow (B-1404), tracing (B-1401)
+      // and zones applied in-cluster (B-1405).
+      rateLimitHealth: s.counters.health?.() ?? { degraded: false, since: null, detail: null, fallbacks: 0 },
+      schema: s.schema.current ?? (await s.schema.check().catch(() => null)),
+      escrow: await latestEscrow(s.db).then((e) => (e ? { id: e.id, threshold: e.threshold, shares: e.shares, keyCheck: e.key_check, createdAt: e.created_at, verifiedAt: e.verified_at } : null)),
+      tracing: { enabled: s.tracer.enabled, exported: s.tracer.stats.exported, dropped: s.tracer.stats.dropped, failed: s.tracer.stats.failed },
+      zonesApply: s.cfg.ZONES_APPLY,
       acme: { ...(await this.certs.accountView()), renewDays: s.cfg.ACME_RENEW_DAYS, checkMinutes: s.cfg.ACME_CHECK_MINUTES },
       backup: {
         everyMinutes: s.cfg.PLATFORM_BACKUP_MINUTES,
@@ -151,17 +159,23 @@ export class OpsService {
     };
   }
 
-  /** The offset from NTP_SERVER by one SNTP query, or null when no server is configured. */
-  async ntpSkew(): Promise<{ server: string; skewMs: number | null; offsetMs: number | null; delayMs: number | null; stratum: number | null; error: string | null } | null> {
+  /**
+   * The offset from NTP_SERVER. Sprint 22 (B-1406): NTP_SERVER may name several servers; they are asked at once and
+   * the median of the agreeing ones is the offset, with outliers and a missing majority reported.
+   */
+  async ntpSkew(): Promise<{ server: string; skewMs: number | null; offsetMs: number | null; delayMs: number | null; stratum: number | null; error: string | null; servers: NtpServerResult[]; outliers: string[]; quorum: boolean; warning: string | null } | null> {
     const cfg = this.s().cfg;
-    if (!cfg.NTP_SERVER) return null;
-    try {
-      const r = await sntpQuery(cfg.NTP_SERVER, cfg.NTP_TIMEOUT_MS);
-      return { server: cfg.NTP_SERVER, skewMs: Math.abs(r.offsetMs), offsetMs: r.offsetMs, delayMs: r.delayMs, stratum: r.stratum, error: null };
-    } catch (err) {
-      return { server: cfg.NTP_SERVER, skewMs: null, offsetMs: null, delayMs: null, stratum: null, error: (err as Error).message.slice(0, 200) };
-    }
+    const specs = (cfg.NTP_SERVER ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!specs.length) return null;
+    const q = await ntpQuorum(specs, { timeoutMs: cfg.NTP_TIMEOUT_MS, outlierMs: cfg.NTP_OUTLIER_MS });
+    const best = q.servers.find((x) => x.offsetMs !== null && !x.outlier) ?? q.servers.find((x) => x.offsetMs !== null);
+    const error = q.offsetMs === null ? (q.servers.length === 1 ? q.servers[0]!.error : 'No NTP server answered.') : null;
+    if (q.offsetMs !== null) this.lastClockOffsetMs = q.offsetMs;
+    return { server: specs.join(', '), skewMs: q.skewMs, offsetMs: q.offsetMs, delayMs: best?.delayMs ?? null, stratum: best?.stratum ?? null, error, servers: q.servers, outliers: q.outliers, quorum: q.quorum, warning: q.warning };
   }
+
+  /** The last offset measured against NTP (ms), for the clock-offset metric; null until one was measured. */
+  lastClockOffsetMs: number | null = null;
 
   /** The difference between this server's clock and the database server's, as a cheap cross-host time check. */
   async clockSkew(): Promise<{ skewMs: number | null; against: string }> {
