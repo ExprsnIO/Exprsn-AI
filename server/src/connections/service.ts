@@ -11,7 +11,7 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { Guardrails } from '../guardrails/types.js';
 import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
 import type { DynamicCredentials } from './dynamic.js';
-import type { ConnectionSpec, DriverFactory, QueryResult, SchemaObject } from './drivers.js';
+import type { ConnectionSpec, DriverFactory, QueryResult, RoleCheck, SchemaObject } from './drivers.js';
 import type { ReplicationOptions, RowChange } from './replication.js';
 
 /** A replicated change after masking; `raw` is the unmasked value of the requested column (the access column). */
@@ -444,15 +444,26 @@ export class ConnectionService {
    * Rows of an allow-listed object for a knowledge source, masked the same way. `rawColumn` (a row-level access
    * column, B-1002) is also returned unmasked beside the rows, as it decides who may retrieve each row.
    */
-  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; rawColumn?: string | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string; raw?: unknown[] }> {
+  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; rawColumn?: string | null; role?: string | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string; raw?: unknown[] }> {
     const c = await this.get(tenantId, id);
     if (c.engine !== 'postgres' && c.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views can be a knowledge source.');
     if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
-    const r = await (await this.driver(c)).rows(object, { watermarkColumn: opts.watermarkColumn, after: opts.after, limit: opts.limit, timeoutMs: c.timeout_s * 1000 });
+    if (opts.role && c.engine !== 'postgres') throw conflict('Reading as a database role is for PostgreSQL connections.');
+    const r = await (await this.driver(c)).rows(object, { watermarkColumn: opts.watermarkColumn, after: opts.after, limit: opts.limit, timeoutMs: c.timeout_s * 1000, ...(opts.role ? { role: opts.role } : {}) });
     const at = opts.rawColumn ? r.columns.indexOf(opts.rawColumn) : -1;
     const raw = at >= 0 ? r.rows.map((row) => row[at]) : undefined;
     const m = this.mask(c, [object], r);
     return { columns: r.columns, rows: m.rows, capped: r.capped, label: c.label, name: c.name, ...(raw ? { raw } : {}) };
+  }
+
+  /** How PostgreSQL would read an allow-listed object as each mapped role (B-1503). */
+  async roleCheck(tenantId: string, id: string, object: string, roles: string[]): Promise<RoleCheck> {
+    const c = await this.get(tenantId, id);
+    if (c.engine !== 'postgres') throw conflict('Row security through database roles is for PostgreSQL connections.');
+    if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
+    const d = await this.driver(c);
+    if (!d.roleCheck) throw conflict(`The ${c.engine} driver cannot check roles.`);
+    return d.roleCheck(object, roles, c.timeout_s * 1000);
   }
 
   /**

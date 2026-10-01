@@ -115,6 +115,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `ZONES_APPLY_FIELD_MANAGER`, `ZONES_APPLY_DRIFT_MINUTES` | `exprsn-ai`, `15` | Sprint 22: the server-side apply field manager; how often live policies are compared with what was applied (0: on request) |
 | `NTP_SERVER`, `NTP_OUTLIER_MS` | —, `1000` | Sprint 22: `NTP_SERVER` takes a comma list; with three or more servers the clock skew is the median of those that agree, and a server further than `NTP_OUTLIER_MS` from the median is named as an outlier |
 | `RATELIMIT_PROBE_SECONDS` | `15` | Sprint 22: how often each instance pings Redis, so the Platform warning and `exprsn_ratelimit_degraded` show that limits count per instance within a minute of Redis stopping |
+| `KNOWLEDGE_ALLOWED_HOSTS`, `KNOWLEDGE_FETCH_TIMEOUT_MS` | —, `30000` | Sprint 23: knowledge sources that fetch over HTTP (a bucket on its own S3-compatible endpoint, an internal web site) reach internal addresses only, unless this list (hosts, `*.domain`, CIDRs) names them; link-local and cloud metadata addresses never. Every connection's address is checked when it is dialled. The timeout applies to each request |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -324,3 +325,43 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   once from `TRAINER_CALLBACK_URL`; checkpoints and GGUF files are uploaded back and sealed under the tenant key. Route
   `/trainer/v1/` from the training zone to the app, require the worker's client certificate at the proxy and set
   `TRAINER_CLIENT_CERT_SHA256`. A contract-1 worker is refused unless `TRAINER_PLAINTEXT_FALLBACK=true`.
+
+### Knowledge sources (Sprint 23)
+
+- **S3-compatible buckets.** A source can name its own endpoint (MinIO, Ceph, another account's S3) with an access key
+  that is sealed with the tenant key; include patterns (`**/*.md`) narrow the prefix. Endpoints outside the internal
+  network need `KNOWLEDGE_ALLOWED_HOSTS` (for AWS, e.g. `*.amazonaws.com`).
+- **Internal web sites.** The crawler sends `User-Agent: ExprsnAI-Knowledge/1.0`, so a site can give it its own
+  robots.txt group. It stays on the start page's scheme, host and port, follows robots.txt and the sitemap, and
+  re-checks pages with `If-None-Match`/`If-Modified-Since`. A robots.txt that answers 5xx or not at all stops the crawl
+  (the site is treated as closed); a missing one (4xx) allows everything.
+- **Row security through PostgreSQL roles.** A PostgreSQL source can map directory groups to database roles; each
+  sync reads the table once per role inside a read-only transaction under `SET LOCAL ROLE`, so the table's row
+  security policies decide which group retrieves which row. The database owner sets it up once:
+
+  ```sql
+  ALTER TABLE notices ENABLE ROW LEVEL SECURITY;            -- FORCE as well if a mapped role owns the table
+  CREATE ROLE kb_finance NOLOGIN;                            -- one role per group, never superuser or BYPASSRLS
+  CREATE POLICY finance_rows ON notices FOR SELECT TO kb_finance USING (region IN ('finance', 'all'));
+  GRANT SELECT ON notices TO kb_finance;
+  -- The connection's login: a member of each mapped role, without inheriting it (PostgreSQL 16+), and SELECT on the
+  -- table only so that schema introspection lists it; no policy names the login, so it reads no rows by itself.
+  GRANT kb_finance TO exprsn_reader WITH INHERIT FALSE;
+  GRANT SELECT ON notices TO exprsn_reader;
+  ```
+
+  The server refuses a mapping when the role does not exist, the login is not a member, the role is a superuser or
+  has BYPASSRLS, the role may not select the table, the table does not enable row security (or a mapped role owns it
+  without FORCE), or the object is a view that is not `security_invoker` (PostgreSQL 15+). With OpenBao dynamic
+  credentials, put the `GRANT … TO "{{name}}" WITH INHERIT FALSE` in the role's creation statements. Role-mapped
+  sources sync by full reads (up to 5000 rows per role) and cannot use logical replication, which bypasses policies.
+
+### Webhooks and billing (Sprint 23)
+
+- Ordered webhooks now take their positions from a counter row per endpoint (`webhook_order`) and send under a lease
+  in that row, so several instances deliver one endpoint's events strictly in order, one at a time. A lease outlives a
+  crashed holder by `WEBHOOK_TIMEOUT_MS` plus 30 seconds.
+- Price book changes can take effect from an earlier moment of the current month; the month's statement is prorated
+  by the prices in effect when each usage record was written. Subscribe the Stripe endpoint also to `charge.refunded`,
+  `credit_note.created`, `credit_note.updated`, `credit_note.voided`, `charge.dispute.created`,
+  `charge.dispute.updated` and `charge.dispute.closed` to reconcile refunds, credit notes and disputes.

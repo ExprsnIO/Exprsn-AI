@@ -133,9 +133,14 @@ filter, private `/tmp`, only the state directory writable.
 - The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
   labelled cases (the console warns below 200 per label).
 - Knowledge: row-level access for database sources comes from an access column the curator names (groups or users per
-  row), not from the source database's own grants or row-level security policies; groups are matched against the
-  groups the user's identities carried at their last sign-in or directory sync, so a change in the directory applies
-  from then. Rows the reader may not see are dropped after ranking candidates, so a result list can be shorter than
+  row) or, for PostgreSQL (Sprint 23), from the database's own row security: the source reads as one mapped role per
+  group, and a policy change applies at the next sync (sources sync on their schedule, not when a policy changes).
+  Role-mapped sources read the whole object per role (up to 5000 rows each) and cannot replicate. Groups are matched
+  against the groups the user's identities carried at their last sign-in or directory sync, so a change in the
+  directory applies from then. The crawler and buckets on their own endpoints reach internal hosts (and those in
+  `KNOWLEDGE_ALLOWED_HOSTS`) with every dialled address checked; the crawler has no authentication (a site that needs
+  a login cannot be crawled), does not run JavaScript, and indexes what any internal client could fetch, so the
+  source's label floor must reflect the site. Rows the reader may not see are dropped after ranking candidates, so a result list can be shorter than
   asked. Logical replication (PostgreSQL tables with `pgoutput`) needs `wal_level=logical`, a publication the database
   owner creates and the REPLICATION attribute on the connection's account; replicated changes are applied as they
   arrive (no back-pressure beyond one transaction at a time), and a delete is matched by the id column only when it is
@@ -315,9 +320,10 @@ filter, private `/tmp`, only the state directory writable.
   check, at the cost of time to first token.
 - Webhooks: a delivery carries the audit event's target and detail (within the webhook's label ceiling) to the
   endpoint, so the endpoint must be trusted with them. Deliveries are not ordered unless the webhook asks for it; ordered
-  delivery keeps the order in which this instance queued events (instances queue independently, so events raised on
-  two instances at the same moment may interleave), and receivers should still de-duplicate by the event id (a replay
-  reuses it). The HMAC secret is sealed at rest and shared with the receiver; Ed25519 signing uses a per-tenant key
+  delivery keeps the order in which events were queued across all instances (a position counter and a delivery lease
+  per endpoint in the database, Sprint 23). Two events raised at the same moment on two instances are ordered by
+  which one queued first, not by a clock, and receivers should still de-duplicate by the event id (a replay reuses
+  it). The HMAC secret is sealed at rest and shared with the receiver; Ed25519 signing uses a per-tenant key
   whose private half is sealed with the tenant key and held in memory while signing (not in the KMS). Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
   against the operator's rules and the tenant's list, as for MCP servers.
 - Conversation sharing: readers of a user or workspace share can watch an answer stream (Sprint 16), answer text only
@@ -341,10 +347,14 @@ filter, private `/tmp`, only the state directory writable.
 - Scheduled agent runs (1.3.0): a schedule runs as its owner with the roles, clearance and workspace memberships they
   hold at its due time, never more; a due time missed while no instance was running fires once at the next tick, not
   once per missed time. Cron expressions are UTC.
-- Billing: there is no currency conversion or proration; a tenant with a currency is priced only from books in it.
+- Billing: there is no currency conversion; a tenant with a currency is priced only from books in it. Proration
+  (Sprint 23) follows price changes within a book by the moment they take effect; moving a tenant to another book
+  mid-month prices the whole month from the book in effect when the statement is computed.
   Taxes are flat percentages of the priced subtotal, without tax registration numbers, exemptions or jurisdictions.
   The Stripe webhook reconciles paid, failed and voided invoices by the Stripe-Signature HMAC with a timestamp
-  tolerance; refunds, credit notes and disputes are not reconciled. Statements are computed from `usage_records`, so usage deleted
+  tolerance, and (Sprint 23) refunds, credit notes and disputes. A refund or dispute is matched only when it names the
+  invoice or the charge or payment intent recorded from the invoice's paid event; credit notes are recorded with their
+  amounts but do not change the statement's state. Statements are computed from `usage_records`, so usage deleted
   with a tenant's data is gone from later recomputations; push a finished month to keep it.
 - Prompt templates pass the `user-input` checkpoint when they are saved and when a version is published (Sprint 16);
   a template published before a rule existed stays usable until it is published again, and the filled text still

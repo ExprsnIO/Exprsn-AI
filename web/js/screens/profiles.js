@@ -267,7 +267,7 @@
           + '<div class="formgrid" style="--cols:3">'
           + UI.field('Display name', UI.input(f.displayName, { attrs: 'data-f="displayName" maxlength="200"' }))
           + UI.field('Model', UI.select(modelOpts, f.modelId, 'data-f="model" data-key="modelId"'), m ? esc(short(m.digest)) + ', ' + esc(m.capabilities.join(', ')) + (models ? ' · <a href="#" data-go="models">Open in Models</a>' : '') : 'Only approved models are offered')
-          + UI.field('Pool', UI.select(poolOpts, f.poolId, 'data-f="pool" data-key="poolId"'), App.can('pools:manage') ? '<a href="#" data-go="pools">Instances and health</a>' : '')
+          + UI.field('Pool', UI.select(poolOpts, f.poolId, 'data-f="pool" data-key="poolId"'), App.can('pools:manage') ? '<a href="#" class="pf-go" data-go="pools">Instances and health</a>' : '')
           + UI.field('num_ctx (fixed at load)', UI.input(f.numCtx, { placeholder: 'model default', attrs: 'data-f="numCtx" class="input mono" inputmode="numeric"' }).replace('class="input" ', ''), 'Changing it reloads the model on every instance')
           + UI.field('temperature', UI.input(f.temperature, { placeholder: 'model default', attrs: 'data-f="temperature" class="input mono" inputmode="decimal"' }).replace('class="input" ', ''), '0 to 2')
           + UI.field('Max label', UI.select(labelOpts, f.label, 'data-f="label" data-key="label"'), 'Up to your clearance')
@@ -294,6 +294,8 @@
         + '.pf-ptr{display:flex;height:12px;background:var(--sel);border-radius:3px;overflow:hidden}.pf-ptr .stable{background:var(--meter)}.pf-ptr .canary{background:var(--accent)}'
         + '.pf-yaml{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre;overflow:auto;min-height:210px}'
         + '.pf-check{display:flex;gap:8px;align-items:baseline;font-size:13px}.pf-check .pill{flex-shrink:0}'
+        // A link alone on its hint line is a target in its own right: at least 24 px tall (WCAG 2.5.8).
+        + '.pf-go{display:inline-block;min-height:24px;line-height:24px}'
         + '.pf-side{width:330px;flex-shrink:0;min-width:0}@media (max-width:1100px){.pf-side{width:100%}}'
         + '.pf-out{max-height:120px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--fg2)}'
         + '</style>'

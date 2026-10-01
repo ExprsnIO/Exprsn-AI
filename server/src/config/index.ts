@@ -356,6 +356,15 @@ const base = z.object({
     /** B-1407: how often the shared rate-limit counters check that Redis answers. */
     RATELIMIT_PROBE_SECONDS: z.coerce.number().int().min(1).max(600).default(15),
     // --- end Sprint 22 ---
+    // --- Sprint 23: knowledge, integrations and accessibility ---
+    /**
+     * Knowledge sources that fetch over HTTP (an S3-compatible endpoint of a source's own, an internal web site):
+     * internal hosts only, unless this comma list (hosts, *.domain, CIDRs) names them. Link-local never.
+     */
+    KNOWLEDGE_ALLOWED_HOSTS: z.string().default(''),
+    /** Per-request timeout for those fetches (ms). */
+    KNOWLEDGE_FETCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).default(30_000),
+    // --- end Sprint 23 ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */

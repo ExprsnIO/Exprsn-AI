@@ -41,19 +41,32 @@ export function integrationPublicRoutes(s: Services): Router {
     const parsed = z.object({ id: z.string().min(1).max(100), type: z.string().min(1).max(100) }).safeParse(event);
     if (!parsed.success) throw new HttpProblem(400, 'Invalid request', 'An event needs an id and a type.');
     const obj = event.data?.object ?? {};
-    const isInvoice = obj.object === 'invoice' || parsed.data.type.startsWith('invoice.');
+    const str = (v: unknown): string | null => (typeof v === 'string' && v ? v.slice(0, 100) : v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string' ? String((v as { id: string }).id).slice(0, 100) : null);
+    const int = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
+    const kind = typeof obj.object === 'string' ? obj.object : '';
+    const isInvoice = kind === 'invoice' || parsed.data.type.startsWith('invoice.');
     const metadata = (obj.metadata ?? {}) as Record<string, unknown>;
+    // B-1505: refunds arrive on the charge (amount_refunded is the running total), credit notes name their invoice,
+    // and disputes name the charge they contest.
+    const isCharge = kind === 'charge';
+    const isCredit = kind === 'credit_note';
+    const isDispute = kind === 'dispute';
     const out = await s.billing.reconcile('stripe', {
       id: parsed.data.id,
       type: parsed.data.type,
-      invoiceId: isInvoice && typeof obj.id === 'string' ? obj.id : null,
+      invoiceId: isInvoice ? str(obj.id) : isCharge || isCredit ? str(obj.invoice) : null,
       statementId: typeof metadata.statement === 'string' ? metadata.statement : null,
-      amountPaidMinor: typeof obj.amount_paid === 'number' ? obj.amount_paid : null
+      amountPaidMinor: int(obj.amount_paid),
+      chargeId: isInvoice ? str(obj.charge) : isCharge ? str(obj.id) : isDispute ? str(obj.charge) : null,
+      paymentId: isInvoice || isCharge || isDispute ? str(obj.payment_intent) : null,
+      objectId: isCredit || isDispute ? str(obj.id) : null,
+      amountMinor: isCharge ? int(obj.amount_refunded) : isCredit ? (int(obj.total) ?? int(obj.amount)) : isDispute ? int(obj.amount) : null,
+      totalMinor: isCharge ? int(obj.amount) : null,
+      status: isCredit || isDispute ? (typeof obj.status === 'string' ? obj.status : null) : null
     });
-    if (out.transition && out.statement) {
+    if (out.action && out.statement) {
       const st = out.statement;
-      const action = out.transition === 'paid' ? 'billing.statement.paid' : out.transition === 'void' ? 'billing.statement.voided' : 'billing.statement.payment-failed';
-      await s.audit.append({ tenantId: st.tenant_id, action, kind: 'system', actor: { service: 'stripe' }, target: { tenant: st.tenant_id, month: monthToText(st.month), statement: st.id }, label: 'internal', detail: { event: parsed.data.id, type: parsed.data.type, invoice: st.provider_ref, amountPaidMinor: typeof obj.amount_paid === 'number' ? obj.amount_paid : null, currency: st.currency }, traceId: req.traceId });
+      await s.audit.append({ tenantId: st.tenant_id, action: out.action, kind: 'system', actor: { service: 'stripe' }, target: { tenant: st.tenant_id, month: monthToText(st.month), statement: st.id }, label: 'internal', detail: { event: parsed.data.id, type: parsed.data.type, invoice: st.provider_ref, currency: st.currency, state: st.state, ...out.detail }, traceId: req.traceId });
     }
     // Stripe retries anything but a 2xx: every verified event is acknowledged, applied or not.
     res.json({ received: true, duplicate: out.duplicate, result: out.result });

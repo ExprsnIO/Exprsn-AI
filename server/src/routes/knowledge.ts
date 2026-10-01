@@ -7,6 +7,7 @@ import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, wo
 import { badRequest, conflict, forbidden } from '../http/problem.js';
 import { docView, indexView, SCHEDULES, SOURCE_KINDS, sourceView } from '../knowledge/service.js';
 import { replicationView } from '../knowledge/replication.js';
+import { ROLE_NAME } from '../connections/drivers.js';
 import type { Services } from '../services.js';
 
 const id26 = z.string().length(26);
@@ -180,14 +181,26 @@ export function knowledgeRoutes(s: Services): Router {
           accessColumn: z.string().trim().min(1).max(63).nullable().optional(),
           accessKind: z.enum(['group', 'user']).optional(),
           replication: z.boolean().optional(),
-          publication: z.string().trim().regex(/^[a-z_][a-z0-9_]{0,62}$/, 'a publication name: lower-case letters, digits and _').nullable().optional()
+          publication: z.string().trim().regex(/^[a-z_][a-z0-9_]{0,62}$/, 'a publication name: lower-case letters, digits and _').nullable().optional(),
+          // Sprint 23: S3-compatible buckets (B-1501), internal web sites (B-1502), row security by role (B-1503).
+          include: z.array(z.string().trim().min(1).max(200).regex(/^[^\0]*$/)).max(20).optional(),
+          endpoint: z.string().trim().max(500).nullable().optional(),
+          region: z.string().trim().regex(/^[a-z0-9-]{1,40}$/).optional(),
+          pathStyle: z.boolean().optional(),
+          accessKeyId: z.string().trim().min(1).max(200).optional(),
+          secretAccessKey: z.string().min(1).max(500).optional(),
+          maxDepth: z.number().int().min(0).max(5).optional(),
+          maxPages: z.number().int().min(1).max(1000).optional(),
+          pathPrefix: z.string().trim().max(300).regex(/^[^\0\s]*$/).optional(),
+          sitemap: z.boolean().optional(),
+          roleMappings: z.array(z.object({ group: z.string().trim().min(1).max(200), role: z.string().trim().regex(ROLE_NAME, 'a PostgreSQL role name') }).strict()).min(1).max(50).optional()
         })
         .strict(),
       req.body
     );
     if (body.kind !== 'upload' && !body.location) throw badRequest('Give the source a location.');
     const src = await k.addSource(principalOf(req), String(req.params.id), body);
-    await audit(req, 'knowledge.source.added', { kb: src.kb_id, source: src.id }, { kind: src.kind, location: src.location, schedule: src.schedule, labelFloor: src.label_floor, ...(src.config.accessColumn ? { accessColumn: src.config.accessColumn, accessKind: src.config.accessKind } : {}), ...(src.config.replication ? { replication: true, publication: src.config.publication } : {}) }, src.label_floor);
+    await audit(req, 'knowledge.source.added', { kb: src.kb_id, source: src.id }, { kind: src.kind, location: src.location, schedule: src.schedule, labelFloor: src.label_floor, ...(src.config.accessColumn ? { accessColumn: src.config.accessColumn, accessKind: src.config.accessKind } : {}), ...(src.config.replication ? { replication: true, publication: src.config.publication } : {}), ...(src.config.include?.length ? { include: src.config.include } : {}), ...(src.config.endpoint ? { endpoint: src.config.endpoint, ownKeys: true } : {}), ...(src.kind === 'web' ? { maxDepth: src.config.maxDepth, maxPages: src.config.maxPages, pathPrefix: src.config.pathPrefix, sitemap: src.config.sitemap } : {}), ...(src.config.roleMappings ? { roleMappings: src.config.roleMappings } : {}) }, src.label_floor);
     res.status(201).json(sourceView(src));
   });
 

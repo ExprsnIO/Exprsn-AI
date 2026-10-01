@@ -21,6 +21,19 @@ const item = z
   .strict()
   .refine((x) => (x.match === 'any') === (x.value == null), 'a model or profile item names it; an "any" item does not');
 const currency = z.string().regex(/^[A-Za-z]{3}$/);
+/** B-1505: when new prices take effect, as an ISO date or date-time (UTC unless an offset is given). */
+const effectiveFrom = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/, 'an ISO date or date-time')
+  .transform((v, ctx) => {
+    const t = Date.parse(/T/.test(v) && !/(Z|[+-]\d{2}:\d{2})$/.test(v) ? `${v}Z` : v);
+    if (Number.isNaN(t)) {
+      ctx.addIssue({ code: 'custom', message: 'not a valid date' });
+      return z.NEVER;
+    }
+    return t;
+  });
+const versionView = (v: { id: string; items: unknown[]; effective_from: number; created_at: number }) => ({ id: v.id, items: v.items.length, effectiveFrom: v.effective_from ? new Date(v.effective_from).toISOString() : null, createdAt: v.created_at });
 const taxView = (x: { name: string; ratePpm: number }) => ({ name: x.name, ratePercent: x.ratePpm / 10_000 });
 
 /**
@@ -71,10 +84,10 @@ export function billingAdminRoutes(s: Services): Router {
 
   r.patch('/billing/price-books/:id', manage, async (req, res) => {
     const p = principalOf(req);
-    const body = parseBody(z.object({ name: z.string().trim().min(1).max(100).optional(), currency: currency.optional(), isDefault: z.boolean().optional(), items: z.array(item).max(500).optional(), state: z.enum(['active', 'retired']).optional() }).strict(), req.body);
-    const { before, after } = await b.updateBook(parseBody(id26, req.params.id), p.userId, body);
-    await audit(req, 'billing.price-book.updated', { priceBook: after.id, name: after.name }, { changed: Object.keys(body), before: { items: before.items.length, state: before.state, isDefault: before.is_default }, after: { items: after.items.length, state: after.state, isDefault: after.is_default } });
-    res.json(bookView(after));
+    const body = parseBody(z.object({ name: z.string().trim().min(1).max(100).optional(), currency: currency.optional(), isDefault: z.boolean().optional(), items: z.array(item).max(500).optional(), state: z.enum(['active', 'retired']).optional(), effectiveFrom: effectiveFrom.optional() }).strict(), req.body);
+    const { before, after, effectiveFrom: from } = await b.updateBook(parseBody(id26, req.params.id), p.userId, body);
+    await audit(req, 'billing.price-book.updated', { priceBook: after.id, name: after.name }, { changed: Object.keys(body), before: { items: before.items.length, state: before.state, isDefault: before.is_default }, after: { items: after.items.length, state: after.state, isDefault: after.is_default }, ...(from != null ? { effectiveFrom: new Date(from).toISOString() } : {}) });
+    res.json({ ...bookView(after), versions: (await b.versions(after)).map(versionView) });
   });
 
   // ---------- tenant settings ----------

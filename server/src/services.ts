@@ -295,7 +295,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
       ...(cfg.S3_ENDPOINT && cfg.S3_ACCESS_KEY_ID && cfg.S3_SECRET_ACCESS_KEY ? { s3: { endpoint: cfg.S3_ENDPOINT, region: cfg.S3_REGION, accessKeyId: cfg.S3_ACCESS_KEY_ID, secretAccessKey: cfg.S3_SECRET_ACCESS_KEY, pathStyle: cfg.S3_FORCE_PATH_STYLE } } : {}),
       git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 }),
-      replication: { enabled: cfg.KNOWLEDGE_REPLICATION === 'on', tickMs: cfg.KNOWLEDGE_REPLICATION_TICK_MS }
+      replication: { enabled: cfg.KNOWLEDGE_REPLICATION === 'on', tickMs: cfg.KNOWLEDGE_REPLICATION_TICK_MS },
+      // Sprint 23 (B-1501, B-1502): sources' own S3 endpoints and crawled sites.
+      allowedHosts: parseAllowList(cfg.KNOWLEDGE_ALLOWED_HOSTS),
+      fetchTimeoutMs: cfg.KNOWLEDGE_FETCH_TIMEOUT_MS
     }
   );
   const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });

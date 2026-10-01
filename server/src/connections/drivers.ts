@@ -53,8 +53,14 @@ export interface DataDriver {
   introspect(timeoutMs: number): Promise<SchemaObject[]>;
   /** Runs a classified read. `limit` rows at most; one more is fetched to know whether the result is capped. */
   query(c: Classification, text: string, opts: { limit: number; timeoutMs: number }): Promise<QueryResult>;
-  /** Rows of one allow-listed object after a watermark, ordered by it (knowledge sources). */
-  rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number }): Promise<QueryResult>;
+  /**
+   * Rows of one allow-listed object after a watermark, ordered by it (knowledge sources). With `role` (PostgreSQL,
+   * B-1503) the read runs as that database role (`SET LOCAL ROLE` inside the read-only transaction), so the
+   * database's grants and row security policies for the role decide which rows come back.
+   */
+  rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number; role?: string | null }): Promise<QueryResult>;
+  /** Checks that the connection's account can read an object as each role, and that row security applies (B-1503). */
+  roleCheck?(object: string, roles: string[], timeoutMs: number): Promise<RoleCheck>;
   /** A logical replication stream of one table (PostgreSQL only, B-1003). */
   replicate?(opts: ReplicationOptions): Promise<ReplicationStream>;
   /** Drops a replication slot this platform created; false when there was none (or it is in use). */
@@ -62,6 +68,16 @@ export interface DataDriver {
 }
 
 export type DriverFactory = (spec: ConnectionSpec) => DataDriver;
+
+/** What PostgreSQL says about reading an object as mapped roles (B-1503). */
+export interface RoleCheck {
+  account: string;
+  object: { kind: 'table' | 'view' | 'other' | 'missing'; rowSecurity: boolean; forced: boolean; owner: string | null; securityInvoker: boolean };
+  roles: { role: string; exists: boolean; member: boolean; bypass: boolean; canSelect: boolean }[];
+}
+
+/** A database role name as accepted for row security mappings (B-1503). */
+export const ROLE_NAME = /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/;
 
 const hostPort = (endpoint: string, defaultPort: number): { host: string; port: number } => {
   const m = /^\[?([^\]]+?)\]?(?::(\d+))?$/.exec(endpoint.replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, ''));
@@ -170,9 +186,18 @@ export class PostgresDriver implements DataDriver {
     return dropSlot(await this.endpoint(), slot, timeoutMs);
   }
 
-  async rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number }): Promise<QueryResult> {
+  async roleCheck(object: string, roles: string[], timeoutMs: number): Promise<RoleCheck> {
+    return this.client(timeoutMs, (c) => this.readOnly(c, timeoutMs, () => pgRoleCheck(c, object, roles)));
+  }
+
+  async rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number; role?: string | null }): Promise<QueryResult> {
     return this.client(opts.timeoutMs, (c) =>
       this.readOnly(c, opts.timeoutMs, async () => {
+        if (opts.role) {
+          if (!ROLE_NAME.test(opts.role)) throw new Error('The role name is not valid.');
+          // Ends with the transaction (ROLLBACK), so the connection never keeps the role.
+          await c.query(`SET LOCAL ROLE ${quoteIdent(opts.role)}`);
+        }
         const wm = opts.watermarkColumn ? quoteIdent(opts.watermarkColumn) : null;
         const text = `SELECT * FROM ${quoteIdent(object)}${wm && opts.after != null ? ` WHERE ${wm} > $1` : ''}${wm ? ` ORDER BY ${wm}` : ''} LIMIT ${opts.limit + 1}`;
         const r = await c.query({ text, values: wm && opts.after != null ? [opts.after] : [], rowMode: 'array' });
@@ -180,6 +205,34 @@ export class PostgresDriver implements DataDriver {
       })
     );
   }
+}
+
+/** PostgreSQL's view of reading `object` as each role (B-1503). */
+async function pgRoleCheck(c: pg.Client, object: string, roles: string[]): Promise<RoleCheck> {
+  const me = (await c.query<{ u: string }>('SELECT current_user AS u')).rows[0]!.u;
+  const rel = (
+    await c.query<{ kind: string; rls: boolean; forced: boolean; owner: string; opts: string[] | null }>(
+      'SELECT c.relkind AS kind, c.relrowsecurity AS rls, c.relforcerowsecurity AS forced, pg_get_userbyid(c.relowner) AS owner, c.reloptions AS opts FROM pg_class c WHERE c.oid = to_regclass($1)',
+      [object]
+    )
+  ).rows[0];
+  const kind = !rel ? 'missing' : rel.kind === 'r' || rel.kind === 'p' ? 'table' : rel.kind === 'v' ? 'view' : 'other';
+  const securityInvoker = !!rel?.opts?.some((o) => /^security_invoker=(true|on|1|yes)$/i.test(o));
+  const found = (
+    await c.query<{ role: string; member: boolean; bypass: boolean; can: boolean | null }>(
+      "SELECT r.rolname AS role, pg_has_role(current_user, r.oid, 'MEMBER') AS member, (r.rolsuper OR r.rolbypassrls) AS bypass, CASE WHEN to_regclass($2) IS NULL THEN NULL ELSE has_table_privilege(r.oid, to_regclass($2), 'SELECT') END AS can FROM pg_roles r WHERE r.rolname = ANY($1::text[])",
+      [roles, object]
+    )
+  ).rows;
+  const byName = new Map(found.map((r) => [r.role, r]));
+  return {
+    account: me,
+    object: { kind, rowSecurity: !!rel?.rls, forced: !!rel?.forced, owner: rel?.owner ?? null, securityInvoker },
+    roles: roles.map((role) => {
+      const r = byName.get(role);
+      return { role, exists: !!r, member: !!r?.member, bypass: !!r?.bypass, canSelect: !!r?.can };
+    })
+  };
 }
 
 export const quoteMysqlIdent = (name: string): string =>

@@ -1692,3 +1692,32 @@ Zone changes (approve, seed) queue the job `zones.cluster.apply` on their own wh
 
 CLI (no routes): `migrate --check`, `kms:escrow --shares <n> --threshold <k>`, `kms:recover --out <file>
 [--share …] [--check <value>]`. Audit actions: `zone.cluster.applied`, `zone.cluster.drift`, `kms.escrow.created`.
+
+## Sprint 23: Knowledge, integrations and accessibility
+
+### Knowledge sources (`knowledge:manage` or manage access on the base)
+
+| Route | Notes |
+| --- | --- |
+| `POST /knowledge/bases/:id/sources` `{kind: s3, location: "s3://bucket/prefix/", include?, endpoint?, region?, pathStyle?, accessKeyId?, secretAccessKey?}` | B-1501. `include`: up to 20 patterns relative to the prefix (`*` within a folder, `**` across folders, `?` one character); objects that match none are never fetched. Without `endpoint` the platform's S3 credentials are used (keys are refused, `400`). With `endpoint` (an S3-compatible service; internal, or named in `KNOWLEDGE_ALLOWED_HOSTS`, else `409`; link-local and metadata addresses always `409`) both keys are required and are sealed with the tenant key; responses and the audit entry carry only `ownKeys: true`. Objects are versioned by ETag: an unchanged object is not downloaded again, and one no longer listed is removed from every index |
+| `POST /knowledge/bases/:id/sources` `{kind: web, location: "https://intranet.example.internal/", maxDepth?: 0-5 (2), maxPages?: 1-1000 (100), pathPrefix?, sitemap?: true}` | B-1502. Crawls an internal site from its start page: same scheme, host and port only (links, redirects and sitemap entries elsewhere are skipped), robots.txt honoured (user agent `ExprsnAI-Knowledge`), the sitemap's pages added at depth 1, `pathPrefix` limiting paths. HTML, plain text, Markdown, CSV, JSON and PDF pages are indexed; `noindex` pages are followed but not indexed, `nofollow` links are not followed. Pages are re-checked with `If-None-Match`/`If-Modified-Since`; a 304 keeps the document. Pages no longer reached are removed. The sync job's result lists up to 50 skipped URLs with the reason |
+| `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …", connectionId, roleMappings: [{group, role}]}` | B-1503, PostgreSQL only. Each sync reads the object once per mapped role (`SET LOCAL ROLE` in the read-only transaction); a row's document and chunks may be retrieved by the groups whose role saw it, and a row no role sees is not indexed. `409` when a role is missing, the connection's account is not a member, the role is superuser or BYPASSRLS or may not select the object, the table does not enable row security (or a mapped role owns it without FORCE), a view is not `security_invoker`, or with `accessColumn` or `replication`. Synced by full reads (no watermark) |
+
+### Webhooks (`webhooks:manage`)
+
+Ordered webhooks (B-1504) keep their order across instances: each event's position comes from the endpoint's
+counter in the database, taken in the same transaction that queues the delivery, and only the holder of the
+endpoint's delivery lease sends (one delivery in flight per ordered endpoint). `X-Exprsn-Sequence` is that position.
+No route changes.
+
+### Billing (`billing:manage`, `billing:read`)
+
+| Route | Notes |
+| --- | --- |
+| `PATCH /admin/billing/price-books/:id` `{…, items?, effectiveFrom?}` | B-1505. New `items` take effect at `effectiveFrom` (an ISO date or date-time, UTC unless an offset is given; default now): no earlier than the start of the current month (`409`) and not in the future (`409`); `effectiveFrom` without `items` is `400`. Saving the same items again makes no version. Answers the book with `versions: [{id, items (a count), effectiveFrom, createdAt}]` (null `effectiveFrom`: from the start). Audited with `effectiveFrom` |
+| `GET /admin/billing/statements/:month` | A month whose book changed during it is prorated: `prorated: true`, and each line carries `from` and `to` (ms, end exclusive) for the part of the month it covers, priced with the items in effect then. Also `refundedMicros`, `creditedMicros`, `credits: [{id, amountMicros, state: issued \| void}]`, `disputedMicros`, `disputeStatus`. New states `partly refunded`, `refunded`, `disputed`, `dispute lost` (all final, like `paid`) |
+| `POST /billing/stripe/webhook` (public) | Also: `charge.refunded` (the charge's `amount_refunded` is the running total: the statement becomes `refunded` when it covers the charge's `amount`, else `partly refunded`; an older, smaller total is ignored), `credit_note.created`/`updated`/`voided` (recorded by id; voided notes no longer count), `charge.dispute.created`/`updated` (`disputed`, with the amount and status) and `charge.dispute.closed` (`won` returns the statement to paid, or refunded; `lost` makes it `dispute lost`). The statement is found by invoice id, then by the charge or payment intent remembered from `invoice.paid`, then by `metadata.statement` |
+
+Audit actions: `billing.statement.refunded`, `billing.statement.credited`, `billing.statement.credit-voided`,
+`billing.statement.disputed`, `billing.statement.dispute-updated`, `billing.statement.dispute-closed` (actor
+`service: stripe`, detail with the amounts in micro-units and the statement's state).

@@ -19,13 +19,15 @@ import { decodeVector, encodeVector } from '../platform/vectors.js';
 import type { QuotaService } from '../tenancy/quotas.js';
 import { chunkText, DEFAULT_CHUNKING, type ChunkOptions, type TextChunk } from './chunk.js';
 import { detectType, ExtractionError, extractText } from './extract.js';
-import { gitItems, parseS3, S3Reader, type GitFetcher, type S3Settings, type SourceItem } from './sources.js';
+import { gitItems, globRegex, parseS3, S3Reader, type GitFetcher, type S3Settings, type SourceItem } from './sources.js';
+import { crawl } from './crawl.js';
+import { checkHost, guardedAgent, HostRefused, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import { bm25, rrf, termCounts, TermKeys, tokenize } from './terms.js';
 import { aclAllows, readAcl, readerEntries, rowAcl, type AccessKind } from './acl.js';
 import { ReplicationManager } from './replication.js';
 import type { MaskedChange } from '../connections/service.js';
 
-export const SOURCE_KINDS = ['upload', 's3', 'git', 'database'] as const;
+export const SOURCE_KINDS = ['upload', 's3', 'git', 'database', 'web'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 export const SCHEDULES = ['15m', 'hourly', 'daily', 'manual'] as const;
 export type Schedule = (typeof SCHEDULES)[number];
@@ -74,7 +76,36 @@ export interface SourceRow {
   kb_id: string;
   kind: SourceKind;
   location: string;
-  config: { bucket?: string; prefix?: string; url?: string; ref?: string | null; path?: string; connectionId?: string; object?: string; idColumn?: string | null; watermarkColumn?: string | null; engine?: 'postgres' | 'mysql'; accessColumn?: string | null; accessKind?: AccessKind; replication?: boolean; publication?: string | null };
+  config: {
+    bucket?: string;
+    prefix?: string;
+    url?: string;
+    ref?: string | null;
+    path?: string;
+    connectionId?: string;
+    object?: string;
+    idColumn?: string | null;
+    watermarkColumn?: string | null;
+    engine?: 'postgres' | 'mysql';
+    accessColumn?: string | null;
+    accessKind?: AccessKind;
+    replication?: boolean;
+    publication?: string | null;
+    /** B-1501: S3 include patterns, and a bucket on another S3-compatible endpoint (its keys are sealed apart). */
+    include?: string[];
+    endpoint?: string | null;
+    region?: string;
+    pathStyle?: boolean;
+    /** B-1502: a crawl's limits. */
+    maxDepth?: number;
+    maxPages?: number;
+    pathPrefix?: string;
+    sitemap?: boolean;
+    /** B-1503: rows are read as each mapped PostgreSQL role, and the groups whose role saw a row may retrieve it. */
+    roleMappings?: RoleMapping[];
+  };
+  /** B-1501: the sealed secret access key of the source's own S3-compatible endpoint. */
+  secret_sealed?: string | null;
   label_floor: Label;
   schedule: Schedule;
   state: 'idle' | 'syncing' | 'failed';
@@ -86,6 +117,41 @@ export interface SourceRow {
   created_by: string | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface AddSourceInput {
+  kind: SourceKind;
+  location: string;
+  labelFloor?: Label;
+  schedule?: Schedule;
+  ref?: string | null;
+  path?: string;
+  connectionId?: string;
+  idColumn?: string | null;
+  watermarkColumn?: string | null;
+  accessColumn?: string | null;
+  accessKind?: AccessKind;
+  replication?: boolean;
+  publication?: string | null;
+  /** B-1501 */
+  include?: string[];
+  endpoint?: string | null;
+  region?: string;
+  pathStyle?: boolean;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  /** B-1502 */
+  maxDepth?: number;
+  maxPages?: number;
+  pathPrefix?: string;
+  sitemap?: boolean;
+  /** B-1503 */
+  roleMappings?: RoleMapping[];
+}
+
+export interface RoleMapping {
+  group: string;
+  role: string;
 }
 
 export type DocState = 'quarantined' | 'scanning' | 'queued' | 'indexing' | 'indexed' | 'unchanged' | 'failed' | 'rejected' | 'removed';
@@ -142,6 +208,13 @@ export interface KnowledgeOptions {
   git: GitFetcher;
   /** Logical replication for PostgreSQL sources (B-1003): KNOWLEDGE_REPLICATION and its tick. */
   replication?: { enabled: boolean; tickMs: number };
+  /**
+   * B-1501, B-1502: where a source's own S3 endpoint or a crawled site may be: internal addresses, plus the hosts
+   * and networks in KNOWLEDGE_ALLOWED_HOSTS. Link-local and metadata addresses never.
+   */
+  allowedHosts?: AllowList;
+  /** Per-request timeout for crawls and S3 endpoints of sources (ms). */
+  fetchTimeoutMs?: number;
 }
 
 export interface KnowledgeDeps {
@@ -163,7 +236,7 @@ export interface KnowledgeDeps {
 const num = (v: unknown) => (v == null ? null : Number(v));
 const kbFrom = (r: Record<string, unknown>): KbRow => ({ ...(r as unknown as KbRow), chunking: json<ChunkOptions>(r.chunking, DEFAULT_CHUNKING), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 const indexFrom = (r: Record<string, unknown>): IndexRow => ({ ...(r as unknown as IndexRow), version: Number(r.version), dims: num(r.dims), progress: Number(r.progress), chunks: Number(r.chunks), created_at: Number(r.created_at), built_at: num(r.built_at) });
-const sourceFrom = (r: Record<string, unknown>): SourceRow => ({ ...(r as unknown as SourceRow), config: json<SourceRow['config']>(r.config, {}), last_sync_at: num(r.last_sync_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+const sourceFrom = (r: Record<string, unknown>): SourceRow => ({ ...(r as unknown as SourceRow), secret_sealed: (r.secret_sealed as string | null | undefined) ?? null, config: json<SourceRow['config']>(r.config, {}), last_sync_at: num(r.last_sync_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 const docFrom = (r: Record<string, unknown>): DocRow => ({ ...(r as unknown as DocRow), size: Number(r.size), chunks: Number(r.chunks), detections: json<Record<string, number> | null>(r.detections, null), created_at: Number(r.created_at), updated_at: Number(r.updated_at), indexed_at: num(r.indexed_at), acl: readAcl(r.acl) });
 const labelsUpTo = (l: Label): Label[] => LABELS.filter((x) => labelRank(x) <= labelRank(l));
 const traceId = () => randomBytes(16).toString('hex');
@@ -482,12 +555,13 @@ export class KnowledgeService {
 
   // ---------- sources ----------
 
-  async addSource(p: Principal, kbId: string, input: { kind: SourceKind; location: string; labelFloor?: Label; schedule?: Schedule; ref?: string | null; path?: string; connectionId?: string; idColumn?: string | null; watermarkColumn?: string | null; accessColumn?: string | null; accessKind?: AccessKind; replication?: boolean; publication?: string | null }): Promise<SourceRow> {
+  async addSource(p: Principal, kbId: string, input: AddSourceInput): Promise<SourceRow> {
     const kb = await this.base(p, kbId, 'manage');
     const floor = highest(kb.label, input.labelFloor ?? kb.label);
     if (!clears(p.clearance, floor)) throw forbidden(`Your clearance is ${p.clearance}.`, { step: 'clearance' });
     let location = input.location.trim();
     let config: SourceRow['config'] = {};
+    let secret: string | null = null;
     if (input.kind === 'upload') {
       const existing = (await this.sources(kb.id)).find((s) => s.kind === 'upload');
       if (existing) throw conflict('This knowledge base already has an upload source; upload files to it.');
@@ -495,8 +569,26 @@ export class KnowledgeService {
     } else if (input.kind === 's3') {
       const s3 = parseS3(location);
       if (!s3) throw new HttpProblem(400, 'Invalid request', 'Give the S3 location as s3://bucket/prefix/.');
-      if (!this.o.s3) throw conflict('S3 is not configured on this platform (S3_ENDPOINT and its credentials). Credentials come from the platform, never from this form.');
-      config = { bucket: s3.bucket, prefix: s3.prefix };
+      const include = (input.include ?? []).map((x) => x.trim()).filter(Boolean);
+      for (const g of include) globRegex(g);
+      if (input.endpoint) {
+        // B-1501: an S3-compatible bucket of its own, on an internal endpoint (or one KNOWLEDGE_ALLOWED_HOSTS names).
+        if (!input.accessKeyId || !input.secretAccessKey) throw new HttpProblem(400, 'Invalid request', 'A bucket on its own endpoint needs an access key id and a secret access key.');
+        await this.checkFetchUrl(input.endpoint, 'S3 endpoint');
+        secret = JSON.stringify({ accessKeyId: input.accessKeyId, secretAccessKey: input.secretAccessKey });
+        config = { bucket: s3.bucket, prefix: s3.prefix, include, endpoint: input.endpoint.replace(/\/+$/, ''), region: input.region ?? 'us-east-1', pathStyle: input.pathStyle ?? true };
+      } else {
+        if (input.accessKeyId || input.secretAccessKey) throw new HttpProblem(400, 'Invalid request', 'Keys go with an endpoint; without one the platform\'s S3 credentials are used.');
+        if (!this.o.s3) throw conflict('S3 is not configured on this platform (S3_ENDPOINT and its credentials). Give the bucket\'s own endpoint and keys, or ask an operator to configure S3.');
+        config = { bucket: s3.bucket, prefix: s3.prefix, include };
+      }
+    } else if (input.kind === 'web') {
+      // B-1502: an internal web site, crawled within its own origin.
+      const url = await this.checkFetchUrl(location, 'site');
+      location = url;
+      const pathPrefix = (input.pathPrefix ?? '').trim();
+      if (pathPrefix && !pathPrefix.startsWith('/')) throw new HttpProblem(400, 'Invalid request', 'A path prefix starts with /.');
+      config = { url, maxDepth: input.maxDepth ?? 2, maxPages: input.maxPages ?? 100, pathPrefix, sitemap: input.sitemap ?? true };
     } else if (input.kind === 'git') {
       location = location.replace(/^git:\s*/i, '');
       config = { url: location, ref: input.ref ?? null, path: input.path ?? '' };
@@ -519,17 +611,93 @@ export class KnowledgeService {
       if (input.replication && conn.engine !== 'postgres') throw conflict('Logical replication is for PostgreSQL sources; MySQL sources sync by watermark.');
       if (input.replication && schema.kind === 'view') throw conflict(`${schema.name} is a view: PostgreSQL replicates tables only. Point the source at the table, or leave replication off to sync the view by watermark.`);
       if (input.replication && !idCol) throw conflict('Replication needs an id column to match changed rows to documents.');
+      if (input.roleMappings?.length) await this.checkRoleMappings(p.tenantId, conn, schema.name, input, idCol);
       location = `${conn.engine === 'postgres' ? 'pg' : 'mysql'}: ${schema.name}`;
-      config = { connectionId: conn.id, object: schema.name, idColumn: idCol, watermarkColumn: wm, engine: conn.engine, accessColumn: input.accessColumn ?? null, ...(input.accessColumn ? { accessKind: input.accessKind ?? 'group' } : {}), ...(input.replication ? { replication: true, publication: input.publication ?? 'exprsn_knowledge' } : {}) };
+      config = { connectionId: conn.id, object: schema.name, idColumn: idCol, watermarkColumn: input.roleMappings?.length ? null : wm, engine: conn.engine, accessColumn: input.accessColumn ?? null, ...(input.accessColumn ? { accessKind: input.accessKind ?? 'group' } : {}), ...(input.replication ? { replication: true, publication: input.publication ?? 'exprsn_knowledge' } : {}), ...(input.roleMappings?.length ? { roleMappings: input.roleMappings.map((m) => ({ group: m.group.trim().toLowerCase(), role: m.role })) } : {}) };
       // Rows are read at the connection's label: the source floor is at least that.
       if (labelRank(conn.label) > labelRank(floor)) input = { ...input, labelFloor: conn.label };
     }
     const t = Date.now();
     const id = ulid();
-    await this.db('knowledge_sources').insert({ id, tenant_id: p.tenantId, kb_id: kb.id, kind: input.kind, location, config: JSON.stringify(config), label_floor: highest(floor, input.labelFloor ?? floor), schedule: input.kind === 'upload' ? 'manual' : (input.schedule ?? '15m'), state: 'idle', created_by: p.userId, created_at: t, updated_at: t });
+    await this.db('knowledge_sources').insert({ id, tenant_id: p.tenantId, kb_id: kb.id, kind: input.kind, location, config: JSON.stringify(config), secret_sealed: secret ? await this.d.keys.seal(p.tenantId, secret, `knowledge-source:${id}`) : null, label_floor: highest(floor, input.labelFloor ?? floor), schedule: input.kind === 'upload' ? 'manual' : (input.schedule ?? '15m'), state: 'idle', created_by: p.userId, created_at: t, updated_at: t });
     const s = await this.source(p.tenantId, id);
     if (s.kind !== 'upload') await this.sync(p.userId, s);
     return this.source(p.tenantId, id);
+  }
+
+  private get allow(): AllowList {
+    return this.o.allowedHosts ?? parseAllowList('');
+  }
+
+  /**
+   * Checks an S3 endpoint or a site's start URL (B-1501, B-1502): http(s) without credentials, and every address the
+   * host resolves to internal (or named in KNOWLEDGE_ALLOWED_HOSTS), never link-local or metadata. Returns the URL
+   * without its fragment.
+   */
+  private async checkFetchUrl(raw: string, what: string): Promise<string> {
+    let u: URL;
+    try {
+      u = new URL(raw.trim());
+    } catch {
+      throw new HttpProblem(400, 'Invalid request', `The ${what} is not a URL.`);
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new HttpProblem(400, 'Invalid request', `The ${what} must start with http:// or https://.`);
+    if (u.username || u.password) throw new HttpProblem(400, 'Invalid request', 'Credentials do not belong in the URL.');
+    try {
+      await checkHost(u.hostname, this.allow);
+    } catch (err) {
+      if (err instanceof HostRefused) throw conflict(`${err.message} Knowledge sources reach internal hosts, and those an operator names in KNOWLEDGE_ALLOWED_HOSTS.`);
+      throw err;
+    }
+    u.hash = '';
+    return u.toString();
+  }
+
+  /** A dispatcher whose every connection is checked against the knowledge host rules, plus the literal check. */
+  private async fetchAgent(url: string) {
+    // Address literals skip the dispatcher's lookup, so the host is checked here as well.
+    await checkHost(new URL(url).hostname, this.allow);
+    const t = this.o.fetchTimeoutMs ?? 30_000;
+    return guardedAgent(this.allow, t);
+  }
+
+  /**
+   * Row security through database roles (B-1503): PostgreSQL only; not with an access column or replication (the
+   * stream would bypass the policies); each role must exist, have the connection's account as a member, be neither
+   * superuser nor BYPASSRLS, and may select the object; the object must enforce row security for the role (a table
+   * with it enabled, and forced if the role owns it; a view only with security_invoker).
+   */
+  private async checkRoleMappings(tenantId: string, conn: { id: string; engine: string; name: string }, object: string, input: AddSourceInput, idCol: string | null): Promise<void> {
+    const maps = input.roleMappings ?? [];
+    if (conn.engine !== 'postgres') throw conflict('Row security through database roles is for PostgreSQL sources.');
+    if (input.accessColumn) throw conflict('Use either an access column or role mappings, not both.');
+    if (input.replication) throw conflict('Replicated changes do not pass through row security policies; role mappings sync by full reads instead. Turn replication off.');
+    if (!idCol) throw conflict('Role mappings need an id column to merge what each role sees.');
+    const groups = new Set<string>();
+    for (const m of maps) {
+      const g = m.group.trim().toLowerCase();
+      if (groups.has(g)) throw conflict(`The group ${m.group} is mapped twice.`);
+      groups.add(g);
+    }
+    const roles = [...new Set(maps.map((m) => m.role))];
+    let check;
+    try {
+      check = await this.d.connections.roleCheck(tenantId, conn.id, object, roles);
+    } catch (err) {
+      if (err instanceof HttpProblem) throw err;
+      throw conflict(`The roles could not be checked on ${conn.name}: ${(err as Error).message}`);
+    }
+    const o = check.object;
+    if (o.kind === 'missing' || o.kind === 'other') throw conflict(`${object} is not a table or view on ${conn.name}.`);
+    if (o.kind === 'view' && !o.securityInvoker) throw conflict(`${object} is a view that reads as its owner, so row security would not see the mapped roles. Create it WITH (security_invoker = true) (PostgreSQL 15 or later), or point the source at the table.`);
+    if (o.kind === 'table' && !o.rowSecurity) throw conflict(`${object} does not have row level security enabled (ALTER TABLE ${object} ENABLE ROW LEVEL SECURITY), so every mapped role would see every row.`);
+    for (const r of check.roles) {
+      if (!r.exists) throw conflict(`There is no role ${r.role} on ${conn.name}.`);
+      if (!r.member) throw conflict(`The connection's account ${check.account} is not a member of ${r.role}: GRANT ${r.role} TO ${check.account};`);
+      if (r.bypass) throw conflict(`${r.role} is a superuser or has BYPASSRLS, so row security does not apply to it.`);
+      if (!r.canSelect) throw conflict(`${r.role} may not select from ${object}: GRANT SELECT ON ${object} TO ${r.role};`);
+      if (o.kind === 'table' && o.owner === r.role && !o.forced) throw conflict(`${r.role} owns ${object}, and owners bypass row security unless it is forced (ALTER TABLE ${object} FORCE ROW LEVEL SECURITY).`);
+    }
   }
 
   /** Queues a sync of a source unless one is already queued or running. */
@@ -895,11 +1063,50 @@ export class KnowledgeService {
     }
   }
 
-  private async runSync(s: SourceRow, ctx: JobContext): Promise<{ added: number; changed: number; unchanged: number; removed: number; watermark?: string | null }> {
+  private async runSync(s: SourceRow, ctx: JobContext): Promise<{ added: number; changed: number; unchanged: number; removed: number; watermark?: string | null; skipped?: number; skippedUrls?: { url: string; reason: string }[] }> {
     if (s.kind === 's3') {
+      if (s.config.endpoint) {
+        // B-1501: the source's own S3-compatible endpoint and keys, dialled through the knowledge host rules.
+        if (!s.secret_sealed) throw new Error('The source has no keys; remove it and add it again.');
+        const keys = json<{ accessKeyId: string; secretAccessKey: string }>(await this.d.keys.open(s.tenant_id, s.secret_sealed, `knowledge-source:${s.id}`), { accessKeyId: '', secretAccessKey: '' });
+        const agent = await this.fetchAgent(s.config.endpoint);
+        try {
+          const listing = await new S3Reader({ endpoint: s.config.endpoint, region: s.config.region ?? 'us-east-1', accessKeyId: keys.accessKeyId, secretAccessKey: keys.secretAccessKey, pathStyle: s.config.pathStyle ?? true }, agent).list(s.config.bucket!, s.config.prefix ?? '', this.o.maxBytes, ctx.signal, s.config.include ?? []);
+          return { ...(await this.apply(s, listing.items, true, ctx)), watermark: listing.newest ?? s.watermark };
+        } finally {
+          await agent.close().catch(() => undefined);
+        }
+      }
       if (!this.o.s3) throw new Error('S3 is not configured on this platform.');
-      const listing = await new S3Reader(this.o.s3).list(s.config.bucket!, s.config.prefix ?? '', this.o.maxBytes, ctx.signal);
+      const listing = await new S3Reader(this.o.s3).list(s.config.bucket!, s.config.prefix ?? '', this.o.maxBytes, ctx.signal, s.config.include ?? []);
       return { ...(await this.apply(s, listing.items, true, ctx)), watermark: listing.newest ?? s.watermark };
+    }
+    if (s.kind === 'web') {
+      // B-1502: the crawl offers every page it reached; pages no longer reached are removed.
+      const cfg = s.config;
+      const agent = await this.fetchAgent(cfg.url!);
+      try {
+        const prev = new Map(((await this.db('knowledge_documents').where({ source_id: s.id }).whereNot({ state: 'removed' })) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
+        const out = await crawl({
+          start: cfg.url!,
+          maxDepth: cfg.maxDepth ?? 2,
+          maxPages: cfg.maxPages ?? 100,
+          pathPrefix: cfg.pathPrefix ?? '',
+          sitemap: cfg.sitemap ?? true,
+          maxBytes: this.o.maxBytes,
+          timeoutMs: this.o.fetchTimeoutMs ?? 30_000,
+          dispatcher: agent,
+          signal: ctx.signal,
+          previous: async (url) => {
+            const d = prev.get(sha(url));
+            return d && d.blob_key && d.state !== 'failed' ? { version: d.version, body: () => this.content(d) } : null;
+          }
+        });
+        const applied = await this.apply(s, out.items, true, ctx);
+        return { ...applied, skipped: out.skipped.length, skippedUrls: out.skipped.slice(0, 50), watermark: new Date().toISOString() };
+      } finally {
+        await agent.close().catch(() => undefined);
+      }
     }
     if (s.kind === 'git') {
       const co = await this.o.git.checkout(s.config.url!, s.config.ref ?? null, ctx.signal);
@@ -914,6 +1121,7 @@ export class KnowledgeService {
         await co.cleanup();
       }
     }
+    if (s.kind === 'database' && s.config.roleMappings?.length) return this.syncAsRoles(s, ctx);
     if (s.kind === 'database') {
       const cfg = s.config;
       const r = await this.d.connections.readRows(s.tenant_id, cfg.connectionId!, cfg.object!, { watermarkColumn: cfg.watermarkColumn ?? null, after: cfg.watermarkColumn ? s.watermark : null, limit: 5000, rawColumn: cfg.accessColumn ?? null });
@@ -939,6 +1147,42 @@ export class KnowledgeService {
       return { ...out, watermark: cfg.watermarkColumn ? watermark : null };
     }
     throw new Error('Uploads have no sync.');
+  }
+
+  /**
+   * B-1503: reads the whole object once per mapped role (inside a read-only transaction under `SET LOCAL ROLE`), so
+   * PostgreSQL's own grants and row security policies decide what each role sees. A row's document may be retrieved
+   * by the groups whose role saw it; a row no mapped role sees is not indexed (and is removed if it was). When roles
+   * see different values for the same row, each variant is its own document for the groups that saw it.
+   */
+  private async syncAsRoles(s: SourceRow, ctx: JobContext): Promise<{ added: number; changed: number; unchanged: number; removed: number; watermark: null }> {
+    const cfg = s.config;
+    const variants = new Map<string, Map<string, { columns: string[]; row: unknown[]; groups: Set<string> }>>();
+    for (const m of cfg.roleMappings ?? []) {
+      if (ctx.signal.aborted) throw ctx.signal.reason as Error;
+      const r = await this.d.connections.readRows(s.tenant_id, cfg.connectionId!, cfg.object!, { watermarkColumn: null, after: null, limit: 5000, role: m.role });
+      if (r.capped) this.d.log.warn({ source: s.id, role: m.role }, 'role mapping read capped at 5000 rows');
+      const idAt = cfg.idColumn ? r.columns.indexOf(cfg.idColumn) : -1;
+      if (idAt < 0) throw new Error(`${cfg.object} no longer has the id column ${cfg.idColumn ?? ''}; nothing was synced.`);
+      for (const row of r.rows) {
+        const id = String(row[idAt]);
+        const body = rowItem({ ...cfg, accessColumn: null }, id, r.columns, row, undefined);
+        const byBody = variants.get(id) ?? new Map();
+        variants.set(id, byBody);
+        const v = byBody.get(body.version!) ?? { columns: r.columns, row, groups: new Set<string>() };
+        v.groups.add(m.group.toLowerCase());
+        byBody.set(body.version!, v);
+      }
+    }
+    const items: SourceItem[] = [];
+    for (const [id, byBody] of variants) {
+      const several = byBody.size > 1;
+      for (const [hash, v] of byBody) {
+        const it = rowItem({ ...cfg, accessColumn: null }, id, v.columns, v.row, undefined);
+        items.push({ ...it, ...(several ? { key: `${it.key}#${hash.slice(0, 16)}` } : {}), acl: [...v.groups].sort().map((g) => `g:${g}`), version: `${it.version}:${[...v.groups].sort().join(',')}`.slice(0, 200) });
+      }
+    }
+    return { ...(await this.apply(s, items, true, ctx, 'text/plain')), watermark: null };
   }
 
   /**
@@ -969,10 +1213,16 @@ export class KnowledgeService {
       const hash = sha(data);
       if (prev && prev.sha256 === hash && prev.state !== 'failed') {
         await this.db('knowledge_documents').where({ id: prev.id }).update({ version: it.version, state: prev.state === 'indexed' ? 'unchanged' : prev.state });
+        // Same content, new access list (B-1503: a policy now shows the row to other roles): the chunks follow.
+        if (it.acl !== undefined && JSON.stringify(it.acl) !== JSON.stringify(prev.acl)) {
+          const acl = it.acl == null ? null : JSON.stringify(it.acl);
+          await this.db('knowledge_documents').where({ id: prev.id }).update({ acl });
+          await this.db('knowledge_chunks').where({ document_id: prev.id }).update({ acl });
+        }
         unchanged++;
         continue;
       }
-      const type = forceType ?? (() => {
+      const type = forceType ?? it.type ?? (() => {
         const t = detectType(data, it.name);
         return 'type' in t ? t.type : null;
       })();
