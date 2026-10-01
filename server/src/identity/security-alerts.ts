@@ -16,6 +16,7 @@ export type SecurityEvent =
   | 'recovery_codes.regenerated'
   | 'api_key.created'
   | 'api_key.revoked'
+  | 'api_key.changed'
   | 'session.revoked'
   | 'sessions.revoked'
   | 'grant.added'
@@ -32,6 +33,7 @@ const TITLES: Record<SecurityEvent, string> = {
   'recovery_codes.regenerated': 'New recovery codes were generated',
   'api_key.created': 'An API key was created',
   'api_key.revoked': 'An API key was revoked',
+  'api_key.changed': 'An API key\'s request signing changed',
   'session.revoked': 'A session was signed out',
   'sessions.revoked': 'Your other sessions were signed out',
   'grant.added': 'An application can now act as you',

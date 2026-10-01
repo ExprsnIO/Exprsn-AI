@@ -2,6 +2,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign,
 import { ulid } from 'ulid';
 import { fetch } from 'undici';
 import { hmac, randomToken, safeEqual } from '../crypto/index.js';
+import { contentDigest, signMessage } from '../crypto/httpsig.js';
 import { json } from '../db/knex.js';
 import { labelRank, type Label } from '../authz/labels.js';
 import { isUniqueViolation, type AuditEvent } from '../audit/chain.js';
@@ -83,6 +84,8 @@ export interface WebhookRow {
   ordered: boolean;
   /** B-1004: HMAC with the shared secret, or Ed25519 with the tenant's published key. */
   signing: 'hmac' | 'ed25519';
+  /** Sprint 20 (B-1203): also sign with RFC 9421 HTTP Message Signatures (the same key or secret). */
+  message_signatures: boolean;
   breaker: 'closed' | 'open';
   failures: number;
   opened_at: number | null;
@@ -127,8 +130,12 @@ export interface SigningKeyRow {
   retired_at: number | null;
 }
 
+/** Sprint 20 (B-1202): `private_sealed` of a key in OpenBao transit (`kms:<name>`) or held by the signer (`signer:<blob>`). */
+const KMS_REF = 'kms:';
+const SIGNER_REF = 'signer:';
+
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
-const hookFromRow = (r: Record<string, unknown>): WebhookRow => ({ ...(r as unknown as WebhookRow), ordered: !!r.ordered, signing: r.signing === 'ed25519' ? 'ed25519' : 'hmac', events: json<string[]>(r.events, []), failures: Number(r.failures ?? 0), opened_at: num(r.opened_at), last_delivery_at: num(r.last_delivery_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+const hookFromRow = (r: Record<string, unknown>): WebhookRow => ({ ...(r as unknown as WebhookRow), ordered: !!r.ordered, message_signatures: !!r.message_signatures, signing: r.signing === 'ed25519' ? 'ed25519' : 'hmac', events: json<string[]>(r.events, []), failures: Number(r.failures ?? 0), opened_at: num(r.opened_at), last_delivery_at: num(r.last_delivery_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 const deliveryFromRow = (r: Record<string, unknown>): DeliveryRow => ({ ...(r as unknown as DeliveryRow), seq: num(r.seq), attempts: Number(r.attempts ?? 0), status_code: num(r.status_code), next_attempt_at: num(r.next_attempt_at), duration_ms: num(r.duration_ms), created_at: Number(r.created_at), delivered_at: num(r.delivered_at) });
 
 export interface WebhookOptions {
@@ -149,6 +156,7 @@ export const webhookView = (w: WebhookRow, cooldownMs: number) => ({
   state: w.state,
   ordered: w.ordered,
   signing: w.signing,
+  messageSignatures: w.message_signatures,
   breaker: w.breaker,
   failures: w.failures,
   openedAt: w.opened_at,
@@ -380,18 +388,21 @@ export class WebhookService {
       if (refused) throw new HostRefused(refused);
       const ts = Math.floor(Date.now() / 1000);
       const signature: Record<string, string> = w.signing === 'ed25519' ? await this.edHeaders(w.tenant_id, ts, body) : { 'x-exprsn-signature': signBody(secret, ts, body) };
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+        'user-agent': 'exprsn-ai-webhooks',
+        'x-exprsn-event': d.event,
+        'x-exprsn-timestamp': String(ts),
+        ...signature,
+        'x-exprsn-delivery-id': d.id,
+        ...(d.seq != null ? { 'x-exprsn-sequence': String(d.seq) } : {})
+      };
+      // Sprint 20 (B-1203): RFC 9421 signatures as well, over the method, target, body digest and delivery id.
+      if (w.message_signatures) Object.assign(headers, await this.messageSignature(w, secret, headers, body, ts));
       const res = await fetch(w.url, {
         method: 'POST',
         body,
-        headers: {
-          'content-type': 'application/json',
-          'user-agent': 'exprsn-ai-webhooks',
-          'x-exprsn-event': d.event,
-          'x-exprsn-timestamp': String(ts),
-          ...signature,
-          'x-exprsn-delivery-id': d.id,
-          ...(d.seq != null ? { 'x-exprsn-sequence': String(d.seq) } : {})
-        },
+        headers,
         dispatcher: agent,
         redirect: 'manual',
         signal: AbortSignal.timeout(this.o.timeoutMs)
@@ -449,10 +460,70 @@ export class WebhookService {
   // ---------- Ed25519 signing keys (B-1004) ----------
 
   private async edHeaders(tenantId: string, ts: number, body: string): Promise<Record<string, string>> {
-    const k = (await this.activeKey(tenantId)) ?? (await this.createKey(tenantId, null)).row;
-    const der = Buffer.from(await this.s().keys.open(tenantId, k.private_sealed, `webhook-signing-key:${k.id}`), 'base64');
-    const key = createPrivateKey({ key: der, format: 'der', type: 'pkcs8' });
-    return { 'x-exprsn-signature-ed25519': edSign(null, Buffer.from(`${ts}.${body}`), key).toString('base64'), 'x-exprsn-key-id': k.id };
+    const { signature, kid } = await this.edSign(tenantId, Buffer.from(`${ts}.${body}`));
+    return { 'x-exprsn-signature-ed25519': signature.toString('base64'), 'x-exprsn-key-id': kid };
+  }
+
+  /**
+   * RFC 9421 headers for a delivery: `Content-Digest`, `Signature-Input` and `Signature` (label `exprsn`), with
+   * ed25519 and the tenant's key id for Ed25519 webhooks, or hmac-sha256 and the webhook id for HMAC ones.
+   */
+  private async messageSignature(w: WebhookRow, secret: string, headers: Record<string, string>, body: string, ts: number): Promise<Record<string, string>> {
+    const digest = contentDigest(body);
+    const msg = { method: 'POST', url: w.url, headers: { ...Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])), 'content-digest': digest } };
+    const components = ['@method', '@target-uri', 'content-type', 'content-digest', 'x-exprsn-delivery-id'];
+    let sig: { 'signature-input': string; signature: string };
+    if (w.signing === 'ed25519') {
+      const k = await this.currentKey(w.tenant_id);
+      sig = await signMessage(msg, { label: 'exprsn', components, keyid: k.id, alg: 'ed25519', created: ts, signer: (base) => this.signWith(k, base) });
+    } else sig = await signMessage(msg, { label: 'exprsn', components, keyid: w.id, alg: 'hmac-sha256', key: secret, created: ts });
+    return { 'content-digest': digest, ...sig };
+  }
+
+  /** Where a key's private half lives (Sprint 20, B-1202): the signer, OpenBao transit, or sealed in the database. */
+  private keyHome(): 'signer' | 'kms' | 'sealed' {
+    const kms = this.s().kms;
+    if (kms.heldKeys) return 'signer';
+    return typeof kms.createSigningKey === 'function' && typeof kms.sign === 'function' ? 'kms' : 'sealed';
+  }
+
+  private static homeOf(k: Pick<SigningKeyRow, 'private_sealed'>): 'signer' | 'kms' | 'sealed' {
+    return k.private_sealed.startsWith(SIGNER_REF) ? 'signer' : k.private_sealed.startsWith(KMS_REF) ? 'kms' : 'sealed';
+  }
+
+  /**
+   * Signs with the tenant's active Ed25519 key, wherever it is held. With OpenBao the signature is made in transit and
+   * with the signer in the signer, so the private key is never in this process; a key sealed here before either was
+   * configured is retired (it stays in the JWKS) and replaced by one held there.
+   */
+  async edSign(tenantId: string, data: Buffer): Promise<{ signature: Buffer; kid: string }> {
+    const k = await this.currentKey(tenantId);
+    return { signature: await this.signWith(k, data), kid: k.id };
+  }
+
+  /** The active key, created (or moved to the KMS or the signer) first when needed. */
+  private async currentKey(tenantId: string): Promise<SigningKeyRow> {
+    const k = await this.activeKey(tenantId);
+    const home = this.keyHome();
+    if (k && WebhookService.homeOf(k) === home) return k;
+    const made = await this.createKey(tenantId, null);
+    if (k) await this.s().audit.append({ tenantId, action: 'webhook.signing-key.created', kind: 'system', actor: { service: 'webhooks' }, target: { key: made.row.id }, detail: { retired: k.id, reason: `moved to ${home === 'kms' ? 'the KMS' : 'the signer'}` } });
+    return made.row;
+  }
+
+  private async signWith(k: SigningKeyRow, data: Buffer): Promise<Buffer> {
+    const kms = this.s().kms;
+    const home = WebhookService.homeOf(k);
+    if (home === 'signer') {
+      if (!kms.heldKeys) throw new Error('The webhook signing key is held by the signer, which is not configured (SIGNER_SOCKET).');
+      return kms.heldKeys.sign(`webhook:${k.tenant_id}:${k.id}`, 'ed25519', k.private_sealed.slice(SIGNER_REF.length), data);
+    }
+    if (home === 'kms') {
+      if (!kms.sign) throw new Error('The webhook signing key is held in a KMS that is no longer configured.');
+      return kms.sign(k.private_sealed.slice(KMS_REF.length), 'ed25519', data);
+    }
+    const der = Buffer.from(await this.s().keys.open(k.tenant_id, k.private_sealed, `webhook-signing-key:${k.id}`), 'base64');
+    return edSign(null, data, createPrivateKey({ key: der, format: 'der', type: 'pkcs8' }));
   }
 
   async activeKey(tenantId: string): Promise<SigningKeyRow | null> {
@@ -464,22 +535,43 @@ export class WebhookService {
     return (await this.s().db('webhook_signing_keys').where({ tenant_id: tenantId }).orderBy('created_at', 'desc')) as SigningKeyRow[];
   }
 
-  /** A new Ed25519 key pair; the private key is sealed with the tenant key and never leaves the server. */
+  /**
+   * A new Ed25519 key pair. Sprint 20 (B-1202): created in OpenBao transit (not exportable) or in the signer when
+   * either is configured; otherwise the private key is sealed with the tenant key. It never leaves the server.
+   */
   async createKey(tenantId: string, by: string | null): Promise<{ row: SigningKeyRow; retired: string | null }> {
     const s = this.s();
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
     const id = ulid();
-    const x = String(publicKey.export({ format: 'jwk' }).x);
-    const der = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+    let x: string;
+    let sealed: string;
+    const home = this.keyHome();
+    if (home === 'signer') {
+      const r = await s.kms.heldKeys!.create(`webhook:${tenantId}:${id}`, 'ed25519');
+      x = String(createPublicKey(r.publicKey).export({ format: 'jwk' }).x);
+      sealed = `${SIGNER_REF}${r.wrapped}`;
+    } else if (home === 'kms') {
+      const name = `${s.cfg.OPENBAO_KEY_PREFIX}webhook-${id}`.toLowerCase();
+      x = String(createPublicKey(await s.kms.createSigningKey!(name, 'ed25519')).export({ format: 'jwk' }).x);
+      sealed = `${KMS_REF}${name}`;
+    } else {
+      const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+      x = String(publicKey.export({ format: 'jwk' }).x);
+      // Sealed before the transaction: sealing may read the tenant's data key from the database.
+      sealed = await s.keys.seal(tenantId, privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'), `webhook-signing-key:${id}`);
+    }
     const prev = await this.activeKey(tenantId);
     const t = Date.now();
-    // Sealed before the transaction: sealing may read the tenant's data key from the database.
-    const sealed = await s.keys.seal(tenantId, der, `webhook-signing-key:${id}`);
     await s.db.transaction(async (trx) => {
       await trx('webhook_signing_keys').where({ tenant_id: tenantId, state: 'active' }).update({ state: 'retired', retired_at: t });
       await trx('webhook_signing_keys').insert({ id, tenant_id: tenantId, public_key: x, private_sealed: sealed, state: 'active', created_by: by, created_at: t, retired_at: null });
     });
     return { row: (await s.db('webhook_signing_keys').where({ id }).first()) as SigningKeyRow, retired: prev?.id ?? null };
+  }
+
+  /** Where the tenant's active key is held, for the console. */
+  async keyStore(tenantId: string): Promise<'signer' | 'kms' | 'sealed' | null> {
+    const k = await this.activeKey(tenantId);
+    return k ? WebhookService.homeOf(k) : null;
   }
 
   /** The JWKS a receiver fetches to verify Ed25519 signatures. */
@@ -506,14 +598,14 @@ export class WebhookService {
     if (refused) throw new HostRefused(refused);
   }
 
-  async create(tenantId: string, by: string, input: { name: string; url: string; events: string[]; maxLabel: Label; ordered?: boolean; signing?: 'hmac' | 'ed25519' }): Promise<{ row: WebhookRow; secret: string }> {
+  async create(tenantId: string, by: string, input: { name: string; url: string; events: string[]; maxLabel: Label; ordered?: boolean; signing?: 'hmac' | 'ed25519'; messageSignatures?: boolean }): Promise<{ row: WebhookRow; secret: string }> {
     const s = this.s();
     await this.checkEndpoint(tenantId, input.url);
     const id = ulid();
     const secret = `whsec_${randomToken(32)}`;
     const t = Date.now();
     try {
-      await s.db('webhooks').insert({ id, tenant_id: tenantId, name: input.name, url: input.url, events: JSON.stringify(input.events), max_label: input.maxLabel, secret_sealed: await s.keys.seal(tenantId, secret, `webhook:${id}`), state: 'active', ordered: !!input.ordered, signing: input.signing ?? 'hmac', breaker: 'closed', failures: 0, created_by: by, created_at: t, updated_at: t });
+      await s.db('webhooks').insert({ id, tenant_id: tenantId, name: input.name, url: input.url, events: JSON.stringify(input.events), max_label: input.maxLabel, secret_sealed: await s.keys.seal(tenantId, secret, `webhook:${id}`), state: 'active', ordered: !!input.ordered, signing: input.signing ?? 'hmac', message_signatures: !!input.messageSignatures, breaker: 'closed', failures: 0, created_by: by, created_at: t, updated_at: t });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict(`A webhook named ${input.name} already exists.`);
       throw err;
@@ -522,7 +614,7 @@ export class WebhookService {
     return { row: await this.get(tenantId, id), secret };
   }
 
-  async update(tenantId: string, id: string, patch: { name?: string; url?: string; events?: string[]; maxLabel?: Label; state?: 'active' | 'disabled'; ordered?: boolean; signing?: 'hmac' | 'ed25519' }): Promise<{ before: WebhookRow; after: WebhookRow }> {
+  async update(tenantId: string, id: string, patch: { name?: string; url?: string; events?: string[]; maxLabel?: Label; state?: 'active' | 'disabled'; ordered?: boolean; signing?: 'hmac' | 'ed25519'; messageSignatures?: boolean }): Promise<{ before: WebhookRow; after: WebhookRow }> {
     const before = await this.get(tenantId, id);
     if (patch.url !== undefined && patch.url !== before.url) await this.checkEndpoint(tenantId, patch.url);
     const upd: Record<string, unknown> = { updated_at: Date.now() };
@@ -533,6 +625,7 @@ export class WebhookService {
     if (patch.state !== undefined) upd.state = patch.state;
     if (patch.ordered !== undefined) upd.ordered = patch.ordered;
     if (patch.signing !== undefined) upd.signing = patch.signing;
+    if (patch.messageSignatures !== undefined) upd.message_signatures = patch.messageSignatures;
     // Re-enabling, or pointing the webhook elsewhere, starts the breaker afresh.
     if ((patch.state === 'active' && before.state !== 'active') || (patch.url !== undefined && patch.url !== before.url)) Object.assign(upd, { breaker: 'closed', failures: 0, opened_at: null });
     try {

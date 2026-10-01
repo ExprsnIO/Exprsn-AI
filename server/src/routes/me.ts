@@ -4,6 +4,7 @@ import { actorFrom } from '../audit/chain.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { getRole, PERMISSIONS, rolesRequireMfa, type Permission } from '../authz/permissions.js';
 import { apiKeyState } from '../identity/apikeys.js';
+import { ed25519PublicKey } from '../crypto/httpsig.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requireRecentAuth, setSessionCookie, workspacesFor } from '../http/middleware.js';
 import { AccountService } from '../identity/account.js';
 import { LoginThrottle } from '../identity/lockout.js';
@@ -12,6 +13,15 @@ import { toClient as notificationView } from '../platform/notifications.js';
 import { badRequest, conflict, forbidden, HttpProblem, notFound, tooManyRequests, unauthorized } from '../http/problem.js';
 import { setFedCookie } from './federation-public.js';
 import type { Services } from '../services.js';
+
+/** Sprint 20 (B-1203): an Ed25519 public key (JWK x or PEM) as its JWK x value, or a 400. */
+function signatureKeyX(text: string): string {
+  try {
+    return String(ed25519PublicKey(text).export({ format: 'jwk' }).x);
+  } catch (err) {
+    throw badRequest(`signatureKey: ${(err as Error).message}`);
+  }
+}
 
 export function meRoutes(s: Services): Router {
   const r = Router();
@@ -325,7 +335,7 @@ export function meRoutes(s: Services): Router {
 
   r.get('/api-keys', active, async (req, res) => {
     const rows = await s.apiKeys.listForUser(principalOf(req).userId);
-    res.json(rows.map((k) => ({ id: k.id, name: k.name, prefix: `exai_k1_${k.prefix}`, scopes: k.scopes, state: apiKeyState(k), expiresAt: k.expires_at, lastUsedAt: k.last_used_at, createdAt: k.created_at })));
+    res.json(rows.map((k) => ({ id: k.id, name: k.name, prefix: `exai_k1_${k.prefix}`, scopes: k.scopes, state: apiKeyState(k), expiresAt: k.expires_at, lastUsedAt: k.last_used_at, createdAt: k.created_at, signatureKey: k.signature_key })));
   });
 
   r.post('/api-keys', browser, recent, async (req, res) => {
@@ -334,17 +344,35 @@ export function meRoutes(s: Services): Router {
       z.object({
         name: z.string().trim().min(1).max(100),
         scopes: z.array(z.enum(PERMISSIONS)).min(1).max(PERMISSIONS.length),
-        ttlDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)])
+        ttlDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)]),
+        // Sprint 20 (B-1203): requests made with the key must then carry an RFC 9421 signature by this Ed25519 key.
+        signatureKey: z.string().trim().min(1).max(400).nullable().optional()
       }),
       req.body
     );
+    const signatureKey = body.signatureKey ? signatureKeyX(body.signatureKey) : null;
     const held = effectivePermissions(p);
     const extra = body.scopes.filter((sc) => !held.has(sc));
     if (extra.length) throw forbidden(`Scopes never widen a role: you do not hold ${extra.join(', ')}.`, { step: 'scope' });
-    const { key, row } = await s.apiKeys.create({ tenantId: p.tenantId, userId: p.userId, name: body.name, scopes: body.scopes as Permission[], ttlDays: body.ttlDays });
-    await audit(req, 'apikey.created', { key: row.id, prefix: row.prefix, scopes: row.scopes, expiresAt: row.expires_at });
+    const { key, row } = await s.apiKeys.create({ tenantId: p.tenantId, userId: p.userId, name: body.name, scopes: body.scopes as Permission[], ttlDays: body.ttlDays, signatureKey });
+    await audit(req, 'apikey.created', { key: row.id, prefix: row.prefix, scopes: row.scopes, expiresAt: row.expires_at, signatureKey: row.signature_key });
     await alert(req, 'api_key.created', `Key "${row.name}" (exai_k1_${row.prefix}…) with ${row.scopes.length} scope${row.scopes.length === 1 ? '' : 's'}.`);
-    res.status(201).json({ id: row.id, key, prefix: `exai_k1_${row.prefix}`, scopes: row.scopes, expiresAt: row.expires_at, notice: 'This is the only time the key is shown.' });
+    res.status(201).json({ id: row.id, key, prefix: `exai_k1_${row.prefix}`, scopes: row.scopes, expiresAt: row.expires_at, signatureKey: row.signature_key, notice: 'This is the only time the key is shown.' });
+  });
+
+  /**
+   * Sprint 20 (B-1203): registers (or, with null, removes) the Ed25519 public key that `/v1` requests made with this
+   * API key must be signed with (RFC 9421). Browser sessions only, after a recent sign-in, like creating a key.
+   */
+  r.put('/api-keys/:id/signature-key', browser, recent, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ publicKey: z.string().trim().min(1).max(400).nullable() }).strict(), req.body);
+    const x = body.publicKey ? signatureKeyX(body.publicKey) : null;
+    const row = await s.apiKeys.setSignatureKey(p.userId, String(req.params.id), x);
+    if (!row) throw notFound('API key');
+    await audit(req, x ? 'apikey.signature_key.set' : 'apikey.signature_key.removed', { key: row.id, prefix: row.prefix, signatureKey: x });
+    await alert(req, 'api_key.changed', x ? `Key "${row.name}" (exai_k1_${row.prefix}…) now requires signed requests.` : `Key "${row.name}" (exai_k1_${row.prefix}…) no longer requires signed requests.`);
+    res.json({ id: row.id, signatureKey: row.signature_key });
   });
 
   r.delete('/api-keys/:id', active, async (req, res) => {

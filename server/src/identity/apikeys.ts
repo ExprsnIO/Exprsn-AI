@@ -15,6 +15,8 @@ export interface ApiKeyRow {
   last_used_at: number | null;
   revoked_at: number | null;
   created_at: number;
+  /** Sprint 20 (B-1203): an Ed25519 public key (JWK x); when set, every `/v1` request with this key must be signed. */
+  signature_key: string | null;
 }
 
 const KEY_RE = /^exai_k1_([0-9a-f]{12})_([A-Za-z0-9_-]{43})$/;
@@ -29,7 +31,8 @@ const toRow = (r: Record<string, unknown>): ApiKeyRow => ({
   expires_at: Number(r.expires_at),
   last_used_at: r.last_used_at == null ? null : Number(r.last_used_at),
   revoked_at: r.revoked_at == null ? null : Number(r.revoked_at),
-  created_at: Number(r.created_at)
+  created_at: Number(r.created_at),
+  signature_key: r.signature_key == null ? null : String(r.signature_key)
 });
 
 export const apiKeyState = (k: ApiKeyRow): 'active' | 'expired' | 'revoked' =>
@@ -50,7 +53,7 @@ export class ApiKeyService {
     return hmac(this.secret, 'apikey:' + key);
   }
 
-  async create(input: { tenantId: string; userId: string; name: string; scopes: Permission[]; ttlDays: number }): Promise<{ key: string; row: ApiKeyRow }> {
+  async create(input: { tenantId: string; userId: string; name: string; scopes: Permission[]; ttlDays: number; signatureKey?: string | null }): Promise<{ key: string; row: ApiKeyRow }> {
     const prefix = randomBytes(6).toString('hex');
     const key = `exai_k1_${prefix}_${randomToken(32)}`;
     const t = Date.now();
@@ -65,7 +68,8 @@ export class ApiKeyService {
       expires_at: t + input.ttlDays * 86400_000,
       last_used_at: null,
       revoked_at: null,
-      created_at: t
+      created_at: t,
+      signature_key: input.signatureKey ?? null
     };
     await this.db('api_keys').insert(row);
     return { key, row: toRow(row) };
@@ -94,6 +98,13 @@ export class ApiKeyService {
       .andWhere('expires_at', '>', cutoff)
       .orderBy('created_at', 'desc');
     return rows.map(toRow);
+  }
+
+  /** Sprint 20 (B-1203): sets or clears the public key that `/v1` requests made with this key must be signed with. */
+  async setSignatureKey(userId: string, id: string, publicKey: string | null): Promise<ApiKeyRow | null> {
+    const n = await this.db('api_keys').where({ user_id: userId, id, revoked_at: null }).update({ signature_key: publicKey });
+    if (!n) return null;
+    return toRow(await this.db('api_keys').where({ id }).first());
   }
 
   async revoke(userId: string, id: string): Promise<boolean> {

@@ -7,6 +7,7 @@ import { authorize } from '../authz/policy.js';
 import { authenticate, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import { HttpProblem } from '../http/problem.js';
 import type { Services } from '../services.js';
+import { checkContentDigest, ed25519PublicKey, verifyMessage } from '../crypto/httpsig.js';
 import { apiProblem, chatBody, embeddingsBody, type CompletionResult, type Extensions } from './service.js';
 
 /*
@@ -97,12 +98,19 @@ export function openAiRoutes(s: Services): Router {
     res.setHeader('Cache-Control', 'no-store');
     next();
   });
-  r.use(express.json({ limit: '8mb', strict: true }));
+  // The raw body is kept for RFC 9421 Content-Digest checks (B-1203).
+  r.use(express.json({ limit: '8mb', strict: true, verify: (req, _res, buf) => void ((req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf)) }));
   r.use((req, res, next) => {
     if (!req.headers.authorization) throw new HttpProblem(401, 'Unauthorized', 'Send an API key or an access token as "Authorization: Bearer <credential>".', { extensions: { code: 'missing_api_key' } });
     return auth(req, res, next);
   });
   r.use(requireAuth());
+  // Sprint 20 (B-1203): an API key with a registered public key accepts only requests signed with it (RFC 9421).
+  r.use(async (req, _res, next) => {
+    const key = req.apiKey;
+    if (key?.signature_key) await verifySignedRequest(s, req, key.id, `exai_k1_${key.prefix}`, key.signature_key);
+    next();
+  });
   r.use(async (req, _res, next) => {
     try {
       await limiter.consume(principalOf(req).userId);
@@ -186,6 +194,30 @@ export function openAiRoutes(s: Services): Router {
   });
   r.use(openAiErrorHandler(s));
   return r;
+}
+
+/**
+ * Checks a `/v1` request's HTTP Message Signature (RFC 9421) against the API key's Ed25519 public key. The signature
+ * must cover `@method`, `@target-uri` (the public URL the client called) and `authorization`, plus `content-digest`
+ * (RFC 9530, checked against the body) whenever there is a body, and be created within HTTP_SIGNATURE_MAX_AGE_SECONDS.
+ * `keyid`, when given, must name this API key (its id or its `exai_k1_<prefix>`).
+ */
+async function verifySignedRequest(s: Services, req: Request, keyId: string, prefix: string, x: string): Promise<void> {
+  const refuse = (detail: string): never => {
+    throw new HttpProblem(401, 'Unauthorized', detail, { extensions: { code: 'invalid_signature' } });
+  };
+  const raw = (req as Request & { rawBody?: Buffer }).rawBody;
+  const hasBody = !!raw && raw.length > 0;
+  if (hasBody && !checkContentDigest(req.header('content-digest'), raw)) refuse('This API key requires signed requests: Content-Digest is missing or does not match the body.');
+  const v = await verifyMessage(
+    { method: req.method, url: `${s.cfg.ORIGIN}${req.originalUrl}`, headers: req.headers },
+    {
+      required: ['@method', '@target-uri', 'authorization', ...(hasBody ? ['content-digest'] : [])],
+      maxAgeSeconds: s.cfg.HTTP_SIGNATURE_MAX_AGE_SECONDS,
+      keyFor: (keyid) => (keyid == null || keyid === keyId || keyid === prefix ? { alg: 'ed25519', key: ed25519PublicKey(x) } : null)
+    }
+  );
+  if (!v.ok) refuse(`This API key requires signed requests (RFC 9421): ${v.reason}`);
 }
 
 /** Server-sent events: `data: <json>` per chunk, comments as keep-alives while nothing is sent, `data: [DONE]` last. */
