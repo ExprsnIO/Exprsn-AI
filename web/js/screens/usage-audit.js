@@ -68,7 +68,8 @@
 
   // ---------- Sprint 13: statements and price books (billing:read to see, billing:manage to change) ----------
   const METER_LABEL = { prompt_tokens: 'Prompt tokens', output_tokens: 'Output tokens', thinking_tokens: 'Thinking tokens', gpu_seconds: 'GPU-seconds', requests: 'Requests', calc_calls: 'Calculator calls' };
-  const FINAL = { pushed: 1, paid: 1, 'payment failed': 1, void: 1 };
+  const FINAL = { pushed: 1, paid: 1, 'payment failed': 1, void: 1, 'partly refunded': 1, refunded: 1, disputed: 1, 'dispute lost': 1 };
+  const dayTime = (ms) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   const money = (micros, cur) => (Number(micros || 0) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + ' ' + (cur || '');
   function billingLoad(st, refresh) {
     const b = st.bill = st.bill || {};
@@ -113,8 +114,13 @@
         + (d.state === 'paid' ? UI.notice('<b>Paid.</b> ' + esc(b.settings.provider || 'The billing provider') + ' reported invoice ' + esc(d.providerRef || '') + ' paid on ' + esc(when(d.paidAt)) + '.', 'ok') : '')
         + (d.state === 'payment failed' ? UI.notice('<b>Payment failed.</b> ' + esc(b.settings.provider || 'The billing provider') + ' reported that invoice ' + esc(d.providerRef || '') + ' could not be collected. It is marked paid when a later payment succeeds.', 'danger') : '')
         + (d.state === 'void' ? UI.notice('<b>Void.</b> Invoice ' + esc(d.providerRef || '') + ' was voided at ' + esc(b.settings.provider || 'the billing provider') + '.', 'warn') : '')
+        + (d.state === 'refunded' || d.state === 'partly refunded' ? UI.notice('<b>' + (d.state === 'refunded' ? 'Refunded.' : 'Partly refunded.') + '</b> ' + esc(money(d.refundedMicros, d.currency)) + ' of ' + esc(money(d.totalMicros, d.currency)) + ' was returned to the customer.', 'warn') : '')
+        + (d.state === 'disputed' ? UI.notice('<b>Disputed.</b> The customer disputes ' + esc(money(d.disputedMicros, d.currency)) + (d.disputeStatus ? ' (' + esc(d.disputeStatus.replace(/_/g, ' ')) + ')' : '') + '. The statement returns to paid if the dispute is won.', 'danger') : '')
+        + (d.state === 'dispute lost' ? UI.notice('<b>Dispute lost.</b> ' + esc(money(d.disputedMicros, d.currency)) + ' was taken back from the payment.', 'danger') : '')
+        + (d.creditedMicros ? UI.notice('Credit notes for ' + esc(money(d.creditedMicros, d.currency)) + ' were issued against invoice ' + esc(d.providerRef || '') + ' (' + esc(String(d.credits.filter((c) => c.state === 'issued').length)) + ' issued' + (d.credits.some((c) => c.state === 'void') ? ', ' + esc(String(d.credits.filter((c) => c.state === 'void').length)) + ' voided' : '') + ').', 'info') : '')
+        + (d.prorated ? UI.notice('Prices changed during this month: each part of the month is priced with the prices in effect then.', 'info') : '')
         + '<div class="grid4">' + UI.stat(esc(money(d.totalMicros, d.currency)), 'Total, ' + d.month, esc(d.state === 'preview' ? 'preview, not saved' : d.state)) + UI.stat(fmt(t.promptTokens + t.outputTokens), 'Tokens', fmt(t.promptTokens) + ' in, ' + fmt(t.outputTokens) + ' out') + UI.stat(fmt(Math.round(t.gpuSeconds)), 'GPU-seconds', '') + UI.stat(fmt(t.requests), 'Requests', d.book ? 'price book ' + esc(d.book.name) : 'no price book') + '</div>'
-        + UI.table(['Kind', 'Model', 'Profile', 'Meter', { label: 'Quantity', right: true }, { label: 'Price', right: true }, { label: 'Amount', right: true }], d.lines.map((l) => [esc(l.kind), '<span class="mono">' + esc(l.model || '') + '</span>', esc(l.profile || ''), esc(METER_LABEL[l.meter] || l.meter), fmt(l.quantity), l.priced ? esc(money(l.unitPriceMicros, '')) + ' <span class="muted">per ' + fmt(l.perUnits) + '</span>' : '<span class="muted">not priced</span>', esc(money(l.amountMicros, d.currency))]), { clickable: false, minWidth: '720px', emptyTitle: 'No usage this month', emptyText: 'Lines appear as models are used.' })
+        + UI.table(['Kind', 'Model', 'Profile', 'Meter'].concat(d.prorated ? ['Period'] : []).concat([{ label: 'Quantity', right: true }, { label: 'Price', right: true }, { label: 'Amount', right: true }]), d.lines.map((l) => [esc(l.kind), '<span class="mono">' + esc(l.model || '') + '</span>', esc(l.profile || ''), esc(METER_LABEL[l.meter] || l.meter)].concat(d.prorated ? [l.from != null ? esc(dayTime(l.from)) + ' to ' + esc(dayTime(l.to)) : ''] : []).concat([fmt(l.quantity), l.priced ? esc(money(l.unitPriceMicros, '')) + ' <span class="muted">per ' + fmt(l.perUnits) + '</span>' : '<span class="muted">not priced</span>', esc(money(l.amountMicros, d.currency))])), { clickable: false, minWidth: d.prorated ? '880px' : '720px', emptyTitle: 'No usage this month', emptyText: 'Lines appear as models are used.' })
         + (d.taxes && d.taxes.length ? UI.kv([['Subtotal', esc(money(d.subtotalMicros, d.currency))]].concat(d.taxes.map((x) => [esc(x.name) + ' ' + esc(String(x.ratePpm / 10000)) + '%', esc(money(x.amountMicros, d.currency))])).concat([['Total', '<b>' + esc(money(d.totalMicros, d.currency)) + '</b>']]), 1) : '')
         + '<div class="muted" style="font-size:12px">Totals come from the same usage records as the Usage tab, so they match its report for the month. Usage without a price is listed at zero.' + (d.computedAt ? ' Computed ' + esc(when(d.computedAt)) + '.' : '') + '</div>';
     }
@@ -147,7 +153,9 @@
         + (!existing && isSysAdmin() ? UI.check('Only for this tenant, not the whole platform', false, 'data-bowner') : existing && existing.tenantId ? '<div class="muted" style="font-size:12px">This book belongs to one tenant; only it can use it.</div>' : '')
         + '<div class="fg2" style="font-size:12px">Each item prices one meter. The most specific item wins: a profile, then a model, then anything; a named usage kind (chat, api, embed, agent, workflow…) beats *.</div>'
         + '<div class="tablewrap"><table class="dt"><thead><tr><th>Applies to</th><th>Name</th><th>Usage</th><th>Meter</th><th>Price</th><th>Per</th><th></th></tr></thead><tbody data-bitems></tbody></table></div>'
-        + UI.btn('Add item', { size: 'sm', icon: 'plus', attrs: 'data-badd' }) + '<div data-err></div>',
+        + UI.btn('Add item', { size: 'sm', icon: 'plus', attrs: 'data-badd' })
+        + (existing ? UI.field('New prices take effect from', UI.input('', { type: 'datetime-local', attrs: 'data-beffective' }), 'Empty: from now. Earlier this month prorates the month: usage before that moment keeps the old prices.') : '')
+        + '<div data-err></div>',
       actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(existing ? 'Save price book' : 'Create price book', { kind: 'primary', attrs: 'data-bsave' }),
       onMount(m) {
         const tbody = m.querySelector('[data-bitems]');
@@ -166,6 +174,8 @@
           const own = m.querySelector('[data-bowner]');
           if (!existing && own && own.checked) body.tenantId = st.bill.settings.tenantId;
           if (existing) body.state = m.querySelector('[data-bstate]').value;
+          const eff = m.querySelector('[data-beffective]');
+          if (existing && eff && eff.value) { const t = new Date(eff.value); if (isNaN(t.getTime())) { box.innerHTML = UI.notice('Give the effective time as a date and time.', 'warn'); return; } body.effectiveFrom = t.toISOString(); }
           e.target.disabled = true;
           try {
             if (existing) await App.patch('/api/admin/billing/price-books/' + encodeURIComponent(existing.id), body); else await App.post('/api/admin/billing/price-books', body);
