@@ -1,4 +1,7 @@
-import { createHash, createPublicKey, sign as cryptoSign, verify as cryptoVerify, type JsonWebKey, type KeyObject } from 'node:crypto';
+import { createHash, createPublicKey, sign as cryptoSign, verify as cryptoVerify, type KeyObject, type webcrypto } from 'node:crypto';
+
+// @types/node 26 keeps the JWK type under webcrypto only.
+type JsonWebKey = webcrypto.JsonWebKey;
 
 /** Compact JWS (RFC 7515) for ES256 signing and ES256 / RS256 verification, with node:crypto only. */
 

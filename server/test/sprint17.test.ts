@@ -4,7 +4,7 @@ import { createServer, type AddressInfo, type Server as NetServer, type Socket }
 import type { Server } from 'node:http';
 import express from 'express';
 import request from 'supertest';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Jwk } from '../src/federation/jose.js';
 import { selfSignedCertificate } from '../src/federation/x509.js';
@@ -433,7 +433,7 @@ describe('Sprint 17: identity and security', () => {
       // The link works once.
       expect((await request(h.app).post('/api/auth/password/reset').send({ token, password: 'the first root chooses this' })).status).toBe(400);
       const begin = await browser.post('/api/me/mfa/totp').set('x-csrf-token', csrf).send({});
-      const confirm = await browser.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', csrf).send({ code: authenticator.generate(begin.body.secret) });
+      const confirm = await browser.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', csrf).send({ code: totp.generate(begin.body.secret) });
       expect(confirm.status).toBe(201);
       expect(confirm.body.stage).toBe('active');
       expect((await browser.get('/api/admin/users')).status).toBe(200);

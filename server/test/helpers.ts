@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import request from 'supertest';
 import type { Express } from 'express';
 import { loadConfig, type Config } from '../src/config/index.js';
@@ -97,7 +97,7 @@ export async function loginAdmin(h: Harness, username: string): Promise<Client &
   const { agent, res } = await login(h, username);
   if (res.body.stage !== 'enroll') throw new Error(`expected enroll stage, got ${JSON.stringify(res.body)}`);
   const begin = await agent.post('/api/me/mfa/totp').set('x-csrf-token', res.body.csrf).send({});
-  const enrolCode = authenticator.generate(begin.body.secret);
+  const enrolCode = totp.generate(begin.body.secret);
   const confirm = await agent.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', res.body.csrf).send({ code: enrolCode });
   if (confirm.status !== 201) throw new Error(`enrol failed: ${JSON.stringify(confirm.body)}`);
   return { agent, csrf: confirm.body.csrf, cookie: cookieOf(confirm), totpSecret: begin.body.secret, enrolCode };

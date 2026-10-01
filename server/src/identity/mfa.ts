@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { authenticator } from 'otplib';
+import { totp } from './totp.js';
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -12,8 +12,6 @@ import { ulid } from 'ulid';
 import { json, type Db } from '../db/knex.js';
 import { hmac, safeEqual } from '../crypto/index.js';
 import type { Sealer } from '../platform/datakeys.js';
-
-authenticator.options = { step: 30, window: 1, digits: 6 };
 
 export interface FactorRow {
   id: string;
@@ -72,9 +70,9 @@ export class MfaService {
   async beginTotp(userId: string, username: string, label: string): Promise<{ id: string; secret: string; uri: string }> {
     await this.db('mfa_factors').where({ user_id: userId, kind: 'totp' }).whereNull('confirmed_at').delete();
     const id = ulid();
-    const secret = authenticator.generateSecret(20);
+    const secret = totp.generateSecret(20);
     await this.db('mfa_factors').insert({ id, user_id: userId, kind: 'totp', label, secret: await this.box.seal(secret, 'totp:' + id), created_at: Date.now() });
-    return { id, secret, uri: authenticator.keyuri(username, this.cfg.issuer, secret) };
+    return { id, secret, uri: totp.keyuri(username, this.cfg.issuer, secret) };
   }
 
   async confirmTotp(userId: string, factorId: string, code: string): Promise<boolean> {
@@ -105,7 +103,7 @@ export class MfaService {
   private async checkCode(row: Record<string, unknown>, code: string): Promise<number | null> {
     if (!/^\d{6}$/.test(code)) return null;
     const secret = await this.box.open(String(row.secret), 'totp:' + String(row.id));
-    const delta = authenticator.checkDelta(code, secret);
+    const delta = totp.checkDelta(code, secret);
     if (delta == null) return null;
     return Math.floor(Date.now() / 30_000) + delta;
   }

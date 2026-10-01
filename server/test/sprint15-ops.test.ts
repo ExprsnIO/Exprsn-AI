@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDb, migrate, type Db } from '../src/db/knex.js';
 import { createApp } from '../src/http/app.js';
@@ -293,7 +293,7 @@ describe('B-410: backups of the blob store, streamed, and restore into an empty 
     const agent = request.agent(app);
     const first = await agent.post('/api/auth/login').send({ username: 'root', password: PASSWORD }).expect(200);
     expect(first.body.stage).toBe('mfa');
-    const step = await agent.post('/api/auth/mfa/totp').set('x-csrf-token', first.body.csrf).send({ code: authenticator.clone({ epoch: Date.now() + 30_000 }).generate(admin.totpSecret) });
+    const step = await agent.post('/api/auth/mfa/totp').set('x-csrf-token', first.body.csrf).send({ code: totp.generate(admin.totpSecret, Date.now() + 30_000) });
     expect([200, 201]).toContain(step.status);
     await agent.get('/api/admin/platform/summary').expect(200);
     expect(await t.keys.open(h.tenantId, sealed, 'aad:r')).toBe('survives the restore');

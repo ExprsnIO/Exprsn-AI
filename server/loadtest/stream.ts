@@ -21,7 +21,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { parseArgs } from 'node:util';
 import { performance } from 'node:perf_hooks';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import { io as ioClient, type Socket } from 'socket.io-client';
 
 /* ------------------------------------------------------------------ options */
@@ -244,7 +244,7 @@ async function signIn(url: string, a: Target['accounts'][number], tenant: string
   let s: Session = { cookie: mergeCookies('', res), csrf: String(body.csrf) };
   if (body.stage === 'mfa') {
     if (!a.totp) throw new Error(`sign-in ${a.username}: a second factor is required; add :<totp-secret> in LOADTEST_USERS`);
-    const r2 = await post(url, '/api/auth/mfa/totp', { code: authenticator.generate(a.totp) }, s, extra);
+    const r2 = await post(url, '/api/auth/mfa/totp', { code: totp.generate(a.totp) }, s, extra);
     const b2 = (await r2.json().catch(() => ({}))) as { stage?: string; csrf?: string; detail?: string };
     if (!r2.ok) throw new Error(`second factor ${a.username}: ${r2.status} ${b2.detail ?? ''}`);
     s = { cookie: mergeCookies(s.cookie, r2), csrf: String(b2.csrf) };

@@ -76,6 +76,14 @@ applicable) and [docs/accessibility.md](docs/accessibility.md).
   `y-reflow.spec.ts`.
 - A flake in `memory.test.ts`, where a random sealed value could contain the searched substring, is fixed.
 
+### Dependencies
+
+- Builds on the dependency updates merged into `main` after 1.1.0: TypeScript 7, `@types/node` 26, otplib 13,
+  undici 8, and the PostgreSQL 18, Redis 8 and MySQL 9.6 images. otplib 13 drops the `authenticator` API; TOTP now
+  goes through `server/src/identity/totp.ts` (the same SHA-1, six-digit, 30-second codes with one step of drift, so
+  enrolled authenticators keep working; checked against the RFC 6238 vectors). `@types/node` 26 keeps the JWK type
+  under `crypto.webcrypto`.
+
 ### Upgrade notes
 - Migrations `018_chat_depth` to `021_integrations2` run on start (`DB_MIGRATE_ON_START`) or with `exprsn-ai migrate`.
 - The training worker must speak contract 2 ([docs/training-worker.md](docs/training-worker.md)). A contract-1 worker
