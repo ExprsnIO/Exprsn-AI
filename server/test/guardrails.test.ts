@@ -167,7 +167,9 @@ describe('guardrails', () => {
     const view = (await m.agent.get(`/api/conversations/${sent.body.conversationId}`).expect(200)).body;
     expect(view.messages[1].content).toMatch(/^This answer was withheld\. Blocked by the guardrail "Safety categories" \(unsafe: S1 violent crimes\)/);
     expect(view.messages[1].guard).toMatchObject({ action: 'block' });
-    expect(Number(stored.seq)).toBeGreaterThan(1); // bumped past the released sentence, so a client reads the answer again
+    // Since Sprint 16 the guard model screens while streaming (hold-back 1), so the sentence is never released; the
+    // sequence is still bumped, so a client reads the answer again.
+    expect(Number(stored.seq)).toBeGreaterThan(0);
     const resume = (await m.agent.get(`/api/conversations/${sent.body.conversationId}/messages/${sent.body.messageId}/stream?after=0`).expect(200)).body;
     expect(resume.content).toMatch(/^This answer was withheld/);
     // a safe answer passes

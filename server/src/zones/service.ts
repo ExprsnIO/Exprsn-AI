@@ -1,4 +1,6 @@
-import { connect } from 'node:net';
+import { connect, isIP } from 'node:net';
+import { fetch } from 'undici';
+import { checkServiceUrl, checkServiceHost, serviceAddressProblem, serviceAgent, serviceLookup, servicePolicy, ServiceUrlRefused, type ServicePolicy } from '../platform/egress.js';
 import { ulid } from 'ulid';
 import { labelRank, type Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
@@ -32,6 +34,8 @@ export interface ZoneVersionRow {
   status: VersionStatus;
   spec: ZoneSpec;
   move_pools: string[];
+  /** Sprint 18 (B-908): connections and MCP servers that move into the zone on approval. */
+  move_members: MemberMove[];
   reason: string | null;
   proposed_by: string | null;
   proposed_at: number | null;
@@ -72,6 +76,28 @@ export interface Blocker {
   tenant: string | null;
 }
 
+/** B-908: a data connection or MCP server moved into a zone by an approved proposal. */
+export interface MemberMove {
+  kind: 'connection' | 'mcp';
+  id: string;
+  name: string;
+}
+
+/** B-908: a connection or MCP server registered before zones were defined that is outside what its zone admits. */
+export interface Misplaced {
+  kind: 'connection' | 'mcp';
+  id: string;
+  name: string;
+  tenant: string | null;
+  zone: string;
+  label: Label | null;
+  reason: string;
+  /** The zone the move proposal would target (null when no defined zone admits it). */
+  suggestion: string | null;
+  /** A draft already moves it. */
+  pending: string | null;
+}
+
 /** One member of a zone as the endpoint-health list shows it. */
 export interface Member {
   ref: string;
@@ -100,6 +126,7 @@ const versionFrom = (r: Record<string, unknown>): ZoneVersionRow => ({
   version: Number(r.version),
   spec: json<ZoneSpec>(r.spec, {} as ZoneSpec),
   move_pools: json<string[]>(r.move_pools, []),
+  move_members: json<MemberMove[]>(r.move_members, []),
   proposed_at: n(r.proposed_at),
   decided_at: n(r.decided_at),
   created_at: Number(r.created_at),
@@ -318,6 +345,68 @@ export class ZoneService {
     return out;
   }
 
+  // ---------- members outside their zone (Sprint 18, B-908) ----------
+
+  /** Looks up the members a proposal moves (by id, any tenant: zones are platform-wide) and names them. */
+  private async resolveMoves(list: { kind: 'connection' | 'mcp'; id: string }[]): Promise<MemberMove[]> {
+    const out: MemberMove[] = [];
+    for (const m of list) {
+      const row = (await this.s().db(m.kind === 'connection' ? 'data_connections' : 'mcp_servers').where({ id: m.id }).first('id', 'name')) as { id: string; name: string } | undefined;
+      if (!row) throw notFound(m.kind === 'connection' ? 'Connection' : 'MCP server');
+      if (!out.some((x) => x.kind === m.kind && x.id === m.id)) out.push({ kind: m.kind, id: row.id, name: row.name });
+    }
+    return out;
+  }
+
+  /**
+   * Connections and MCP servers that sit outside what their zone admits: registered before zones were defined (or
+   * before their zone was), so the registration check (B-415) never saw them. Each comes with a suggested zone (a
+   * defined, non-external zone whose ceiling admits the member's label: `data` for connections and `app` for MCP
+   * servers when those fit, else the tightest that does) and whether a draft already moves it.
+   */
+  async misplaced(): Promise<Misplaced[]> {
+    const db = this.s().db;
+    const zones = await this.loadCurrent();
+    if (!zones.size) return [];
+    const [conns, mcp, drafts] = await Promise.all([
+      db('data_connections as c').leftJoin('tenants as t', 't.id', 'c.tenant_id').select('c.id', 'c.name', 'c.zone', 'c.label', 't.slug') as Promise<{ id: string; name: string; zone: string; label: Label; slug: string | null }[]>,
+      db('mcp_servers as m').leftJoin('tenants as t', 't.id', 'm.tenant_id').where('m.state', 'active').select('m.id', 'm.name', 'm.zone', 't.slug') as Promise<{ id: string; name: string; zone: string; slug: string | null }[]>,
+      db('zone_versions').where({ status: 'draft' }).select('zone_id', 'move_members') as Promise<{ zone_id: string; move_members: unknown }[]>
+    ]);
+    const pending = new Map<string, string>();
+    for (const d of drafts) for (const m of json<MemberMove[]>(d.move_members, [])) pending.set(`${m.kind}:${m.id}`, d.zone_id);
+    const ordered = [...zones].filter(([id, z]) => !isExternal(id, z.spec));
+    const suggest = (kind: 'connection' | 'mcp', label: Label | null): string | null => {
+      const fits = ordered.filter(([, z]) => !label || labelRank(label) <= labelRank(z.spec.maxLabel));
+      const preferred = kind === 'connection' ? ['data'] : ['app', 'sandbox'];
+      for (const id of preferred) if (fits.some(([x]) => x === id)) return id;
+      const tight = fits.slice().sort((a, b) => labelRank(a[1].spec.maxLabel) - labelRank(b[1].spec.maxLabel));
+      return tight[0]?.[0] ?? null;
+    };
+    const why = (zone: string, label: Label | null): string | null => {
+      const z = zones.get(zone);
+      if (!z) return `Zone ${zone} is not defined.`;
+      if (isExternal(zone, z.spec)) return `The ${zone} zone stays empty.`;
+      if (label && labelRank(label) > labelRank(z.spec.maxLabel)) return `Labelled ${label}, above the ${zone} zone's ceiling of ${z.spec.maxLabel}.`;
+      return null;
+    };
+    const out: Misplaced[] = [];
+    for (const c of conns) {
+      const reason = why(c.zone, c.label);
+      if (reason) out.push({ kind: 'connection', id: c.id, name: c.name, tenant: c.slug, zone: c.zone, label: c.label, reason, suggestion: suggest('connection', c.label), pending: pending.get(`connection:${c.id}`) ?? null });
+    }
+    for (const m of mcp) {
+      const reason = why(m.zone, null);
+      if (reason) out.push({ kind: 'mcp', id: m.id, name: m.name, tenant: m.slug, zone: m.zone, label: null, reason, suggestion: suggest('mcp', null), pending: pending.get(`mcp:${m.id}`) ?? null });
+    }
+    return out.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  }
+
+  /** Whether any zone has a current definition (the re-check runs when the first one appears). */
+  async anyDefined(): Promise<boolean> {
+    return (await this.loadCurrent()).size > 0;
+  }
+
   // ---------- validation ----------
 
   private problemsFor(zones: Map<string, ZoneSpec>, members: ZoneSetMembers): SetProblem[] {
@@ -329,7 +418,15 @@ export class ZoneService {
    * already has elsewhere do not block; new ones do (422 "Invalid zone"). A ceiling below what the zone holds is
    * refused with the list of what must move first (422 "Ceiling too low").
    */
-  async check(zoneId: string, spec: ZoneSpec, movePools: string[]): Promise<void> {
+  async check(zoneId: string, spec: ZoneSpec, movePools: string[], moveMembers: MemberMove[] = []): Promise<void> {
+    // B-908: members moving in must fit the zone they move to.
+    for (const m of moveMembers) {
+      if (isExternal(zoneId, spec)) throw forbidden(`The ${zoneId} zone stays empty: ${m.name} cannot move into it.`, { step: 'zone' });
+      if (m.kind === 'connection') {
+        const c = (await this.s().db('data_connections').where({ id: m.id }).first('label')) as { label: Label } | undefined;
+        if (c && labelRank(c.label) > labelRank(spec.maxLabel)) throw new HttpProblem(422, 'Ceiling too low', `${m.name} is labelled ${c.label}, above the ${zoneId} zone's ceiling of ${spec.maxLabel}.`, { extensions: { step: 'zone-ceiling', zone: zoneId, ceiling: spec.maxLabel } });
+      }
+    }
     const current = await this.loadCurrent();
     const before = new Map([...current].map(([id, z]) => [id, z.spec]));
     const after = new Map(before);
@@ -366,7 +463,8 @@ export class ZoneService {
    * Proposes a change to a zone as a draft version (or a new zone, as its version 1). `patch` is merged over the
    * zone's current specification. At most one draft per zone is open at a time.
    */
-  async propose(p: Principal, zoneId: string, input: { create: boolean; spec?: ZoneSpec; patch?: ZoneSpecPatch; movePools: string[]; reason: string | null }): Promise<ZoneVersionRow> {
+  async propose(p: Principal, zoneId: string, input: { create: boolean; spec?: ZoneSpec; patch?: ZoneSpecPatch; movePools: string[]; moveMembers?: { kind: 'connection' | 'mcp'; id: string }[]; reason: string | null }): Promise<ZoneVersionRow> {
+    const moveMembers = await this.resolveMoves(input.moveMembers ?? []);
     const db = this.s().db;
     if (!ZONE_ID.test(zoneId) || RESERVED_IDS.includes(zoneId)) throw new HttpProblem(422, 'Invalid zone', 'A zone id is lower case letters, digits and dashes, starting with a letter.');
     let z = await this.zone(zoneId);
@@ -382,10 +480,10 @@ export class ZoneService {
       const merged = specSchema.safeParse({ ...cur.spec, ...(input.patch ?? {}) });
       if (!merged.success) throw new HttpProblem(422, 'Invalid zone', merged.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
       spec = merged.data;
-      if (JSON.stringify(spec) === JSON.stringify(cur.spec) && !input.movePools.length) throw conflict('The proposal changes nothing.');
+      if (JSON.stringify(spec) === JSON.stringify(cur.spec) && !input.movePools.length && !moveMembers.length) throw conflict('The proposal changes nothing.');
     }
     if (await this.draft(zoneId)) throw conflict(`Zone ${zoneId} already has a draft waiting for review. Approve, reject or withdraw it first.`);
-    await this.check(zoneId, spec, input.movePools);
+    await this.check(zoneId, spec, input.movePools, moveMembers);
     const t = Date.now();
     if (!z) {
       const max = ((await db('zones').max({ m: 'position' }).first()) as { m: number | null } | undefined)?.m ?? -1;
@@ -398,9 +496,9 @@ export class ZoneService {
       }
     }
     const max = ((await db('zone_versions').where({ zone_id: zoneId }).max({ v: 'version' }).first()) as { v: number | null } | undefined)?.v ?? 0;
-    const row: ZoneVersionRow = { id: ulid(), zone_id: zoneId, version: Number(max) + 1, status: 'draft', spec, move_pools: input.movePools, reason: input.reason, proposed_by: p.userId, proposed_at: t, decided_by: null, decided_at: null, decision_note: null, created_at: t, updated_at: t };
+    const row: ZoneVersionRow = { id: ulid(), zone_id: zoneId, version: Number(max) + 1, status: 'draft', spec, move_pools: input.movePools, move_members: moveMembers, reason: input.reason, proposed_by: p.userId, proposed_at: t, decided_by: null, decided_at: null, decision_note: null, created_at: t, updated_at: t };
     try {
-      await db('zone_versions').insert({ ...row, spec: JSON.stringify(spec), move_pools: JSON.stringify(input.movePools) });
+      await db('zone_versions').insert({ ...row, spec: JSON.stringify(spec), move_pools: JSON.stringify(input.movePools), move_members: moveMembers.length ? JSON.stringify(moveMembers) : null });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('Someone else proposed a change to this zone at the same time. Reload it.');
       throw err;
@@ -411,14 +509,14 @@ export class ZoneService {
   }
 
   /** Dual control: a system admin other than the proposer approves, and the draft becomes current (pools move in). */
-  async approve(p: Principal, zoneId: string, note: string | null): Promise<{ version: ZoneVersionRow; previous: number | null; moved: string[] }> {
+  async approve(p: Principal, zoneId: string, note: string | null): Promise<{ version: ZoneVersionRow; previous: number | null; moved: string[]; movedMembers: MemberMove[] }> {
     const db = this.s().db;
     const z = await this.zone(zoneId);
     if (!z) throw notFound('Zone');
     const d = await this.draft(zoneId);
     if (!d) throw notFound('Draft');
     if (d.proposed_by === p.userId) throw forbidden('Dual control: you cannot approve your own proposal. Another system admin must approve it.', { step: 'dual-control' });
-    await this.check(zoneId, d.spec, d.move_pools);
+    await this.check(zoneId, d.spec, d.move_pools, d.move_members);
     const t = Date.now();
     await db.transaction(async (trx) => {
       const n = await trx('zone_versions').where({ id: d.id, status: 'draft' }).update({ status: 'current', decided_by: p.userId, decided_at: t, decision_note: note, updated_at: t });
@@ -426,9 +524,13 @@ export class ZoneService {
       if (z.current_version != null) await trx('zone_versions').where({ zone_id: zoneId, version: z.current_version }).update({ status: 'superseded', updated_at: t });
       await trx('zones').where({ id: zoneId }).update({ current_version: d.version, updated_at: t });
       if (d.move_pools.length) await trx('pools').whereIn('name', d.move_pools).update({ zone: zoneId, updated_at: t });
+      const conns = d.move_members.filter((m) => m.kind === 'connection').map((m) => m.id);
+      const mcps = d.move_members.filter((m) => m.kind === 'mcp').map((m) => m.id);
+      if (conns.length) await trx('data_connections').whereIn('id', conns).update({ zone: zoneId, updated_at: t });
+      if (mcps.length) await trx('mcp_servers').whereIn('id', mcps).update({ zone: zoneId, updated_at: t });
     });
     this.changed();
-    return { version: { ...d, status: 'current', decided_by: p.userId, decided_at: t, decision_note: note }, previous: z.current_version, moved: d.move_pools };
+    return { version: { ...d, status: 'current', decided_by: p.userId, decided_at: t, decision_note: note }, previous: z.current_version, moved: d.move_pools, movedMembers: d.move_members };
   }
 
   async reject(p: Principal, zoneId: string, note: string | null): Promise<ZoneVersionRow> {
@@ -604,7 +706,7 @@ export class ZoneService {
           version: cur?.version ?? null,
           spec: cur?.spec ?? null,
           external: isExternal(z.id, (cur ?? d)?.spec ?? ({ trust: 'private' } as ZoneSpec)),
-          draft: d ? { version: d.version, spec: d.spec, reason: d.reason, movePools: d.move_pools, proposedBy: d.proposed_by, proposedByName: d.proposed_by ? (names.get(d.proposed_by) ?? null) : null, proposedAt: d.proposed_at, mine: d.proposed_by === p.userId } : null,
+          draft: d ? { version: d.version, spec: d.spec, reason: d.reason, movePools: d.move_pools, moveMembers: d.move_members, proposedBy: d.proposed_by, proposedByName: d.proposed_by ? (names.get(d.proposed_by) ?? null) : null, proposedAt: d.proposed_at, mine: d.proposed_by === p.userId } : null,
           pools: h.pools,
           members: h.members
         };
@@ -620,6 +722,7 @@ export class ZoneService {
       corporateCidrs: this.ctx(new Map()).corporateCidrs,
       zones,
       undefinedRefs,
+      misplaced: await this.misplaced(),
       problems,
       defaults: DEFAULT_ZONES.map((d) => d.id).filter((id) => !rows.some((r) => r.id === id)),
       lastChange: last ? { id: last.id, action: last.action, ts: Number(last.ts), target: json<Record<string, unknown>>(last.target, {}) } : null
@@ -637,6 +740,7 @@ export class ZoneService {
     const cur = (await this.current()).get(zoneId);
     if (!cur) throw notFound('Zone');
     if (isExternal(zoneId, cur.spec)) throw forbidden(`The ${zoneId} zone stays empty: no endpoint can be registered in it.`, { step: 'zone' });
+    await checkEndpointAddress(input.address, servicePolicy(this.s().cfg));
     const t = Date.now();
     const row: EndpointRow = { id: ulid(), zone_id: zoneId, name: input.name, address: input.address, kind: input.kind, state: 'active', health: 'unknown', health_detail: null, failures: 0, checks: 0, failing_since: null, last_checked_at: null, last_ok_at: null, created_by: p.userId, created_at: t, updated_at: t };
     try {
@@ -675,7 +779,7 @@ export class ZoneService {
     let flipped = false;
     await Promise.all(
       rows.map(async (e) => {
-        const r = await probe(e.address, s.cfg.ZONE_HEALTH_TIMEOUT_MS);
+        const r = await probe(e.address, s.cfg.ZONE_HEALTH_TIMEOUT_MS, servicePolicy(s.cfg));
         const t = Date.now();
         const next: EndpointRow = r.ok
           ? { ...e, health: 'healthy', health_detail: r.detail, failures: 0, checks: 0, failing_since: null, last_checked_at: t, last_ok_at: t }
@@ -690,29 +794,60 @@ export class ZoneService {
   }
 }
 
-/** One health check. Only system admins register endpoints; addresses are theirs to choose, like pool instance URLs. */
-export async function probe(address: string, timeoutMs: number): Promise<{ ok: boolean; detail: string | null }> {
+/**
+ * B-901: an endpoint's address (a URL, or host:port) may not be a metadata, link-local (unless allowed),
+ * unspecified or multicast address. A name that does not resolve yet is accepted; the probe re-checks each dial.
+ */
+export async function checkEndpointAddress(address: string, policy: ServicePolicy): Promise<void> {
+  try {
+    if (/^https?:\/\//i.test(address)) return await checkServiceUrl(address, policy);
+    const m = /^\[?([^\]]+?)\]?:(\d{1,5})$/.exec(address);
+    if (!m) return;
+    await checkServiceHost(m[1]!, policy).catch((err: Error) => {
+      if (isIP(m[1]!) || !/does not resolve/.test(err.message)) throw err;
+    });
+  } catch (err) {
+    if (err instanceof ServiceUrlRefused) throw new HttpProblem(400, 'Invalid request', `The endpoint address is refused: ${err.message}`);
+    throw err;
+  }
+}
+
+const agents = new WeakMap<ServicePolicy, ReturnType<typeof serviceAgent>>();
+
+/** One health check. Only system admins register endpoints; each dial is checked against the service policy (B-901). */
+export async function probe(address: string, timeoutMs: number, policy: ServicePolicy = servicePolicy()): Promise<{ ok: boolean; detail: string | null }> {
   const started = Date.now();
   if (/^https?:\/\//i.test(address)) {
     try {
-      const res = await fetch(address, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+      const host = new URL(address).hostname.replace(/^\[|\]$/g, '');
+      const literal = isIP(host) ? serviceAddressProblem(host, host, policy) : null;
+      if (literal) return { ok: false, detail: `Refused: ${literal}` };
+      let dispatcher = agents.get(policy);
+      if (!dispatcher) agents.set(policy, (dispatcher = serviceAgent(policy)));
+      const res = await fetch(address, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs), dispatcher });
       await res.body?.cancel().catch(() => undefined);
       const ms = Date.now() - started;
       return res.status < 500 ? { ok: true, detail: `HTTP ${res.status} in ${ms} ms` } : { ok: false, detail: `HTTP ${res.status}` };
     } catch (err) {
-      return { ok: false, detail: (err as Error).name === 'TimeoutError' ? `No answer within ${timeoutMs} ms` : ((err as Error & { cause?: { code?: string } }).cause?.code ?? (err as Error).message) };
+      const cause = (err as Error & { cause?: { code?: string; message?: string } }).cause;
+      if (cause?.code === 'EREFUSED' && cause.message) return { ok: false, detail: `Refused: ${cause.message}` };
+      return { ok: false, detail: (err as Error).name === 'TimeoutError' ? `No answer within ${timeoutMs} ms` : (cause?.code ?? (err as Error).message) };
     }
   }
   const m = /^\[?([^\]]+?)\]?:(\d{1,5})$/.exec(address);
   if (!m) return { ok: false, detail: 'Not a URL or host:port' };
+  if (isIP(m[1]!)) {
+    const literal = serviceAddressProblem(m[1]!, m[1]!, policy);
+    if (literal) return { ok: false, detail: `Refused: ${literal}` };
+  }
   return new Promise((resolve) => {
-    const sock = connect({ host: m[1]!, port: Number(m[2]) });
+    const sock = connect({ host: m[1]!, port: Number(m[2]), lookup: serviceLookup(policy) as never });
     const done = (ok: boolean, detail: string) => {
       sock.destroy();
       resolve({ ok, detail });
     };
     sock.setTimeout(timeoutMs, () => done(false, `No answer within ${timeoutMs} ms`));
     sock.once('connect', () => done(true, `TCP connect in ${Date.now() - started} ms`));
-    sock.once('error', (err: NodeJS.ErrnoException) => done(false, err.code ?? err.message));
+    sock.once('error', (err: NodeJS.ErrnoException) => done(false, err.code === 'EREFUSED' ? `Refused: ${err.message}` : (err.code ?? err.message)));
   });
 }

@@ -241,8 +241,26 @@
         + UI.panel('Definition', UI.code(yaml(zone.id, zone.version || zone.draft.version, spec, !zone.spec), 'yaml'), { actions: UI.btn('Copy', { size: 'xs', kind: 'ghost', attrs: 'data-copy' }) })
         + '<div class="vstack gap6">' + UI.btn('View rendered diff', { size: 'sm', attrs: 'data-diff' }) + UI.btn('Propose change', { size: 'sm', kind: 'primary', attrs: 'data-propose' }) + '</div>';
 
+      // Sprint 18 (B-908): connections and MCP servers registered before zones were defined, outside what their zone admits.
+      function misplacedPanel() {
+        const list = data.misplaced || [];
+        if (!list.length) return '';
+        const rows = list.map((m) => [
+          esc(m.kind === 'mcp' ? 'MCP server' : 'Connection'),
+          '<b>' + esc(m.name) + '</b>' + (m.tenant ? ' <span class="muted">' + esc(m.tenant) + '</span>' : ''),
+          '<span class="mono">' + esc(m.zone) + '</span>',
+          esc(m.reason),
+          m.pending ? '<span class="muted">Draft pending in ' + esc(m.pending) + '</span>'
+            : m.suggestion ? UI.btn('Propose move to ' + esc(m.suggestion), { size: 'xs', attrs: 'data-movemember="' + esc(m.kind + ':' + m.id) + '" data-target="' + esc(m.suggestion) + '" data-name="' + esc(m.name) + '"' })
+            : '<span class="muted">No defined zone admits it</span>'
+        ]);
+        return UI.notice('<b>' + list.length + (list.length === 1 ? ' member is' : ' members are') + ' outside their zone.</b> They were registered before zones were defined. Each move is a proposal another system admin approves.', 'warn')
+          + '<div>' + UI.table(['Kind', 'Name', 'Zone', 'Why', 'Move'], rows, { clickable: false, minWidth: '0', cls: 'bare' }) + '</div>';
+      }
+
       const notices = (data.problems.length ? UI.notice('<b>The current zone set has ' + data.problems.length + (data.problems.length === 1 ? ' problem' : ' problems') + '.</b> ' + data.problems.map((p) => esc(p.message)).join(' '), 'warn') : '')
         + (data.undefinedRefs.length ? UI.notice('Members name zones that are not defined: ' + data.undefinedRefs.map((u) => '<b>' + esc(u.zone) + '</b> (' + esc(u.pools.map((x) => 'pool ' + x).concat(u.members).join(', ')) + ')').join('; ') + '. No zone ceiling applies to them until the zone is defined.', 'warn') : '')
+        + misplacedPanel()
         + (data.lastChange ? UI.notice('Last zone change ' + esc(when(data.lastChange.ts)) + ': ' + esc(data.lastChange.action.replace(/^zone\./, '').replace(/\./g, ' ')) + ' ' + esc([data.lastChange.target.zone, data.lastChange.target.version ? 'v' + data.lastChange.target.version : ''].concat(data.lastChange.target.zones || []).filter(Boolean).join(' ')) + '.', 'ok', UI.btn('Audit event', { size: 'sm', kind: 'ghost', attrs: 'data-audit="' + esc(data.lastChange.id) + '"' })) : '');
 
       root.innerHTML = style
@@ -265,7 +283,7 @@
         const stats = (f) => '<span class="muted" style="font-size:12px">' + (d.from ? 'v' + d.from.version + ' to v' + d.to.version : 'new, v' + d.to.version) + ': ' + d.renders[f].added + ' added, ' + d.renders[f].removed + ' removed</span>';
         let tab = 'networkpolicy';
         ctx.modal({ title: 'Rendered diff, ' + esc(z.id) + ' v' + d.to.version + (isDraft ? ' ' + UI.pill('draft', 'info') : ''), cls: 'wide',
-          body: '<div class="fg2" style="font-size:12px">The same zone definition rendered three ways. Approving applies all three in one change and routing follows at once; deploy the downloaded files with Compose, Helm or nft.' + (d.to.reason ? ' Reason: ' + esc(d.to.reason) + '.' : '') + (d.to.movePools && d.to.movePools.length ? ' Moves pools ' + esc(d.to.movePools.join(', ')) + ' into ' + esc(z.id) + '.' : '') + '</div>'
+          body: '<div class="fg2" style="font-size:12px">The same zone definition rendered three ways. Approving applies all three in one change and routing follows at once; deploy the downloaded files with Compose, Helm or nft.' + (d.to.reason ? ' Reason: ' + esc(d.to.reason) + '.' : '') + (d.to.movePools && d.to.movePools.length ? ' Moves pools ' + esc(d.to.movePools.join(', ')) + ' into ' + esc(z.id) + '.' : '') + (z.draft && z.draft.moveMembers && z.draft.moveMembers.length ? ' Moves ' + esc(z.draft.moveMembers.map((m) => m.name).join(', ')) + ' into ' + esc(z.id) + '.' : '') + '</div>'
             + UI.tabs(FORMATS.map((f) => ({ id: f.id, label: f.label })), tab, 'id="zn-difftabs"') + '<div id="zn-stats">' + stats(tab) + '</div><div id="zn-diff">' + view(tab) + '</div>',
           actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Download', { icon: 'download', kind: 'ghost', attrs: 'data-dl' })
             + (isDraft ? (z.draft && z.draft.mine ? UI.btn('Withdraw draft', { kind: 'danger', attrs: 'data-withdraw' }) : UI.btn('Reject draft', { kind: 'danger', attrs: 'data-reject' }) + UI.btn('Approve and apply', { kind: 'primary', attrs: 'data-approve' })) : ''),
@@ -393,6 +411,13 @@
       }));
       ctx.on('click', '[data-check]', async () => { try { const out = await App.post('/api/admin/zones/' + enc(zone.id) + '/endpoints/check'); ctx.toast(out.length ? out.length + ' registered ' + (out.length === 1 ? 'endpoint' : 'endpoints') + ' checked: ' + out.filter((x) => x.health === 'healthy').length + ' healthy.' : 'No registered endpoints to check. Pool instances are checked by the gateway poller.', 'ok'); quiet(); } catch (err) { App.fail(err); } });
       ctx.on('click', '[data-addep]', endpointModal);
+      ctx.on('click', '[data-movemember]', (e, t) => {
+        const [kind, id] = t.dataset.movemember.split(':');
+        const target = t.dataset.target;
+        ctx.confirm({ title: 'Move ' + esc(t.dataset.name) + ' to ' + esc(target), tone: 'info', body: '<p class="fg2" style="margin:0">Creates a draft of the ' + esc(target) + ' zone that moves ' + esc(t.dataset.name) + ' into it. Another system admin approves it before anything changes.</p>', ok: 'Propose move' }).then((ok) => {
+          if (ok) propose(target, { moveMembers: [{ kind, id }], reason: 'Registered before zones were defined' }, ' to move ' + esc(t.dataset.name));
+        });
+      });
       ctx.on('click', '[data-copy]', () => { const text = yaml(zone.id, zone.version || zone.draft.version, spec, !zone.spec); (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(() => ctx.toast('NetworkZone ' + esc(zone.id) + ' copied.', 'ok'), () => ctx.toast('The clipboard is not available here.', 'warn')); });
       ctx.on('click', '[data-diff]', diffModal);
       ctx.on('click', '[data-propose]', proposeModal);

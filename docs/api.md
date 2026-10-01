@@ -1246,3 +1246,275 @@ The `billing.close` schedule closes last month's statements. Audit actions: `bil
 - Media is sandboxed; see "Media origin" above. Platform routes for signer proposals, dns-01 and backups are under
   "Sprint 9: Platform operations". Data connections gained MySQL and OpenBao dynamic credentials; MCP server
   registration and tool approval check zones (`422`/`403 step: zone`, the refusal audited as `mcp.register.refused`).
+
+## Sprint 16: Chat and AI depth
+
+### `/v1` context and server tools
+
+`POST /v1/chat/completions` takes three optional headers. Without them nothing changes. Each needs its own permission
+beside `inference:invoke` (and, for an API key or OAuth token, the scope): `knowledge:read`, `memory:write` and
+`tools:invoke` respectively (`403` with `code: denied_role` or `denied_scope` and the header as `param`).
+
+| Header | Behaviour |
+| --- | --- |
+| `X-Exprsn-Knowledge: <id>[,<id>…]` (up to 10) | Retrieves from those knowledge bases with chat's context provider and rules: each must be one the caller may read (`404 knowledge_base_not_found` otherwise, exactly as for one that does not exist) and published (`409 knowledge_base_unavailable`); nothing above the lowest of the caller's clearance, the profile's label, the pool's ceiling and the workspace's ceiling is used. The items go in one delimited system message after the profile's prompt |
+| `X-Exprsn-Memory: on \| off` | Adds the caller's memories (user and workspace scope), each through the `memory` checkpoint, as in chat |
+| `X-Exprsn-Tools: profile \| none` | Offers the profile's read-only tools (calculate, and registry and MCP tools with side effect `read` that need no confirmation) and runs them on the server through the dispatcher, up to six rounds; only the final answer is returned. Refused with `400 tools_conflict` together with `tools`, and `400 tools_not_supported` for a model without tool calling. Calculations are metered |
+
+With any of them the completion (and, when streaming, the chunk carrying the finish reason) has an extension field
+`exprsn: {label, citations: [{n, kind: knowledge \| memory, label, kbId, kb, documentId, document, chunkId, section, score, span, passage} | {n, kind: memory, label, memoryId, scope, type}], tools: [{name, ok}]}`.
+`label` is the request's label raised to the highest item used; the answer passes `model-output` at that label.
+Citations are left out of an answer that was withheld.
+
+### Held prompts (`require-approval` at `user-input`)
+
+In chat (`POST /chat`, `POST /conversations/:id/messages`, edits), a prompt a `require-approval` rule holds is stored
+with its question `state: held` and the answer `state: awaiting`; the send returns `202 {…, state: 'awaiting', reason}`
+and nothing reaches the model. The Flags queue gets a `hold` flag at checkpoint `user-input` whose `held` shows the
+question. `POST /flags/:ref/decide {decision: approved}` sends it: the owner is loaded again (clearance, profile
+access and quota are checked now) and the answer is generated as usual (`chat.released {messageId: <question>,
+answerId, state: queued}`, then the stream). `rejected` withdraws the question and its answer (the answer says the
+question was not sent) and notifies the owner. Regenerating an awaiting answer is `409`. A hold caused by a check
+that could not run still refuses the send (`422`); compare and `/v1` refuse held prompts. Audit: `chat.prompt.held`,
+`chat.hold.approved` / `chat.hold.rejected`.
+
+### Guard model while streaming
+
+With enforced guard-model or classifier rules at `model-output`, each sentence window that passed the deterministic
+rules is also checked by them in the background, over the text so far (`CHAT_GUARD_HOLDBACK_SENTENCES`,
+`CHAT_GUARD_STREAM_CONCURRENCY`). A block stops the model and the answer is replaced; a hold holds it for review.
+Tool results shown in chat pass the same screen before their `chat.chunk`: a block shows `{name, error: 'This tool
+result was withheld…'}`, a redaction `{name, output: {redacted}}`; what is shown is what is stored.
+
+### Live sharing (socket)
+
+A reader of a conversation shared with them (user or workspace share) emits `shared.watch {conversationId}` with an
+acknowledgement callback: `{ok: true, label}` after the server checked the share and the reader's clearance, `{ok:
+true, owner: true}` for the owner (who already receives their events), `{ok: false}` otherwise (at most 20 watched
+conversations per socket). The reader then receives `chat.chunk {conversationId, messageId, seq, delta? , tool?}`
+(no thinking), `chat.status {conversationId, messageId, state}`, `chat.done` and `chat.released` for that conversation.
+`shared.unwatch {conversationId}` stops. Revoking the share, or the conversation's label rising above the reader,
+removes the socket from the room at once and sends `shared.revoked {conversationId}` (unless another live share still
+admits them).
+
+| Route | Notes |
+| --- | --- |
+| `GET /shared-conversations/:id/messages/:mid/stream?after=` (`chat:read`) | Catch-up for a reader: the answer's chunks after `after` (answer text and tools only), or its screened text so far; a held answer shows nothing |
+
+### Anonymous share links
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/tenants/:tid/sharing`, `PUT /admin/tenants/:tid/sharing` `{anonymousLinks: boolean, anonymousMaxHours?: 1–720}` (`tenant:manage`) | Off by default; maximum 72 hours by default. Turning it off ends every anonymous link at once. Audit: `tenant.sharing.updated` |
+| `POST /conversations/:id/shares` `{kind: link, expiresInHours, anonymous: true}` | Only for a conversation labelled `public` (`403`), when the tenant allows it (`403`), within its maximum (`400`). The `url` is `…/#/shared?t=<token>`; shares list `anonymous: true` |
+| `POST /api/public/shared-links/open` `{token}` (no sign-in) | Outside the authenticated API: no session is read or created and no cookie is set. `{id, title, label, createdAt, updatedAt, messages, readOnly: true}` (no owner). `404` for anything that does not open, including a conversation no longer `public` or the setting turned off; `429` past `SHARE_ANONYMOUS_PER_MINUTE` per client address. Audited `conversation.share.opened` with `{anonymous: true}` and the address |
+
+The console's `#/shared?t=…` page opens it signed-out and takes the token out of the address bar at once.
+
+### Retention per workspace and per user (`tenant:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/tenants/:tid/retention` | Adds `scopes: [{id, scope: workspace \| user, scopeId, name, conversationDays, updatedBy, updatedAt}]` |
+| `PUT /admin/tenants/:tid/retention/scopes` `{scope, scopeId, conversationDays: 1–3650 \| null}` | Sets or (null) removes a period for a workspace or user of the tenant (`404` otherwise). Audit: `tenant.retention.scope.updated` |
+
+A conversation is purged after the shortest period that applies to it: the tenant's, its workspace's and its
+owner's. `POST …/retention/run` needs at least one period. The purge audit adds `scopes`.
+
+### Prompt templates
+
+`POST /prompts`, `POST /prompts/:id/versions` and publishing (`POST /prompts/:id/state {state: published}`) pass the
+body through the `user-input` checkpoint: a block, hold or redaction refuses with `422` (`step: guardrail`, `action`,
+`rules`) and nothing changes.
+
+## Sprint 19: Knowledge, integrations and workflows
+
+### Knowledge sources (`knowledge:manage` or manage access on the base)
+
+| Route | Notes |
+| --- | --- |
+| `GET /knowledge/connections` | PostgreSQL and MySQL connections: `[{id, name, engine, label, objects, columns}]` |
+| `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …" \| "mysql: …", connectionId, idColumn?, watermarkColumn?, accessColumn?, accessKind?: group \| user, replication?, publication?}` | MySQL tables and views sync by watermark like PostgreSQL (names default to the connection's database). `accessColumn` (B-1002) names who may retrieve each row: a list of directory groups (`accessKind: group`, the default) or usernames, emails or user ids (`user`), as a comma or semicolon list, a JSON array or a PostgreSQL array. The list is carried onto the row's document and chunks; search, chat context and the document list for members drop rows that do not name the reader or one of their groups (matched case-insensitively against the groups of the user's identities); an empty value admits nobody. `replication: true` (B-1003, PostgreSQL tables only, `409` for views and MySQL) streams changes through logical replication (`publication` defaults to `exprsn_knowledge`) |
+| `GET /knowledge/bases/:id` | Each database source carries `replication: {state: starting \| streaming \| fallback \| stopped, slot, publication, lsn, lastChangeAt, changes, error}` when it asked for it |
+| `DELETE /knowledge/sources/:id` | Also stops the source's stream and drops its replication slot |
+
+Replication: the database owner runs `CREATE PUBLICATION exprsn_knowledge FOR TABLE <table>`, the connection's account
+has the `REPLICATION` attribute and the server runs with `wal_level=logical`. The slot is `exprsn_<source id>`
+(pgoutput, created on first use). Inserts and updates become documents at once, deletes remove them (the id column must
+be the primary key, or the table `REPLICA IDENTITY FULL`), a truncate empties the source; each transaction is
+acknowledged only after it is applied. One instance holds each stream (a lease renewed every
+`KNOWLEDGE_REPLICATION_TICK_MS`). When the stream cannot run, `replication.state` is `fallback` with the reason and the
+source keeps syncing by watermark on its schedule; the watermark schedule also runs beside a healthy stream.
+
+### Webhooks (`webhooks:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `POST /admin/webhooks` `{…, ordered?, signing?: hmac \| ed25519}` | `ordered`: deliveries go out one at a time in the order events were queued (`X-Exprsn-Sequence`); a delivery that keeps failing holds the ones after it until it gives up. `signing: ed25519` signs with the tenant's key instead of the shared secret (the first such webhook creates the key; audited `webhook.signing-key.created`) |
+| `PATCH /admin/webhooks/:id` `{…, ordered?, signing?}` | Turning `ordered` off sends anything waiting for its turn |
+| `GET /admin/webhooks/signing-key` | `{active: {kid, publicKey, createdAt} \| null, retired: [{kid, publicKey, retiredAt}], jwksUrl}` |
+| `POST /admin/webhooks/signing-key/rotate` | A new Ed25519 key; the previous one stays published as `retired`. Audited `webhook.signing-key.rotated` |
+| `GET /webhooks/keys/:tenant` (public, outside `/api`) | The tenant's signing keys as a JWKS: `{keys: [{kty: OKP, crv: Ed25519, x, kid, use: sig, alg: EdDSA, status}]}` |
+
+An Ed25519 delivery carries `X-Exprsn-Signature-Ed25519` (base64 signature over `"<X-Exprsn-Timestamp>.<body>"`) and
+`X-Exprsn-Key-Id` (the `kid`) instead of `X-Exprsn-Signature`. The private key is sealed with the tenant key.
+
+### Billing
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/billing/price-books` | System admins see every book; others the platform books and their tenant's own. Books carry `tenantId` (null: platform) |
+| `POST /admin/billing/price-books` `{…, tenantId?}` (`billing:manage`) | A book only that tenant may use; one default among the platform books and one among each tenant's |
+| `GET /admin/billing/settings?tenant=` | Adds `billingCurrency`, `taxRates: [{name, ratePercent}]` and `reconciliation` (whether the Stripe webhook is configured) |
+| `PUT /admin/billing/tenants/:tenantId` `{priceBookId?, billingCustomer?, billingCurrency?, taxRates?}` (`billing:manage`) | With a currency, only books in it are used (`409` when assigning another; no conversion). The effective book is the assigned one, else the tenant's own default, else the platform default. Up to five taxes, each a percentage of the priced subtotal |
+| `GET /admin/billing/statements/:month` | Adds `subtotalMicros`, `taxMicros`, `taxes: [{name, ratePpm, amountMicros}]` (the total includes them), `paidAt`, `providerStatus`; `state` may also be `paid`, `payment failed` or `void` |
+| `POST /billing/stripe/webhook` (public, outside `/api`) | Stripe events, authenticated by `Stripe-Signature` (`t=`, `v1=` HMAC-SHA256 of `"<t>.<raw body>"` with `STRIPE_WEBHOOK_SECRET`, within `STRIPE_WEBHOOK_TOLERANCE_SECONDS`; `400` otherwise, `404` when no secret is set). `invoice.paid`/`invoice.payment_succeeded` mark the statement with that invoice `paid`, `invoice.payment_failed` marks it `payment failed`, `invoice.voided` marks it `void`; paid and void are final. Each event id is applied once (a redelivery answers `{duplicate: true}`); every verified event is acknowledged with `200`. Audited in the statement's tenant: `billing.statement.paid`/`payment-failed`/`voided` |
+
+A pushed invoice gets one extra invoice item per tax. Statements in `pushed`, `paid`, `payment failed` or `void` are
+final: compute and push answer `409`.
+
+### Workflows and agent runs
+
+- A workflow published as a tool that pauses on an approval returns a pending result: an agent run that called it
+  waits (its step is `waiting` with `meta.awaiting: {kind: workflow-run, id}`, and `POST /runs/:id/steps/:n/decision`
+  answers `409` for it) and is queued again when the workflow run finishes, continuing with the run's output or its
+  failure as the tool result. Other callers get the pending message as an error, as before.
+- Guardrail and tool steps take `approvalTimeoutMs` (60 s to 7 days, default 24 h) for the approval they pause for.
+- Run events (`workflow.run`, `workflow.step`) also go to the holders of the approval roles a run asked for (cleared for
+  its label), and `workflow.approval` tells them when an approval is requested or decided.
+
+### Images and scripts
+
+- `GET /images/backends` adds `safety.required` (`IMAGE_SAFETY_REQUIRED`): with it on and no classifier, generated
+  images end `withheld` (not stored; audited `image.withheld` with `reason: not classified`) and sampled video frames
+  are withheld.
+- `GET /scripts/runtime` adds `runtime` (`SCRIPT_RUNTIME`, e.g. `runsc`) and `runtimeProblem`; the runner reports itself
+  as `docker (runsc)`, passes `--runtime=runsc`, and refuses runs when the engine does not know the runtime.
+
+## Sprint 18: Platform hardening
+
+- Pool instances (`POST /api/admin/pools/:id/instances`, `PATCH /api/admin/instances/:id`) and zone endpoints
+  (`POST /api/admin/zones/:id/endpoints`) refuse a cloud metadata, link-local or unspecified address with `400`
+  ("The instance URL is refused: ..."); loopback and private addresses are accepted, public ones unless
+  `SERVICE_INTERNAL_ONLY` is on. Connections to instances, endpoints, image backends and the training worker check the
+  address they dial (a name that later resolves to such an address fails with "refused").
+- Problem details never carry credentials: URLs with a password, `password=`/`token=`-style values, bearer and basic
+  authorization values and private-key blocks are masked (`********`), as are driver messages in connection tests
+  and health details.
+- Guardrail rules as YAML (`yaml` in rule-set drafts and rule checks) are refused with `422 Invalid YAML` above 512 KiB,
+  16 levels of nesting or with any alias; the identity file (`IDENTITY_CONFIG`) is capped at 4 MiB, 24 levels and 50
+  aliases.
+
+### Certificate push hooks (`platform:manage`)
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/platform/certificates/:id/hooks` | `{hooks: [{id, kind: command\|webhook, command, url, lastState: ok\|failed\|null, lastDetail, lastAt, createdAt}], commands: [names from ACME_RELOAD_COMMANDS]}` |
+| `POST /api/admin/platform/certificates/:id/hooks` `{kind: "command", command}` or `{kind: "webhook", url}` | `201` hook; a webhook answer carries `secret` once (stored sealed). An unknown command or a non-internal URL is `400`; tracked certificates have no hooks (`409`); at most 10. Audited `platform.cert.hook.added` |
+| `POST /api/admin/platform/certificates/:id/hooks/:hookId/test` | Runs the hook now (`certificate.test`); answers the hook with its `lastState` |
+| `DELETE /api/admin/platform/certificates/:id/hooks/:hookId` | `204`; audited `platform.cert.hook.removed` |
+
+After every issue and renewal, webhooks are POSTed from the issuing instance with `X-Exprsn-Event:
+certificate.issued|certificate.renewed` and `X-Exprsn-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`; the
+body is `{event, certificate: {id, name, domains, serial, fingerprint, notBefore, notAfter}, chainPem}` (never the
+key). Reload commands run on every instance after its certificate files are written. Each run is audited
+`platform.cert.hook.ran` or `platform.cert.hook.failed`.
+
+### Registry pushes (`platform:manage`)
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/platform/push-targets` | `[{id, mirrorId, kind: oci\|npm\|pypi, url, repository, username, hasSecret, state: active\|disabled, lastPushAt, lastPushOk, lastDetail, updatedAt}]` |
+| `PUT /api/admin/platform/mirrors/:id/push-target` `{url, repository?, username?, secret?, state?}` | The mirror's target (created or replaced). Image mirrors push to an OCI registry such as Harbor (`repository`: the project), npm mirrors to Verdaccio, PyPI mirrors to devpi (`repository`: `user/index`); other kinds are `400`. The URL must be internal (`PLATFORM_ALLOWED_HOSTS` for others). `secret` is sealed and never returned; leave it out to keep the stored one. Audited |
+| `DELETE /api/admin/platform/mirrors/:id/push-target` | `204`; audited |
+| `GET /api/admin/platform/bundles/:id/pushes` | `[{id, bundleId, targetId, path, sha256, artefact, state: pushed\|exists\|failed, detail, at}]` |
+| `POST /api/admin/platform/bundles/:id/push` | `202 {jobId}`: pushes a promoted bundle again (`409` when it is not in production or no target is active) |
+
+Promotion queues the push (`ops.bundle.push`) when an active target exists; the outcome is audited
+`platform.bundle.pushed` or `platform.bundle.push.failed`.
+
+### Zones: members outside their zone (`zones:manage`)
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/zones/misplaced` | `{misplaced: [{kind: connection\|mcp, id, name, tenant, zone, label, reason, suggestion, pending}]}`: connections and MCP servers in an undefined or external zone, or labelled above their zone's ceiling, with the zone a move would target and the draft already moving them |
+| `POST /api/admin/zones/:id/proposals` | Also takes `moveMembers: [{kind: connection\|mcp, id}]`; approval moves them into the zone. A member labelled above the zone's ceiling is `422`, the external zone `403` |
+
+`GET /api/admin/zones` gains `misplaced` and each draft's `moveMembers`; `POST /api/admin/zones/seed` and
+`POST /api/admin/zones/:id/draft/approve` answer `misplaced` (a count) when they define the first zones, and then
+audit `zone.members.rechecked` and notify system admins if any member is outside its zone.
+
+### Training worker callbacks (outside `/api`, grant tokens only)
+
+| Route | Result |
+| --- | --- |
+| `POST /trainer/v1/keys/:grant` | `{key, cipher}` once; `401` wrong token, `403` missing client certificate (`TRAINER_CLIENT_CERT_SHA256`), `410` expired or already fetched. Audited `training.worker.key.released` / `.refused` |
+| `PUT /trainer/v1/artifacts/:grant/:name?kind=checkpoint\|gguf\|other` | `201 {ref, name, sha256, bytes}`; the body is streamed into the blob store, sealed under the tenant key. Audited `training.worker.artifact.stored` |
+| `GET /trainer/v1/artifacts/:grant/:name` | The artefact, streamed (`X-Artifact-SHA256`). Audited `training.worker.artifact.read` |
+
+The whole contract is in [training-worker.md](training-worker.md).
+
+## Sprint 17: Identity and security
+
+### Sign-in and account (`/api/auth`, `/api/me`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /auth/login` (and upstream and Kerberos sign-ins) | Now also sets a long-lived signed device cookie (`exai_device`, `__Host-` prefixed with secure cookies). A sign-in from a browser or a network (/24, /48) the account has not used before sends a `New sign-in to your account` security notice (`SIGNIN_NOTICES`); the account's first sign-in does not. Audit `auth.login.new_context` |
+| `POST /auth/password/check` `{password, token?, username?, breach?}` | The strength meter: `{bits, score 0-4, label, rules[{id, label, ok}], acceptable, breached {mode, checked, found, unavailable}}`. Needs a session (any stage) or a live reset, invite or enrolment `token`; `username` (whose name the password must not contain) is taken from the body only for callers with `identity:manage` or `users:manage`. With `BREACHED_PASSWORDS` on, the breach corpus is asked unless `breach: false`. Throttled to 600 an hour per session or link (`429`) |
+| `POST /auth/password/reset` | With an enrolment link (`admin:create --enrol-link`) also signs in: `{…, session}` with `stage: enroll`, which reaches only the factor enrolment routes; audit `password.enrol.accepted` |
+| `POST /auth/logout` | When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers `200 {signedOut, next}`; `next` is the signed-out page (`/oauth/logged-out?handle=…`, single use, ten minutes) that loads each one in a frame. Otherwise `204` as before |
+| `GET /me` | `stepUp.methods` includes `upstream` for a session from an enabled upstream OIDC or SAML provider, with `stepUp.upstream {name, protocol}` |
+| `POST /me/step-up/upstream` | Starts a re-authentication at the session's upstream IdP (`prompt=login`, `max_age=0`; SAML `ForceAuthn`), bound to this browser and session; `{url, provider}`. `409` for a session that did not come from an upstream provider |
+| `POST /me/step-up/upstream/complete` `{handle}` | Redeems the handle the upstream callback put in `/#/settings?stepup=<handle>`. Only the session that started it can redeem it, once, within five minutes; then the step-up time moves (`auth.step_up`). `400` otherwise |
+
+The upstream callback accepts a step-up only when the IdP reports a fresh authentication (`auth_time`, or the
+assertion's `AuthnInstant`, no older than the request minus a minute) as the same upstream account; otherwise it
+shows an error page (`auth.step_up.failed` for another account).
+
+### Users (`users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/users/:id/password` | Now takes `revokeApiKeys` (default `true`): the account's API keys are revoked with the reset. The answer adds `apiKeysRevoked` |
+
+### Protocol endpoints (outside `/api`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /oauth/logged-out?handle=` | The signed-out page after a console sign-out, with a frame per front-channel logout URL (CSP `frame-src` names exactly their origins); then back to the sign-in screen |
+| `POST /oauth/token`, API calls with `DPoP` | With `DPOP_NONCES=true` every token response carries `DPoP-Nonce`; a proof without the current nonce gets `400 {error: use_dpop_nonce}` at the token endpoint and `401` with `WWW-Authenticate: DPoP error="use_dpop_nonce"` (and `DPoP-Nonce`) at `/oauth/userinfo` and the API. API proofs name `<API_PUBLIC_URL or PUBLIC_URL origin><path>` as `htu` |
+| `POST /oauth/introspect` | A client registered as a resource server (`introspect: any`) sees the access tokens of every client in its tenant; refresh tokens stay visible to their own client only |
+
+### Federation admin (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/federation/oidc/clients[/:id]` | Now also returns `introspect` (`own` or `any`) and `introspectPending` |
+| `POST /admin/federation/oidc/clients/:id/introspect` `{mode: own\|any, reason?}` | `own` applies at once. `any` (confidential clients only) is a proposal (`202 {client, proposal}`) that a second identity admin approves |
+| `GET /admin/federation/proposals[?state=]` | Changes waiting for approval (and decided ones): `{id, kind (client.introspect, metadata.sp, metadata.idp), targetId, name, summary, state, proposedBy (null: the metadata refresh), mine, …}` |
+| `POST /admin/federation/proposals/:id/approve` `{note?}` | Applies the change. A person's proposal needs another identity admin (`403` dual control); the metadata refresh's needs any identity admin |
+| `POST /admin/federation/proposals/:id/reject` `{note?}`, `…/withdraw` | Rejects (not your own), or withdraws your own |
+| `POST /admin/federation/saml/sps` | Now takes `metadataUrl` instead of `xml` (fetched through the upstream host checks: internal or `FEDERATION_ALLOWED_HOSTS`, pinned, no redirects, 1 MB) and `signResponse` (sign the whole response as well as the assertion) |
+| `PATCH /admin/federation/saml/sps/:id` | Now takes `signResponse` |
+| `POST /admin/federation/upstream` | SAML metadata given as a URL is remembered and refreshed like SP metadata |
+| `GET /admin/federation/metadata` | Metadata sources `{id, kind (sp, idp), url, fetchedAt, error}` |
+| `PUT /admin/federation/metadata/:id` `{url}` | Starts fetching a registered SP's or SAML IdP's metadata from a URL; it must describe the same entity. A difference from what is in force becomes a proposal |
+| `POST /admin/federation/metadata/:id/refresh` | Fetches now: `{state: unchanged\|proposed\|pending\|error, proposal, source}` |
+| `DELETE /admin/federation/metadata/:id` | Stops fetching (the values in force stay) |
+
+Every source is fetched again every `FEDERATION_METADATA_REFRESH_HOURS` (job `federation.metadata`). A change of
+certificates, assertion consumer services, SSO or logout endpoints is proposed, never applied, until approved; the
+previous values stay in force meanwhile. Metadata that now names another entity ID is refused (`error`).
+
+### Platform (`platform:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/platform/summary` | Adds `passwords {breachedCheck}`; the console warns while it is `off` |
+
+Audit actions: `auth.login.new_context`, `auth.step_up.started`, `password.enrol.accepted`, `user.enrol_link.issued`,
+`federation.client.introspect_changed`, `federation.proposal.created`, `federation.proposal.approved`,
+`federation.proposal.rejected`, `federation.proposal.withdrawn`, `federation.metadata.refreshed`,
+`federation.metadata.failed`, `federation.metadata.source_set`, `federation.metadata.source_removed`,
+`federation.saml_sp.metadata_applied`, `identity.provider.metadata_applied`.

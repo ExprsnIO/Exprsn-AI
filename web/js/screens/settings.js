@@ -27,13 +27,15 @@
     const methods = (App.me && App.me.stepUp && App.me.stepUp.methods) || ['password'];
     const pw = methods.indexOf('password') >= 0; const totp = methods.indexOf('totp') >= 0;
     const passkey = methods.indexOf('webauthn') >= 0 && App.webauthn && App.webauthn.supported();
+    // B-803: a session from an upstream identity provider confirms by signing in there again.
+    const upstream = methods.indexOf('upstream') >= 0 && App.me.stepUp.upstream;
     let ok = false;
     ctx.modal({ title: 'Confirm it is you',
-      body: '<div class="fg2">This change needs a fresh check of who you are. ' + (pw && totp ? 'Enter your password or a code from your authenticator.' : pw ? 'Enter your password.' : totp ? 'Enter a code from your authenticator.' : 'Use your passkey.') + '</div>'
+      body: '<div class="fg2">This change needs a fresh check of who you are. ' + (pw && totp ? 'Enter your password or a code from your authenticator.' : pw ? 'Enter your password.' : totp ? 'Enter a code from your authenticator.' : passkey ? 'Use your passkey.' : upstream ? 'Sign in again at ' + esc(upstream.name) + '; you come back here and can then make the change.' : 'Sign out and sign in again.') + '</div>'
         + (pw ? UI.field('Password', UI.input('', { type: 'password', attrs: 'data-supw autocomplete="current-password"' })) : '')
         + (totp ? UI.field('Authenticator code', UI.input('', { attrs: 'data-sucode inputmode="numeric" maxlength="6" autocomplete="one-time-code"' })) : '')
         + '<div data-suerr role="alert"></div>',
-      actions: UI.btn('Cancel', { attrs: 'data-close' }) + (passkey ? UI.btn('Use a passkey', { icon: 'key', attrs: 'data-supk' }) : '') + (pw || totp ? UI.btn('Confirm', { kind: 'primary', attrs: 'data-sugo' }) : ''),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + (upstream ? UI.btn('Sign in again at ' + esc(upstream.name), { kind: pw || totp ? '' : 'primary', attrs: 'data-suup' }) : '') + (passkey ? UI.btn('Use a passkey', { icon: 'key', attrs: 'data-supk' }) : '') + (pw || totp ? UI.btn('Confirm', { kind: 'primary', attrs: 'data-sugo' }) : ''),
       onMount(m) {
         const err = m.querySelector('[data-suerr]'); const first = m.querySelector('input'); if (first) first.focus();
         const send = async (body) => {
@@ -47,6 +49,8 @@
         };
         const b = m.querySelector('[data-sugo]'); if (b) b.addEventListener('click', go);
         m.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } }));
+        const up = m.querySelector('[data-suup]');
+        if (up) up.addEventListener('click', async () => { try { const r = await App.post('/api/me/step-up/upstream'); location.assign(r.url); } catch (e) { err.innerHTML = UI.notice(esc((e.problem && e.problem.detail) || e.message), 'danger'); } });
         const pk = m.querySelector('[data-supk]');
         if (pk) pk.addEventListener('click', async () => { try { const opts = await App.post('/api/me/step-up/webauthn/options'); const response = await App.webauthn.authenticate(opts); await send({ response }); } catch (e) { err.innerHTML = UI.notice(esc((e.problem && e.problem.detail) || e.message), 'danger'); } });
       },
@@ -85,7 +89,7 @@
       const pwHome = me.password || { managedHere: false, stores: [] };
       const passwordPanel = UI.panel('Password', pwHome.managedHere
         ? '<div class="formgrid" style="--cols:1">' + UI.field('Current password', UI.input('', { type: 'password', attrs: 'data-pwcur autocomplete="current-password"' }))
-          + UI.field('New password', UI.input('', { type: 'password', attrs: 'data-pwnew autocomplete="new-password"' }), 'At least 12 characters. Not your username, not a common or breached password.')
+          + UI.field('New password', UI.input('', { type: 'password', attrs: 'data-pwnew autocomplete="new-password"' }), 'At least 12 characters. Not your username, not a common or breached password.') + App.passwordMeter.html()
           + UI.field('New password again', UI.input('', { type: 'password', attrs: 'data-pwagain autocomplete="new-password"' })) + '</div>'
           + '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Changing it signs out your other sessions and applications.</span>' + UI.btn('Change password', { kind: 'primary', size: 'sm', attrs: 'data-pwchange' }) + '</div>'
         : '<div class="fg2" style="font-size:13px">Your password is kept by ' + esc((pwHome.stores || []).join(', ') || 'your directory') + '. Change it there; this server never stores it.</div>');
@@ -125,6 +129,14 @@
         + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + grantsPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
+      if (ctx.$('[data-pwnew]')) App.passwordMeter.attach(ctx.$('[data-pwnew]'), ctx.$('[data-pwmeter]'));
+      // Back from a step-up at the upstream identity provider (B-803): redeem it for this session, once.
+      const handle = ctx.params && ctx.params.stepup;
+      if (handle && st.stepupHandle !== handle) {
+        st.stepupHandle = handle;
+        try { history.replaceState(null, '', location.pathname + location.search + '#/settings'); } catch (e) { /* history unavailable */ }
+        App.post('/api/me/step-up/upstream/complete', { handle }).then(() => ctx.toast('Confirmed. You can make the change now.', 'ok'), (err) => App.fail(err, 'Not confirmed'));
+      }
       const reload = () => { st.loaded = false; ctx.rerender(); };
       const act = async (fn, okMsg) => { try { await fn(); if (okMsg) ctx.toast(okMsg, 'ok'); reload(); } catch (err) { if (!err.cancelled) App.fail(err); } };
       const guarded = (fn) => withStepUp(ctx, fn);

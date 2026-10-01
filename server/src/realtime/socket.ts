@@ -3,7 +3,10 @@ import { Server, type Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
 import { loadPrincipal, sessionTokenFrom } from '../http/middleware.js';
+import { z } from 'zod';
+import { clears } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
+import type { ShareAccessEvent } from '../chat/sharing.js';
 import { TOPICS } from '../platform/bus.js';
 import type { JobProgressEvent } from '../platform/jobs.js';
 import type { Services } from '../services.js';
@@ -12,6 +15,8 @@ export interface SocketData {
   principal: Principal;
   sessionId: string;
   token: string;
+  /** Sprint 16: shared conversations this socket watches, with the share that let it in. */
+  watching?: Map<string, string>;
 }
 
 export type Realtime = Server<Record<string, never>, Record<string, never>, Record<string, never>, SocketData>;
@@ -23,8 +28,23 @@ export const rooms = {
   /** Holders of a permission in a tenant, for admin-screen updates (pool state, job queues). */
   perm: (tenantId: string, perm: string) => `perm:${tenantId}:${perm}`,
   /** Holders of a permission in any tenant, for platform-wide resources such as pools. */
-  platformPerm: (perm: string) => `perm:*:${perm}`
+  platformPerm: (perm: string) => `perm:*:${perm}`,
+  /** Readers watching a shared conversation stream (Sprint 16); joined only after the server checked the share. */
+  shared: (tenantId: string, conversationId: string) => `shared:${tenantId}:${conversationId}`
 };
+
+/** Chat events readers of a shared conversation receive, reduced to what the transcript shows (no thinking). */
+const SHARED_EVENTS = new Set(['chat.chunk', 'chat.status', 'chat.done', 'chat.released']);
+const MAX_WATCHED = 20;
+
+function forReaders(event: string, data: Record<string, unknown>): Record<string, unknown> | null {
+  const ids = { conversationId: data.conversationId, messageId: data.messageId };
+  if (event === 'chat.chunk') {
+    if (!data.delta && !data.tool) return null;
+    return { ...ids, seq: data.seq, ...(data.delta ? { delta: data.delta } : {}), ...(data.tool ? { tool: data.tool } : {}) };
+  }
+  return { ...ids, state: data.state, ...(data.seq != null ? { seq: data.seq } : {}), ...(data.answerId ? { answerId: data.answerId } : {}) };
+}
 
 /** Permissions whose holders receive live admin updates. */
 const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage', 'flags:review', 'tools:manage', 'zones:manage', 'training:manage'] as const;
@@ -81,7 +101,59 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     socket.on('disconnect', () => s.metrics.socketConnections.dec());
     // Clients may not choose rooms: membership is decided on the server from the principal.
     socket.emit('ready' as never, { user: d.principal.userId, tenant: d.principal.tenantSlug } as never);
+
+    // Sprint 16 (B-705): a reader asks to watch a conversation shared with them. The server checks the share and the
+    // reader's clearance now, and decides the room; the owner already hears their own conversation.
+    socket.on('shared.watch' as never, (async (msg: unknown, ack?: (r: unknown) => void) => {
+      const reply = typeof ack === 'function' ? ack : () => undefined;
+      try {
+        const id = z.string().length(26).parse((msg as { conversationId?: unknown } | null)?.conversationId);
+        const { c, via } = await s.sharing.readable(d.principal, id);
+        if (via === 'owner') return reply({ ok: true, owner: true });
+        d.watching ??= new Map();
+        if (!d.watching.has(c.id) && d.watching.size >= MAX_WATCHED) return reply({ ok: false, error: 'Watching too many shared conversations at once.' });
+        d.watching.set(c.id, via.id);
+        await socket.join(rooms.shared(c.tenant_id, c.id));
+        reply({ ok: true, label: c.label });
+      } catch {
+        reply({ ok: false, error: 'Not shared with you.' });
+      }
+    }) as never);
+    socket.on('shared.unwatch' as never, ((msg: unknown) => {
+      const id = (msg as { conversationId?: unknown } | null)?.conversationId;
+      if (typeof id !== 'string' || !d.watching?.has(id)) return;
+      d.watching.delete(id);
+      void socket.leave(rooms.shared(d.principal.tenantId, id));
+    }) as never);
   });
+
+  /**
+   * Access to a shared conversation may have ended. Readers leave the room at once (synchronously, before any further
+   * chunk is relayed); those still entitled through another share are let back in after a fresh check.
+   */
+  const recheck = (e: ShareAccessEvent) => {
+    const room = rooms.shared(e.tenantId, e.conversationId);
+    const ids = io.of('/').adapter.rooms.get(room);
+    if (!ids) return;
+    for (const sid of [...ids]) {
+      const socket = io.of('/').sockets.get(sid);
+      const d = socket?.data as SocketData | undefined;
+      if (!socket || !d) continue;
+      const via = d.watching?.get(e.conversationId);
+      const affected = (e.shareId && via === e.shareId) || (e.label && !clears(d.principal.clearance, e.label));
+      if (!affected) continue;
+      void socket.leave(room);
+      d.watching?.delete(e.conversationId);
+      void s.sharing
+        .readable(d.principal, e.conversationId)
+        .then(async ({ via: again }) => {
+          if (again === 'owner' || !socket.connected) return;
+          d.watching?.set(e.conversationId, again.id);
+          await socket.join(room);
+        })
+        .catch(() => (socket as unknown as Socket).emit('shared.revoked', { conversationId: e.conversationId }));
+    }
+  };
 
   // Every instance hears revocations through the bus and closes the sockets it holds.
   const offs = [
@@ -98,9 +170,15 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     s.bus.on<{ userId: string; notification: unknown }>(TOPICS.notification, (e) => {
       io.local.to(rooms.user(e.userId)).emit('notification' as never, e.notification as never);
     }),
-    s.bus.on<{ userId: string; event: string; data: unknown }>(TOPICS.chatEvent, (e) => {
+    s.bus.on<{ userId: string; tenantId?: string; event: string; data: Record<string, unknown> }>(TOPICS.chatEvent, (e) => {
       io.local.to(rooms.user(e.userId)).emit(e.event as never, e.data as never);
+      // Readers of a shared conversation (Sprint 16): the answer text as it is released, nothing else.
+      if (e.tenantId && typeof e.data?.conversationId === 'string' && SHARED_EVENTS.has(e.event)) {
+        const data = forReaders(e.event, e.data);
+        if (data) io.local.to(rooms.shared(e.tenantId, e.data.conversationId)).except(rooms.user(e.userId)).emit(e.event as never, data as never);
+      }
     }),
+    s.bus.on<ShareAccessEvent>(TOPICS.shareAccess, (e) => recheck(e)),
     s.bus.on<{ tenantId: string | null; perm: string; event: string; data: unknown }>(TOPICS.poolState, (e) => {
       io.local.to(e.tenantId ? rooms.perm(e.tenantId, e.perm) : rooms.platformPerm(e.perm)).emit(e.event as never, e.data as never);
     }),

@@ -25,7 +25,11 @@ export class FakeIdp {
   private server: Server | null = null;
   private readonly key: KeyObject;
   private readonly publicJwk: Record<string, unknown>;
-  private readonly codes = new Map<string, { user: FakeUser; nonce: string; challenge: string; redirectUri: string }>();
+  private readonly codes = new Map<string, { user: FakeUser; nonce: string; challenge: string; redirectUri: string; maxAge: string | null }>();
+  /** Sprint 17: the prompt and max_age of the last authorization request, and an auth_time to report instead of now. */
+  lastPrompt: string | null = null;
+  lastMaxAge: string | null = null;
+  authTimeOverride: number | null = null;
   /** Makes the next ID token carry this nonce instead of the request's (a replay test). */
   nonceOverride: string | null = null;
 
@@ -52,7 +56,7 @@ export class FakeIdp {
       const challenge = b64u(createHash('sha256').update(String(req.body.code_verifier)).digest());
       if (challenge !== entry.challenge) return void res.status(400).json({ error: 'invalid_grant', error_description: 'pkce' });
       const now = Math.floor(Date.now() / 1000);
-      res.json({ access_token: 'x', token_type: 'Bearer', id_token: this.idToken({ iss: this.url, aud: this.clientId, iat: now, exp: now + 300, nonce: this.nonceOverride ?? entry.nonce, ...entry.user }) });
+      res.json({ access_token: 'x', token_type: 'Bearer', id_token: this.idToken({ iss: this.url, aud: this.clientId, iat: now, exp: now + 300, nonce: this.nonceOverride ?? entry.nonce, ...(entry.maxAge !== null ? { auth_time: this.authTimeOverride ?? now } : {}), ...entry.user }) });
     });
     await new Promise<void>((resolve) => {
       this.server = app.listen(0, '127.0.0.1', () => resolve());
@@ -72,7 +76,9 @@ export class FakeIdp {
     if (u.searchParams.get('client_id') !== this.clientId) throw new Error('wrong client');
     if (u.searchParams.get('code_challenge_method') !== 'S256') throw new Error('no PKCE');
     const code = randomBytes(16).toString('hex');
-    this.codes.set(code, { user, nonce: u.searchParams.get('nonce')!, challenge: u.searchParams.get('code_challenge')!, redirectUri: u.searchParams.get('redirect_uri')! });
+    this.lastPrompt = u.searchParams.get('prompt');
+    this.lastMaxAge = u.searchParams.get('max_age');
+    this.codes.set(code, { user, nonce: u.searchParams.get('nonce')!, challenge: u.searchParams.get('code_challenge')!, redirectUri: u.searchParams.get('redirect_uri')!, maxAge: this.lastMaxAge });
     return { code, state: u.searchParams.get('state')! };
   }
 

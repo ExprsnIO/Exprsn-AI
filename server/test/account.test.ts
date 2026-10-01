@@ -58,7 +58,9 @@ describe('Sprint 11: account self-service', () => {
       // B-109: the owner is told, in the console and by email, without any secret.
       const notes = (await a.agent.get('/api/me/notifications')).body.items as { title: string }[];
       expect(notes.some((n) => n.title === 'Your password was changed')).toBe(true);
-      const sent = await mail.next(u.email);
+      // Sprint 17: the second browser's sign-in sent a new-sign-in notice first; find the password notice.
+      let sent = await mail.next(u.email);
+      for (let i = 1; !sent.subject.includes('Your password was changed'); i++) sent = await mail.next(u.email, i);
       expect(sent.subject).toContain('Your password was changed');
       expect(sent.text).not.toContain(NEW_PASSWORD);
       expect(sent.html).not.toContain(NEW_PASSWORD);

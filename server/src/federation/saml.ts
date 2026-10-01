@@ -47,6 +47,8 @@ export interface SpRow {
   slo_binding: 'redirect' | 'post' | null;
   encryption_certificate: string | null;
   encrypt_assertions: boolean;
+  /** Sprint 17 (B-807): sign the whole samlp:Response as well as the assertion. */
+  sign_response: boolean;
   last_used_at: number | null;
   created_at: number;
   updated_at: number;
@@ -61,6 +63,7 @@ const spFromRow = (r: Record<string, unknown>): SpRow => ({
   slo_binding: (r.slo_binding as 'redirect' | 'post' | null) ?? null,
   encryption_certificate: (r.encryption_certificate as string | null) ?? null,
   encrypt_assertions: !!r.encrypt_assertions,
+  sign_response: !!r.sign_response,
   last_used_at: r.last_used_at == null ? null : Number(r.last_used_at),
   created_at: Number(r.created_at),
   updated_at: Number(r.updated_at)
@@ -182,14 +185,14 @@ export class SamlIdp {
     return r ? spFromRow(r) : undefined;
   }
 
-  async create(tenantId: string, input: { name: string; entityId: string; acsUrls: AcsUrl[]; nameIdFormat: NameIdFormat; certificate: string | null; signedRequests: boolean; attributeMap: Record<string, string>; sloUrl?: string | null; sloBinding?: 'redirect' | 'post' | null; encryptionCertificate?: string | null; encryptAssertions?: boolean }): Promise<SpRow> {
+  async create(tenantId: string, input: { name: string; entityId: string; acsUrls: AcsUrl[]; nameIdFormat: NameIdFormat; certificate: string | null; signedRequests: boolean; attributeMap: Record<string, string>; sloUrl?: string | null; sloBinding?: 'redirect' | 'post' | null; encryptionCertificate?: string | null; encryptAssertions?: boolean; signResponse?: boolean }): Promise<SpRow> {
     const t = Date.now();
-    const row = { id: ulid(), tenant_id: tenantId, name: input.name, entity_id: input.entityId, acs_urls: JSON.stringify(input.acsUrls), nameid_format: input.nameIdFormat, certificate: input.certificate, signed_requests: input.signedRequests, attribute_map: JSON.stringify(input.attributeMap), slo_url: input.sloUrl ?? null, slo_binding: input.sloBinding ?? null, encryption_certificate: input.encryptionCertificate ?? null, encrypt_assertions: !!(input.encryptAssertions && input.encryptionCertificate), status: 'active', last_used_at: null, created_at: t, updated_at: t };
+    const row = { id: ulid(), tenant_id: tenantId, name: input.name, entity_id: input.entityId, acs_urls: JSON.stringify(input.acsUrls), nameid_format: input.nameIdFormat, certificate: input.certificate, signed_requests: input.signedRequests, attribute_map: JSON.stringify(input.attributeMap), slo_url: input.sloUrl ?? null, slo_binding: input.sloBinding ?? null, encryption_certificate: input.encryptionCertificate ?? null, encrypt_assertions: !!(input.encryptAssertions && input.encryptionCertificate), sign_response: !!input.signResponse, status: 'active', last_used_at: null, created_at: t, updated_at: t };
     await this.db('saml_service_providers').insert(row);
     return spFromRow(row);
   }
 
-  async update(tenantId: string, id: string, patch: { status?: 'active' | 'disabled'; signedRequests?: boolean; nameIdFormat?: NameIdFormat; attributeMap?: Record<string, string>; certificate?: string | null; encryptAssertions?: boolean }): Promise<SpRow | undefined> {
+  async update(tenantId: string, id: string, patch: { status?: 'active' | 'disabled'; signedRequests?: boolean; nameIdFormat?: NameIdFormat; attributeMap?: Record<string, string>; certificate?: string | null; encryptAssertions?: boolean; signResponse?: boolean }): Promise<SpRow | undefined> {
     const upd: Record<string, unknown> = { updated_at: Date.now() };
     if (patch.status) upd.status = patch.status;
     if (patch.signedRequests !== undefined) upd.signed_requests = patch.signedRequests;
@@ -197,6 +200,7 @@ export class SamlIdp {
     if (patch.attributeMap) upd.attribute_map = JSON.stringify(patch.attributeMap);
     if (patch.certificate !== undefined) upd.certificate = patch.certificate;
     if (patch.encryptAssertions !== undefined) upd.encrypt_assertions = patch.encryptAssertions;
+    if (patch.signResponse !== undefined) upd.sign_response = patch.signResponse;
     await this.db('saml_service_providers').where({ tenant_id: tenantId, id }).update(upd);
     return this.get(tenantId, id);
   }
@@ -306,12 +310,14 @@ export class SamlIdp {
       `</saml:Assertion>`;
     let signed = await signEnvelopedWith(assertion, (d) => signer.sign(d), row.certificate!, { afterLocal: 'Issuer' });
     if (sp.encrypt_assertions && sp.encryption_certificate) signed = encryptAssertion(signed, sp.encryption_certificate);
-    const response =
+    let response =
       `<samlp:Response xmlns:samlp="${NS.samlp}" Destination="${escAttr(acs.url)}" ID="${newId()}"${irt} IssueInstant="${isoNow(now)}" Version="2.0">` +
       `<saml:Issuer xmlns:saml="${NS.saml}">${idp}</saml:Issuer>` +
       `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status>` +
       signed +
       `</samlp:Response>`;
+    // B-807: optionally the whole response too (after the assertion was signed and encrypted), right after its Issuer.
+    if (sp.sign_response) response = await signEnvelopedWith(response, (d) => signer.sign(d), row.certificate!, { afterLocal: 'Issuer' });
     await this.db('saml_service_providers').where({ id: sp.id }).update({ last_used_at: now });
     if (user.sessionId) await this.db('saml_sessions').insert({ id: ulid(), tenant_id: t.id, session_id: user.sessionId, role: 'idp', peer_id: sp.id, name_id: nameId.slice(0, 500), name_id_format: NAMEID_FORMATS[sp.nameid_format], session_index: sessionIndex, created_at: now, ended_at: null });
     return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>${response}`, 'utf8').toString('base64');

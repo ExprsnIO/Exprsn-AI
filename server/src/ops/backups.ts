@@ -68,11 +68,67 @@ export interface BackupManifest {
   totalRows: number;
   archive: { blob: string; sha256: string; bytes: number; cipher: 'aes-256-gcm'; iv: string; tag: string; kek: string; wrappedKey: string };
   /** Sprint 15: the blob store as a tar, sealed with its own key (absent in older backups or with PLATFORM_BACKUP_BLOBS=false). */
-  blobs?: { blob: string; sha256: string; bytes: number; plainBytes: number; objects: number; cipher: 'aes-256-gcm'; iv: string; tag: string; kek: string; wrappedKey: string } | null;
+  blobs?: { blob: string; sha256: string; bytes: number; plainBytes: number; objects: number; /** B-903: `snapshot` when only objects the dump references are archived. */ selection?: 'snapshot'; cipher: 'aes-256-gcm'; iv: string; tag: string; kek: string; wrappedKey: string } | null;
 }
 
 /** Blob keys a backup of the blob store leaves out: the backups themselves. */
 export const BLOB_BACKUP_EXCLUDE = ['platform/backups/'];
+
+/*
+ * B-903: the blob archive holds exactly the objects the database snapshot references. While the dump reads every
+ * row inside its snapshot, every string value (and every string inside a JSON value) that could be a blob key is
+ * collected; after the dump the store is listed and only objects named by the snapshot are archived. An object
+ * written after the snapshot opened (whose row the snapshot cannot see) is left out, and every object a row of the
+ * snapshot names was written before that row committed, so it is in the store when the listing runs.
+ */
+
+/** Objects no row names: content-addressed mirror files and pipeline staging input. They are archived as listed. */
+export const BLOB_UNOWNED_PREFIXES = ['mirrors/', 'training/staging/'];
+
+/** Rows that own a whole directory of objects without naming each one (derived keys). */
+export const BLOB_OWNED_DIRS: Record<string, (r: Record<string, unknown>) => string | null> = {
+  exports: (r) => (r.tenant_id && r.id ? `exports/${String(r.tenant_id)}/${String(r.id)}/` : null),
+  platform_bundles: (r) => (r.id ? `platform/bundles/${String(r.id)}/` : null)
+};
+
+const KEY_LIKE = /^[A-Za-z0-9][A-Za-z0-9._\-/]{0,511}$/;
+
+/** The blob keys and owned directories a snapshot's rows reference. */
+export class BlobRefs {
+  readonly keys = new Set<string>();
+  readonly dirs = new Set<string>();
+
+  add(table: string, row: Record<string, unknown>): void {
+    const dir = BLOB_OWNED_DIRS[table]?.(row);
+    if (dir) this.dirs.add(dir);
+    for (const v of Object.values(row)) this.visit(v, 0);
+  }
+
+  private visit(v: unknown, depth: number): void {
+    if (typeof v === 'string') {
+      const c = v.charCodeAt(0);
+      if ((c === 123 || c === 91) && depth < 6 && v.length < 4 * 1024 * 1024) {
+        try {
+          this.visit(JSON.parse(v), depth + 1);
+          return;
+        } catch {
+          /* not JSON */
+        }
+      }
+      if (v.length <= 512 && v.includes('/') && KEY_LIKE.test(v)) this.keys.add(v);
+    } else if (Array.isArray(v)) {
+      if (depth < 6) for (const x of v) this.visit(x, depth + 1);
+    } else if (v && typeof v === 'object' && !Buffer.isBuffer(v) && !(v instanceof Date)) {
+      if (depth < 6) for (const x of Object.values(v)) this.visit(x, depth + 1);
+    }
+  }
+
+  includes(key: string): boolean {
+    if (this.keys.has(key) || BLOB_UNOWNED_PREFIXES.some((p) => key.startsWith(p))) return true;
+    for (let i = key.lastIndexOf('/'); i > 0; i = key.lastIndexOf('/', i - 1)) if (this.dirs.has(key.slice(0, i + 1))) return true;
+    return false;
+  }
+}
 
 export const manifestKeyFor = (id: string) => `platform/backups/${id}.manifest.json`;
 
@@ -130,6 +186,36 @@ const fmtMs = (ms: number): string => (ms < 1000 ? `${ms} ms` : ms < 60_000 ? `$
  */
 export class BackupService {
   constructor(private readonly s: () => Services) {}
+
+  /** A test seam (B-903): runs once the dump's snapshot is fixed, before any table is read. */
+  onSnapshot: ((backupId: string) => Promise<void>) | null = null;
+
+  /**
+   * The dump's snapshot. PostgreSQL and MySQL: a repeatable-read transaction on the pool. A SQLite file: a read
+   * transaction on a second connection (WAL keeps writers going and the reader on its snapshot). In-memory SQLite has
+   * one connection only, so the transaction holds it and other queries wait until the dump ends.
+   */
+  private async openSnapshot(): Promise<{ db: Db; sharesConnection: boolean; done: (ok: boolean) => Promise<void> }> {
+    const s = this.s();
+    if (s.cfg.DB_CLIENT !== 'sqlite') {
+      const trx = await s.db.transaction({ isolationLevel: 'repeatable read' });
+      return { db: trx as unknown as Db, sharesConnection: false, done: async (ok) => void (await (ok ? trx.commit() : trx.rollback()).catch(() => undefined)) };
+    }
+    if (s.cfg.SQLITE_FILENAME === ':memory:') {
+      const trx = await s.db.transaction();
+      return { db: trx as unknown as Db, sharesConnection: true, done: async (ok) => void (await (ok ? trx.commit() : trx.rollback()).catch(() => undefined)) };
+    }
+    const reader = createDb({ ...s.cfg, DB_POOL_MAX: 1 });
+    const trx = await reader.transaction();
+    return {
+      db: trx as unknown as Db,
+      sharesConnection: false,
+      done: async () => {
+        await trx.rollback().catch(() => undefined);
+        await reader.destroy();
+      }
+    };
+  }
 
   private get kek(): string {
     return `${this.s().cfg.OPENBAO_KEY_PREFIX}platform-backups`;
@@ -190,17 +276,28 @@ export class BackupService {
     await s.db('platform_backups').where({ id: backupId }).update({ state: 'running' });
     try {
       const client = s.cfg.DB_CLIENT;
-      const migrations = (await s.db('knex_migrations').select('name').orderBy('id')).map((r: { name: string }) => r.name);
       const counts: { name: string; rows: number }[] = [];
-      // The dump is produced a page at a time and flows through gzip and AES-256-GCM into the blob store.
-      const dump = (db: Db) =>
-        async function* (): AsyncGenerator<Buffer> {
+      const refs = new BlobRefs();
+      // B-903: one snapshot for the whole dump (repeatable read on PostgreSQL and MySQL, one read transaction on SQLite).
+      const snap = await this.openSnapshot();
+      let migrations: string[];
+      let sealedDb: Awaited<ReturnType<typeof sealToBlob>>;
+      const dek = randomBytes(32);
+      const iv = randomBytes(12);
+      const blob = `platform/backups/${backupId}.bin`;
+      try {
+        // The first read fixes the snapshot.
+        migrations = (await snap.db('knex_migrations').select('name').orderBy('id')).map((r: { name: string }) => r.name);
+        await this.onSnapshot?.(backupId);
+        // The dump is produced a page at a time and flows through gzip and AES-256-GCM into the blob store.
+        const dump = async function* (db: Db): AsyncGenerator<Buffer> {
           const tables = await listTables(db, client);
           yield Buffer.from(JSON.stringify({ format: 'exprsn-backup/1', id: backupId }) + '\n');
           for (const [i, t] of tables.entries()) {
             let n = 0;
             let buf: string[] = [];
             for await (const r of tableRows(db, client, t)) {
+              refs.add(t, r);
               buf.push(JSON.stringify([t, encodeRow(r)]));
               n++;
               if (buf.length >= 500) {
@@ -210,25 +307,17 @@ export class BackupService {
             }
             if (buf.length) yield Buffer.from(buf.join('\n') + '\n');
             counts.push({ name: t, rows: n });
-            // SQLite has one connection, held by nothing here; on the others progress goes through the pool.
-            if (client !== 'sqlite' || i % 10 === 0) await progress(Math.round(((i + 1) * 60) / tables.length), `Dumped ${t}`);
+            // With an in-memory SQLite database the snapshot holds the only connection, so progress waits until the end.
+            if (!snap.sharesConnection) await progress(Math.round(((i + 1) * 60) / tables.length), `Dumped ${t}`);
           }
         };
-      const dek = randomBytes(32);
-      const iv = randomBytes(12);
-      const blob = `platform/backups/${backupId}.bin`;
-      let sealedDb: Awaited<ReturnType<typeof sealToBlob>>;
-      if (client === 'sqlite') sealedDb = await sealToBlob({ blobs: s.blobs, key: blob, plain: dump(s.db)(), gzip: true, dek, iv, aad: `exprsn-backup:${backupId}` });
-      else {
-        const trx = await s.db.transaction({ isolationLevel: 'repeatable read' });
-        try {
-          sealedDb = await sealToBlob({ blobs: s.blobs, key: blob, plain: dump(trx as unknown as Db)(), gzip: true, dek, iv, aad: `exprsn-backup:${backupId}` });
-          await trx.commit();
-        } catch (err) {
-          await trx.rollback().catch(() => undefined);
-          throw err;
-        }
+        sealedDb = await sealToBlob({ blobs: s.blobs, key: blob, plain: dump(snap.db), gzip: true, dek, iv, aad: `exprsn-backup:${backupId}` });
+        await snap.done(true);
+      } catch (err) {
+        await snap.done(false);
+        throw err;
       }
+      if (snap.sharesConnection) await progress(60, `Dumped ${counts.length} tables`);
       await s.kms.ensureKey(this.kek);
       let blobsPart: BackupManifest['blobs'] = null;
       if (s.cfg.PLATFORM_BACKUP_BLOBS) {
@@ -237,8 +326,8 @@ export class BackupService {
         const biv = randomBytes(12);
         const counter = { objects: 0, bytes: 0 };
         const key = `platform/backups/${backupId}.blobs.bin`;
-        const r = await sealToBlob({ blobs: s.blobs, key, plain: blobTar(s.blobs, BLOB_BACKUP_EXCLUDE, counter), gzip: false, dek: bdek, iv: biv, aad: `exprsn-backup-blobs:${backupId}` });
-        blobsPart = { blob: key, sha256: r.sha256, bytes: r.bytes, plainBytes: r.plainBytes, objects: counter.objects, cipher: 'aes-256-gcm', iv: biv.toString('base64'), tag: r.tag, kek: this.kek, wrappedKey: await s.kms.wrap(this.kek, bdek, `backup-blobs:${backupId}`) };
+        const r = await sealToBlob({ blobs: s.blobs, key, plain: blobTar(s.blobs, BLOB_BACKUP_EXCLUDE, counter, (k) => refs.includes(k)), gzip: false, dek: bdek, iv: biv, aad: `exprsn-backup-blobs:${backupId}` });
+        blobsPart = { blob: key, sha256: r.sha256, bytes: r.bytes, plainBytes: r.plainBytes, objects: counter.objects, selection: 'snapshot', cipher: 'aes-256-gcm', iv: biv.toString('base64'), tag: r.tag, kek: this.kek, wrappedKey: await s.kms.wrap(this.kek, bdek, `backup-blobs:${backupId}`) };
       }
       await progress(85, 'Signing the manifest');
       const manifest: BackupManifest = {

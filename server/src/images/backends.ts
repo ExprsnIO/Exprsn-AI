@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { fetch, WebSocket, type Dispatcher } from 'undici';
 import { ndjson } from '../gateway/ollama.js';
+import { literalProblem, serviceAgent, servicePolicy, type ServicePolicy } from '../platform/egress.js';
 
 /*
  * Image generation runs on a worker behind this interface: a ComfyUI server (HTTP API, a workflow template with
@@ -77,6 +79,11 @@ export function fillWorkflow(template: unknown, values: Record<string, string | 
   return template;
 }
 
+/** B-901: the worker's address is checked (literals here, names in every connection's DNS lookup). */
+function pinned(c: BackendConfig, policy: ServicePolicy): { dispatcher: Dispatcher; refused: string | null } {
+  return { dispatcher: serviceAgent(policy), refused: literalProblem(c.url, policy) };
+}
+
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const t = setTimeout(resolve, ms);
@@ -91,11 +98,14 @@ export class ComfyUiBackend implements ImageBackend {
   readonly concurrency: number;
   readonly steps: number;
   private readonly template: unknown;
+  private readonly net: { dispatcher: Dispatcher; refused: string | null };
 
   constructor(
     readonly id: string,
-    private readonly c: BackendConfig
+    private readonly c: BackendConfig,
+    policy: ServicePolicy = servicePolicy()
   ) {
+    this.net = pinned(c, policy);
     if (!c.workflow) throw new Error(`Image backend ${id}: a ComfyUI backend needs a workflow file`);
     this.template = JSON.parse(readFileSync(c.workflow, 'utf8'));
     this.label = c.label ?? `comfyui, ${c.model ?? 'workflow'}`;
@@ -109,13 +119,15 @@ export class ComfyUiBackend implements ImageBackend {
   }
 
   async generate(req: GenerateRequest, o: { signal: AbortSignal; onProgress: (p: GenerateProgress) => void }): Promise<GenerateResult> {
+    if (this.net.refused) throw new BackendError(`The ComfyUI address is refused: ${this.net.refused}`);
+    const dispatcher = this.net.dispatcher;
     const clientId = randomUUID();
     const signal = AbortSignal.any([o.signal, AbortSignal.timeout(this.c.timeoutMs)]);
     const prompt = fillWorkflow(this.template, { prompt: req.prompt, negative: req.negative ?? '', seed: req.seed, width: req.width, height: req.height, steps: req.steps });
-    let ws: WebSocket | null = null;
-    if (typeof WebSocket !== 'undefined') {
+    let ws: WebSocket | null;
+    {
       try {
-        ws = new WebSocket(this.url(`ws?clientId=${clientId}`).replace(/^http/, 'ws'));
+        ws = new WebSocket(this.url(`ws?clientId=${clientId}`).replace(/^http/, 'ws'), { dispatcher });
         ws.onmessage = (ev) => {
           try {
             const m = JSON.parse(String(ev.data)) as { type?: string; data?: { value?: number; max?: number } };
@@ -131,22 +143,22 @@ export class ComfyUiBackend implements ImageBackend {
       }
     }
     try {
-      const res = await fetch(this.url('prompt'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, client_id: clientId }), signal });
+      const res = await fetch(this.url('prompt'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, client_id: clientId }), signal, dispatcher });
       if (!res.ok) throw new BackendError(`ComfyUI refused the workflow (${res.status}): ${(await res.text()).slice(0, 300)}`);
       const { prompt_id: id } = (await res.json()) as { prompt_id: string };
-      const onAbort = () => void fetch(this.url('interrupt'), { method: 'POST' }).catch(() => undefined);
+      const onAbort = () => void fetch(this.url('interrupt'), { method: 'POST', dispatcher }).catch(() => undefined);
       o.signal.addEventListener('abort', onAbort, { once: true });
       o.onProgress({ stage: 'Queued on the worker' });
       for (;;) {
         await sleep(1000, signal);
-        const h = (await (await fetch(this.url(`history/${encodeURIComponent(id)}`), { signal })).json()) as Record<string, { status?: { status_str?: string; messages?: unknown[] }; outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> }>;
+        const h = (await (await fetch(this.url(`history/${encodeURIComponent(id)}`), { signal, dispatcher })).json()) as Record<string, { status?: { status_str?: string; messages?: unknown[] }; outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> }>;
         const entry = h[id];
         if (!entry) continue;
         if (entry.status?.status_str === 'error') throw new BackendError('The ComfyUI workflow failed on the worker.');
         const img = Object.values(entry.outputs ?? {}).flatMap((x) => x.images ?? [])[0];
         if (!img) continue;
         const q = new URLSearchParams({ filename: img.filename, subfolder: img.subfolder, type: img.type });
-        const bytes = await fetch(this.url(`view?${q}`), { signal });
+        const bytes = await fetch(this.url(`view?${q}`), { signal, dispatcher });
         if (!bytes.ok) throw new BackendError(`Could not fetch the image from ComfyUI (${bytes.status}).`);
         o.signal.removeEventListener('abort', onAbort);
         return { image: Buffer.from(await bytes.arrayBuffer()), ...(this.model ? { model: this.model } : {}) };
@@ -167,11 +179,14 @@ export class DiffusersBackend implements ImageBackend {
   readonly model: string | null;
   readonly concurrency: number;
   readonly steps: number;
+  private readonly net: { dispatcher: Dispatcher; refused: string | null };
 
   constructor(
     readonly id: string,
-    private readonly c: BackendConfig
+    private readonly c: BackendConfig,
+    policy: ServicePolicy = servicePolicy()
   ) {
+    this.net = pinned(c, policy);
     this.steps = c.steps;
     this.label = c.label ?? `diffusers, ${c.model ?? 'default model'}`;
     this.model = c.model ?? null;
@@ -179,12 +194,14 @@ export class DiffusersBackend implements ImageBackend {
   }
 
   async generate(req: GenerateRequest, o: { signal: AbortSignal; onProgress: (p: GenerateProgress) => void }): Promise<GenerateResult> {
+    if (this.net.refused) throw new BackendError(`The image worker's address is refused: ${this.net.refused}`);
     const signal = AbortSignal.any([o.signal, AbortSignal.timeout(this.c.timeoutMs)]);
     const res = await fetch(new URL('generate', this.c.url.endsWith('/') ? this.c.url : `${this.c.url}/`), {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/x-ndjson, application/json' },
       body: JSON.stringify({ prompt: req.prompt, negative_prompt: req.negative ?? '', width: req.width, height: req.height, seed: req.seed, num_inference_steps: req.steps, ...(this.model ? { model: this.model } : {}) }),
-      signal
+      signal,
+      dispatcher: this.net.dispatcher
     });
     if (!res.ok || !res.body) throw new BackendError(`The image worker answered ${res.status}: ${(await res.text().catch(() => '')).slice(0, 300)}`);
     type Final = { image?: string; gpu_seconds?: number; nsfw_score?: number; error?: string; step?: number; steps?: number };
@@ -205,7 +222,7 @@ export class DiffusersBackend implements ImageBackend {
   }
 }
 
-export function createBackends(raw: string): ImageBackend[] {
+export function createBackends(raw: string, policy: ServicePolicy = servicePolicy()): ImageBackend[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw || '[]');
@@ -213,5 +230,5 @@ export function createBackends(raw: string): ImageBackend[] {
     throw new Error('IMAGE_BACKENDS is not valid JSON');
   }
   const list = backendConfig.parse(parsed);
-  return list.map((c) => (c.kind === 'comfyui' ? new ComfyUiBackend(c.id, c) : new DiffusersBackend(c.id, c)));
+  return list.map((c) => (c.kind === 'comfyui' ? new ComfyUiBackend(c.id, c, policy) : new DiffusersBackend(c.id, c, policy)));
 }

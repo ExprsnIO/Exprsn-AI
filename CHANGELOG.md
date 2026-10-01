@@ -1,5 +1,103 @@
 # Changelog
 
+## 1.2.0
+
+Sprints 16 to 19: the [1.2.0 backlog](Backlog-1.2.0.md), which closes most of the known gaps and ASVS follow-ups left
+after 1.1.0 and deepens chat, knowledge and integrations. Sprint details are in [Sprints.md](Sprints.md); the remaining
+gaps are in [docs/security.md](docs/security.md), [docs/asvs.md](docs/asvs.md) (now 54 groups met, 10 partly, 7 not
+applicable) and [docs/accessibility.md](docs/accessibility.md).
+
+### Chat and AI
+- `/v1` takes chat's knowledge and memory context on request (`X-Exprsn-Knowledge`, `X-Exprsn-Memory`) under chat's
+  clearance rules, with citations in an `exprsn` extension field, and runs the profile's read-only tools on the server
+  (`X-Exprsn-Tools: profile`); each header needs its own permission or scope.
+- The guard model and classifiers check streamed answers in the background; with a hold-back
+  (`CHAT_GUARD_HOLDBACK_SENTENCES`, 1) a sentence is shown only once a clean verdict covers it. Tool results shown in
+  chat pass the stream screen.
+- `require-approval` on `user-input` holds the prompt in the Flags queue until a reviewer approves or rejects it.
+- Readers of a shared conversation watch answers stream, and lose them at once on revocation.
+- Anonymous share links, off per tenant by default, for conversations labelled `public` only, expiring,
+  rate-limited and audited, opened on a signed-out page.
+- Retention per workspace and per user; the shortest applicable period wins.
+- Prompt templates pass the `user-input` guardrail checkpoint when saved and published.
+
+### Identity and security
+- A sign-in from a new browser or a new network sends a security notice (`SIGNIN_NOTICES`, on by default).
+- A password strength meter on every password form; Platform warns while the breached-password check is off.
+- Re-authenticating at an upstream OIDC or SAML IdP counts as step-up.
+- Admin password reset revokes the account's API keys unless the option is unticked.
+- Optional DPoP nonces (`DPOP_NONCES`) and `API_PUBLIC_URL` for proofs behind a proxy prefix.
+- Resource servers may introspect any client's token after a second identity admin approves.
+- SAML: optional whole-response signing; SP and IdP metadata fetched by URL, refreshed daily, with certificate and
+  endpoint changes held for approval.
+- Console sign-out runs front-channel logout; SQL user stores dial the checked address.
+- `admin:create --enrol-link` gives the first admin a single-use link that sets the password and enrols a factor.
+- Operator-chosen service URLs (pool instances, zone endpoints, image backends, the trainer) refuse metadata,
+  link-local and unspecified addresses when saved and at every connection (`SERVICE_ALLOWED_HOSTS`,
+  `SERVICE_INTERNAL_ONLY`).
+- `REQUIRE_BACKEND_TLS` refuses plaintext PostgreSQL, MySQL, Redis, S3 and OpenBao links in production (off by
+  default; `BACKEND_TLS_EXEMPT` per link).
+- YAML size, depth, node and alias caps; secrets masked in diagnostics and problem details.
+- Training data leaves the platform sealed with a per-run key (worker contract 2); checkpoints and GGUF files come back
+  sealed under the tenant key.
+- `kms:rewrap` also re-signs image provenance and training model cards.
+
+### Accessibility
+- The Playwright suite checks every screen and design state, sign-in and a streaming chat, light and dark, against an
+  in-page checker modelled on axe-core's WCAG A/AA rules (Standard mode).
+- No two-dimensional scrolling at 320 and 640 px; wide tables scroll in a named, keyboard-reachable region.
+- One tab panel per tab list; faint text at 4.5:1 or more; no nested buttons in Pools rows; Media caption contrast.
+
+### Platform and operations
+- Backups read one snapshot, and the blob archive holds exactly the objects it names.
+- ACME external account binding, RFC 2136 over TCP with fallback and SOA zone discovery, and push hooks per
+  certificate (named reload commands or signed webhooks).
+- MCP servers and connections outside their zone are listed with a move proposal under dual control.
+- Promoted artefacts are pushed to Harbor, Verdaccio and devpi.
+- `API_RATE_PER_MINUTE` sets the `/api` limit per user (600 by default).
+
+### Knowledge and integrations
+- MySQL tables and views as knowledge sources.
+- Row-level access for database knowledge sources from an access column, enforced at retrieval.
+- PostgreSQL logical replication for knowledge sources (`KNOWLEDGE_REPLICATION`), falling back to watermarks.
+- Ordered webhook delivery per endpoint, and Ed25519 signatures with a per-tenant key published as a JWKS.
+- Per-tenant price books, currency and taxes; a signed Stripe webhook marks statements paid, failed or void
+  (`STRIPE_WEBHOOK_SECRET`).
+- A paused workflow tool gives an agent run a pending result it awaits; approval timeouts per step; run events reach
+  approvers live.
+- `IMAGE_SAFETY_REQUIRED` withholds images no classifier checked; `SCRIPT_RUNTIME=runsc` runs scripts under gVisor.
+
+### Testing
+- 477 unit and API tests (1 skipped) across 37 files, with new suites `sprint16.test.ts`, `sprint17.test.ts`,
+  `sprint18.test.ts`, `sprint19-knowledge.test.ts`, `sprint19-integrations.test.ts` and `sprint19-workflows.test.ts`,
+  and fakes for Harbor, Verdaccio and devpi (`sprint18-fakes.ts`).
+- `integration/replication.test.ts`: logical replication against PostgreSQL with `wal_level=logical`.
+- 55 Playwright tests, with new specs `shared.spec.ts`, `password-meter.spec.ts`, `y-accessibility.spec.ts` and
+  `y-reflow.spec.ts`.
+- A flake in `memory.test.ts`, where a random sealed value could contain the searched substring, is fixed.
+
+### Upgrade notes
+- Migrations `018_chat_depth` to `021_integrations2` run on start (`DB_MIGRATE_ON_START`) or with `exprsn-ai migrate`.
+- The training worker must speak contract 2 ([docs/training-worker.md](docs/training-worker.md)). A contract-1 worker
+  is refused unless `TRAINER_PLAINTEXT_FALLBACK=true`, which sends rows in plaintext as before.
+- The integration tests need PostgreSQL with `wal_level=logical`; CI sets it with `ALTER SYSTEM` and a restart. Add the
+  same step to other pipelines that run `npm run test:integration` against PostgreSQL.
+- The `/api` rate limit is now `API_RATE_PER_MINUTE` (600 a minute per user, or per address when signed out, as
+  before); raise it for automation that makes many console requests.
+- Admin password reset now revokes the account's API keys by default; untick the option to keep them.
+- New-sign-in notices are on by default (`SIGNIN_NOTICES=true`). Each account's first sign-in after the upgrade only
+  records its browser and network; a later sign-in from another browser or network sends a notice. Set it to `false`
+  to turn them off.
+- New settings, all optional with safe defaults: chat (`CHAT_GUARD_HOLDBACK_SENTENCES`, `CHAT_GUARD_STREAM_CONCURRENCY`,
+  `SHARE_ANONYMOUS_PER_MINUTE`), identity (`SIGNIN_NOTICES`, `DPOP_NONCES`, `DPOP_NONCE_SECONDS`, `API_PUBLIC_URL`,
+  `FEDERATION_METADATA_REFRESH_HOURS`), outbound and backend links (`SERVICE_ALLOWED_HOSTS`, `SERVICE_INTERNAL_ONLY`,
+  `REQUIRE_BACKEND_TLS`, `BACKEND_TLS_EXEMPT`), ACME (`ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`,
+  `ACME_DNS_RFC2136_TRANSPORT`, `ACME_RELOAD_COMMANDS`, `ACME_HOOK_TIMEOUT_MS`; `ACME_DNS_RFC2136_ZONE` is now
+  optional), training (`TRAINER_*`), knowledge (`KNOWLEDGE_REPLICATION`, `KNOWLEDGE_REPLICATION_TICK_MS`), billing
+  (`STRIPE_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_TOLERANCE_SECONDS`), `IMAGE_SAFETY_REQUIRED`, `SCRIPT_RUNTIME` and
+  `API_RATE_PER_MINUTE`. See [docs/deploy.md](docs/deploy.md).
+- No new permissions.
+
 ## 1.1.0
 
 Sprints 11 to 15: the [1.1.0 backlog](Backlog-1.1.0.md), which closes most of the known gaps and ASVS follow-ups of

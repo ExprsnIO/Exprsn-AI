@@ -52,6 +52,24 @@ export interface WorkflowToolRunner {
   /** Why the entry's workflow cannot run now, or null. */
   unavailable(entry: EntryRow): Promise<string | null>;
   runAsTool(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown>;
+  /** The result of a run that paused (B-1006): still pending, its output, or why it did not succeed. */
+  toolResult(ctx: ToolCallContext, entry: EntryRow, runId: string): Promise<{ state: 'pending' } | { state: 'done'; result: unknown } | { state: 'failed'; error: string }>;
+}
+
+/** A pending tool result (B-1006): the call started something that finishes later, which the caller can await. */
+export interface PendingResult {
+  kind: 'workflow-run';
+  id: string;
+}
+
+/** Thrown by an implementation whose work paused: the dispatcher turns it into a pending outcome. */
+export class ToolPending extends Error {
+  constructor(
+    readonly pending: PendingResult,
+    message: string
+  ) {
+    super(message);
+  }
 }
 
 export interface ToolOutcome {
@@ -68,6 +86,8 @@ export interface ToolOutcome {
   needsApproval?: boolean;
   /** The call ran but the context guardrail withheld its result from the model. */
   withheld?: boolean;
+  /** The call started work that has not finished (a workflow waiting on an approval): await it with `awaitResult`. */
+  pending?: PendingResult;
   /** When the tool declares an output schema: did the result match it? */
   valid?: boolean | null;
   durationMs: number;
@@ -185,31 +205,52 @@ export class ToolDispatcher {
 
     try {
       const result = await this.execute(ctx, tool.entry, args);
-      const valid = tool.entry.output_schema ? validateAgainst(tool.entry.output_schema, result).length === 0 : null;
-      const text = JSON.stringify(result ?? null);
-      const capped = text.length > RESULT_LIMIT ? { truncated: true, text: text.slice(0, RESULT_LIMIT) } : result;
-      // Whatever an MCP server, script or workflow returns is untrusted input to the model: the same context
-      // checkpoint retrieved knowledge passes, and the same tag defusing, before it goes into the conversation.
-      const g = await this.guard().check({
-        tenantId: p.tenantId,
-        workspaceId: p.workspaceId ?? null,
-        checkpoint: 'context',
-        text: JSON.stringify(capped ?? null),
-        // A result has no label of its own: it takes the label of the context it lands in, which the caller is always
-        // cleared for (the harness may run a tool at its ceiling, above the tester's clearance).
-        label: clears(p.clearance, ctx.label) ? ctx.label : p.clearance,
-        principal: p,
-        ...(ctx.source ? { source: ctx.source } : {}),
-        meta: { via: 'tool-result', tool: tool.entry.name, impl: tool.entry.impl, sideEffect: tool.sideEffect }
-      });
-      if (g.action === 'block' || g.action === 'require-approval') {
-        return out({ decision: g.action, withheld: true, valid, error: `The result of ${tool.entry.name} was withheld by a guardrail${g.reason ? `: ${g.reason}` : '.'}` });
-      }
-      return out({ ok: true, result: defuseResult(g.action === 'redact' ? g.text : JSON.stringify(capped ?? null)), decision: d.action, valid });
+      return await this.finishResult(ctx, tool, result, out, d.action);
     } catch (err) {
+      if (err instanceof ToolPending) return out({ decision: d.action, pending: err.pending, error: err.message });
       if (ctx.signal?.aborted) throw err;
       return out({ decision: d.action, error: (err as Error).message.slice(0, 1000) });
     }
+  }
+
+  /**
+   * Picks up a pending result (B-1006): when the work finished, its result passes the output schema check and the
+   * context checkpoint like any other; still pending comes back pending.
+   */
+  async awaitResult(ctx: ToolCallContext, tool: ResolvedTool, args: Record<string, unknown>, pending: PendingResult): Promise<ToolOutcome> {
+    const started = Date.now();
+    const out = (o: Partial<ToolOutcome>): ToolOutcome => ({ name: tool.entry.name, arguments: args, ok: false, decision: null, durationMs: Date.now() - started, ...o });
+    if (pending.kind !== 'workflow-run' || !this.workflows) return out({ error: 'The pending result can no longer be read on this instance.' });
+    const r = await this.workflows.toolResult(ctx, tool.entry, pending.id);
+    if (r.state === 'pending') return out({ pending, error: `${tool.entry.name} is still waiting.` });
+    if (r.state === 'failed') return out({ error: r.error.slice(0, 1000) });
+    return this.finishResult(ctx, tool, r.result, out, null);
+  }
+
+  /** Output schema, size cap, the context checkpoint and tag defusing: what every result passes before the model. */
+  private async finishResult(ctx: ToolCallContext, tool: ResolvedTool, result: unknown, out: (o: Partial<ToolOutcome>) => ToolOutcome, decision: GuardAction | null): Promise<ToolOutcome> {
+    const p = ctx.principal;
+    const valid = tool.entry.output_schema ? validateAgainst(tool.entry.output_schema, result).length === 0 : null;
+    const text = JSON.stringify(result ?? null);
+    const capped = text.length > RESULT_LIMIT ? { truncated: true, text: text.slice(0, RESULT_LIMIT) } : result;
+    // Whatever an MCP server, script or workflow returns is untrusted input to the model: the same context
+    // checkpoint retrieved knowledge passes, and the same tag defusing, before it goes into the conversation.
+    const g = await this.guard().check({
+      tenantId: p.tenantId,
+      workspaceId: p.workspaceId ?? null,
+      checkpoint: 'context',
+      text: JSON.stringify(capped ?? null),
+      // A result has no label of its own: it takes the label of the context it lands in, which the caller is always
+      // cleared for (the harness may run a tool at its ceiling, above the tester's clearance).
+      label: clears(p.clearance, ctx.label) ? ctx.label : p.clearance,
+      principal: p,
+      ...(ctx.source ? { source: ctx.source } : {}),
+      meta: { via: 'tool-result', tool: tool.entry.name, impl: tool.entry.impl, sideEffect: tool.sideEffect }
+    });
+    if (g.action === 'block' || g.action === 'require-approval') {
+      return out({ decision: g.action, withheld: true, valid, error: `The result of ${tool.entry.name} was withheld by a guardrail${g.reason ? `: ${g.reason}` : '.'}` });
+    }
+    return out({ ok: true, result: defuseResult(g.action === 'redact' ? g.text : JSON.stringify(capped ?? null)), decision, valid });
   }
 
   private async execute(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown> {

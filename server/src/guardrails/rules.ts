@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import YAML from 'yaml';
+import { parseYamlSafely, YamlLimitError } from '../platform/yaml.js';
 import { LABELS } from '../authz/labels.js';
 import { HttpProblem } from '../http/problem.js';
 import { compilePattern } from './regex.js';
@@ -90,9 +91,11 @@ export const rulesToYaml = (rules: Rule[]): string => YAML.stringify(rules, { li
 
 export function rulesFromYaml(text: string): unknown {
   try {
-    const doc = YAML.parse(text, { maxAliasCount: 0 }) as unknown;
+    // B-907: size, depth, node and alias caps (no aliases at all in rules).
+    const doc = parseYamlSafely(text, { maxBytes: 512 * 1024, maxDepth: 16, maxAliases: 0 });
     return doc ?? [];
   } catch (err) {
+    if (err instanceof YamlLimitError) throw new HttpProblem(422, 'Invalid YAML', err.message, { extensions: { line: err.line, col: null } });
     const e = err as { message?: string; linePos?: { line: number; col: number }[] };
     throw new HttpProblem(422, 'Invalid YAML', e.message?.split('\n')[0] ?? 'The YAML does not parse.', { extensions: { line: e.linePos?.[0]?.line ?? null, col: e.linePos?.[0]?.col ?? null } });
   }

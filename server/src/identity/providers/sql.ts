@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs';
+import { connect as netConnect, isIP, Socket } from 'node:net';
 import path from 'node:path';
 import knexFactory, { type Knex } from 'knex';
 import { checkHost, parseAllowList, type AllowList } from '../../mcp/hosts.js';
@@ -44,8 +45,9 @@ export class SqlProvider implements IdentityProvider {
   /**
    * The store's database may only be an internal host (or one on IDENTITY_ALLOWED_HOSTS), and a SQLite store may not
    * be the application's own database file: either would turn "Test a login" into an oracle for someone else's data.
+   * Returns the checked addresses of a network store, which is then dialled by address (B-809).
    */
-  private async checkTarget(conn: string): Promise<void> {
+  private async checkTarget(conn: string): Promise<{ host: string; port: number; addresses: string[] } | null> {
     if (this.cfg.dialect === 'sqlite') {
       const real = (p: string) => {
         try {
@@ -55,29 +57,58 @@ export class SqlProvider implements IdentityProvider {
         }
       };
       if (this.outbound.refusedSqliteFiles.some((f) => real(f) === real(conn))) throw new Error('The store cannot be the application\'s own database.');
-      return;
+      return null;
     }
-    let host: string;
+    let url: URL;
     try {
-      host = new URL(conn).hostname;
+      url = new URL(conn);
     } catch {
       throw new Error('The connection must be a URL (postgres://… or mysql://…).');
     }
-    await checkHost(host, this.outbound.allow);
+    const { addresses } = await checkHost(url.hostname, this.outbound.allow);
+    return { host: url.hostname.replace(/^\[|\]$/g, ''), port: Number(url.port) || (this.cfg.dialect === 'pg' ? 5432 : 3306), addresses };
+  }
+
+  /**
+   * The driver settings for one new pool connection. The host is resolved and checked for every connection, and the
+   * driver dials exactly the checked address through its `stream` option, so a name that re-resolves somewhere else
+   * after the check (DNS rebinding) is never dialled. TLS still verifies the configured name.
+   */
+  private async settings(conn: string, steps?: Step[]): Promise<Record<string, unknown>> {
+    const target = await timed(steps, 'Check the database host', () => this.checkTarget(conn));
+    const t = target!;
+    const address = t.addresses[0]!;
+    // Refresh the settings (and so re-check the host) for every new connection.
+    const expirationChecker = () => true;
+    if (this.cfg.dialect === 'pg') {
+      const stream = () => {
+        const sock = new Socket();
+        const dial = sock.connect.bind(sock) as (port: number, host: string) => Socket;
+        // node-postgres calls connect(port, host) with the configured name; dial the checked address instead.
+        (sock as unknown as { connect: (port: number) => Socket }).connect = (port: number) => dial(port, address);
+        return sock;
+      };
+      return { connectionString: conn, statement_timeout: this.cfg.timeoutMs, stream, expirationChecker };
+    }
+    // mysql2 takes a connected stream; its TLS upgrade verifies the configured host name.
+    const stream = () => netConnect({ host: address, port: t.port, family: isIP(address) });
+    return { uri: conn, connectTimeout: this.cfg.timeoutMs, stream, expirationChecker };
   }
 
   private async db(steps?: Step[]): Promise<Knex> {
     if (this.knex) return this.knex;
     const conn = resolveSecret(this.cfg.connection);
-    await timed(steps, 'Check the database host', () => this.checkTarget(conn));
+    if (this.cfg.dialect === 'sqlite') await timed(steps, 'Check the database file', () => this.checkTarget(conn));
+    // The first check runs now, so a refused host fails the test with its own step before any pool exists.
+    else await this.settings(conn, steps);
     if (this.knex) return this.knex;
     const pool = { min: 0, max: 4, acquireTimeoutMillis: this.cfg.timeoutMs };
     switch (this.cfg.dialect) {
       case 'pg':
-        this.knex = knexFactory({ client: 'pg', connection: { connectionString: conn, statement_timeout: this.cfg.timeoutMs }, pool });
+        this.knex = knexFactory({ client: 'pg', connection: (() => this.settings(conn)) as unknown as Knex.StaticConnectionConfig, pool });
         break;
       case 'mysql':
-        this.knex = knexFactory({ client: 'mysql2', connection: { uri: conn, connectTimeout: this.cfg.timeoutMs } as unknown as Knex.MySql2ConnectionConfig, pool });
+        this.knex = knexFactory({ client: 'mysql2', connection: (() => this.settings(conn)) as unknown as Knex.StaticConnectionConfig, pool });
         break;
       case 'sqlite':
         this.knex = knexFactory({ client: 'better-sqlite3', connection: { filename: conn, options: { readonly: true, fileMustExist: true } } as Knex.Sqlite3ConnectionConfig, useNullAsDefault: true, pool: { min: 1, max: 1 } });

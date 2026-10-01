@@ -10,6 +10,7 @@ import type { AcmeChallengeStore } from './acme.js';
 import { audit, notifyAdmins, type OpsActor } from './common.js';
 import { buildCsr, pemBlocks } from './der.js';
 import { createDnsProvider, type DnsProvider } from './dns.js';
+import { CertHooks } from './cert-hooks.js';
 
 /** Published on the bus after every issue or renewal; every instance's file sink writes the new PEMs (B-409). */
 export const CERT_ISSUED = 'platform.cert.issued';
@@ -19,6 +20,8 @@ export interface CertIssuedEvent {
   serial: string;
   notAfter: number;
   renewal: boolean;
+  /** Sprint 18: the tenant the issue was recorded in, for the hooks' audit events. */
+  tenantId?: string;
 }
 
 /** A directory name for a certificate: its first name, with a wildcard's `*` spelled out. */
@@ -124,8 +127,12 @@ const WILDCARD = /^\*\.(?=.{1,251}$)(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.)+(?!-)[a-z0-
  */
 export class CertificateService {
   private dnsOverride: DnsProvider | null | undefined;
+  /** B-904: push hooks (reload commands, signed webhooks) run after every issue and renewal. */
+  readonly hooks: CertHooks;
 
-  constructor(private readonly s: () => Services) {}
+  constructor(private readonly s: () => Services) {
+    this.hooks = new CertHooks(s);
+  }
 
   /** The dns-01 provider when ACME_CHALLENGE=dns-01, else null (http-01). Replaceable (tests). */
   get dns(): DnsProvider | null {
@@ -306,7 +313,8 @@ export class CertificateService {
       await this.patch(certId, { state: 'valid', issuer: info.issuer, serial: info.serial, fingerprint: info.fingerprint, not_before: info.notBefore, not_after: info.notAfter, chain_pem: chainPem, key_sealed: keySealed, order_url: orderUrl, renewed_at: Date.now(), notified_at: null, error: null });
       await audit(s, by, renewal ? 'platform.cert.renewed' : 'platform.cert.issued', { certificate: certId, name: c.name }, { serial: info.serial, issuer: info.issuer, notAfter: info.notAfter, fingerprint: info.fingerprint, previousSerial: c.serial, challenge: dns ? 'dns-01' : 'http-01' });
       // Every instance hears this: their file sinks write the new PEMs, and anything else can reload on it.
-      s.bus.publish(CERT_ISSUED, { certificate: certId, name: c.name, serial: info.serial, notAfter: info.notAfter, renewal } satisfies CertIssuedEvent);
+      s.bus.publish(CERT_ISSUED, { certificate: certId, name: c.name, serial: info.serial, notAfter: info.notAfter, renewal, tenantId: by.tenantId } satisfies CertIssuedEvent);
+      await this.hooks.fireWebhooks(by, certId, renewal ? 'certificate.renewed' : 'certificate.issued').catch((err: Error) => s.log.warn({ err, certificate: certId }, 'certificate webhooks failed'));
       return { serial: info.serial, notAfter: info.notAfter };
     } catch (err) {
       const reason = (err as Error).message.slice(0, 1000);

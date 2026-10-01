@@ -4,6 +4,7 @@ import mysql from 'mysql2/promise';
 import { fetch, type Dispatcher } from 'undici';
 import { addressProblem, checkHost, guardedAgent, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import type { Classification } from './classify.js';
+import { dropSlot, PgReplicationStream, type ReplicationOptions, type ReplicationStream } from './replication.js';
 
 /** What the service hands a driver: the endpoint and the opened credential. */
 export interface ConnectionSpec {
@@ -54,6 +55,10 @@ export interface DataDriver {
   query(c: Classification, text: string, opts: { limit: number; timeoutMs: number }): Promise<QueryResult>;
   /** Rows of one allow-listed object after a watermark, ordered by it (knowledge sources). */
   rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number }): Promise<QueryResult>;
+  /** A logical replication stream of one table (PostgreSQL only, B-1003). */
+  replicate?(opts: ReplicationOptions): Promise<ReplicationStream>;
+  /** Drops a replication slot this platform created; false when there was none (or it is in use). */
+  dropReplicationSlot?(slot: string, timeoutMs: number): Promise<boolean>;
 }
 
 export type DriverFactory = (spec: ConnectionSpec) => DataDriver;
@@ -148,6 +153,21 @@ export class PostgresDriver implements DataDriver {
         return { columns: r.fields.map((f) => f.name), rows: (r.rows as unknown[][]).slice(0, opts.limit), capped, estimate };
       })
     );
+  }
+
+  /** The endpoint to dial for replication: the checked address, as for queries. */
+  private async endpoint() {
+    const { host, port } = hostPort(this.spec.endpoint, 5432);
+    const { addresses } = await checkHost(host, this.allow);
+    return { host, address: addresses[0]!, port, database: this.spec.database, user: this.spec.username, password: this.spec.password, tls: this.spec.tls };
+  }
+
+  async replicate(opts: ReplicationOptions): Promise<ReplicationStream> {
+    return new PgReplicationStream(await this.endpoint(), opts);
+  }
+
+  async dropReplicationSlot(slot: string, timeoutMs: number): Promise<boolean> {
+    return dropSlot(await this.endpoint(), slot, timeoutMs);
   }
 
   async rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number }): Promise<QueryResult> {

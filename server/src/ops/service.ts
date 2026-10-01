@@ -7,12 +7,13 @@ import { MirrorService } from './mirrors.js';
 import { CERT_ISSUED, CertificateService, type CertIssuedEvent } from './certs.js';
 import { BackupService } from './backups.js';
 import { SignerProposals } from './signers.js';
+import { PushService } from './push.js';
 import { sntpQuery } from '../platform/ntp.js';
 import { audit, platformTenant, systemActor, type OpsActor } from './common.js';
 
 type Tenants = () => Promise<{ tenantId: string; payload: Record<string, unknown> }[]>;
 
-const FILE_SECRETS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET'] as const;
+const FILE_SECRETS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'ACME_EAB_HMAC_KEY'] as const;
 
 /** Sprint 9: signed import bundles, mirrors, ACME certificates, backups and restore drills. Reads its collaborators through `s` so later replacements (tests, overrides) are used. */
 export class OpsService {
@@ -22,12 +23,15 @@ export class OpsService {
   readonly backups: BackupService;
   /** Sprint 15: dual control for signer keys. */
   readonly signers: SignerProposals;
+  /** Sprint 18 (B-909): pushes promoted artefacts into Harbor, Verdaccio and devpi. */
+  readonly push: PushService;
 
   constructor(private readonly s: () => Services) {
     // `s` is not assigned until every service is built, so nothing here reads it yet.
     this.bundles = new BundleService(s);
     this.mirrors = new MirrorService(s);
     this.certs = new CertificateService(s);
+    this.push = new PushService(s);
     this.backups = new BackupService(s);
     this.signers = new SignerProposals(s, this.bundles);
   }
@@ -44,8 +48,12 @@ export class OpsService {
     this.s().bus.on<CertIssuedEvent>(CERT_ISSUED, async (e) => {
       const dir = await this.certs.sink(e.certificate);
       if (dir) this.s().log.info({ certificate: e.certificate, name: e.name, serial: e.serial, dir }, 'certificate written to the sink');
+      // Sprint 18 (B-904): each instance runs the certificate's reload commands once its files are in place.
+      const tenantId = e.tenantId ?? (await platformTenant(this.s()));
+      if (tenantId) await this.certs.hooks.runCommands(systemActor(tenantId), e.certificate, e.renewal ? 'certificate.renewed' : 'certificate.issued', dir).catch((err: Error) => this.s().log.warn({ err, certificate: e.certificate }, 'certificate reload commands failed'));
     });
     jobs.register('ops.bundle.verify', async (p, ctx) => this.bundles.runVerify(String(p.bundleId), this.jobActor(ctx.job.tenant_id, ctx.job.created_by), ctx.progress, ctx.signal), { timeoutMs: 6 * 3_600_000 });
+    jobs.register('ops.bundle.push', async (p, ctx) => this.push.run(String(p.bundleId), this.jobActor(ctx.job.tenant_id, ctx.job.created_by), ctx.progress), { timeoutMs: 6 * 3_600_000 });
     jobs.register('ops.bundle.promote', async (p, ctx) => this.bundles.runPromote(String(p.bundleId), this.jobActor(ctx.job.tenant_id, ctx.job.created_by), ctx.progress), { timeoutMs: 6 * 3_600_000 });
     jobs.register('ops.mirror.check', async (p, ctx) => this.mirrors.check(Array.isArray(p.mirrorIds) ? p.mirrorIds.map(String) : null, ctx.progress, ctx.signal));
     jobs.register('ops.cert.issue', async (p, ctx) => this.certs.runIssue(String(p.certId), this.jobActor(ctx.job.tenant_id, ctx.job.created_by), ctx.progress, ctx.signal), { timeoutMs: 20 * 60_000 });

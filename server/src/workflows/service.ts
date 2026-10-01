@@ -15,7 +15,7 @@ import { THINK_LEVELS, type ThinkLevel } from '../gateway/repo.js';
 import type { ChatMessage, ChatRequest } from '../gateway/ollama.js';
 import type { CalcWorker } from '../chat/calc.js';
 import type { Guardrails } from '../guardrails/types.js';
-import type { ToolCallContext, ToolDispatcher, WorkflowToolRunner } from '../registry/dispatch.js';
+import { ToolPending, type ToolCallContext, type ToolDispatcher, type WorkflowToolRunner } from '../registry/dispatch.js';
 import { runChecks } from '../registry/checks.js';
 import type { EntryRow, RegistryService, SideEffect } from '../registry/service.js';
 import {
@@ -89,6 +89,9 @@ export interface RunRow {
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
+  /** B-1006: who awaits this run's result (an agent run that called the workflow as a tool). */
+  caller_kind?: string | null;
+  caller_id?: string | null;
 }
 
 interface StepRow {
@@ -143,6 +146,8 @@ export interface WorkflowDeps {
   http: { hosts: string[]; allowLoopback: boolean };
   /** The tenant's outbound host allow-list (Sprint 13), consulted by HTTP steps. */
   tenantHosts?: (tenantId: string) => Promise<AllowList | null>;
+  /** B-1006: a run someone awaits (an agent run) finished; the caller picks the result up. */
+  onCallerDone?: (tenantId: string, kind: string, id: string) => Promise<void>;
 }
 
 const TERMINAL: RunState[] = ['succeeded', 'failed', 'rejected', 'cancelled'];
@@ -614,6 +619,7 @@ export class WorkflowService implements WorkflowToolRunner {
     } else {
       await this.finishStep(run, step, 'failed', { error: `Rejected by ${p.displayName}${input.reason ? `: ${input.reason}` : ''}`.slice(0, 1000), detail: { rejected: true, rejectedBy: p.userId } });
     }
+    this.toApprovers(run, 'workflow.approval', { approvalId: a.id, runId: run.id, workflowId: run.workflow_id, nodeId: a.node_id, role: a.role, state: approved ? 'approved' : 'rejected' });
     if (!TERMINAL.includes(run.state)) await this.resume(run);
     if (run.created_by !== p.userId) {
       const w = await this.workflowById(run.workflow_id);
@@ -646,11 +652,39 @@ export class WorkflowService implements WorkflowToolRunner {
   // ---------- events ----------
 
   private emitRun(run: RunRow, name?: string): void {
-    this.d.bus.publish(TOPICS.chatEvent, { userId: run.created_by, event: 'workflow.run', data: { runId: run.id, workflowId: run.workflow_id, workflow: name, state: run.state, mode: run.mode, error: run.error } });
+    const data = { runId: run.id, workflowId: run.workflow_id, workflow: name, state: run.state, mode: run.mode, error: run.error };
+    this.d.bus.publish(TOPICS.chatEvent, { userId: run.created_by, event: 'workflow.run', data });
+    this.toApprovers(run, 'workflow.run', data);
   }
 
   private emitStep(run: RunRow, s: Pick<StepRow, 'node_id' | 'state' | 'error' | 'label' | 'attempts'> & { detail?: unknown }): void {
-    this.d.bus.publish(TOPICS.chatEvent, { userId: run.created_by, event: 'workflow.step', data: { runId: run.id, workflowId: run.workflow_id, nodeId: s.node_id, state: s.state, error: s.error, label: s.label, attempts: s.attempts, detail: s.detail ?? null } });
+    const data = { runId: run.id, workflowId: run.workflow_id, nodeId: s.node_id, state: s.state, error: s.error, label: s.label, attempts: s.attempts, detail: s.detail ?? null };
+    this.d.bus.publish(TOPICS.chatEvent, { userId: run.created_by, event: 'workflow.step', data });
+    this.toApprovers(run, 'workflow.step', data);
+  }
+
+  /**
+   * B-1006: the run's approvers follow it live too: holders of the role of any approval the run asked for, cleared
+   * for the run's label, other than the person who started it. Dry runs have no audience but their owner.
+   */
+  private toApprovers(run: Pick<RunRow, 'id' | 'tenant_id' | 'created_by' | 'label' | 'mode'>, event: string, data: Record<string, unknown>): void {
+    if (run.mode === 'dry') return;
+    void this.approverIds(run)
+      .then((ids) => {
+        for (const userId of ids) this.d.bus.publish(TOPICS.chatEvent, { userId, event, data });
+      })
+      .catch(() => undefined);
+  }
+
+  private async approverIds(run: Pick<RunRow, 'id' | 'tenant_id' | 'created_by' | 'label'>): Promise<string[]> {
+    const rows = (await this.d.db('workflow_approvals').where({ run_id: run.id }).select('role')) as { role: string }[];
+    if (!rows.length) return [];
+    // The same people who may open the run (visibleRun): holders of an approval's role.
+    const ids = new Set<string>(await this.d.notifications.usersWithRoles(run.tenant_id, [...new Set(rows.map((r) => r.role))]));
+    ids.delete(run.created_by);
+    if (!ids.size) return [];
+    const users = (await this.d.db('users').where({ tenant_id: run.tenant_id, state: 'active' }).whereIn('id', [...ids]).select('id', 'clearance')) as { id: string; clearance: Label }[];
+    return users.filter((u) => clears(u.clearance, run.label)).map((u) => u.id);
   }
 
   // ---------- execution ----------
@@ -680,6 +714,11 @@ export class WorkflowService implements WorkflowToolRunner {
     await this.d.db('workflow_runs').where({ id: run.id }).update({ state, error: error?.slice(0, 1000) ?? null, finished_at: TERMINAL.includes(state) ? Date.now() : null, locked_until: null });
     const after = { ...run, state, error };
     this.emitRun(after);
+    if (TERMINAL.includes(state)) {
+      // Whoever awaited this run (an agent run that called it as a tool) picks the result up now.
+      const caller = (await this.d.db('workflow_runs').where({ id: run.id }).first('caller_kind', 'caller_id')) as { caller_kind: string | null; caller_id: string | null } | undefined;
+      if (caller?.caller_kind && caller.caller_id) await this.d.onCallerDone?.(run.tenant_id, caller.caller_kind, caller.caller_id).catch((err: unknown) => this.d.log.warn({ run: run.id, err: (err as Error).message }, 'could not resume the caller of a workflow run'));
+    }
     if (TERMINAL.includes(state) && state !== 'succeeded' && state !== 'cancelled') {
       await this.d.audit.append({ tenantId: run.tenant_id, action: `workflow.run.${state}`, kind: 'system', actor: { service: 'workflows' }, target: { workflow: run.workflow_id, run: run.id }, label: run.label, detail: { error, mode: run.mode } });
     }
@@ -848,7 +887,7 @@ export class WorkflowService implements WorkflowToolRunner {
         const detail = { action: d.action, findings: d.findings.map((f) => ({ rule: f.ruleName, action: f.action, stage: f.stage })) };
         if (d.action === 'block') throw new StepFailed(`Blocked by guardrails${d.reason ? `: ${d.reason}` : '.'}`);
         const out = { ...c.merged, text: d.action === 'redact' ? d.text : text, action: d.action };
-        if (d.action === 'require-approval') return this.pauseForApproval(run, n, step, cfg.approverRole, 24 * 3_600_000, out, `${n.title}: ${d.reason ?? 'guardrails asked for an approval'}`);
+        if (d.action === 'require-approval') return this.pauseForApproval(run, n, step, cfg.approverRole, cfg.approvalTimeoutMs, out, `${n.title}: ${d.reason ?? 'guardrails asked for an approval'}`);
         return { output: out, detail };
       }
       case 'approval': {
@@ -935,7 +974,7 @@ export class WorkflowService implements WorkflowToolRunner {
     const decided = !guarded && (await this.toolApproved(run.id, n.id));
     const outcome = await this.d.tools.call({ principal: p, label: c.label, source: { kind: 'workflow-step', id: step.id }, signal: c.signal, approved: guarded || decided }, tool, args);
     if (outcome.needsApproval) {
-      return this.pauseForApproval(run, n, step, cfg.approverRole, 24 * 3_600_000, c.merged, { tool: entry.name, version: entry.version, sideEffect: base.sideEffect, arguments: outcome.arguments, reason: outcome.error });
+      return this.pauseForApproval(run, n, step, cfg.approverRole, cfg.approvalTimeoutMs, c.merged, { tool: entry.name, version: entry.version, sideEffect: base.sideEffect, arguments: outcome.arguments, reason: outcome.error });
     }
     if (outcome.denied && /ceiling/.test(outcome.error ?? '')) throw new StepBlocked(`Blocked by label ceiling: ${outcome.error}`);
     if (!outcome.ok) throw new StepFailed(outcome.error ?? `${name} failed.`);
@@ -954,6 +993,7 @@ export class WorkflowService implements WorkflowToolRunner {
     await this.d.db('workflow_approvals').insert({ id, tenant_id: run.tenant_id, run_id: run.id, node_id: n.id, role, state: 'pending', shown: await this.seal(run.tenant_id, `wfapproval:${id}`, shown), decided_by: null, reason: null, due_at: due, created_at: Date.now(), decided_at: null });
     await this.d.db('workflow_steps').where({ id: step.id }).update({ state: 'waiting', output: await this.seal(step.tenant_id, `wfstep:${step.id}`, pending) });
     this.emitStep(run, { ...step, state: 'waiting', detail: { approval: id, role, dueAt: due } });
+    this.toApprovers(run, 'workflow.approval', { approvalId: id, runId: run.id, workflowId: run.workflow_id, nodeId: n.id, role, state: 'pending', dueAt: due });
     await this.d.jobs.enqueue({ tenantId: run.tenant_id, type: 'workflow.approval-timeout', payload: { approvalId: id }, runAt: due, maxAttempts: 3 });
     this.d.bus.emitLocal(TOPICS.integrationEvent, { tenantId: run.tenant_id, type: 'approval.requested', label: run.label, id: `workflow-approval:${id}`, data: { kind: 'workflow', workflow: run.workflow_id, run: run.id, step: n.id, role, dueAt: due } });
     if (run.mode === 'run') {
@@ -1122,11 +1162,38 @@ export class WorkflowService implements WorkflowToolRunner {
       ctx.signal?.removeEventListener('abort', onAbort);
     }
     const after = (await this.runRow(run.id))!;
-    if (after.state === 'waiting') throw new Error(`Run ${run.id} of ${w.name} is waiting on an approval. It continues once someone decides; its result does not come back to this call.`);
-    if (after.state !== 'succeeded') throw new Error(`Run ${run.id} of ${w.name} ${after.state}${after.error ? `: ${after.error}` : ''}.`);
-    const out = await this.runOutput(after, v.graph);
+    if (after.state === 'waiting') {
+      // B-1006: an agent run awaits the result; it resumes when this run finishes. Other callers cannot wait.
+      if (ctx.source?.kind === 'agent-run') {
+        await this.d.db('workflow_runs').where({ id: run.id }).update({ caller_kind: 'agent-run', caller_id: ctx.source.id });
+        throw new ToolPending({ kind: 'workflow-run', id: run.id }, `Run ${run.id} of ${w.name} is waiting on an approval. This run pauses and continues with its result once the workflow finishes.`);
+      }
+      throw new ToolPending({ kind: 'workflow-run', id: run.id }, `Run ${run.id} of ${w.name} is waiting on an approval. It continues once someone decides; its result does not come back to this call.`);
+    }
+    return this.toolOutput(ctx, w, after, v.graph);
+  }
+
+  private async toolOutput(ctx: ToolCallContext, w: WorkflowRow, run: RunRow, g: WfGraph): Promise<{ run: string; output: unknown }> {
+    if (run.state !== 'succeeded') throw new Error(`Run ${run.id} of ${w.name} ${run.state}${run.error ? `: ${run.error}` : ''}.`);
+    const out = await this.runOutput(run, g);
     if (labelRank(out.label) > labelRank(ctx.label)) throw new Error(`The result of ${w.name} is labelled ${out.label}, above the ${ctx.label} data it was called from.`);
     return { run: run.id, output: out.value };
+  }
+
+  /**
+   * The result of a workflow tool run that paused (B-1006), for the caller that awaited it: pending while it runs or
+   * waits, its output once it succeeded (under the same label rule as an immediate result), or why it did not.
+   */
+  async toolResult(ctx: ToolCallContext, entry: EntryRow, runId: string): Promise<{ state: 'pending' } | { state: 'done'; result: unknown } | { state: 'failed'; error: string }> {
+    const run = await this.runRow(runId);
+    const w = run ? await this.workflowById(run.workflow_id) : undefined;
+    if (!run || !w || run.tenant_id !== ctx.principal.tenantId || w.id !== String(entry.definition.workflowId ?? '')) return { state: 'failed', error: 'The workflow run behind this call no longer exists.' };
+    if (!TERMINAL.includes(run.state)) return { state: 'pending' };
+    try {
+      return { state: 'done', result: await this.toolOutput(ctx, w, run, JSON.parse(run.graph) as WfGraph) };
+    } catch (err) {
+      return { state: 'failed', error: (err as Error).message };
+    }
   }
 
   /** A finished run's result: the outputs of the passed steps nothing follows, merged, and the highest of their labels. */

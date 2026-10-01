@@ -17,6 +17,9 @@ export const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 export const EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
 
 /** An OAuth error for the token, device and revocation endpoints (RFC 6749 5.2): JSON `{error, error_description}`. */
+/** A DPoP proof without the current server nonce (RFC 9449 8): the client retries with the DPoP-Nonce header's value. */
+export class DpopNonceError extends JwtError {}
+
 export class OAuthError extends Error {
   constructor(
     readonly status: number,
@@ -60,6 +63,8 @@ export interface ClientRow {
   jwks: Jwk[];
   par_required: boolean;
   dpop_required: boolean;
+  /** Sprint 17 (B-806): `any` lets a resource server introspect every client's access tokens (set under dual control). */
+  introspect: 'own' | 'any';
   created_by: string | null;
   last_used_at: number | null;
   created_at: number;
@@ -78,6 +83,7 @@ const clientFromRow = (r: Record<string, unknown>): ClientRow => ({
   jwks: json<{ keys?: Jwk[] }>(r.jwks, {}).keys ?? [],
   par_required: !!r.par_required,
   dpop_required: !!r.dpop_required,
+  introspect: r.introspect === 'any' ? 'any' : 'own',
   secret_created_at: r.secret_created_at == null ? null : Number(r.secret_created_at),
   access_ttl: Number(r.access_ttl),
   refresh_ttl: Number(r.refresh_ttl),
@@ -697,13 +703,29 @@ export class OidcProvider {
   }
 
   /**
+   * The current DPoP nonce (RFC 9449 8, B-805): an HMAC of the time window, so every instance issues and accepts the
+   * same values without shared state. The previous window's nonce stays valid, so a nonce lives one to two periods.
+   */
+  dpopNonce(at = Date.now()): string {
+    const period = this.s().cfg.DPOP_NONCE_SECONDS * 1000;
+    return hmac(this.s().cfg.SESSION_SECRET, `dpop-nonce:${Math.floor(at / period)}`).slice(0, 43);
+  }
+
+  private dpopNonceValid(nonce: string | null): boolean {
+    if (!nonce) return false;
+    const now = Date.now();
+    return safeEqual(nonce, this.dpopNonce(now)) || safeEqual(nonce, this.dpopNonce(now - this.s().cfg.DPOP_NONCE_SECONDS * 1000));
+  }
+
+  /**
    * Verifies a DPoP proof and records its jti (shared by every instance) so it cannot be replayed. Returns the key
-   * thumbprint. Nonces (RFC 9449 8) are not required.
+   * thumbprint. With DPOP_NONCES the proof must carry a current server nonce, or `DpopNonceError` asks for one.
    */
   async checkDpop(dpop: DpopInput, accessToken?: string): Promise<string> {
     if (!dpop.proof || dpop.proof.length > 8000) throw new JwtError('A DPoP proof is required.');
     const maxAge = this.s().cfg.DPOP_PROOF_MAX_AGE_SECONDS;
     const proof = verifyDpopProof(dpop.proof, { method: dpop.method, url: dpop.url, accessToken, maxAgeS: maxAge });
+    if (this.s().cfg.DPOP_NONCES && !this.dpopNonceValid(proof.nonce)) throw new DpopNonceError(proof.nonce ? 'The DPoP nonce has expired; use the one in the DPoP-Nonce header.' : 'Send the DPoP proof with the nonce from the DPoP-Nonce header.');
     if (!(await this.once('dpop', `${proof.jkt}:${proof.jti}`, (proof.iat + maxAge + 60) * 1000))) throw new JwtError('The DPoP proof was already used.');
     return proof.jkt;
   }
@@ -720,6 +742,7 @@ export class OidcProvider {
       try {
         jkt = await this.checkDpop(dpop);
       } catch (err) {
+        if (err instanceof DpopNonceError) throw new OAuthError(400, 'use_dpop_nonce', err.message, { 'DPoP-Nonce': this.dpopNonce() });
         throw new OAuthError(400, 'invalid_dpop_proof', (err as Error).message);
       }
     } else if (client.dpop_required) throw new OAuthError(400, 'invalid_dpop_proof', 'This client must send a DPoP proof.');
@@ -1049,9 +1072,16 @@ export class OidcProvider {
     return { client, revoked: null };
   }
 
+  /** Sets who a client may introspect for (B-806); widening to `any` is applied only by an approved proposal. */
+  async setIntrospect(tenantId: string, id: string, mode: 'own' | 'any'): Promise<void> {
+    await this.db('oidc_clients').where({ tenant_id: tenantId, id }).update({ introspect: mode, updated_at: Date.now() });
+  }
+
   /**
    * RFC 7662: token introspection for confidential clients. A token is active only for the client it was issued to;
-   * another client's tokens, and anything revoked, expired or unknown, introspect as `{active: false}`.
+   * another client's tokens, and anything revoked, expired or unknown, introspect as `{active: false}`. A registered
+   * resource server (`introspect: any`, B-806) may introspect every client's access tokens in its tenant; refresh
+   * tokens stay visible to their own client only.
    */
   async introspect(t: TenantCtx, form: Record<string, string>, authorization: string | undefined): Promise<{ client: ClientRow; response: Record<string, unknown> }> {
     const client = await this.authenticateClient(t, form, authorization);
@@ -1072,7 +1102,7 @@ export class OidcProvider {
       } catch {
         return null;
       }
-      if (claims.client_id !== client.client_id) return null;
+      if (claims.client_id !== client.client_id && client.introspect !== 'any') return null;
       const user = await this.s().users.get(t.id, String(claims.sub));
       const cnf = claims.cnf as { jkt?: string } | undefined;
       return { active: true, token_type: cnf?.jkt ? 'DPoP' : 'Bearer', scope: claims.scope, client_id: claims.client_id, sub: claims.sub, username: user?.username, iss: claims.iss, aud: claims.aud, iat: claims.iat, exp: claims.exp, jti: claims.jti, ...(cnf?.jkt ? { cnf: { jkt: cnf.jkt } } : {}), ...(claims.auth_time ? { auth_time: claims.auth_time } : {}), ...(claims.act ? { act: claims.act } : {}), tenant: t.slug };

@@ -24,6 +24,39 @@
     }
   };
 
+  // ---- Password strength meter (B-802), shared with Settings and User stores ----
+  // The server rates the password (entropy estimate), checks it against the policy's rules and, when the breached
+  // check is on, against the breach corpus; the meter shows all three as text, not by colour alone.
+  App.passwordMeter = {
+    html() { return '<div data-pwmeter style="display:flex;flex-direction:column;gap:4px;font-size:12px" hidden></div>'; },
+    render(box, r) {
+      const tone = r.score <= 1 ? 'var(--danger-fg)' : r.score === 2 ? 'var(--warn-fg)' : 'var(--ok-fg)';
+      const bars = [0, 1, 2, 3].map((i) => '<i style="flex:1;height:4px;border-radius:2px;background:' + (i < Math.max(1, r.score) ? tone : 'var(--bar-off)') + '"></i>').join('');
+      const b = r.breached || {};
+      const breach = b.mode === 'off' ? 'Not checked against breached-password lists on this server.' : !b.checked ? '' : b.found ? '<b>Found in a list of breached passwords. Choose another.</b>' : b.unavailable ? 'The breached-password list could not be reached; the server may accept it unchecked.' : 'Not found in breached-password lists.';
+      const unmet = (r.rules || []).filter((x) => !x.ok);
+      box.innerHTML = '<div style="display:flex;gap:3px" aria-hidden="true">' + bars + '</div>'
+        + '<div role="status">Strength: <b>' + App.esc(r.label) + '</b>, about ' + Number(r.bits) + ' bits. ' + (unmet.length ? 'Not yet: ' + unmet.map((x) => App.esc(x.label.toLowerCase())).join('; ') + '.' : 'Meets the policy.') + '</div>'
+        + (breach ? '<div class="muted">' + breach + '</div>' : '');
+      box.hidden = false;
+    },
+    /** Rates `input` as the user types (debounced). `extra()` adds the reset link token or the target username. */
+    attach(input, box, extra) {
+      if (!input || !box) return;
+      let timer = null; let turn = 0;
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        const v = input.value;
+        if (!v) { box.hidden = true; box.innerHTML = ''; return; }
+        timer = setTimeout(() => {
+          const mine = ++turn;
+          App.post('/api/auth/password/check', Object.assign({ password: v }, extra ? extra() : {}))
+            .then((r) => { if (mine === turn && input.value === v) App.passwordMeter.render(box, r); }, () => { if (mine === turn) { box.hidden = true; box.innerHTML = ''; } });
+        }, 350);
+      });
+    }
+  };
+
   const problemNotice = (err) => {
     const p = (err && err.problem) || {};
     return UI.notice('<b>' + esc(p.title || 'Sign-in failed') + '.</b> ' + esc(p.detail || err.message || '') + (p.trace_id ? ' <span class="mono muted" style="font-size:11px">trace ' + esc(p.trace_id) + '</span>' : ''), p.status === 429 ? 'warn' : 'danger');
@@ -47,7 +80,7 @@
     try { history.replaceState(null, '', location.pathname + location.search + '#/signin'); } catch (e) { /* history unavailable */ }
   })();
   const pwFields = (current) => (current ? '<div class="field"><label for="pc">' + esc(current) + '</label><input class="input" id="pc" type="password" autocomplete="current-password"></div>' : '')
-    + '<div class="field"><label for="pn">New password</label><input class="input" id="pn" type="password" autocomplete="new-password" aria-describedby="pn-hint"><div class="hint" id="pn-hint">At least 12 characters. Not your username, not a common or breached password.</div></div>'
+    + '<div class="field"><label for="pn">New password</label><input class="input" id="pn" type="password" autocomplete="new-password" aria-describedby="pn-hint"><div class="hint" id="pn-hint">At least 12 characters. Not your username, not a common or breached password.</div>' + App.passwordMeter.html() + '</div>'
     + '<div class="field"><label for="pa">New password again</label><input class="input" id="pa" type="password" autocomplete="new-password"></div>';
 
   App.register({
@@ -107,6 +140,7 @@
         + '<form class="panel" style="width:400px;max-width:100%;gap:18px;padding:28px" novalidate data-form><div><div class="eyebrow" style="letter-spacing:.08em">Exprsn-AI</div><div style="font-size:22px;font-weight:600">' + (st.mode === 'enroll' ? 'Set up a second factor' : st.mode === 'codes' ? 'Recovery codes' : st.mode === 'mfa' ? 'Second factor' : st.mode === 'password' ? 'Change your password' : st.mode === 'reset' ? 'Set a new password' : st.mode === 'forgot' ? 'Reset your password' : 'Sign in') + '</div></div>' + form + '</form>'
         + '<div class="muted" style="font-size:12px;max-width:400px;text-align:center">Your directory account and password. Roles and clearance come from your directory groups.</div></div>';
 
+      if (ctx.$('#pn')) App.passwordMeter.attach(ctx.$('#pn'), ctx.$('[data-pwmeter]'), () => (st.mode === 'reset' && st.resetToken ? { token: st.resetToken } : {}));
       const focus = ctx.$('#otp') || ctx.$('#rc') || ctx.$('#pc') || ctx.$('#pn') || ctx.$('#fi') || (st.username ? ctx.$('#p') : ctx.$('#u'));
       if (focus) focus.focus();
 
@@ -182,7 +216,12 @@
       ctx.on('click', '[data-resetgo]', (e) => {
         e.preventDefault(); const next = newPassword();
         if (!next) { ctx.rerender(); return; }
-        run(async () => { const r = await App.post('/api/auth/password/reset', { token: st.resetToken, password: next }); st.resetToken = null; st.mode = 'form'; st.username = r.username; st.info = 'Password set. Sign in with it now.'; });
+        run(async () => {
+          const r = await App.post('/api/auth/password/reset', { token: st.resetToken, password: next }); st.resetToken = null; st.username = r.username;
+          // An enrolment link (B-810) signs straight in to set up the second factor.
+          if (r.session && r.session.stage === 'enroll') { App.state.csrf = r.session.csrf; st.mode = 'enroll'; st.methods = []; st.info = null; return; }
+          st.mode = 'form'; st.info = 'Password set. Sign in with it now.';
+        });
       });
     }
   });
