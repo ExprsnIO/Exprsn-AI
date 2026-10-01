@@ -369,7 +369,9 @@ const base = z.object({
     /** Sprint 16: anonymous share links opened per client address per minute. */
     SHARE_ANONYMOUS_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /** How often each tenant's conversation retention policy is applied. */
-    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60)
+    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    /** Sprint 21 (B-1306): how often due agent schedules are looked for (a schedule fires at most this late). */
+    AGENT_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(10).max(3600).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

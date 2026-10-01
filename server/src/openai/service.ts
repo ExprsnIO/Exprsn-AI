@@ -10,6 +10,9 @@ import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL } from '../chat/calc.js';
 import { formatContext, passageSpan, type ContextItem } from '../chat/context.js';
 import type { ResolvedTool } from '../registry/dispatch.js';
+import type { GuardDecision } from '../guardrails/types.js';
+import { ApiHolds } from './holds.js';
+import { ResponsesApi } from './responses.js';
 import type { Services } from '../services.js';
 
 /*
@@ -89,6 +92,8 @@ export interface CompletionResult {
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   /** Sprint 16: the `exprsn` extension (citations, the label the answer carries, server-side tool calls). */
   exprsn?: Exprsn;
+  /** Sprint 21: what answered (for a stored response); never sent to the client as such. */
+  resolved?: { profileId: string; profileName: string; model: string; label: Label; promptTokens: number; outputTokens: number; gpuMs: number };
 }
 
 /** The `exprsn` extension field of a completion (Sprint 16). */
@@ -110,6 +115,31 @@ export interface Extensions {
 }
 
 const MAX_TOOL_ROUNDS = 6;
+
+/**
+ * How the user-input checkpoint treats a request (B-1301, B-1302). `holdable` with `onHold`: a `require-approval` hold
+ * is handed to `onHold`, which files the request for review and throws. `approved`: a reviewer approved this request,
+ * so the hold is not applied again (a block still refuses). `stored`: the indexes of messages that are stored history
+ * of a conversation and already passed the checkpoint when they were sent.
+ */
+export interface InputMode {
+  holdable?: boolean;
+  approved?: boolean;
+  stored?: ReadonlySet<number>;
+  onHold?: (hold: { decision: GuardDecision; text: string }) => Promise<never>;
+}
+
+/** A chat completion in the wire format. */
+export const completionObject = (r: CompletionResult) => ({
+  id: r.id,
+  object: 'chat.completion',
+  created: r.created,
+  model: r.model,
+  system_fingerprint: null,
+  choices: [{ index: 0, message: { role: 'assistant', content: r.toolCalls.length && !r.content ? null : r.content, ...(r.toolCalls.length ? { tool_calls: r.toolCalls } : {}), refusal: null }, logprobs: null, finish_reason: r.finishReason }],
+  usage: r.usage,
+  ...(r.exprsn ? { exprsn: r.exprsn } : {})
+});
 
 /** A problem with the OpenAI error `code` (and `param`) the translation layer should report. */
 export const apiProblem = (status: number, detail: string, code: string, param?: string) => new HttpProblem(status, status === 400 ? 'Bad request' : 'Error', detail, { extensions: { code, ...(param ? { param } : {}) } });
@@ -135,10 +165,17 @@ const partsText = (c: ChatBody['messages'][number]['content']): { text: string; 
 };
 
 export class OpenAiService {
+  /** Sprint 21: requests held for review (B-1301) and the Responses API subset (B-1302). */
+  readonly holds: ApiHolds;
+  readonly responses: ResponsesApi;
+
   constructor(
     private readonly s: () => Services,
     private readonly o: { streamMode: 'checked' | 'live' }
-  ) {}
+  ) {
+    this.holds = new ApiHolds(s);
+    this.responses = new ResponsesApi(s);
+  }
 
   get streamMode(): 'checked' | 'live' {
     return this.o.streamMode;
@@ -189,27 +226,50 @@ export class OpenAiService {
     await s.quotas.admit(p.tenantId, p.workspaceId ?? null, { tenantName: tenant?.name, workspaceName: ws?.name });
   }
 
-  /** The user-input checkpoint on everything the caller sent. A block refuses the request; a redaction is what the model sees. */
-  private async guardIn(p: Principal, texts: string[], label: Label, requestId: string): Promise<string[]> {
+  /**
+   * The user-input checkpoint on everything the caller sent. A block refuses the request; a redaction is what the model
+   * sees. A hold (`require-approval`) refuses too, unless the request may be held (B-1301): then the first hold is
+   * returned and the caller files the request for review. A request a reviewer already approved is not held again.
+   */
+  private async guardIn(p: Principal, texts: string[], label: Label, requestId: string, mode: InputMode = {}): Promise<{ texts: string[]; hold: { decision: GuardDecision; text: string } | null }> {
     const out: string[] = [];
+    let hold: { decision: GuardDecision; text: string } | null = null;
     for (const t of texts) {
       if (!t) {
         out.push(t);
         continue;
       }
       const d = await this.s().guardrails.check({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, checkpoint: 'user-input', text: t, label, principal: p, source: { kind: 'api-request', id: requestId }, meta: { tokens: Math.ceil(t.length / 4), via: 'openai-api' } });
+      // A hold that comes from a check that could not run is not a reviewer's decision to make: it stays a refusal.
+      const reviewable = d.action === 'require-approval' && d.findings.some((f) => f.stage === 'enforce' && f.action === 'require-approval' && !f.detail?.startsWith('unavailable:'));
+      if (reviewable && mode.approved) {
+        out.push(d.text);
+        continue;
+      }
+      if (reviewable && mode.holdable) {
+        hold ??= { decision: d, text: t };
+        out.push(d.text);
+        continue;
+      }
       if (d.action === 'block' || d.action === 'require-approval') throw apiProblem(400, d.reason ?? 'A guardrail refused this request.', 'content_filter', 'messages');
       out.push(d.text);
     }
-    return out;
+    return { texts: out, hold };
   }
 
   /** Converts the request's messages to Ollama's, after the input checkpoint. */
-  private async messages(p: Principal, body: ChatBody, r: ResolvedProfile, label: Label, requestId: string): Promise<ChatMessage[]> {
+  private async messages(p: Principal, body: ChatBody, r: ResolvedProfile, label: Label, requestId: string, mode: InputMode = {}): Promise<ChatMessage[]> {
     const vision = r.model.capabilities.includes('vision');
     const parsed = body.messages.map((m) => ({ m, ...partsText(m.content) }));
     if (!vision && parsed.some((x) => x.images.length)) throw apiProblem(400, `${r.model.name} cannot read images; use a model with vision.`, 'model_not_vision_capable', 'messages');
-    const guarded = await this.guardIn(p, parsed.map((x) => (x.m.role === 'assistant' ? '' : x.text)), label, requestId);
+    // The stored history of a conversation (B-1302) passed the checkpoint when it was sent; only the new turn is checked.
+    const stored = mode.stored ?? new Set<number>();
+    const { texts: checked, hold } = await this.guardIn(p, parsed.map((x, i) => (x.m.role === 'assistant' || stored.has(i) ? '' : x.text)), label, requestId, mode);
+    if (hold) {
+      if (mode.onHold) await mode.onHold(hold);
+      throw apiProblem(400, hold.decision.reason ?? 'A guardrail refused this request.', 'content_filter', 'messages');
+    }
+    const guarded = checked.map((t, i) => (stored.has(i) ? parsed[i]!.text : t));
     const toolNames = new Map<string, string>();
     const out: ChatMessage[] = [];
     if (r.profile.system_prompt) out.push({ role: 'system', content: r.profile.system_prompt });
@@ -289,7 +349,7 @@ export class OpenAiService {
     return { calculate, extra };
   }
 
-  async chat(p: Principal, body: ChatBody, label: Label, signal: AbortSignal, opts: { id?: string; onDelta?: (text: string) => void; ext?: Extensions } = {}): Promise<CompletionResult> {
+  async chat(p: Principal, body: ChatBody, label: Label, signal: AbortSignal, opts: { id?: string; onDelta?: (text: string) => void; ext?: Extensions; input?: InputMode } = {}): Promise<CompletionResult> {
     const s = this.s();
     const id = opts.id ?? `chatcmpl-${ulid()}`;
     const onDelta = opts.onDelta;
@@ -303,7 +363,7 @@ export class OpenAiService {
     if ((toolsWanted || ext.serverTools) && !modelTools) throw apiProblem(400, `${body.model} does not support tools.`, 'tools_not_supported', ext.serverTools ? 'X-Exprsn-Tools' : 'tools');
     if (ext.knowledge?.length) await this.checkKnowledge(p, ext.knowledge);
     await this.admit(p);
-    const messages = await this.messages(p, body, r, label, id);
+    const messages = await this.messages(p, body, r, label, id, opts.input);
     let answerLabel = label;
     let items: ContextItem[] = [];
     const toolsRun: { name: string; ok: boolean }[] = [];
@@ -458,6 +518,7 @@ export class OpenAiService {
     const exprsn: Exprsn | undefined = ext.knowledge?.length || ext.memory || ext.serverTools ? { label: answerLabel, citations, tools: toolsRun } : undefined;
     return {
       ...(exprsn ? { exprsn } : {}),
+      resolved: { profileId: r.profile.id, profileName: r.profile.name, model: r.model.name, label: answerLabel, promptTokens, outputTokens, gpuMs: Math.round(gpuMs) },
       id,
       created,
       model: body.model,
@@ -479,7 +540,7 @@ export class OpenAiService {
     await this.admit(p);
     const inputs = typeof body.input === 'string' ? [body.input] : body.input;
     if (inputs.some((x) => !x)) throw badRequest('An input is empty.');
-    const texts = await this.guardIn(p, inputs, label, `embed-${ulid()}`);
+    const { texts } = await this.guardIn(p, inputs, label, `embed-${ulid()}`);
     const r = await s.gateway.embed(model.name, texts, label, signal);
     await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'embed', model: model.name, poolId: r.poolId, promptTokens: r.promptTokens, gpuMs: r.gpuMs });
     const base64 = body.encoding_format === 'base64';

@@ -22,7 +22,7 @@ import { Metrics } from './observability/index.js';
 import { createKms, type Kms } from './platform/kms.js';
 import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
-import { Bus, TOPICS } from './platform/bus.js';
+import { Bus, TOPICS, type MembershipEvent } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
 import { Notifications, type MailTransport } from './platform/notifications.js';
 import { AccountService } from './identity/account.js';
@@ -42,6 +42,8 @@ import { McpService } from './mcp/service.js';
 import { ScriptService } from './scripts/service.js';
 import { createScriptRunner } from './scripts/runner.js';
 import { AgentService } from './agents/service.js';
+import { AgentSchedules } from './agents/schedules.js';
+import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
 import { MediaService } from './media/service.js';
@@ -155,6 +157,10 @@ export interface Services {
   billing: BillingService;
   /** Sprint 13: the OpenAI-compatible API behind /v1. */
   openai: OpenAiService;
+  /** Sprint 21: scheduled agent runs (B-1306). */
+  agentSchedules: AgentSchedules;
+  /** Sprint 21: eval sets, runs and the publish gate for profiles (B-1303). */
+  evals: EvalService;
   /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
   counters: CounterStore;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
@@ -196,6 +202,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const denials = new DenialAudit(audit, 20, 60_000, counters);
   const providers = new ProviderRepo(db);
   const users = new UserRepo(db);
+  // Sprint 21 (B-1305): memberships lost through a group mapping or the directory end live shared watches at once.
+  users.onMembershipsLost = (userId, workspaceIds) =>
+    void db('users')
+      .where({ id: userId })
+      .first('tenant_id')
+      .then((u: { tenant_id: string } | undefined) => u && bus.publish(TOPICS.workspaceMembership, { tenantId: u.tenant_id, userId, workspaceIds } satisfies MembershipEvent))
+      .catch((err: Error) => log.warn({ err: err.message }, 'membership event not published'));
   const tenants = new TenantRepo(db);
   const notifications = new Notifications(db, bus, log, { smtpUrl: cfg.SMTP_URL, from: cfg.SMTP_FROM, publicUrl: cfg.PUBLIC_URL, ...(overrides.mail ? { transport: overrides.mail } : {}) });
   configureSecretPolicy(
@@ -230,7 +243,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     },
     streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
-  guard.flags.heldAnswer = (tenantId, messageId) => chat.heldText(tenantId, messageId);
+  // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
+  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
@@ -343,6 +357,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
     ),
     openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
+    agentSchedules: new AgentSchedules(() => s),
+    evals: new EvalService(() => s),
     counters,
     close: async () => {
       scheduler.stop();
@@ -372,6 +388,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.webhooks.registerJobs();
   s.webhooks.listen();
   s.sharing.registerJobs();
+  s.openai.holds.registerJobs(); // Sprint 21 (B-1301)
+  s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
+  s.evals.registerJobs(); // Sprint 21 (B-1303)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -419,4 +438,5 @@ export function startSchedules(s: Services): void {
   s.ops.schedule(s.scheduler, activeTenants);
   s.federation.schedule(s.scheduler, activeTenants);
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
+  s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
 }
