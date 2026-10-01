@@ -8,6 +8,7 @@ Operational procedures for Exprsn-AI. Each one covers Docker Compose (`deploy/do
 | [backup-restore.md](backup-restore.md) | Setting up backups, restoring after data loss, running a restore drill |
 | [incident-response.md](incident-response.md) | Something is wrong: severity levels, the first 15 minutes, revoking access, rotating secrets and keys, disabling a tenant, audit forensics, guardrail emergency blocks, draining Ollama instances, the notice template |
 | [upgrade.md](upgrade.md) | Moving to a new release, running migrations, rolling back, upgrading Ollama nodes |
+| [alerts.md](alerts.md) | A Prometheus alert from `deploy/observability/prometheus/exprsn-ai.rules.yml` fired: what it means and what to do |
 
 ## Conventions
 
@@ -17,7 +18,8 @@ Operational procedures for Exprsn-AI. Each one covers Docker Compose (`deploy/do
   - Bare metal: `node /opt/exprsn-ai/server/dist/cli.js <command>` as the `exprsn-ai` user, with the variables from
     `/etc/exprsn-ai/exprsn-ai.env` and `SESSION_SECRET_FILE`, `DATA_KEY_FILE` and `DATABASE_URL_FILE` pointing at the
     files in `/etc/exprsn-ai/credentials/` (the installer prints the full command line)
-- The CLI's commands are `migrate`, `admin:create`, `audit:verify [--tenant <slug>]` and `kms:rotate [--tenant <slug>]`.
+- The CLI's commands are `migrate`, `admin:create`, `audit:verify [--tenant <slug>]` and `kms:rotate [--tenant <slug>]`
+  (the full list is `exprsn-ai --help`; 1.3.0 adds `migrate --check`, `kms:escrow` and `kms:recover`).
   `audit:verify` exits 2 when the chain or a signed checkpoint is broken.
 - Console locations are written as screen names (Admin > Pools); the API routes behind them are in
   [api.md](../api.md) and [identity.md](../identity.md).

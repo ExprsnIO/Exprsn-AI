@@ -103,6 +103,15 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `TRAINER_KEY_TTL_SECONDS`, `TRAINER_ARTIFACT_MAX_BYTES` | `900`, 64 GiB | Sprint 18: how long a run key waits to be fetched (once); the largest checkpoint or GGUF upload |
 | `TRAINER_CLIENT_CERT_SHA256` | — | Sprint 18: SHA-256 fingerprint of the worker's client certificate; key and artefact calls must present it (on this server's TLS socket, or as `X-Client-Cert-SHA256` from a proxy that `TRUST_PROXY` trusts and that verified the certificate) |
 | `TRAINER_CA_FILE`, `TRAINER_CERT_FILE`, `TRAINER_KEY_FILE` | — | Sprint 18: mutual TLS from the orchestrator to the worker |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | — | Sprint 22: OpenTelemetry tracing over OTLP/HTTP JSON. Spans go to `<endpoint>/v1/traces` (or the full traces URL); unset, nothing is traced. Requests, jobs, gateway calls, guardrail checks and database queries are spans of the request's W3C trace (the `X-Trace-Id`); no tenant content is recorded |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_SERVICE_NAME` | —, `10000`, `exprsn-ai` | Sprint 22: collector request headers (`name=value,…`, e.g. an API key), the export timeout (ms) and the `service.name` resource attribute |
+| `OTEL_TRACES_SAMPLE_RATIO`, `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_SCHEDULE_DELAY` | `1`, `2048`, `5000` | Sprint 22: share of new traces recorded (a caller's sampled flag wins); spans held for export (more are dropped and counted); the export interval (ms) |
+| `SCHEMA_CHECK_SECONDS` | `30` | Sprint 22: how often each instance compares its migrations with the database's; an instance older than the schema takes no jobs and is not ready (0: at start and on `/readyz` only) |
+| `ZONES_APPLY` | `off` | Sprint 22: `kubernetes` applies each zone's rendered NetworkPolicy through the Kubernetes API (server-side apply) after every approved change and checks for drift. Needs a service account allowed to get, list, create and patch networkpolicies in the zone namespaces (the chart's `zonesApply`) |
+| `ZONES_APPLY_API_URL`, `ZONES_APPLY_TOKEN_FILE`, `ZONES_APPLY_CA_FILE` | in-cluster | Sprint 22: the API server (default `https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT`), the bearer token file (re-read on every call) and the CA, defaulting to the pod's service-account files |
+| `ZONES_APPLY_FIELD_MANAGER`, `ZONES_APPLY_DRIFT_MINUTES` | `exprsn-ai`, `15` | Sprint 22: the server-side apply field manager; how often live policies are compared with what was applied (0: on request) |
+| `NTP_SERVER`, `NTP_OUTLIER_MS` | —, `1000` | Sprint 22: `NTP_SERVER` takes a comma list; with three or more servers the clock skew is the median of those that agree, and a server further than `NTP_OUTLIER_MS` from the median is named as an outlier |
+| `RATELIMIT_PROBE_SECONDS` | `15` | Sprint 22: how often each instance pings Redis, so the Platform warning and `exprsn_ratelimit_degraded` show that limits count per instance within a minute of Redis stopping |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -180,6 +189,10 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   fill in (data, directory, inference, sandbox, KMS, mail, SIEM). Nothing allows the internet.
 - `SCRIPT_RUNNER` is `none` in the chart, since the pod has no container runtime; run script runners in the sandbox
   zone.
+- Zones applied in-cluster (Sprint 22): `zonesApply.enabled` with `zonesApply.namespaces` (the zone namespaces, which
+  must exist) creates in each a Role allowing get, list, create and patch on networkpolicies and binds it to the
+  server's service account, mounts that account's token and sets `ZONES_APPLY=kubernetes`. Allow egress to the API
+  server in `networkPolicy.egress.kubernetesApi`. Off by default: the pod then has no token.
 
 ## Runbooks and load testing
 
@@ -194,7 +207,18 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
 ## Operations
 
 - **Health:** `/healthz` (process up), `/readyz` (database reachable and migrated, KMS and blob store answering; 503 while draining).
-- **Metrics:** `/metrics` with `Authorization: Bearer $METRICS_TOKEN`.
+- **Metrics:** `/metrics` with `Authorization: Bearer $METRICS_TOKEN`. Sprint 22 adds job, rate-limit, schema, zone
+  drift, clock and trace-export series; Grafana dashboards and Prometheus alert rules for them are in
+  [deploy/observability](../deploy/observability/README.md), each alert explained in
+  [runbooks/alerts.md](runbooks/alerts.md).
+- **Tracing (Sprint 22):** set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OpenTelemetry collector (or Tempo, Jaeger with
+  OTLP/HTTP). A chat request is one trace: the HTTP span, guardrail checks, the gateway's Ollama calls (which receive
+  the `traceparent`), database queries and the jobs it queued. Attributes are a fixed allow-list of metadata.
+- **Upgrades (Sprint 22):** `exprsn-ai migrate --check` lists what `migrate` would apply and any destructive
+  (contract) steps; an instance older than the database schema stops taking jobs and reports not ready
+  ([upgrade.md](runbooks/upgrade.md)).
+- **Key escrow (Sprint 22):** `exprsn-ai kms:escrow --shares 5 --threshold 3` splits `DATA_KEY` into Shamir shares
+  and `kms:recover` rebuilds it ([backup-restore.md](runbooks/backup-restore.md#keys)).
 - **Logs:** JSON on stdout; every line carries the request's trace id, which is also in every error response.
 - **Shutdown:** SIGTERM stops accepting connections, closes sockets and the database, and exits within 25 s.
 - **Audit:** `exprsn-ai audit:verify --tenant <slug>` checks the chain and its signed checkpoints and exits 2 when
@@ -211,7 +235,7 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   `KMS_PREVIOUS_PROVIDER=openbao` with `OPENBAO_ADDR` and `OPENBAO_TOKEN` still set.
 - **Rate limits (Sprint 15):** with `REDIS_URL` set, the API limits, the failed-credential throttle and the denial
   cap are shared by all instances (one atomic Lua script per hit); if Redis stops answering they fall back to
-  per-instance memory counters rather than letting requests through.
+  per-instance memory counters rather than letting requests through. Since Sprint 22 the Platform screen warns while that lasts.
 - **Backups:** back up the application database and the blob store together, and the KMS (OpenBao) or `DATA_KEY`
   separately from both: without the key, sealed conversations, attachments and exports cannot be read. Sessions,
   lockout counters and Redis can be lost safely; the audit chain and users cannot.

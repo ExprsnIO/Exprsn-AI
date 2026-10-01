@@ -145,7 +145,10 @@ filter, private `/tmp`, only the state directory writable.
   classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
-  to N times each limit. The failed-bearer throttle is per address: clients behind one NAT share it.
+  to N times each limit. Since 1.3.0 an outage is visible: each instance probes Redis every `RATELIMIT_PROBE_SECONDS`,
+  the Platform screen warns, and `exprsn_ratelimit_degraded` drives the `ExprsnRateLimitsPerInstance` alert; the limits
+  themselves are still per instance until Redis answers. The failed-bearer throttle is per address: clients behind one
+  NAT share it.
 - Scripts need docker or podman on the host; with `SCRIPT_RUNNER=none`, or when no runtime answers, runs are refused.
   The sandbox relies on the container runtime's isolation unless `SCRIPT_RUNTIME=runsc` puts containers under gVisor
   (the host must have it installed and registered with the engine); there is no Firecracker option.
@@ -180,8 +183,13 @@ filter, private `/tmp`, only the state directory writable.
   GGUF is still pulled by name from the registry the worker pushes to; the gateway does not import a GGUF file
   directly. The client-certificate check relies on the proxy that terminates mTLS when the server does not.
   `TRAINER_PLAINTEXT_FALLBACK` brings back contract 1 (plaintext rows) for an old worker.
-- Zones: rendered NetworkPolicy, Compose and nftables files are downloaded and deployed by an operator; the platform
-  does not apply them itself (the Helm chart in Sprint 10 can consume them). MCP server and connection registration
+- Zones: rendered Compose and nftables files are downloaded and deployed by an operator. NetworkPolicies are too,
+  unless `ZONES_APPLY=kubernetes` (1.3.0): the server then applies each zone's policy with server-side apply after
+  every approved change and reports drift (edited or deleted policies) on the Zones screen, in the audit chain and as
+  an alert. It does not create the zone namespaces, does not delete policies of zones that are removed, and the drift
+  check compares the fields it set (a field added by hand to an existing rule, without changing a list's length, is
+  not noticed). The service account needs only get, list, create and patch on networkpolicies in the zone namespaces
+  (the chart's `zonesApply` Role); its token is then mounted in the pod. MCP server and connection registration
   are refused in an undefined or external zone, or above its ceiling, only once zones are defined; members registered
   before that are listed on the Zones screen (and admins are told when the first zones appear), each with a move
   proposal that a second system admin approves. MCP servers carry no label, so only their zone is checked.
@@ -214,8 +222,10 @@ filter, private `/tmp`, only the state directory writable.
   refuses a database with tenants, users or audit events unless forced with the confirmation phrase, and blob objects
   are written after the database commits. Tables outside the portable schema (`vectors_pg`) are skipped in the drill
   and rebuilt by reindexing.
-- Clock skew is measured against the database server, and against NTP when `NTP_SERVER` is set: one unauthenticated
-  SNTP query (no NTS), so a spoofed answer on the path could hide skew; it is a check, not a time source.
+- Clock skew is measured against the database server, and against NTP when `NTP_SERVER` is set. SNTP is
+  unauthenticated (no NTS); since 1.3.0 `NTP_SERVER` takes several servers and the reported skew is the median of the
+  ones that agree, with outliers named, so one lying or spoofed server no longer hides skew. An attacker who controls
+  the path to most of the servers still can; it is a check, not a time source.
 - Federation: the SAML IdP signs with RSA-SHA256 only: the assertion always, and the whole response too when the
   service provider is set to it. SP and upstream IdP metadata can be fetched from a URL (through the upstream host
   checks) and are refreshed every `FEDERATION_METADATA_REFRESH_HOURS`; a changed certificate or endpoint waits for an
@@ -318,3 +328,16 @@ filter, private `/tmp`, only the state directory writable.
 - Security notices cover password, factor, recovery-code, API-key and session changes; a new sign-in does not send
   one. Email notices need `SMTP_URL` and an address on the account.
 - Without `REDIS_URL`, rate limits are per instance (in memory); quotas are shared through the database.
+- Tracing (1.3.0): spans go to `OTEL_EXPORTER_OTLP_ENDPOINT` over OTLP/HTTP JSON with only allow-listed attribute keys
+  (method, route template, status, table and operation, job type, guardrail checkpoint and outcome, model name); SQL
+  text, URLs with query strings, message text and error messages are never recorded. The exporter does not use TLS
+  client certificates; put the collector on the internal network or behind a sidecar, and give an API key through
+  `OTEL_EXPORTER_OTLP_HEADERS` (an environment variable, with no `_FILE` form yet).
+- Key escrow (1.3.0): `kms:escrow` splits only the local `DATA_KEY` (with OpenBao, use its own recovery shares) and
+  prints the shares to standard output once; run it on a terminal, not in a logged CI job. Shares of an earlier escrow
+  stay valid for the key they were made from: after a key change (`kms:rewrap`), make a new escrow and destroy the old
+  shares. `kms:recover` writes the key to a new file with mode 0600, never to standard output.
+- Schema handshake (1.3.0): an instance whose build is older than the database's newest migration stops taking jobs
+  and reports not ready, but keeps answering requests that reach it until its load balancer drains it. Expand-only
+  migrations keep the previous release working during a rolling upgrade; a contract step (marked `// contract:`) needs
+  every old instance stopped first, which `migrate --check` reports.
