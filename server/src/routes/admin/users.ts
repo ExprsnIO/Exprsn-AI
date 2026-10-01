@@ -195,7 +195,9 @@ export function userAdminRoutes(s: Services): Router {
     if (!u) throw notFound('User');
     if (u.id === p.userId) throw forbidden('Change your own password from Settings.', { step: 'self' });
     if (!canManage(p.roles, await s.users.roleIds(u.id))) throw forbidden('This user holds roles you cannot grant, so you cannot reset their password.', { step: 'role' });
-    const body = parseBody(z.discriminatedUnion('mode', [z.object({ mode: z.literal('temporary'), password: z.string().min(1).max(256) }), z.object({ mode: z.literal('link') })]), req.body);
+    // B-804: the account's API keys end too unless the admin unticks it (they are separate credentials).
+    const revokeKeys = z.boolean().default(true);
+    const body = parseBody(z.discriminatedUnion('mode', [z.object({ mode: z.literal('temporary'), password: z.string().min(1).max(256), revokeApiKeys: revokeKeys }), z.object({ mode: z.literal('link'), revokeApiKeys: revokeKeys })]), req.body);
     if (!(await s.account.localCredential(u.id))) {
       throw new HttpProblem(409, 'Managed by the directory', 'This account signs in through a directory, which keeps its password. Reset it there.');
     }
@@ -209,14 +211,16 @@ export function userAdminRoutes(s: Services): Router {
     }
     const sessionsRevoked = await s.sessions.revokeAllForUser(u.id);
     const grantsRevoked = await s.account.revokeGrants(p.tenantId, u.id);
+    const apiKeysRevoked = body.revokeApiKeys ? await s.apiKeys.revokeAllForUser(u.id) : 0;
     let sent = false;
     if (body.mode === 'link') {
       const { token } = await s.account.issueToken({ tenantId: p.tenantId, userId: u.id, kind: 'admin', ttlMs: s.cfg.PASSWORD_RESET_MINUTES * 60_000, createdBy: p.userId });
       sent = await s.notifications.sendTemplate(u.email, 'password-set', { name: u.display_name, username: u.username, actor: p.displayName, minutes: s.cfg.PASSWORD_RESET_MINUTES, link: s.account.resetLink(token, p.tenantSlug) });
     }
-    await audit(req, 'user.password_reset', { user: u.id, username: u.username }, { mode: body.mode, mustChange: body.mode === 'temporary', linkSent: sent, sessionsRevoked, grantsRevoked });
-    await securityAlert(s, { tenantId: p.tenantId, userId: u.id, event: 'password.reset_by_admin', detail: body.mode === 'link' ? `${p.displayName} reset your password and sent a link to choose a new one.` : `${p.displayName} set a temporary password, which you change at your next sign-in.` });
-    res.json({ mode: body.mode, mustChange: body.mode === 'temporary', linkSent: sent, sessionsRevoked, grantsRevoked });
+    await audit(req, 'user.password_reset', { user: u.id, username: u.username }, { mode: body.mode, mustChange: body.mode === 'temporary', linkSent: sent, sessionsRevoked, grantsRevoked, apiKeysRevoked });
+    const keysNote = apiKeysRevoked ? ` ${apiKeysRevoked} API key${apiKeysRevoked === 1 ? ' was' : 's were'} revoked.` : '';
+    await securityAlert(s, { tenantId: p.tenantId, userId: u.id, event: 'password.reset_by_admin', detail: (body.mode === 'link' ? `${p.displayName} reset your password and sent a link to choose a new one.` : `${p.displayName} set a temporary password, which you change at your next sign-in.`) + keysNote });
+    res.json({ mode: body.mode, mustChange: body.mode === 'temporary', linkSent: sent, sessionsRevoked, grantsRevoked, apiKeysRevoked });
   });
 
   // ---------- sessions across the tenant ----------

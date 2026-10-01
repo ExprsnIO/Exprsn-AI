@@ -27,6 +27,10 @@ never.addAddress('255.255.255.255', 'ipv4');
 never.addSubnet('fe80::', 10, 'ipv6');
 never.addSubnet('ff00::', 8, 'ipv6');
 never.addAddress('::', 'ipv6');
+// B-901: cloud metadata services outside link-local (Alibaba in the CGNAT range, Oracle, the AWS IPv6 endpoint).
+never.addAddress('100.100.100.200', 'ipv4');
+never.addAddress('192.0.0.192', 'ipv4');
+never.addAddress('fd00:ec2::254', 'ipv6');
 
 /** Link-local (cloud metadata), unspecified, multicast and broadcast addresses, which no outbound call may reach. */
 export function isNeverAddress(ip: string): boolean {

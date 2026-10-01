@@ -41,7 +41,9 @@ export function scriptRoutes(s: Services): Router {
 
   /** Which sandbox runs scripts here, and whether it answers. */
   r.get('/scripts/runtime', run, async (_req, res) => {
-    res.json({ runner: scripts.runner.name, available: await scripts.runner.available(), defaults: DEFAULT_LIMITS, max: MAX_LIMITS, languages: LANGUAGES, images: { python: s.cfg.SCRIPT_IMAGE_PYTHON, javascript: s.cfg.SCRIPT_IMAGE_NODE } });
+    const available = await scripts.runner.available();
+    const problem = (scripts.runner as { runtimeProblem?: string | null }).runtimeProblem ?? null;
+    res.json({ runner: scripts.runner.name, runtime: scripts.runner.ociRuntime ?? null, runtimeProblem: problem, available, defaults: DEFAULT_LIMITS, max: MAX_LIMITS, languages: LANGUAGES, images: { python: s.cfg.SCRIPT_IMAGE_PYTHON, javascript: s.cfg.SCRIPT_IMAGE_NODE } });
   });
 
   r.post('/scripts', run, async (req, res) => {

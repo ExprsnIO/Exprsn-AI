@@ -2,7 +2,7 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** version `1.1.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+**Status:** version `1.2.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
 and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
 the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
 rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
@@ -16,8 +16,13 @@ runbooks, an OWASP ASVS level 2 review, AA and AAA accessibility modes and a Pla
 check, step-up re-authentication and security notices; streaming output guardrails, held answers and resumable
 streams; an OpenAI-compatible API, signed webhooks, a prompt library, conversation sharing and export, and billing
 statements; token revocation, logout, PAR, DPoP, SAML single logout and signing in OpenBao; and shared rate limits, key
-re-wrap, ACME dns-01, blob-store backups with restore, and sandboxed media. See [Sprints.md](Sprints.md) and
-[CHANGELOG.md](CHANGELOG.md).
+re-wrap, ACME dns-01, blob-store backups with restore, and sandboxed media. Sprints 16 to 19 make up 1.2.0: knowledge,
+memory and server-side tools on `/v1`, the guard model while streaming, held prompts, live and anonymous sharing;
+new-sign-in notices, a password strength meter, upstream step-up, DPoP nonces, SAML metadata by URL and enrolment
+links; automated WCAG A/AA and reflow checks; checks on operator service URLs, backend TLS, consistent backups, ACME
+account binding and certificate hooks, and sealed training data; and MySQL and replicated PostgreSQL knowledge sources
+with row access, ordered and Ed25519-signed webhooks, per-tenant price books with Stripe reconciliation, and workflow
+tools agent runs can await. See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 

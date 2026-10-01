@@ -11,6 +11,8 @@ import { MIRROR_KINDS, mirrorView } from '../../ops/mirrors.js';
 import { CERT_USES, certStatus, type CertRow } from '../../ops/certs.js';
 import type { BackupRow, DrillRow } from '../../ops/backups.js';
 import type { SignerProposalRow } from '../../ops/signers.js';
+import { hookView } from '../../ops/cert-hooks.js';
+import { pushView, targetView } from '../../ops/push.js';
 
 const keyView = (k: SignerKeyRow) => ({ id: k.id, name: k.name, algorithm: k.algorithm, fingerprint: k.fingerprint, short: shortFingerprint(k.fingerprint), publicKeyPem: k.public_key_pem, state: k.state, createdAt: k.created_at, revokedAt: k.revoked_at, revokeReason: k.revoke_reason });
 
@@ -75,7 +77,9 @@ export function platformAdminRoutes(s: Services): Router {
       ...summary,
       bundles: { total: bundles.length, ready: bundles.filter((b) => b.state === 'ready to promote').length, rejected: bundles.filter((b) => b.state === 'rejected').length, expedited: bundles.filter((b) => b.expedited && b.state !== 'in production' && b.state !== 'rejected').length },
       certificates: { total: views.length, expiring: views.filter((c) => c.status === 'expiring' || c.status === 'expired').length, nextExpiry: next ? { name: next.name, days: next.days } : null },
-      mirrors: { total: mirrors.length, stale: mirrors.map(mirrorView).filter((m) => m.stale).length }
+      mirrors: { total: mirrors.length, stale: mirrors.map(mirrorView).filter((m) => m.stale).length },
+      // Sprint 17 (B-802): Platform warns while new passwords are not checked against breached-password lists.
+      passwords: { breachedCheck: s.cfg.BREACHED_PASSWORDS }
     });
   });
 
@@ -232,6 +236,60 @@ export function platformAdminRoutes(s: Services): Router {
   /** The private key, for the deploy tooling. POST so it is CSRF-checked; audited every time. */
   r.post('/platform/certificates/:id/key', async (req, res) => {
     res.type('application/x-pem-file').send(await ops.certs.exportKey(by(req), String(req.params.id)));
+  });
+
+  // ---------- registry pushes (Sprint 18, B-909) ----------
+
+  r.get('/platform/push-targets', async (_req, res) => {
+    res.json((await ops.push.targets()).map(targetView));
+  });
+
+  r.put('/platform/mirrors/:id/push-target', async (req, res) => {
+    const body = parseBody(z.object({ url: z.url().max(500).refine((u) => /^https?:\/\//.test(u), 'http:// or https:// URL'), repository: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/).nullable().optional(), username: z.string().trim().max(200).nullable().optional(), secret: z.string().min(1).max(4000).nullable().optional(), state: z.enum(['active', 'disabled']).optional() }).strict(), req.body);
+    const m = await ops.mirrors.get(String(req.params.id));
+    res.json(targetView(await ops.push.setTarget(by(req), m, body)));
+  });
+
+  r.delete('/platform/mirrors/:id/push-target', async (req, res) => {
+    await ops.push.removeTarget(by(req), await ops.mirrors.get(String(req.params.id)));
+    res.status(204).end();
+  });
+
+  r.get('/platform/bundles/:id/pushes', async (req, res) => {
+    const b = await ops.bundles.get(String(req.params.id));
+    res.json((await ops.push.pushes(b.id)).map(pushView));
+  });
+
+  r.post('/platform/bundles/:id/push', async (req, res) => {
+    const out = await ops.push.request(by(req), String(req.params.id));
+    if (!out) throw new HttpProblem(409, 'Conflict', 'No mirror has an active push target. Set one on an image, npm or PyPI mirror first.');
+    res.status(202).json(out);
+  });
+
+  // ---------- certificate push hooks (Sprint 18, B-904) ----------
+
+  r.get('/platform/certificates/:id/hooks', async (req, res) => {
+    const c = await ops.certs.get(String(req.params.id));
+    res.json({ hooks: (await ops.certs.hooks.list(c.id)).map(hookView), commands: ops.certs.hooks.commandNames() });
+  });
+
+  r.post('/platform/certificates/:id/hooks', async (req, res) => {
+    const body = parseBody(z.discriminatedUnion('kind', [z.object({ kind: z.literal('command'), command: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/) }).strict(), z.object({ kind: z.literal('webhook'), url: z.url().max(500).refine((u) => /^https?:\/\//.test(u), 'http:// or https:// URL') }).strict()]), req.body);
+    const c = await ops.certs.get(String(req.params.id));
+    const { hook, secret } = await ops.certs.hooks.add(by(req), c, body);
+    // The webhook secret is shown once; it is stored sealed.
+    res.status(201).json({ ...hookView(hook), ...(secret ? { secret } : {}) });
+  });
+
+  r.post('/platform/certificates/:id/hooks/:hookId/test', async (req, res) => {
+    const c = await ops.certs.get(String(req.params.id));
+    res.json(hookView(await ops.certs.hooks.test(by(req), c, String(req.params.hookId))));
+  });
+
+  r.delete('/platform/certificates/:id/hooks/:hookId', async (req, res) => {
+    const c = await ops.certs.get(String(req.params.id));
+    await ops.certs.hooks.remove(by(req), c, String(req.params.hookId));
+    res.status(204).end();
   });
 
   // ---------- data keys ----------

@@ -14,7 +14,7 @@ has three parts:
 | `e2e/` | Playwright suite across every console screen (its own package, not a workspace member) |
 | `design/prototype/` | The clickable design prototype. It is the specification for behaviour and copy, with example data only |
 | `deploy/` | Dockerfile, Compose (production, development, GPU), Helm chart with NetworkPolicies, bare-metal systemd unit and installer, example identity YAML |
-| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `asvs.md`, `accessibility.md`, `loadtest.md`, `runbooks/` |
+| `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `asvs.md`, `accessibility.md`, `loadtest.md`, `training-worker.md`, `runbooks/` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
 
 Sprints 0 to 9 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
@@ -25,8 +25,12 @@ L2 review in `docs/asvs.md`, AA/AAA accessibility modes in `docs/accessibility.m
 produced release candidate `1.0.0-rc.1`, and Sprints 11 to 15 (`Backlog-1.1.0.md`: account self-service and security
 notices; streaming guardrails, held answers and resumable streams; the OpenAI-compatible API, webhooks, prompts,
 sharing, export and billing; the second federation sprint; shared rate limits, key re-wrap, dns-01, blob backups and
-restore) are done in version `1.1.0`. Every console screen is live. Check `Sprints.md` and the known gaps in
-`docs/security.md` before starting work.
+restore) made version `1.1.0`. Sprints 16 to 19 (`Backlog-1.2.0.md`: `/v1` context and tools, the guard model while
+streaming, held prompts, live and anonymous sharing; sign-in notices, the strength meter, upstream step-up, DPoP nonces,
+SAML metadata, enrolment links and automated accessibility checks; service URL checks, backend TLS, consistent
+backups, ACME binding and hooks, sealed training data; MySQL and replicated knowledge sources with row access, ordered
+and Ed25519 webhooks, price books with Stripe reconciliation, awaited workflow tools) are done in version `1.2.0`.
+Every console screen is live. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
 
 ## Commands
 
@@ -100,7 +104,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `knowledge.ts`, `memory.ts`, `admin/connections.ts`, `admin/registry.ts`, `admin/mcp.ts`, `agents.ts`, `scripts.ts`,
   `workflows.ts`, `media.ts`, `images.ts`, `training.ts`, `admin/zones.ts`, `admin/platform.ts` (plus the public ACME
   http-01 route), `admin/federation.ts`, `federation-public.ts` (OIDC, SAML, device and Kerberos endpoints mounted at
-  the root, outside `/api`), `health.ts`. The full list is `docs/api.md`.
+  the root, outside `/api`), `health.ts`; since 1.2.0 also `sharing-public.ts` (anonymous links, at `/api/public`),
+  `trainer-worker.ts` (the training worker's key and artefact routes) and `integrations-public.ts` (the webhook JWKS
+  and the Stripe webhook), mounted outside the authenticated `/api`. The full list is `docs/api.md`.
 - **`identity/`**: the per-tenant store chain, adapters in `providers/`, JIT provisioning (roles, clearance and
   workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys;
   `account.ts` (password change, reset tokens, forced change, step-up freshness, preferences), `breached.ts` (HIBP range
@@ -152,6 +158,13 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - 1.1.0 modules: **`openai/`** (the `/v1` OpenAI-compatible API), **`webhooks/`** (signed deliveries as jobs, breaker),
   **`integrations/hosts.ts`** (per-tenant allowed hosts), **`prompts/`** (the prompt library), **`billing/`** (price
   books, statements, Stripe push).
+- 1.2.0 modules: `identity/signin-notices.ts` (new browser or network notices) and `identity/admin-create.ts`
+  (`admin:create`, enrolment links); `federation/proposals.ts` (dual-control identity changes) and
+  `federation/metadata.ts` (SAML metadata by URL); `platform/egress.ts` (operator service URL checks, connect-time),
+  `platform/yaml.ts` (capped YAML parsing) and `platform/diagnostics.ts` (secret masking in diagnostics and problem
+  details); `ops/cert-hooks.ts` (certificate push hooks) and `ops/push.ts` (Harbor, Verdaccio and devpi pushes);
+  `training/worker.ts` (worker contract 2, `docs/training-worker.md`); `knowledge/acl.ts` (row access) and
+  `knowledge/replication.ts` with `connections/replication.ts` (PostgreSQL logical replication).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -164,8 +177,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `fake-runner.ts` (scripts) and `sprint8-fakes.ts` (media runner, image backend, safety classifier) stand in for the
   other external workers; `fake-trainer.ts`, `fake-acme.ts` and `fake-idp.ts` stand in for the training worker, an ACME directory and an
   upstream identity provider; `fake-account.ts` (mail, HIBP range API), `sprint13-fakes.ts` (webhook receiver,
-  Stripe) and `fake-openbao.ts` (transit) serve the 1.1.0 suites; `seed-gateway.ts` and `retrieval-seed.ts` seed pools,
-  models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
+  Stripe) and `fake-openbao.ts` (transit) serve the 1.1.0 suites, and `sprint18-fakes.ts` (Harbor, Verdaccio, devpi)
+  the 1.2.0 ones; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
   before SuperTest sees it, so another process cannot shadow the port on macOS. `server/test/integration/` runs the
   stores and platform paths against real servers.
 
@@ -195,8 +208,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   A screen without `live: true` (on its `NAV` entry or its `App.register` definition) gets the "Prototype data"
   banner.
 - Accessibility: `App.setA11y` and the `:root[data-a11y="aaa"]` tokens in `app.css` give the Enhanced (AAA) mode;
-  `UI.field` labels its control and dialogs are `inert`-backed with focus return. Keep new markup keyboard-operable and
-  labelled (`docs/accessibility.md`).
+  `UI.field` labels its control and dialogs are `inert`-backed with focus return; `App.tabPanel` keeps a tab's content
+  in one tabpanel. Keep new markup keyboard-operable and labelled (`docs/accessibility.md`): the e2e suite fails on any
+  finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) and on sideways scrolling at 320 and 640 px.
+- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`).
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
   streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.

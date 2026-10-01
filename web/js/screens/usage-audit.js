@@ -68,6 +68,7 @@
 
   // ---------- Sprint 13: statements and price books (billing:read to see, billing:manage to change) ----------
   const METER_LABEL = { prompt_tokens: 'Prompt tokens', output_tokens: 'Output tokens', thinking_tokens: 'Thinking tokens', gpu_seconds: 'GPU-seconds', requests: 'Requests', calc_calls: 'Calculator calls' };
+  const FINAL = { pushed: 1, paid: 1, 'payment failed': 1, void: 1 };
   const money = (micros, cur) => (Number(micros || 0) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + ' ' + (cur || '');
   function billingLoad(st, refresh) {
     const b = st.bill = st.bill || {};
@@ -99,8 +100,8 @@
       + UI.select(list.map((x) => ({ value: x.month, label: x.month + ', ' + x.state + ', ' + money(x.totalMicros, x.currency) })), b.month, 'data-bmonth aria-label="Month" style="width:260px"')
       + '<span class="right hstack gap6">'
       + (d && !d.error ? '<a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/export?format=csv" download>CSV</a><a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/export?format=json" download>JSON</a>' : '')
-      + (manage && d && !d.error && d.state !== 'pushed' ? UI.btn(d.state === 'preview' ? 'Save statement' : 'Recompute', { size: 'sm', attrs: 'data-bcompute' }) : '')
-      + (manage && b.settings.provider && d && !d.error && d.state !== 'pushed' && b.month < b.list.current ? UI.btn('Send to ' + b.settings.provider, { size: 'sm', kind: 'primary', attrs: 'data-bpush' }) : '')
+      + (manage && d && !d.error && !FINAL[d.state] ? UI.btn(d.state === 'preview' ? 'Save statement' : 'Recompute', { size: 'sm', attrs: 'data-bcompute' }) : '')
+      + (manage && b.settings.provider && d && !d.error && !FINAL[d.state] && b.month < b.list.current ? UI.btn('Send to ' + b.settings.provider, { size: 'sm', kind: 'primary', attrs: 'data-bpush' }) : '')
       + '</span></div>';
     if (!book) h += UI.notice('<b>No price book applies to this tenant.</b> Statements list the usage with no amounts until ' + (manage ? 'you set a default price book below.' : 'a system admin sets a default price book.'), 'warn');
     if (!d) h += UI.notice('Loading…', 'info');
@@ -108,15 +109,24 @@
     else {
       const t = d.totals;
       h += (d.state === 'push failed' ? UI.notice('<b>Sending failed.</b> ' + esc(d.pushError || ''), 'danger') : '')
-        + (d.state === 'pushed' ? UI.notice('Sent to ' + esc(b.settings.provider || 'the billing provider') + ' as ' + esc(d.providerRef || '') + ' on ' + esc(when(d.pushedAt)) + '. The statement is final.', 'ok') : '')
+        + (d.state === 'pushed' ? UI.notice('Sent to ' + esc(b.settings.provider || 'the billing provider') + ' as ' + esc(d.providerRef || '') + ' on ' + esc(when(d.pushedAt)) + '. The statement is final.' + (b.settings.reconciliation ? ' It is marked paid, failed or void when ' + esc(b.settings.provider || 'the provider') + ' reports it.' : ''), 'ok') : '')
+        + (d.state === 'paid' ? UI.notice('<b>Paid.</b> ' + esc(b.settings.provider || 'The billing provider') + ' reported invoice ' + esc(d.providerRef || '') + ' paid on ' + esc(when(d.paidAt)) + '.', 'ok') : '')
+        + (d.state === 'payment failed' ? UI.notice('<b>Payment failed.</b> ' + esc(b.settings.provider || 'The billing provider') + ' reported that invoice ' + esc(d.providerRef || '') + ' could not be collected. It is marked paid when a later payment succeeds.', 'danger') : '')
+        + (d.state === 'void' ? UI.notice('<b>Void.</b> Invoice ' + esc(d.providerRef || '') + ' was voided at ' + esc(b.settings.provider || 'the billing provider') + '.', 'warn') : '')
         + '<div class="grid4">' + UI.stat(esc(money(d.totalMicros, d.currency)), 'Total, ' + d.month, esc(d.state === 'preview' ? 'preview, not saved' : d.state)) + UI.stat(fmt(t.promptTokens + t.outputTokens), 'Tokens', fmt(t.promptTokens) + ' in, ' + fmt(t.outputTokens) + ' out') + UI.stat(fmt(Math.round(t.gpuSeconds)), 'GPU-seconds', '') + UI.stat(fmt(t.requests), 'Requests', d.book ? 'price book ' + esc(d.book.name) : 'no price book') + '</div>'
         + UI.table(['Kind', 'Model', 'Profile', 'Meter', { label: 'Quantity', right: true }, { label: 'Price', right: true }, { label: 'Amount', right: true }], d.lines.map((l) => [esc(l.kind), '<span class="mono">' + esc(l.model || '') + '</span>', esc(l.profile || ''), esc(METER_LABEL[l.meter] || l.meter), fmt(l.quantity), l.priced ? esc(money(l.unitPriceMicros, '')) + ' <span class="muted">per ' + fmt(l.perUnits) + '</span>' : '<span class="muted">not priced</span>', esc(money(l.amountMicros, d.currency))]), { clickable: false, minWidth: '720px', emptyTitle: 'No usage this month', emptyText: 'Lines appear as models are used.' })
+        + (d.taxes && d.taxes.length ? UI.kv([['Subtotal', esc(money(d.subtotalMicros, d.currency))]].concat(d.taxes.map((x) => [esc(x.name) + ' ' + esc(String(x.ratePpm / 10000)) + '%', esc(money(x.amountMicros, d.currency))])).concat([['Total', '<b>' + esc(money(d.totalMicros, d.currency)) + '</b>']]), 1) : '')
         + '<div class="muted" style="font-size:12px">Totals come from the same usage records as the Usage tab, so they match its report for the month. Usage without a price is listed at zero.' + (d.computedAt ? ' Computed ' + esc(when(d.computedAt)) + '.' : '') + '</div>';
     }
     h += '<div class="hstack"><div class="eyebrow grow">Price books</div>' + (manage ? UI.btn('New price book', { size: 'sm', icon: 'plus', attrs: 'data-bnewbook' }) : '') + '</div>'
-      + UI.table(['Name', 'Currency', 'Items', 'State', ''], b.books.books.map((x) => ['<b>' + esc(x.name) + '</b>' + (x.isDefault ? ' ' + UI.pill('default', 'accent') : '') + (book && book.id === x.id ? ' <span class="muted">used for this tenant</span>' : ''), esc(x.currency), fmt(x.items.length), UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline'), manage ? UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-beditbook="' + esc(x.id) + '"' }) : '']), { clickable: false, minWidth: '520px', emptyTitle: 'No price books', emptyText: manage ? 'Create one to price the usage meter.' : 'A system admin keeps the price books.' });
+      + UI.table(['Name', 'Currency', 'Items', 'State', ''], b.books.books.map((x) => ['<b>' + esc(x.name) + '</b>' + (x.tenantId ? ' ' + UI.pill(x.tenantId === b.settings.tenantId ? 'this tenant' : 'another tenant', 'outline') : '') + (x.isDefault ? ' ' + UI.pill('default', 'accent') : '') + (book && book.id === x.id ? ' <span class="muted">used for this tenant</span>' : ''), esc(x.currency), fmt(x.items.length), UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline'), manage ? UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-beditbook="' + esc(x.id) + '"' }) : '']), { clickable: false, minWidth: '520px', emptyTitle: 'No price books', emptyText: manage ? 'Create one to price the usage meter.' : 'A system admin keeps the price books.' });
     if (manage) h += '<div class="hstack wrap gap6"><span class="muted" style="font-size:12px">This tenant uses</span>' + UI.select([{ value: '', label: 'The default price book' }].concat(b.books.books.filter((x) => x.state === 'active').map((x) => ({ value: x.id, label: x.name }))), b.settings.priceBookId || '', 'data-bbook aria-label="Price book for this tenant" style="width:220px"')
-      + (b.settings.provider ? UI.input(b.settings.billingCustomer || '', { attrs: 'data-bcustomer aria-label="Billing customer" style="width:200px"', placeholder: 'Stripe customer, cus_...' }) : '') + UI.btn('Save', { size: 'sm', attrs: 'data-bsettings' }) + '</div>';
+      + (b.settings.provider ? UI.input(b.settings.billingCustomer || '', { attrs: 'data-bcustomer aria-label="Billing customer" style="width:200px"', placeholder: 'Stripe customer, cus_...' }) : '')
+      + UI.input(b.settings.billingCurrency || '', { attrs: 'data-bcurrency aria-label="Billing currency" maxlength="3" style="width:90px"', placeholder: 'Currency' })
+      + UI.input((b.settings.taxRates || []).map((x) => x.name + ' ' + x.ratePercent).join(', '), { attrs: 'data-btaxes aria-label="Tax rates" style="width:220px"', placeholder: 'Taxes, e.g. VAT 20' })
+      + UI.btn('Save', { size: 'sm', attrs: 'data-bsettings' }) + '</div>'
+      + '<div class="muted" style="font-size:12px">A currency limits this tenant to price books in it (there is no conversion). Taxes are a name and a percentage each, comma separated, added to the priced subtotal.</div>';
+    else if (b.settings.billingCurrency || (b.settings.taxRates || []).length) h += '<div class="muted" style="font-size:12px">Billed in ' + esc(b.settings.billingCurrency || 'the price book\'s currency') + ((b.settings.taxRates || []).length ? ', with ' + esc(b.settings.taxRates.map((x) => x.name + ' ' + x.ratePercent + '%').join(', ')) : '') + '.</div>';
     return h;
   }
   function priceBookModal(ctx, st, existing, reload) {
@@ -134,6 +144,7 @@
       body: '<div class="formgrid">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-bname maxlength="100"' })) + UI.field('Currency', UI.input(existing ? existing.currency : 'USD', { attrs: 'data-bcur maxlength="3"' }))
         + UI.field('State', UI.select(['active', 'retired'], existing ? existing.state : 'active', 'data-bstate')) + '</div>'
         + UI.check('Default for tenants without their own', existing ? existing.isDefault : false, 'data-bdefault')
+        + (!existing && isSysAdmin() ? UI.check('Only for this tenant, not the whole platform', false, 'data-bowner') : existing && existing.tenantId ? '<div class="muted" style="font-size:12px">This book belongs to one tenant; only it can use it.</div>' : '')
         + '<div class="fg2" style="font-size:12px">Each item prices one meter. The most specific item wins: a profile, then a model, then anything; a named usage kind (chat, api, embed, agent, workflow…) beats *.</div>'
         + '<div class="tablewrap"><table class="dt"><thead><tr><th>Applies to</th><th>Name</th><th>Usage</th><th>Meter</th><th>Price</th><th>Per</th><th></th></tr></thead><tbody data-bitems></tbody></table></div>'
         + UI.btn('Add item', { size: 'sm', icon: 'plus', attrs: 'data-badd' }) + '<div data-err></div>',
@@ -152,6 +163,8 @@
           if (bad) { box.innerHTML = UI.notice('Each item needs a price of zero or more, a per-unit count of one or more, and a name when it applies to a model or profile.', 'warn'); return; }
           const def = m.querySelector('[data-bdefault]');
           const body = { name: m.querySelector('[data-bname]').value.trim(), currency: m.querySelector('[data-bcur]').value.trim().toUpperCase(), isDefault: !!(def && def.checked), items: list };
+          const own = m.querySelector('[data-bowner]');
+          if (!existing && own && own.checked) body.tenantId = st.bill.settings.tenantId;
           if (existing) body.state = m.querySelector('[data-bstate]').value;
           e.target.disabled = true;
           try {
@@ -180,9 +193,16 @@
     ctx.on('click', '[data-bnewbook]', () => priceBookModal(ctx, st, null, reload));
     ctx.on('click', '[data-beditbook]', (e, t) => { const x = b.books.books.find((y) => y.id === t.dataset.beditbook); if (x) priceBookModal(ctx, st, x, reload); });
     ctx.on('click', '[data-bsettings]', async () => {
-      const sel = ctx.$('[data-bbook]'); const cus = ctx.$('[data-bcustomer]');
+      const sel = ctx.$('[data-bbook]'); const cus = ctx.$('[data-bcustomer]'); const cur = ctx.$('[data-bcurrency]'); const tax = ctx.$('[data-btaxes]');
       const body = { priceBookId: sel && sel.value ? sel.value : null };
       if (cus) body.billingCustomer = cus.value.trim() || null;
+      if (cur) { const c = cur.value.trim().toUpperCase(); if (c && !/^[A-Z]{3}$/.test(c)) { ctx.toast('A currency is a three-letter code, such as EUR.', 'warn'); return; } body.billingCurrency = c || null; }
+      if (tax) {
+        const parts = tax.value.split(',').map((x) => x.trim()).filter(Boolean);
+        const rates = parts.map((x) => { const m = /^(.+?)\s+(\d+(?:\.\d+)?)\s*%?$/.exec(x); return m ? { name: m[1].trim(), ratePercent: Number(m[2]) } : null; });
+        if (rates.some((r) => !r || r.ratePercent > 100)) { ctx.toast('Write each tax as a name and a percentage, such as VAT 20.', 'warn'); return; }
+        body.taxRates = rates;
+      }
       try { await App.api('PUT', '/api/admin/billing/tenants/' + encodeURIComponent(b.settings.tenantId), body); ctx.toast('Billing settings saved. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not save the billing settings'); }
     });
   }

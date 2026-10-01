@@ -1,4 +1,5 @@
 import type { Logger } from 'pino';
+import type { ServicePolicy } from '../platform/egress.js';
 import { labelRank, type Label } from '../authz/labels.js';
 import { zoneAdmits } from '../authz/policy.js';
 import { HttpProblem, tooManyRequests } from '../http/problem.js';
@@ -13,6 +14,8 @@ export interface GatewayOptions {
   maxInflight: number;
   maxLoadsPer10Min: number;
   queueTimeoutMs: number;
+  /** B-901: which addresses instance URLs may reach (loopback and private stay allowed; metadata never). */
+  policy?: ServicePolicy;
 }
 
 interface Waiter {
@@ -112,7 +115,7 @@ export class Gateway {
       r = undefined;
     }
     if (!r) {
-      r = { row, client: new OllamaClient(row.url, row.tls, this.o.timeoutMs), ps: [], tags: [], latencyMs: null, firstTokenMs: null, inflight: 0, waiting: [], loading: new Set(), unloading: new Set(), expectedGone: new Set() };
+      r = { row, client: new OllamaClient(row.url, row.tls, this.o.timeoutMs, this.o.policy), ps: [], tags: [], latencyMs: null, firstTokenMs: null, inflight: 0, waiting: [], loading: new Set(), unloading: new Set(), expectedGone: new Set() };
       this.runtimes.set(row.id, r);
     } else {
       r.row = { ...row, health: r.row.health, health_detail: r.row.health_detail, version: r.row.version, last_seen_at: r.row.last_seen_at };

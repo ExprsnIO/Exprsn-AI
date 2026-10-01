@@ -3,10 +3,11 @@ import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { ulid } from 'ulid';
 import { ZodError } from 'zod';
 import { LABELS, isLabel, type Label } from '../authz/labels.js';
+import { authorize } from '../authz/policy.js';
 import { authenticate, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import { HttpProblem } from '../http/problem.js';
 import type { Services } from '../services.js';
-import { apiProblem, chatBody, embeddingsBody, type CompletionResult } from './service.js';
+import { apiProblem, chatBody, embeddingsBody, type CompletionResult, type Extensions } from './service.js';
 
 /*
  * `/v1`: the OpenAI-compatible API. Bearer credentials only (an API key or an OAuth access token); the session cookie
@@ -50,6 +51,32 @@ const labelOf = (req: Request): Label => {
   return h;
 };
 
+/**
+ * Sprint 16 request extensions: `X-Exprsn-Knowledge: <id>[,<id>…]` retrieves from those knowledge bases,
+ * `X-Exprsn-Memory: on` adds the caller's memories, `X-Exprsn-Tools: profile` runs the profile's read-only tools on
+ * the server. Citations and the tools that ran come back in the `exprsn` field.
+ */
+const extensionsOf = (req: Request): Extensions => {
+  const out: Extensions = {};
+  const kb = req.header('x-exprsn-knowledge');
+  if (kb != null && kb.trim() !== '') {
+    const ids = [...new Set(kb.split(',').map((x) => x.trim()).filter(Boolean))];
+    if (ids.length > 10 || ids.some((x) => !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(x))) throw apiProblem(400, 'X-Exprsn-Knowledge must list up to 10 knowledge base ids, separated by commas.', 'invalid_header', 'X-Exprsn-Knowledge');
+    out.knowledge = ids;
+  }
+  const mem = req.header('x-exprsn-memory');
+  if (mem != null && mem !== '') {
+    if (mem !== 'on' && mem !== 'off') throw apiProblem(400, 'X-Exprsn-Memory must be on or off.', 'invalid_header', 'X-Exprsn-Memory');
+    out.memory = mem === 'on';
+  }
+  const tools = req.header('x-exprsn-tools');
+  if (tools != null && tools !== '') {
+    if (tools !== 'profile' && tools !== 'none') throw apiProblem(400, 'X-Exprsn-Tools must be profile or none.', 'invalid_header', 'X-Exprsn-Tools');
+    out.serverTools = tools === 'profile';
+  }
+  return out;
+};
+
 const completion = (r: CompletionResult) => ({
   id: r.id,
   object: 'chat.completion',
@@ -57,7 +84,8 @@ const completion = (r: CompletionResult) => ({
   model: r.model,
   system_fingerprint: null,
   choices: [{ index: 0, message: { role: 'assistant', content: r.toolCalls.length && !r.content ? null : r.content, ...(r.toolCalls.length ? { tool_calls: r.toolCalls } : {}), refusal: null }, logprobs: null, finish_reason: r.finishReason }],
-  usage: r.usage
+  usage: r.usage,
+  ...(r.exprsn ? { exprsn: r.exprsn } : {})
 });
 
 export function openAiRoutes(s: Services): Router {
@@ -100,12 +128,19 @@ export function openAiRoutes(s: Services): Router {
     const p = principalOf(req);
     const body = chatBody.parse(req.body);
     const label = labelOf(req);
+    const ext = extensionsOf(req);
+    // Each extension reads more than inference does: it needs its own permission (and scope, for a key or token).
+    for (const [on, action, header] of [[!!ext.knowledge?.length, 'knowledge:read', 'X-Exprsn-Knowledge'], [!!ext.memory, 'memory:write', 'X-Exprsn-Memory'], [!!ext.serverTools, 'tools:invoke', 'X-Exprsn-Tools']] as const) {
+      if (!on) continue;
+      const d = authorize(p, action);
+      if (!d.allow) throw new HttpProblem(403, 'Forbidden', `${header} needs ${action}: ${d.reason}`, { extensions: { code: `denied_${d.step}`, param: header, step: d.step, action } });
+    }
     const ac = new AbortController();
     res.on('close', () => {
       if (!res.writableFinished) ac.abort(new Error('client went away'));
     });
     if (!body.stream) {
-      res.json(completion(await s.openai.chat(p, body, label, ac.signal)));
+      res.json(completion(await s.openai.chat(p, body, label, ac.signal, { ext })));
       return;
     }
     await stream(res, s, async (send) => {
@@ -120,6 +155,7 @@ export function openAiRoutes(s: Services): Router {
       };
       const result = await s.openai.chat(p, body, label, ac.signal, {
         id,
+        ext,
         onDelta: (text) => {
           open();
           send({ ...base, id, created, choices: [{ index: 0, delta: { content: text }, logprobs: null, finish_reason: null }] });
@@ -131,7 +167,7 @@ export function openAiRoutes(s: Services): Router {
         if (result.content) send({ ...base, id, created, choices: [{ index: 0, delta: { content: result.content }, logprobs: null, finish_reason: null }] });
       }
       result.toolCalls.forEach((c, index) => send({ ...base, id, created, choices: [{ index: 0, delta: { tool_calls: [{ index, id: c.id, type: 'function', function: { name: c.function.name, arguments: c.function.arguments } }] }, logprobs: null, finish_reason: null }] }));
-      send({ ...base, id, created, choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: result.finishReason }] });
+      send({ ...base, id, created, choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: result.finishReason }], ...(result.exprsn ? { exprsn: result.exprsn } : {}) });
       if (body.stream_options?.include_usage) send({ ...base, id, created, choices: [], usage: result.usage });
     });
   });

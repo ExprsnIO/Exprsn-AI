@@ -19,7 +19,8 @@ export type SecurityEvent =
   | 'session.revoked'
   | 'sessions.revoked'
   | 'grant.added'
-  | 'grant.revoked';
+  | 'grant.revoked'
+  | 'signin.new';
 
 const TITLES: Record<SecurityEvent, string> = {
   'password.changed': 'Your password was changed',
@@ -34,7 +35,8 @@ const TITLES: Record<SecurityEvent, string> = {
   'session.revoked': 'A session was signed out',
   'sessions.revoked': 'Your other sessions were signed out',
   'grant.added': 'An application can now act as you',
-  'grant.revoked': 'An application lost access to your account'
+  'grant.revoked': 'An application lost access to your account',
+  'signin.new': 'New sign-in to your account'
 };
 
 export interface SecurityAlertInput {

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { Agent, fetch, type Dispatcher } from 'undici';
+import { fetch, type Dispatcher } from 'undici';
+import { literalProblem, serviceAgent, servicePolicy, type ServicePolicy } from '../platform/egress.js';
 
 export interface InstanceTls {
   caFile?: string;
@@ -111,22 +112,30 @@ export class OllamaClient {
   constructor(
     url: string,
     tls: InstanceTls | null,
-    private readonly timeoutMs: number
+    private readonly timeoutMs: number,
+    /** B-901: the addresses this client may dial; checked again in every connection's DNS lookup. */
+    policy: ServicePolicy = servicePolicy()
   ) {
     this.base = url.replace(/\/+$/, '');
-    if (tls && (tls.caFile || tls.certFile)) {
-      try {
-        this.dispatcher = new Agent({
-          connect: {
-            ...(tls.caFile ? { ca: readFileSync(tls.caFile) } : {}),
-            ...(tls.certFile ? { cert: readFileSync(tls.certFile) } : {}),
-            ...(tls.keyFile ? { key: readFileSync(tls.keyFile) } : {}),
-            rejectUnauthorized: true
-          }
-        });
-      } catch (err) {
-        this.configError = new OllamaError(`The instance's mTLS files could not be read: ${(err as Error).message}`, null);
-      }
+    const literal = literalProblem(this.base, policy);
+    if (literal) {
+      this.configError = new OllamaError(`The instance address is refused: ${literal}`, null);
+      return;
+    }
+    try {
+      this.dispatcher = serviceAgent(
+        policy,
+        tls && (tls.caFile || tls.certFile)
+          ? {
+              ...(tls.caFile ? { ca: readFileSync(tls.caFile) } : {}),
+              ...(tls.certFile ? { cert: readFileSync(tls.certFile) } : {}),
+              ...(tls.keyFile ? { key: readFileSync(tls.keyFile) } : {}),
+              rejectUnauthorized: true
+            }
+          : {}
+      );
+    } catch (err) {
+      this.configError = new OllamaError(`The instance's mTLS files could not be read: ${(err as Error).message}`, null);
     }
   }
 

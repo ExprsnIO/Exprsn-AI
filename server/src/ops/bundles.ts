@@ -629,7 +629,7 @@ export class BundleService {
   }
 
   /** The promotion job: checks the digest and signature again, then writes each file into its mirror's store. */
-  async runPromote(bundleId: string, by: OpsActor, progress: (pct: number, msg: string) => Promise<void>): Promise<{ promotedTo: string[] }> {
+  async runPromote(bundleId: string, by: OpsActor, progress: (pct: number, msg: string) => Promise<void>): Promise<{ promotedTo: string[]; pushJob?: string }> {
     const s = this.s();
     const b = await this.get(bundleId);
     const steps = b.steps.slice();
@@ -677,7 +677,9 @@ export class BundleService {
       steps[6] = { state: 'passed', detail: promotedTo.length ? `Written to ${promotedTo.join(', ')}${without.length ? `; no mirror is registered for ${without.join(', ')}` : ''}` : `Written to the mirror store; no mirror is registered for ${without.join(', ')}`, at };
       await this.patch(bundleId, { state: 'in production', steps, promoted_at: at, report: { ...(b.report ?? {}), promotedTo, kindsWithoutMirror: without } });
       await audit(s, by, 'platform.bundle.promoted', { bundle: bundleId, name: b.name }, { digest: b.digest, files: n, mirrors: promotedTo, kindsWithoutMirror: without });
-      return { promotedTo };
+      // Sprint 18 (B-909): mirrors with a push target get the files through their registry's API.
+      const push = await s.ops.push.request(by, bundleId).catch((err: Error) => (s.log.warn({ err, bundle: bundleId }, 'could not queue the registry push'), null));
+      return { promotedTo, ...(push ? { pushJob: push.jobId } : {}) };
     } catch (err) {
       const reason = (err as Error).message.slice(0, 1000);
       steps[6] = { state: 'failed', detail: reason, at: Date.now() };

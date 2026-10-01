@@ -9,6 +9,7 @@ import { DenialAudit } from './audit/denials.js';
 import { IdentityChain } from './identity/chain.js';
 import { configureSecretPolicy, secretPolicy } from './identity/secrets.js';
 import { parseAllowList } from './mcp/hosts.js';
+import { servicePolicy } from './platform/egress.js';
 import { SessionService } from './identity/sessions.js';
 import { ApiKeyService } from './identity/apikeys.js';
 import { MfaService } from './identity/mfa.js';
@@ -71,6 +72,7 @@ import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
+import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
 
 export interface Services {
@@ -211,7 +213,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const apiKeys = new ApiKeyService(db, cfg.SESSION_SECRET);
   const siem = new SiemForwarder(audit, log, { url: cfg.SIEM_URL, token: cfg.SIEM_TOKEN });
   const quotas = new QuotaService(db);
-  const gateway = new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS }, jobs);
+  const gateway = new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS, policy: servicePolicy(cfg) }, jobs);
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
@@ -219,7 +221,14 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     store: cfg.REDIS_URL ? new RedisStreamStore(cfg.REDIS_URL, keys, log) : new DbStreamStore(db, keys),
     flags: guard.flags,
     notifications,
-    leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000
+    leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000,
+    // Sprint 16: a prompt a reviewer approved is answered for its owner; the guard model screens streamed answers.
+    principalFor: async (tenantId, userId, workspaceId) => {
+      const p = await loadPrincipal(s, tenantId, userId, {});
+      if (p) p.workspaceId = workspaceId;
+      return p;
+    },
+    streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
   guard.flags.heldAnswer = (tenantId, messageId) => chat.heldText(tenantId, messageId);
   const registry = new RegistryService(db);
@@ -233,20 +242,21 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t) });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined) });
   tools.useWorkflows(workflows);
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
     runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),
     safety: () => s.imageSafety,
     safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD,
+    safetyRequired: cfg.IMAGE_SAFETY_REQUIRED,
     guardrails: () => s.guardrails,
     caps: { maxBytes: cfg.MEDIA_MAX_BYTES, maxDurationMs: cfg.MEDIA_MAX_DURATION_S * 1000, maxWidth: cfg.MEDIA_MAX_WIDTH, maxHeight: cfg.MEDIA_MAX_HEIGHT, maxStreams: cfg.MEDIA_MAX_STREAMS },
     encoder: cfg.MEDIA_ENCODER,
     ...(cfg.MEDIA_WORK_DIR ? { workDir: cfg.MEDIA_WORK_DIR } : {}),
     ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
   });
-  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
+  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
@@ -257,7 +267,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       maxBytes: cfg.ATTACHMENT_MAX_BYTES,
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
       ...(cfg.S3_ENDPOINT && cfg.S3_ACCESS_KEY_ID && cfg.S3_SECRET_ACCESS_KEY ? { s3: { endpoint: cfg.S3_ENDPOINT, region: cfg.S3_REGION, accessKeyId: cfg.S3_ACCESS_KEY_ID, secretAccessKey: cfg.S3_SECRET_ACCESS_KEY, pathStyle: cfg.S3_FORCE_PATH_STYLE } } : {}),
-      git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 })
+      git: overrides.git ?? new CliGit({ allowFile: false, timeoutMs: 5 * 60_000 }),
+      replication: { enabled: cfg.KNOWLEDGE_REPLICATION === 'on', tickMs: cfg.KNOWLEDGE_REPLICATION_TICK_MS }
     }
   );
   const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
@@ -347,6 +358,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await mcp.close();
       await bus.close();
       await counters.close();
+      await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
     }
   };
@@ -398,6 +410,7 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('guardrails.sweep', 2 * 60_000, activeTenants);
   s.scheduler.every('mcp.poll', s.cfg.MCP_POLL_MINUTES * 60_000, activeTenants);
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
+  s.knowledge.replication.start(); // Sprint 19: logical replication streams for PostgreSQL knowledge sources
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
   s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
   s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);

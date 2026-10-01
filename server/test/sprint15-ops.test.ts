@@ -255,10 +255,12 @@ describe('B-410: backups of the blob store, streamed, and restore into an empty 
     const srcDir = tmp('exprsn-src-');
     const h = await harness({ SESSION_SECRET: secret, DATA_KEY: key, BLOB_DIR: srcDir });
     cleanup.push(() => h.close());
-    await localUser(h, 'root', ['system-admin'], 'restricted');
+    const root = await localUser(h, 'root', ['system-admin'], 'restricted');
     const admin = await loginAdmin(h, 'root');
     const sealed = await h.s.keys.seal(h.tenantId, 'survives the restore', 'aad:r');
     await h.s.blobs.put(`attachments/${h.tenantId}/a1`, Buffer.from(await h.s.keys.seal(h.tenantId, 'attachment body', 'attachment:a1')));
+    // Since B-903 the blob archive holds the objects the database references, so the attachment has its row.
+    await h.s.db('attachments').insert({ id: 'a1', tenant_id: h.tenantId, user_id: root.id, name: 'a1.txt', type: 'text/plain', size: 15, sha256: 'x'.repeat(64), state: 'ready', label: 'internal', blob_key: `attachments/${h.tenantId}/a1`, created_at: Date.now() });
     await h.s.checkpoints.create(h.tenantId, 'test');
     const b = await h.s.ops.backups.createNow(by(h.tenantId));
     const manifest = JSON.parse((await h.s.blobs.get(`platform/backups/${b.id}.manifest.json`))!.toString()).manifest;

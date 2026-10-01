@@ -7,17 +7,19 @@
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
   const ago = (ms) => { if (!ms) return ''; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
   const size = (n) => (n == null ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Postgres view' };
+  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table or view' };
+  const REPL = { starting: 'starting', streaming: 'streaming changes', fallback: 'watermarks (replication unavailable)', stopped: 'stopped' };
   const SCHED = { '15m': 'every 15 min, incremental', hourly: 'hourly', daily: 'daily', manual: 'manual' };
   const BUSY_DOC = ['quarantined', 'scanning', 'queued', 'indexing'];
   const STORE = { db: 'table scan with cosine similarity in the database', pgvector: 'pgvector on PostgreSQL' };
 
-  const srcName = (s) => (s.kind === 'upload' ? 'Uploads' : s.kind === 'git' ? 'git: ' + s.location : s.kind === 'database' ? 'pg: ' + (s.config.object || s.location) : s.location);
+  const srcName = (s) => (s.kind === 'upload' ? 'Uploads' : s.kind === 'git' ? 'git: ' + s.location : s.kind === 'database' ? (s.config.engine === 'mysql' ? 'mysql: ' : 'pg: ') + (s.config.object || s.location) : s.location);
   const syncText = (s) => {
     if (s.kind === 'upload') return 'manual';
     if (s.state === 'syncing') return 'running';
     if (!s.lastSyncAt) return 'not synced yet';
     if (s.kind === 'git' && s.watermark) return 'commit ' + String(s.watermark).slice(0, 7);
+    if (s.kind === 'database' && s.replication && s.replication.state === 'streaming') return 'replication, ' + (s.replication.lastChangeAt ? 'last change ' + ago(s.replication.lastChangeAt) : 'no change yet');
     if (s.kind === 'database') return (s.config.watermarkColumn || 'full read') + (s.watermark ? ' ' + s.watermark : '') + ', ' + ago(s.lastSyncAt);
     return 'synced ' + ago(s.lastSyncAt);
   };
@@ -195,7 +197,10 @@
       ctx.on('click', 'tr[data-src]', (e, t) => {
         const s = sources.find((x) => x.id === t.dataset.src); if (!s) return;
         const status = srcStatus(s, quarantinedDocs.length);
-        ctx.drawer({ title: s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', body: UI.kv([['Type', esc(KIND[s.kind])], ['Sync', esc(syncText(s))], ['Documents', String(s.documents)], ['Status', statePill(status)], ['Schedule', esc(SCHED[s.schedule] || s.schedule) + (s.kind === 'database' ? ', incremental by watermark' : s.kind === 'upload' ? '' : ', unchanged documents skipped')], ['Label floor', UI.label(s.labelFloor, { sm: true })]].concat(s.kind === 'git' && s.config.ref ? [['Ref', '<span class="mono">' + esc(s.config.ref) + '</span>']] : []), 2)
+        ctx.drawer({ title: s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', body: UI.kv([['Type', esc(KIND[s.kind])], ['Sync', esc(syncText(s))], ['Documents', String(s.documents)], ['Status', statePill(status)], ['Schedule', esc(SCHED[s.schedule] || s.schedule) + (s.kind === 'database' ? ', incremental by watermark' : s.kind === 'upload' ? '' : ', unchanged documents skipped')], ['Label floor', UI.label(s.labelFloor, { sm: true })]].concat(s.kind === 'git' && s.config.ref ? [['Ref', '<span class="mono">' + esc(s.config.ref) + '</span>']] : [])
+            .concat(s.kind === 'database' && s.config.accessColumn ? [['Row access', 'column <span class="mono">' + esc(s.config.accessColumn) + '</span> names the ' + (s.config.accessKind === 'user' ? 'users' : 'directory groups') + ' who may retrieve each row']] : [])
+            .concat(s.kind === 'database' && s.replication ? [['Replication', esc(REPL[s.replication.state] || s.replication.state) + (s.replication.lsn ? ', at <span class="mono">' + esc(s.replication.lsn) + '</span>' : '')], ['Slot and publication', '<span class="mono">' + esc(s.replication.slot || '') + '</span>, <span class="mono">' + esc(s.replication.publication || '') + '</span>']] : []), 2)
+          + (s.replication && s.replication.error ? UI.notice('<b>Replication is not running;</b> the source syncs by watermark on its schedule. ' + esc(s.replication.error), 'warn') : '')
           + (s.lastError ? UI.problem('Last sync failed', s.lastError, s.lastTrace) : '')
           + (s.kind === 'upload' && quarantinedDocs.length ? UI.table(['File', 'State', 'Label', 'Held since'], quarantinedDocs.map((d) => ['<span class="mono">' + esc(d.name) + '</span>', statePill(d.state), UI.label(d.label, { sm: true }), esc(ago(d.createdAt))]), { clickable: false, minWidth: '0' }) + '<div class="fg2">Quarantined uploads cannot be attached or indexed until the type check, malware scan and classification pass.</div>' : '<div class="fg2">Unchanged documents are skipped by version or content hash. Each document keeps the higher of its manual label, the floor and the auto-classifier result.</div>'),
           actions: !manage ? UI.btn('Close', { attrs: 'data-close' }) : (s.kind === 'upload' ? UI.btn('Upload files', { icon: 'upload', attrs: 'data-up' }) : UI.btn('Sync now', { icon: 'refresh', attrs: 'data-syncnow', disabled: s.state === 'syncing' })) + UI.btn('Remove source', { kind: 'danger', attrs: 'data-removesrc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
@@ -266,30 +271,39 @@
       ctx.on('click', '[data-addsource]', () => openAdd());
       function openAdd() {
         const needConns = () => (st.conns ? Promise.resolve(st.conns) : App.get('/api/knowledge/connections').then((c) => { st.conns = c; return c; }).catch(() => { st.conns = []; return []; }));
-        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Postgres view' }], 's3', 'data-type'))
+        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table or view' }], 's3', 'data-type'))
           + '<div data-loc-wrap>' + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/', attrs: 'data-loc' }), 'Credentials come from the platform or the connection, never from this form.') + '</div>'
           + '<div data-git-wrap hidden>' + UI.field('Ref', UI.input('', { placeholder: 'main (default branch when empty)', attrs: 'data-ref' })) + UI.field('Path', UI.input('', { placeholder: 'docs/ (whole repository when empty)', attrs: 'data-path' })) + '</div>'
-          + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn><option value="">Loading…</option></select>', 'PostgreSQL connections registered on the Connections screen.') + UI.field('View or table', '<select class="select" data-obj></select>', 'Only objects on the connection\'s allow-list.') + '</div>'
+          + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn aria-label="Connection"><option value="">Loading…</option></select>', 'PostgreSQL and MySQL connections registered on the Connections screen.') + UI.field('View or table', '<select class="select" data-obj aria-label="View or table"></select>', 'Only objects on the connection\'s allow-list.')
+            + UI.field('Row access column', '<select class="select" data-acol aria-label="Row access column"></select>', 'Optional. Each row lists who may retrieve it; readers not on a row\'s list never get its text. An empty value lets nobody read the row.')
+            + UI.field('The column names', UI.select([{ value: 'group', label: 'directory groups' }, { value: 'user', label: 'users (username or email)' }], 'group', 'data-akind aria-label="What the access column names"'))
+            + '<div data-repl-wrap>' + UI.check('Stream changes with logical replication (PostgreSQL tables)', false, 'data-repl') + UI.field('Publication', UI.input('exprsn_knowledge', { attrs: 'data-pub aria-label="Publication"' }), 'The database owner creates it for the table; the connection\'s account needs the REPLICATION attribute. Without them the source keeps syncing by watermark.') + '</div></div>'
           + '<div data-file-wrap hidden>' + UI.field('Files', '<input type="file" multiple data-files class="input">', 'Text, Markdown, CSV, JSON, HTML, PDF with a text layer, DOCX.') + '</div>'
           + UI.field('Label floor', UI.select(myLabels.filter((l) => rank(l) >= rank(kb.label)), kb.label, 'data-floor'), 'Documents get at least this label; the auto-classifier can raise it.')
           + '<div data-sched-wrap>' + UI.field('Sync', UI.select([{ value: '15m', label: 'every 15 min, incremental' }, { value: 'hourly', label: 'hourly' }, { value: 'daily', label: 'daily' }, { value: 'manual', label: 'manual' }], '15m', 'data-sched')) + '</div>'
           + UI.notice('Uploads go to quarantine first. Other sources are read with the connection\'s allow-list and sync by watermark or version.', 'info') + '<div data-err></div>',
           actions: UI.btn('Add and sync', { kind: 'primary', attrs: 'data-go' }) + UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }), onMount(d) {
             const q = (s) => d.querySelector(s);
-            const fillObjs = () => { const c = (st.conns || []).find((x) => x.id === q('[data-conn]').value); q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : ''; };
+            const connOf = () => (st.conns || []).find((x) => x.id === q('[data-conn]').value);
+            const fillCols = () => { const c = connOf(); const cols = c && c.columns ? c.columns[q('[data-obj]').value] || [] : []; q('[data-acol]').innerHTML = '<option value="">none: the base\'s access decides</option>' + cols.map((x) => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join(''); };
+            const fillObjs = () => { const c = connOf(); q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : ''; q('[data-repl-wrap]').hidden = !c || c.engine !== 'postgres'; fillCols(); };
             const sync = () => {
               const t = q('[data-type]').value;
               q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload';
               q('[data-loc]').placeholder = t === 'git' ? 'https://git.example.internal/org/repo.git' : 's3://bucket/prefix/';
-              if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.label) + ')</option>').join('') : '<option value="">No PostgreSQL connection registered</option>'; fillObjs(); });
+              if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.engine === 'mysql' ? 'MySQL' : 'PostgreSQL') + ', ' + esc(c.label) + ')</option>').join('') : '<option value="">No PostgreSQL or MySQL connection registered</option>'; fillObjs(); });
             };
-            q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); sync();
+            q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); q('[data-obj]').addEventListener('change', fillCols); sync();
             q('[data-go]').addEventListener('click', async () => {
               const t = q('[data-type]').value; const floor = q('[data-floor]').value;
               const showErr = (e2) => { q('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Refused') + '.</b> ' + esc(e2.message), 'danger'); };
               if (t === 'upload') { const files = q('[data-files]').files; if (!files || !files.length) { toast('Choose at least one file.'); return; } App.closeOverlay(); uploadFiles(files, floor); return; }
               const body = { kind: t, labelFloor: floor, schedule: q('[data-sched]').value };
-              if (t === 'database') { body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view.'); return; } }
+              if (t === 'database') {
+                body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view.'); return; }
+                if (q('[data-acol]').value) { body.accessColumn = q('[data-acol]').value; body.accessKind = q('[data-akind]').value; }
+                const c = connOf(); if (c && c.engine === 'postgres' && q('[data-repl]').checked) { body.replication = true; body.publication = q('[data-pub]').value.trim() || 'exprsn_knowledge'; }
+              }
               else { body.location = q('[data-loc]').value.trim(); if (!body.location) { toast('Give the source a location.'); return; } }
               if (t === 'git') { const r = q('[data-ref]').value.trim(); const p = q('[data-path]').value.trim(); if (r) body.ref = r; if (p) body.path = p; }
               try { await App.post('/api/knowledge/bases/' + enc(kb.id) + '/sources', body); App.closeOverlay(); st.tab = 'sources'; toast('Source added. First sync started; documents appear as they are extracted.', 'ok'); refresh(); }

@@ -7,9 +7,11 @@ import type { Principal } from '../authz/policy.js';
 import { TOPICS } from '../platform/bus.js';
 import { decodeJwt } from './jose.js';
 import { SigningKeys } from './keys.js';
-import { DENIED_TOPIC, OidcProvider, type DpopInput, type TenantCtx } from './oidc.js';
+import { DENIED_TOPIC, DpopNonceError, OidcProvider, type DpopInput, type TenantCtx } from './oidc.js';
 import { SamlIdp } from './saml.js';
 import { Upstream } from './upstream.js';
+import { FederationProposals } from './proposals.js';
+import { FederationMetadata } from './metadata.js';
 
 type Tenants = () => Promise<{ tenantId: string; payload: Record<string, unknown> }[]>;
 
@@ -50,12 +52,24 @@ export class FederationService {
   readonly oidc: OidcProvider;
   readonly saml: SamlIdp;
   readonly upstream: Upstream;
+  /** Sprint 17: changes waiting for approval (introspection rights, fetched metadata) and fetched SAML metadata. */
+  readonly proposals: FederationProposals;
+  readonly metadata: FederationMetadata;
 
   constructor(private readonly s: () => Services) {
     this.keys = new SigningKeys(s);
     this.oidc = new OidcProvider(s, this.keys);
     this.saml = new SamlIdp(s, this.keys);
     this.upstream = new Upstream(s);
+    this.proposals = new FederationProposals(s);
+    this.metadata = new FederationMetadata(s, this.proposals);
+    // B-806: a client may introspect every client's tokens only after a second identity admin approves.
+    this.proposals.onApprove('client.introspect', async (p, by) => {
+      const client = await this.oidc.getClient(p.tenant_id, p.target_id);
+      if (!client || client.type === 'public') throw new Error('The client no longer exists or is public.');
+      await this.oidc.setIntrospect(p.tenant_id, client.id, 'any');
+      await this.s().audit.append({ tenantId: p.tenant_id, action: 'federation.client.introspect_changed', kind: 'admin', actor: { user: by.userId, username: by.username, ip: by.ip }, target: { client: client.client_id, name: client.name }, detail: { introspect: 'any', proposal: p.id, proposedBy: p.proposed_by } });
+    });
   }
 
   private base(): string {
@@ -110,7 +124,15 @@ export class FederationService {
     const claims = await this.oidc.verifyAccessToken(t, token).catch(() => null);
     if (!claims) return null;
     // DPoP-bound tokens need a proof from their key for this request; bearer tokens must not claim DPoP.
-    if (binding && !(await this.oidc.checkBinding(claims, token, binding.scheme, binding.dpop).then(() => true, () => false))) return null;
+    // A proof without the current server nonce is reported as such (B-805), so the client can retry with it.
+    if (binding) {
+      try {
+        await this.oidc.checkBinding(claims, token, binding.scheme, binding.dpop);
+      } catch (err) {
+        if (err instanceof DpopNonceError) throw err;
+        return null;
+      }
+    }
     // Only tokens minted for this API: a token exchanged or requested for another audience is refused here.
     const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (!aud.includes(`${t.issuer}/api`)) return null;
@@ -151,6 +173,8 @@ export class FederationService {
     s.chain.useFederatedTester((row, steps) => this.upstream.test(row, steps));
     s.jobs.register('federation.keys', async (p, ctx) => this.keys.scheduled(String(p.tenantId ?? ctx.job.tenant_id)));
     s.jobs.register('federation.purge', async () => ({ deleted: await this.oidc.purge() }));
+    // Sprint 17 (B-807): fetched SAML metadata, refreshed on a schedule; changes wait for approval.
+    s.jobs.register('federation.metadata', async (p, ctx) => this.metadata.refreshTenant(String(p.tenantId ?? ctx.job.tenant_id)));
     // Sprint 14: back-channel logout. A logout token per client, posted through the internal-host checks; a client
     // that does not answer 200 is retried by the queue.
     s.jobs.register('federation.backchannel', async (p, ctx) => {
@@ -175,6 +199,7 @@ export class FederationService {
   /** Adds this area's recurring schedules: key rotation checks and the purge of expired codes and pending state. */
   schedule(scheduler: Scheduler, activeTenants: Tenants): void {
     scheduler.every('federation.keys', 60 * 60_000, activeTenants);
+    scheduler.every('federation.metadata', this.s().cfg.FEDERATION_METADATA_REFRESH_HOURS * 3600_000, activeTenants);
     scheduler.every('federation.purge', 60 * 60_000, async () => {
       const list = await activeTenants();
       return list.slice(0, 1);
