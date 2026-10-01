@@ -19,7 +19,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `SQLITE_FILENAME` | `./data/exprsn-ai.sqlite` | For `sqlite` |
 | `DB_MIGRATE_ON_START` | `true` | Otherwise run `exprsn-ai migrate` before starting |
 | `SESSION_SECRET` (`_FILE`) | — | 32+ random bytes; keys session, CSRF and API-key digests |
-| `DATA_KEY` (`_FILE`) | — | 32 bytes, base64; the local KMS master key that wraps each tenant's data key. Required with `KMS_PROVIDER=local` |
+| `DATA_KEY` (`_FILE`) | — | 32 bytes, base64; the local KMS master key that wraps each tenant's data key. Required with `KMS_PROVIDER=local` unless the signer runs (`SIGNER_SOCKET`). Since Sprint 20, production accepts it only as `DATA_KEY_FILE`, and not at all with the signer |
 | `KMS_PROVIDER` | `local` | `local` or `openbao` (OpenBao or Vault transit) |
 | `OPENBAO_ADDR`, `OPENBAO_TOKEN` (`_FILE`), `OPENBAO_TRANSIT_MOUNT`, `OPENBAO_KEY_PREFIX`, `OPENBAO_CA_FILE` | —, —, `transit`, `exprsn-`, — | Transit engine address and token; one key per tenant (`exprsn-tenant-<id>`), one for audit checkpoints. The token needs create, encrypt, decrypt, hmac, verify, update-config and delete on those keys |
 | (OpenBao signing, Sprint 14) | — | With `KMS_PROVIDER=openbao` the OIDC (ES256, `ecdsa-p256`) and SAML (RS256, `rsa-2048`) signing keys are created in transit as `<OPENBAO_KEY_PREFIX>fed-<kid>` and every token, assertion and logout message is signed there (`sign/<key>/sha2-256`), so no private signing key enters the process. The token also needs create, read and sign on those keys. The SAML SP decryption key stays sealed locally |
@@ -80,6 +80,8 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `CHAT_GUARD_HOLDBACK_SENTENCES`, `CHAT_GUARD_STREAM_CONCURRENCY` | `1`, `16` | Sprint 16: the guard-model and classifier rules check streamed answers in the background. Hold-back is how many screened sentences may wait for a verdict before generation pauses (0 shows each sentence at once, so a verdict can only stop what follows); the concurrency caps background checks per instance (further checks queue, they never block the event loop) |
 | `SHARE_ANONYMOUS_PER_MINUTE` | `30` | Sprint 16: anonymous share links opened per client address per minute (anonymous links are off until a tenant admin allows them; set `TRUST_PROXY` correctly so the address is the client's) |
 | `DATA_KEY_PREVIOUS` (`_FILE`), `KMS_PREVIOUS_PROVIDER` | — | Sprint 15: the previous key-encryption key while `kms:rewrap` runs (below). Reads fall back to it; nothing new is wrapped with it |
+| `SIGNER_SOCKET`, `SIGNER_TOKEN` (`_FILE`), `SIGNER_TIMEOUT_MS` | —, —, `5000` | Sprint 20: the signer process's UNIX socket and the token it expects (production: `SIGNER_TOKEN_FILE` only). With `KMS_PROVIDER=local` the key-encryption key and the OIDC, SAML and webhook private keys then stay in the signer (below) |
+| `HTTP_SIGNATURE_MAX_AGE_SECONDS` | `300` | Sprint 20: how far a `/v1` request's RFC 9421 `created` time may be from the server's clock |
 | `NTP_SERVER`, `NTP_TIMEOUT_MS` | —, `2000` | Sprint 15: SNTP server (`host` or `host:port`) for the clock-skew check on the Platform screen |
 | `MEDIA_ORIGIN`, `MEDIA_URL_TTL_SECONDS` | —, `300` | Sprint 15: a second host name for this deployment that serves media and images through signed short-lived URLs (point it at the same instances; it answers `/media-content/*` only) |
 | `OPENBAO_DATABASE_MOUNT` | `database` | Sprint 15: OpenBao database secrets engine for dynamic data-connection credentials (uses `OPENBAO_ADDR` and `OPENBAO_TOKEN`; the token needs read on `<mount>/creds/<role>` and update on `sys/leases/renew` and `sys/leases/revoke`) |
@@ -209,6 +211,16 @@ kubectl -n exprsn-ai exec -it deploy/exprsn-ai -- node server/dist/cli.js admin:
   `KMS_PROVIDER=openbao` with `KMS_PREVIOUS_PROVIDER=local` (the old `DATA_KEY` stays set, or goes in
   `DATA_KEY_PREVIOUS`); from OpenBao to local, `KMS_PROVIDER=local`, the new `DATA_KEY` and
   `KMS_PREVIOUS_PROVIDER=openbao` with `OPENBAO_ADDR` and `OPENBAO_TOKEN` still set.
+- **The signer (Sprint 20):** `exprsn-ai signer` is a separate process that holds the local key-encryption key (what
+  `DATA_KEY` was; the same value keeps every existing data key readable, no re-wrap needed) and every private key the
+  app creates: OIDC (ES256), SAML (RS256), the SAML SP decryption key (RSA-OAEP) and webhook Ed25519 keys. It needs
+  only `SIGNER_SOCKET`, `SIGNER_KEY_FILE` and `SIGNER_TOKEN_FILE` (both files mode 0600), plus `SIGNER_SOCKET_MODE=0660`
+  when the app runs as another user in the socket directory's group. The app then sets `SIGNER_SOCKET` and
+  `SIGNER_TOKEN_FILE` (the same token) and no `DATA_KEY`. Bare metal: `deploy/baremetal/exprsn-signer.service` (its
+  header has the setup); Kubernetes: `signer.enabled` in the Helm chart runs it as a native sidecar with the key mounted
+  into it alone. Existing federation and webhook keys sealed in the app are replaced by signer-held ones on first use
+  (the old public keys stay published for the overlap window; SAML partners re-import the metadata). If the signer is
+  down, everything that needs a key fails closed and `/readyz` reports the KMS unavailable.
 - **Rate limits (Sprint 15):** with `REDIS_URL` set, the API limits, the failed-credential throttle and the denial
   cap are shared by all instances (one atomic Lua script per hit); if Redis stops answering they fall back to
   per-instance memory counters rather than letting requests through.

@@ -241,11 +241,30 @@ filter, private `/tmp`, only the state directory writable.
 - Kerberos needs the optional `kerberos` npm module (GSSAPI bindings) and a keytab on the host; it is not bundled.
   Mapping takes the principal's user part and looks it up in the tenant's user stores; realms map to tenants only
   through the per-tenant realm allow-list.
-- Signing keys: with `KMS_PROVIDER=local` the OIDC and SAML signing keys are sealed with the platform data key and
-  held unsealed in memory while in use (with OpenBao they are signed in transit and never enter the process). The SAML
-  SP decryption key for upstream encrypted assertions is always sealed locally, also with OpenBao (transit's RSA
-  decryption does not offer the OAEP variants IdPs use). Turning on OpenBao replaces the signing keys at once: SAML
-  service providers must re-import the IdP metadata for the new certificate.
+- Signing keys (Sprint 20): with `KMS_PROVIDER=local` and the signer process (`exprsn-ai signer`, `SIGNER_SOCKET`),
+  the key-encryption key and the OIDC, SAML, SAML SP decryption and webhook Ed25519 private keys live only in the
+  signer; the app stores opaque wrapped blobs it cannot open. Data keys are still unwrapped into the app's memory
+  (content is sealed there). Node cannot read a UNIX socket peer's uid (`SO_PEERCRED`), so the signer does not check
+  the caller's credentials: access rests on the socket directory and socket permissions (0700/0600, or 0750/0660 for
+  a shared group) and a shared token every connection must present first; run the signer as its own user so the
+  app's user cannot read the signer's key file. Anyone who can reach the socket with the token can have the signer
+  sign or decrypt (it never exports a key). The signer signs the bytes it is sent (at most 64 KiB), not a digest,
+  because node:crypto cannot sign a precomputed digest with ECDSA or Ed25519. Without the signer, the local KMS keeps
+  the federation and webhook keys sealed with the data keys and unsealed in memory while in use. With OpenBao, OIDC,
+  SAML and webhook signatures are made in transit; the SAML SP decryption key is then still sealed locally (transit's
+  RSA decryption does not offer the OAEP variants IdPs use). Turning on OpenBao or the signer replaces the signing
+  keys at once (the old public keys stay published for the overlap): SAML service providers must re-import the IdP
+  metadata, and upstream IdPs the SP encryption certificate (the replaced decryption key is still tried while it is
+  published).
+- HTTP Message Signatures (RFC 9421, Sprint 20): a subset (`@method`, `@target-uri`, `@authority`, `@path`,
+  `@query`, header fields; no component parameters; `ed25519` and `hmac-sha256`). A signed `/v1` request is accepted
+  within `HTTP_SIGNATURE_MAX_AGE_SECONDS` of its `created` time and nonces are not remembered, so a captured request
+  can be replayed within that window over a broken TLS link. `@target-uri` is checked against `PUBLIC_URL`; a proxy
+  that serves `/v1` under another origin or prefix breaks verification.
+- Supply chain (Sprint 20): `npm audit signatures`, the SLSA provenance attestation, the cosign keyless signature and
+  its verification, and the release SBOM upload run only in GitHub Actions (on pushes to `main` and on `v*` tags, with
+  the workflow's OIDC token) and were validated with actionlint, not run from this repository; they assume the image
+  is published to GHCR as `ghcr.io/<owner>/<repo>`.
 - Key-encryption keys are re-wrapped with `kms:rewrap` (data keys, checkpoint signatures, backup archives and
   manifests). Image provenance manifests (the row and the copy inside the PNG) and training model cards are re-signed
   too; a model card whose signed fields changed after registration cannot be verified with the previous key and is
