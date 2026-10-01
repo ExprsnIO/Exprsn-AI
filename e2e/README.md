@@ -31,6 +31,11 @@ dark on the fresh server (mostly empty states); `zz-every-screen.spec.ts` does i
 hold what the other specs created. Both check that the sidebar lists every screen and that none shows the
 "Prototype data" banner. Tests run in one worker, in file order, against one server.
 
+Accessibility runs after the screen specs: `y-accessibility.spec.ts` runs the in-page WCAG checker
+(`tests/support/a11y.ts`) and axe-core (`tests/support/axe.ts`, the `axe-core` dev dependency evaluated in the page) on
+every screen and design state in Standard and Enhanced, light and dark; `y-reflow-overlays.spec.ts` measures each
+screen's dialogs and drawers at 320 and 640 px, and `y-reflow.spec.ts` the screens themselves.
+
 ## Run it locally
 
 From the repository root, with the workspace installed (`npm ci`) and Node 22:

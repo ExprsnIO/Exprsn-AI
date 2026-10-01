@@ -128,7 +128,7 @@ h1:focus{outline:none}
 .crumbs{display:flex;align-items:center;gap:8px;min-width:0}
 .crumbs .c1{font-weight:500;color:var(--muted)}
 .crumbs .sep{color:var(--faint-text)}
-.crumbs .c2{font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crumbs .c2{font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .htools{display:flex;align-items:center;gap:8px}
 .cmdbtn{display:flex;align-items:center;justify-content:space-between;width:260px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);cursor:pointer}
 .cmdbtn kbd{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -399,6 +399,8 @@ table.dt .actions{white-space:nowrap}
   .seg{display:inline-flex;flex-wrap:wrap;max-width:100%}
   .seg button + button{border-left:0;box-shadow:-1px 0 0 var(--line)}
   .main input.input,.main .select{max-width:100%}
+  /* A long breadcrumb and label are clipped in the header rather than pushing the page sideways (the page's h1 repeats them). */
+  .crumbs{overflow:hidden}
 }
 [data-scrolls]{scrollbar-width:thin;scrollbar-color:var(--meter) var(--line2)}
 [data-scrolls]::-webkit-scrollbar{height:10px;width:10px}

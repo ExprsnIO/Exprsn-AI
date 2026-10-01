@@ -119,6 +119,19 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   regions, nested controls, lists, language and title. `e2e/tests/y-reflow.spec.ts` checks every screen for
   two-dimensional scrolling at 320 and 640 px. Fixed on the way: faint text below 4.5:1 (B-1104), nested buttons in
   Pools rows, the Media caption contrast, and tab content outside its panel (B-1103).
+- **axe-core in CI** since 1.3.0 (B-1506): `axe-core` (pinned in `e2e/package.json`) runs on the same page loads as the
+  in-page checker, on every screen and design state, sign-in and the streaming chat, in light and dark, and in both
+  modes: Standard with the WCAG 2.0, 2.1 and 2.2 A and AA rules, then Enhanced (switched in place with
+  `App.setA11y('aaa')`, so it costs no extra navigation or API requests) with the same rules plus AAA contrast
+  (`color-contrast-enhanced`: 7:1, 4.5:1 for large text). Any violation fails the suite (`e2e/tests/support/axe.ts`).
+  Fixed on the way: a field-hint link on Profiles below the 24 px target size (WCAG 2.5.8) and the unlabelled workflow
+  picker on Workflows (`select-name`).
+- **Dialogs and drawers** (B-1507): `e2e/tests/y-reflow-overlays.spec.ts` opens each screen's dialogs and drawers at
+  320 px (400 % zoom) and 640 px (200 %), through its design states and then through its own controls until it has
+  shown a dialog and a drawer (unsafe API calls are answered by the test, so nothing changes on the server), and fails
+  when the page, the overlay or the dialog scrolls sideways or anything in it sticks out past its edge, other than
+  tables and code in a named scroller. Fixed on the way: at 640 px and below a long breadcrumb with its label (a
+  connection's) overlapped the header tools and pushed the page 2 px sideways; the breadcrumb now shrinks and clips.
 - **Keyboard walk** in Chromium: skip link, landmarks, `aria-current`, focus on screen change, palette combobox and
   arrows, dialog labelling, focus trap in both directions, Esc and focus return, header re-render keeping focus,
   popover focus and Esc, focusable table rows, focus kept on re-render, persistence across reload, system contrast and
@@ -127,12 +140,13 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
 ## Known gaps
 
 Sprint 17 closed the gaps listed for 1.1.0: tab panels (B-1103), reflow (B-1102) and faint-text contrast (B-1104) are
-described above, and the checks now run in CI (B-1101). These remain:
+described above, and the checks now run in CI (B-1101). Sprint 23 put axe-core in CI in both modes (B-1506) and
+measured dialogs and drawers for reflow (B-1507). These remain:
 
-- The CI checker is not axe-core, which is not a dependency of the suite. It does not cover every axe rule (for
-  example `aria-allowed-attr` per role, `target-size`, or contrast over background images, which it skips), and it
-  checks the Standard mode only; Enhanced was last scanned with axe-core by hand in Sprint 10.
-- Reflow is checked on each screen's default state; dialogs and drawers are full-width at narrow sizes but were not
-  measured one by one.
+- axe-core leaves some results as "needs review" (for example contrast over background images or gradients, and text
+  under overlapping elements); those do not fail the suite and are not reviewed automatically.
+- The dialog and drawer reflow check reaches each screen's dialogs through its design states and its own controls; a
+  dialog that only opens after a server-side change (for example a step that follows a successful save) is not
+  measured, since the check answers every unsafe API call itself.
 - No screen-reader session (NVDA, JAWS, VoiceOver) has been recorded yet; the checks above are automated or keyboard
   only.
