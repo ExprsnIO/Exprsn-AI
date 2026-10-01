@@ -9,8 +9,13 @@ const base = { SESSION_SECRET: 'x'.repeat(64), DATA_KEY: Buffer.alloc(32, 1).toS
 
 describe('configuration', () => {
   it('refuses production without HTTPS cookies', () => {
-    expect(() => loadConfig({ ...base, NODE_ENV: 'production', PUBLIC_URL: 'http://ai.example.internal' })).toThrow(/COOKIE_SECURE/);
-    expect(loadConfig({ ...base, NODE_ENV: 'production', PUBLIC_URL: 'https://ai.example.internal' }).COOKIE_SECURE).toBe(true);
+    // Sprint 20 (B-1205): production takes DATA_KEY from a file only.
+    const dir = mkdtempSync(path.join(tmpdir(), 'exprsn-cfg-'));
+    writeFileSync(path.join(dir, 'data_key'), base.DATA_KEY, { mode: 0o600 });
+    const prod = { SESSION_SECRET: base.SESSION_SECRET, DATA_KEY_FILE: path.join(dir, 'data_key'), NODE_ENV: 'production' };
+    expect(() => loadConfig({ ...prod, PUBLIC_URL: 'http://ai.example.internal' })).toThrow(/COOKIE_SECURE/);
+    expect(loadConfig({ ...prod, PUBLIC_URL: 'https://ai.example.internal' }).COOKIE_SECURE).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('requires strong secrets', () => {

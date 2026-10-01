@@ -10,6 +10,7 @@ import { createAdmin } from './identity/admin-create.js';
 import { createKms } from './platform/kms.js';
 import { FsBlobStore } from './platform/blob.js';
 import { createPreviousKms, rewrapAll } from './platform/rewrap.js';
+import { readPrivateFile, startSigner } from './signer/server.js';
 
 const RESTORE_PHRASE = 'replace all data';
 
@@ -36,6 +37,15 @@ Commands:
                                verify. Set the new DATA_KEY (or
                                KMS_PROVIDER) and the old one as DATA_KEY_PREVIOUS (or KMS_PREVIOUS_PROVIDER). Safe to
                                repeat; once it reports verified, the previous key can be removed.
+  signer                       Run the signer process (Sprint 20): holds the local key-encryption key and the OIDC,
+      [--socket <path>]        SAML and webhook private keys, and answers the app on a UNIX socket. Reads
+      [--key-file <path>]      SIGNER_SOCKET, SIGNER_KEY_FILE (the key-encryption key, base64; what DATA_KEY was),
+      [--token-file <path>]    SIGNER_TOKEN_FILE (the token the app presents) and SIGNER_SOCKET_MODE (0600, or 0660
+      [--socket-mode <mode>]   when the app runs as another user in the socket's group). Needs no other settings.
+      [--allow-group-read]     The key and token files must be mode 0600; this (SIGNER_ALLOW_GROUP_READ=true) also
+                               accepts group-readable files, for Kubernetes secret volumes mounted into the signer only.
+                               Run it as its own user; the app then sets SIGNER_SOCKET and SIGNER_TOKEN_FILE and no
+                               DATA_KEY.
   backup:create                Back up the application database into the blob store (sealed, KMS-signed)
   backup:restore-drill [--backup id]
                                Restore a backup (default: the newest) into a scratch SQLite database and verify
@@ -115,10 +125,35 @@ async function restore(s: Services, argv: string[]): Promise<void> {
   process.stdout.write(`Restored backup ${values.backup}: ${r.rows} rows in ${r.tables} tables${r.blobs ? `, ${r.blobs.objects} blob store objects` : ''}.${r.skipped.length ? ` Not in this schema: ${r.skipped.join(', ')}.` : ''}\n`);
 }
 
+/** `exprsn-ai signer`: runs until SIGTERM or SIGINT. It reads only its own settings, never the app's. */
+async function signer(argv: string[]): Promise<void> {
+  const { values } = parseArgs({ args: argv, options: { socket: { type: 'string' }, 'key-file': { type: 'string' }, 'token-file': { type: 'string' }, 'socket-mode': { type: 'string' }, 'allow-group-read': { type: 'boolean' } } });
+  const groupRead = !!values['allow-group-read'] || process.env.SIGNER_ALLOW_GROUP_READ === 'true';
+  const socketPath = values.socket ?? process.env.SIGNER_SOCKET;
+  const keyFile = values['key-file'] ?? process.env.SIGNER_KEY_FILE;
+  const tokenFile = values['token-file'] ?? process.env.SIGNER_TOKEN_FILE;
+  const modeText = values['socket-mode'] ?? process.env.SIGNER_SOCKET_MODE ?? '0600';
+  if (!socketPath || !keyFile || !tokenFile) throw new Error('signer needs --socket, --key-file and --token-file (or SIGNER_SOCKET, SIGNER_KEY_FILE and SIGNER_TOKEN_FILE).');
+  if (process.env.DATA_KEY) throw new Error('The signer reads its key from SIGNER_KEY_FILE only; unset DATA_KEY in its environment.');
+  const key = readPrivateFile(keyFile, 'The key file', groupRead);
+  if (Buffer.from(key, 'base64').length !== 32) throw new Error('The key file must hold 32 bytes, base64-encoded (openssl rand -base64 32).');
+  const running = await startSigner({ socketPath, key, token: readPrivateFile(tokenFile, 'The token file', groupRead), socketMode: parseInt(modeText, 8), log: (m) => void process.stderr.write(`${m}\n`) });
+  await new Promise<void>((resolve) => {
+    const stop = () => resolve();
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+  });
+  await running.close();
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === '--help' || cmd === '-h') {
     process.stdout.write(USAGE);
+    return;
+  }
+  if (cmd === 'signer') {
+    await signer(rest);
     return;
   }
   const cfg = loadConfig();
@@ -168,6 +203,7 @@ async function main(): Promise<void> {
         const tenant = await s.tenants.bySlug(cfg.DEFAULT_TENANT);
         if (tenant) await s.audit.append({ tenantId: tenant.id, action: 'kms.rewrapped', kind: 'system', actor: { service: 'cli' }, target: { kms: target.kind }, detail: { previous: previous.kind, dataKeys: { ...r.dataKeys, failed: r.dataKeys.failed.length }, checkpoints: { ...r.checkpoints, failed: r.checkpoints.failed.length }, backups: { ...r.backups, failed: r.backups.failed.length }, images: { ...r.images, failed: r.images.failed.length }, modelCards: { ...r.modelCards, failed: r.modelCards.failed.length }, verified: r.verified } });
         process.stdout.write(JSON.stringify(r, null, 2) + '\n');
+        (target as { client?: { close(): void } }).client?.close();
         process.stdout.write(r.verified ? 'Every data key opens with the new key-encryption key. The previous key can be removed.\n' : 'Not finished: fix the failures above and run kms:rewrap again. Keep the previous key until it reports verified.\n');
         if (!r.verified) process.exitCode = 2;
         break;

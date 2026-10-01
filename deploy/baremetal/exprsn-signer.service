@@ -1,0 +1,68 @@
+# /etc/systemd/system/exprsn-signer.service — the Exprsn-AI signer (Sprint 20, B-1201 and B-1205).
+#
+# It holds the local key-encryption key (what DATA_KEY was) and the OIDC, SAML and webhook private keys, and answers
+# the application on a UNIX socket, so the application process never holds them. It runs as its own user, so the
+# application's user cannot read its key file; the application reaches the socket through the exprsn-signer group.
+#
+# Setup (as root):
+#   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin exprsn-signer
+#   usermod -a -G exprsn-signer exprsn-ai                      # the app may enter /run/exprsn-signer
+#   install -d -m 0700 /etc/exprsn-signer/credentials
+#   mv /etc/exprsn-ai/credentials/data_key /etc/exprsn-signer/credentials/data_key   # the same key: no re-wrap
+#   openssl rand -base64 48 > /etc/exprsn-signer/credentials/signer_token
+#   cp /etc/exprsn-signer/credentials/signer_token /etc/exprsn-ai/credentials/signer_token
+#   chmod 0600 /etc/exprsn-signer/credentials/* /etc/exprsn-ai/credentials/signer_token
+# Then in exprsn-ai.service: remove DATA_KEY_FILE and its LoadCredential, and add the lines marked "signer" there.
+#
+# Peer credentials: Node cannot read a UNIX socket peer's uid (SO_PEERCRED), so the check is the directory and socket
+# permissions plus the shared token, which every connection must present first.
+[Unit]
+Description=Exprsn-AI signer (keys held outside the application)
+Documentation=file:///opt/exprsn-ai/docs/deploy.md
+Before=exprsn-ai.service
+
+[Service]
+Type=simple
+User=exprsn-signer
+Group=exprsn-signer
+# /run/exprsn-signer: owned by exprsn-signer, entered by the exprsn-signer group (the app's supplementary group).
+RuntimeDirectory=exprsn-signer
+RuntimeDirectoryMode=0750
+LoadCredential=data_key:/etc/exprsn-signer/credentials/data_key
+LoadCredential=signer_token:/etc/exprsn-signer/credentials/signer_token
+Environment=NODE_ENV=production
+Environment=SIGNER_SOCKET=/run/exprsn-signer/signer.sock SIGNER_SOCKET_MODE=0660
+Environment=SIGNER_KEY_FILE=%d/data_key SIGNER_TOKEN_FILE=%d/signer_token
+ExecStart=/usr/bin/node /opt/exprsn-ai/server/dist/cli.js signer
+Restart=on-failure
+RestartSec=2
+
+# Hardening: no network but the UNIX socket, nothing writable but its runtime directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

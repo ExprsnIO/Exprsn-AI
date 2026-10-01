@@ -1,0 +1,14 @@
+# Values used by CI: the signer sidecar (Sprint 20) holds the key-encryption key; DATA_KEY is not given to the server.
+config:
+  publicUrl: https://ai.example.internal
+  blobStore:
+    type: s3
+    s3: { endpoint: "https://minio.data.svc:9000", bucket: exprsn-ai, accessKeyId: exprsn-ai }
+replicaCount: 1
+secrets:
+  DATA_KEY: { name: "", key: data_key }
+  REDIS_URL: { name: "", key: redis_url }
+signer:
+  enabled: true
+  keySecret: { name: exprsn-ai-signer, key: data_key }
+  tokenSecret: { name: exprsn-ai-signer, key: signer_token }

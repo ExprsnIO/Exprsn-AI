@@ -1,8 +1,9 @@
-import { createHmac, hkdfSync, randomBytes } from 'node:crypto';
+import { createHmac, createPublicKey, hkdfSync, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { Config } from '../config/index.js';
 import { safeEqual, SecretBox } from '../crypto/index.js';
+import { SignerClient, SignerKms } from '../signer/client.js';
 
 /**
  * Key management. The KMS holds key-encryption keys (KEKs) by name and never hands them out: callers ask it to
@@ -27,9 +28,30 @@ export interface Kms {
   createSigningKey?(name: string, type: SigningKeyType): Promise<string>;
   /** ES256 signatures come back as raw r||s (JWS form); RS256 as PKCS#1 v1.5. */
   sign?(name: string, type: SigningKeyType, data: Buffer): Promise<Buffer>;
+  /**
+   * Sprint 20 (B-1201): private keys held by the signer process (`exprsn-ai signer`). The app keeps only the opaque
+   * `wrapped` blob the signer returns, which it cannot open; every use of the key is a call to the signer.
+   */
+  heldKeys?: HeldKeys;
 }
 
-export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048';
+/** ed25519: Sprint 20 (B-1202), webhook signing keys in transit. */
+export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048' | 'ed25519';
+
+/** Key types the signer holds: the signing types, and an RSA key that only decrypts (RSA-OAEP), for SAML SP keys. */
+export type HeldKeyType = SigningKeyType | 'rsa-oaep-2048';
+
+export interface HeldKeys {
+  /**
+   * Generates a key inside the signer, bound to `name` (the wrapped blob opens only under that name and type).
+   * `certificate` asks for a self-signed X.509 certificate made with the new key (RSA types), signed in the signer.
+   */
+  create(name: string, type: HeldKeyType, certificate?: { commonName: string; organization: string; days: number }): Promise<{ publicKey: string; wrapped: string; certificate: string | null }>;
+  /** ES256 as raw r||s, RS256 as PKCS#1 v1.5 over SHA-256, Ed25519 as the 64-byte signature. */
+  sign(name: string, type: SigningKeyType, wrapped: string, data: Buffer): Promise<Buffer>;
+  /** RSA-OAEP decryption with an `rsa-oaep-2048` key (the digest is used for MGF1 too). */
+  decrypt(name: string, wrapped: string, ciphertext: Buffer, oaepHash: 'sha1' | 'sha256'): Promise<Buffer>;
+}
 
 export class LocalKms implements Kms {
   readonly kind = 'local' as const;
@@ -152,14 +174,18 @@ export class OpenBaoKms implements Kms {
     await this.call('POST', `keys/${encodeURIComponent(name)}`, { type, exportable: false });
     const r = await this.call<{ data: { latest_version?: number; keys: Record<string, { public_key?: string }> } }>('GET', `keys/${encodeURIComponent(name)}`);
     const version = String(r.data.latest_version ?? Math.max(...Object.keys(r.data.keys).map(Number)));
-    const pem = r.data.keys[version]?.public_key;
-    if (!pem) throw new Error(`OpenBao key ${name} has no public key`);
-    return pem;
+    const pub = r.data.keys[version]?.public_key;
+    if (!pub) throw new Error(`OpenBao key ${name} has no public key`);
+    // Transit gives an Ed25519 public key as the base64 of its 32 raw bytes, not as PEM.
+    if (type === 'ed25519' && !pub.includes('BEGIN')) return createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(pub, 'base64').toString('base64url') }, format: 'jwk' }).export({ type: 'spki', format: 'pem' }).toString();
+    return pub;
   }
 
   async sign(name: string, type: SigningKeyType, data: Buffer): Promise<Buffer> {
-    const body = type === 'ecdsa-p256' ? { input: data.toString('base64'), marshaling_algorithm: 'jws' } : { input: data.toString('base64'), signature_algorithm: 'pkcs1v15' };
-    const r = await this.call<{ data: { signature: string } }>('POST', `sign/${encodeURIComponent(name)}/sha2-256`, body);
+    // Ed25519 signs the message itself, so its path names no hash.
+    const path = type === 'ed25519' ? `sign/${encodeURIComponent(name)}` : `sign/${encodeURIComponent(name)}/sha2-256`;
+    const body = type === 'ecdsa-p256' ? { input: data.toString('base64'), marshaling_algorithm: 'jws' } : type === 'ed25519' ? { input: data.toString('base64') } : { input: data.toString('base64'), signature_algorithm: 'pkcs1v15' };
+    const r = await this.call<{ data: { signature: string } }>('POST', path, body);
     const m = /^vault:v\d+:(.+)$/.exec(r.data.signature);
     if (!m) throw new Error('OpenBao returned an unexpected signature');
     // The JWS marshaling is base64url; the default (and PKCS#1) marshaling is standard base64.
@@ -181,6 +207,8 @@ export function createKms(cfg: Config): Kms {
     const token = cfg.OPENBAO_TOKEN as string;
     return new OpenBaoKms(cfg.OPENBAO_ADDR as string, () => token, cfg.OPENBAO_TRANSIT_MOUNT, cfg.OPENBAO_CA_FILE);
   }
+  // Sprint 20 (B-1201, B-1205): the signer holds the key-encryption key; this process never sees it.
+  if (cfg.SIGNER_SOCKET) return new SignerKms(new SignerClient(cfg.SIGNER_SOCKET, cfg.SIGNER_TOKEN as string, cfg.SIGNER_TIMEOUT_MS));
   return new LocalKms(cfg.DATA_KEY as string);
 }
 

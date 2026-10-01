@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Variables that may instead be given as `<NAME>_FILE` (a path, e.g. a Docker secret or systemd credential). */
-export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ACME_EAB_HMAC_KEY'] as const;
+export const FILE_VARS = ['SESSION_SECRET', 'DATA_KEY', 'DATABASE_URL', 'METRICS_TOKEN', 'OPENBAO_TOKEN', 'REDIS_URL', 'SMTP_URL', 'S3_SECRET_ACCESS_KEY', 'SIEM_TOKEN', 'TRAINER_TOKEN', 'STRIPE_SECRET_KEY', 'DATA_KEY_PREVIOUS', 'ACME_DNS_WEBHOOK_SECRET', 'ACME_DNS_TSIG_SECRET', 'STRIPE_WEBHOOK_SECRET', 'ACME_EAB_HMAC_KEY', 'SIGNER_TOKEN'] as const;
 
 /** Configuration comes from the environment; a `<NAME>_FILE` for the secrets above wins over the plain variable. */
 function readEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
@@ -369,7 +369,18 @@ const base = z.object({
     /** Sprint 16: anonymous share links opened per client address per minute. */
     SHARE_ANONYMOUS_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /** How often each tenant's conversation retention policy is applied. */
-    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60)
+    CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+
+    /**
+     * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and
+     * the OIDC, SAML and webhook private keys stay in the signer (`exprsn-ai signer`) and DATA_KEY is not needed here.
+     * SIGNER_TOKEN (or SIGNER_TOKEN_FILE) is the shared token the signer expects first on every connection.
+     */
+    SIGNER_SOCKET: z.string().startsWith('/').optional(),
+    SIGNER_TOKEN: z.string().min(32).optional(),
+    SIGNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5000),
+    /** Sprint 20 (B-1203): the clock skew allowed for `created` in RFC 9421 signatures on `/v1` requests. */
+    HTTP_SIGNATURE_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
@@ -389,8 +400,18 @@ const schema = base
     if (c.DB_CLIENT !== 'sqlite' && !c.DATABASE_URL) {
       ctx.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: `DATABASE_URL is required when DB_CLIENT=${c.DB_CLIENT}` });
     }
-    if (c.KMS_PROVIDER === 'local' && !c.DATA_KEY) {
-      ctx.addIssue({ code: 'custom', path: ['DATA_KEY'], message: 'DATA_KEY is required when KMS_PROVIDER=local' });
+    if (c.KMS_PROVIDER === 'local' && !c.DATA_KEY && !c.SIGNER_SOCKET) {
+      ctx.addIssue({ code: 'custom', path: ['DATA_KEY'], message: 'DATA_KEY is required when KMS_PROVIDER=local (or run the signer and set SIGNER_SOCKET)' });
+    }
+    // Sprint 20 (B-1201, B-1205): the signer serves the local KMS; OpenBao keeps signing in transit.
+    if (c.SIGNER_SOCKET && c.KMS_PROVIDER !== 'local') {
+      ctx.addIssue({ code: 'custom', path: ['SIGNER_SOCKET'], message: 'SIGNER_SOCKET works with KMS_PROVIDER=local; with OpenBao, transit holds the keys' });
+    }
+    if (c.SIGNER_SOCKET && !c.SIGNER_TOKEN) {
+      ctx.addIssue({ code: 'custom', path: ['SIGNER_TOKEN'], message: 'SIGNER_SOCKET needs SIGNER_TOKEN_FILE (the token the signer expects)' });
+    }
+    if (c.NODE_ENV === 'production' && c.SIGNER_SOCKET && c.DATA_KEY) {
+      ctx.addIssue({ code: 'custom', path: ['DATA_KEY'], message: 'With the signer the key-encryption key lives only in the signer\'s key file: remove DATA_KEY and DATA_KEY_FILE from the app' });
     }
     if (c.KMS_PROVIDER === 'openbao' && (!c.OPENBAO_ADDR || !c.OPENBAO_TOKEN)) {
       ctx.addIssue({ code: 'custom', path: ['OPENBAO_ADDR'], message: 'OPENBAO_ADDR and OPENBAO_TOKEN are required when KMS_PROVIDER=openbao' });
@@ -476,10 +497,24 @@ export function backendTlsProblems(c: { DB_CLIENT: string; DATABASE_URL?: string
   return out;
 }
 
+/**
+ * Sprint 20 (B-1205): in production the key-encryption key never comes from the environment, where every child
+ * process and crash dump sees it: DATA_KEY_FILE (a Docker secret or systemd credential), or the signer.
+ */
+function inlineKeyProblems(env: NodeJS.ProcessEnv): string[] {
+  if (env.NODE_ENV !== 'production') return [];
+  const out: string[] = [];
+  for (const name of ['DATA_KEY', 'DATA_KEY_PREVIOUS', 'SIGNER_TOKEN'] as const) {
+    if (env[name] && !env[`${name}_FILE`]) out.push(`  ${name}: production refuses ${name} given inline in the environment; use ${name}_FILE${name === 'DATA_KEY' ? ' (or the signer, SIGNER_SOCKET)' : ''}`);
+  }
+  return out;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(readEnv(env));
-  if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`);
+  const inline = inlineKeyProblems(env);
+  if (!parsed.success || inline.length) {
+    const lines = [...inline, ...(parsed.success ? [] : parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`))];
     throw new Error(`Invalid configuration:\n${lines.join('\n')}`);
   }
   return parsed.data;

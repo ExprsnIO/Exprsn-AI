@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer as createTcpServer, type AddressInfo, type Server as TcpServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -57,6 +57,13 @@ const poster = (c: Client) => ({
 
 // ---------------------------------------------------------------------------------------------------------------
 
+/** A DATA_KEY_FILE for production configurations (B-1205 refuses DATA_KEY inline in production). */
+const dataKeyFile = () => {
+  const f = path.join(mkdtempSync(path.join(tmpdir(), 'exprsn-dk-')), 'data_key');
+  writeFileSync(f, randomBytes(32).toString('base64'), { mode: 0o600 });
+  return f;
+};
+
 describe('B-901: operator-chosen service URLs', () => {
   it('refuses metadata, link-local and unspecified addresses; loopback and private stay allowed', () => {
     const p = servicePolicy();
@@ -109,7 +116,8 @@ describe('B-902: TLS to the backing services in production', () => {
     NODE_ENV: 'production',
     PUBLIC_URL: 'https://ai.example.internal',
     SESSION_SECRET: randomBytes(32).toString('hex'),
-    DATA_KEY: randomBytes(32).toString('base64'),
+    // Sprint 20 (B-1205): production takes the key from a file only.
+    DATA_KEY_FILE: dataKeyFile(),
     ...env
   });
 

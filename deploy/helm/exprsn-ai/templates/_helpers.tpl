@@ -89,8 +89,18 @@ app.kubernetes.io/part-of: exprsn-ai
 {{- if not (include "exprsn-ai.hasSecret" (dict "root" . "name" "DATABASE_URL")) }}
 {{- fail "secrets.DATABASE_URL.name is required" }}
 {{- end }}
-{{- if and (eq $v.config.kms.provider "local") (not (include "exprsn-ai.hasSecret" (dict "root" . "name" "DATA_KEY"))) }}
-{{- fail "secrets.DATA_KEY.name is required when config.kms.provider=local" }}
+{{- if $v.signer.enabled }}
+{{- if ne $v.config.kms.provider "local" }}
+{{- fail "signer.enabled needs config.kms.provider=local (with OpenBao, transit holds the keys)" }}
+{{- end }}
+{{- if or (not $v.signer.keySecret.name) (not $v.signer.tokenSecret.name) }}
+{{- fail "signer.keySecret.name and signer.tokenSecret.name are required when signer.enabled" }}
+{{- end }}
+{{- if include "exprsn-ai.hasSecret" (dict "root" . "name" "DATA_KEY") }}
+{{- fail "secrets.DATA_KEY.name must be empty when signer.enabled: the key belongs in signer.keySecret, mounted into the signer only" }}
+{{- end }}
+{{- else if and (eq $v.config.kms.provider "local") (not (include "exprsn-ai.hasSecret" (dict "root" . "name" "DATA_KEY"))) }}
+{{- fail "secrets.DATA_KEY.name is required when config.kms.provider=local (or turn on signer.enabled)" }}
 {{- end }}
 {{- if eq $v.config.kms.provider "openbao" }}
 {{- if or (not $v.config.kms.openbao.addr) (not (include "exprsn-ai.hasSecret" (dict "root" . "name" "OPENBAO_TOKEN"))) }}
@@ -135,6 +145,9 @@ DB_CLIENT: {{ $c.database.client | quote }}
 DB_POOL_MAX: {{ $c.database.poolMax | toString | quote }}
 DB_MIGRATE_ON_START: {{ ternary "true" "false" (eq .Values.migrations.mode "none") | quote }}
 KMS_PROVIDER: {{ $c.kms.provider | quote }}
+{{- if .Values.signer.enabled }}
+SIGNER_SOCKET: "/run/exprsn-signer/s/signer.sock"
+{{- end }}
 {{- if eq $c.kms.provider "openbao" }}
 OPENBAO_ADDR: {{ $c.kms.openbao.addr | quote }}
 OPENBAO_TRANSIT_MOUNT: {{ $c.kms.openbao.transitMount | quote }}
@@ -209,6 +222,13 @@ IDENTITY_CONFIG: {{ ternary "/etc/exprsn-ai/identity.yaml" "" (or (not (empty .V
             - key: {{ .key }}
               path: {{ .path }}
       {{- end }}
+      {{- if .Values.signer.enabled }}
+      - secret:
+          name: {{ .Values.signer.tokenSecret.name }}
+          items:
+            - key: {{ .Values.signer.tokenSecret.key }}
+              path: signer_token
+      {{- end }}
 {{- end }}
 
 {{/* Volumes every server container needs: secrets, /tmp, the data directory and the identity YAML. */}}
@@ -228,6 +248,26 @@ IDENTITY_CONFIG: {{ ternary "/etc/exprsn-ai/identity.yaml" "" (or (not (empty .V
   emptyDir:
     sizeLimit: 1Gi
   {{- end }}
+{{- if .Values.signer.enabled }}
+- name: signer-socket
+  emptyDir:
+    medium: Memory
+    sizeLimit: 1Mi
+- name: signer-keys
+  projected:
+    defaultMode: 0400
+    sources:
+      - secret:
+          name: {{ .Values.signer.keySecret.name }}
+          items:
+            - key: {{ .Values.signer.keySecret.key }}
+              path: data_key
+      - secret:
+          name: {{ .Values.signer.tokenSecret.name }}
+          items:
+            - key: {{ .Values.signer.tokenSecret.key }}
+              path: signer_token
+{{- end }}
 {{- if or .Values.identity.config .Values.identity.existingConfigMap }}
 - name: identity
   configMap:
@@ -249,6 +289,10 @@ IDENTITY_CONFIG: {{ ternary "/etc/exprsn-ai/identity.yaml" "" (or (not (empty .V
   mountPath: /tmp
 - name: data
   mountPath: /var/lib/exprsn-ai
+{{- if .Values.signer.enabled }}
+- name: signer-socket
+  mountPath: /run/exprsn-signer
+{{- end }}
 {{- if or .Values.identity.config .Values.identity.existingConfigMap }}
 - name: identity
   mountPath: /etc/exprsn-ai
@@ -270,6 +314,10 @@ IDENTITY_CONFIG: {{ ternary "/etc/exprsn-ai/identity.yaml" "" (or (not (empty .V
 
 {{- define "exprsn-ai.env" -}}
 {{ include "exprsn-ai.secretEnv" . }}
+{{- if .Values.signer.enabled }}
+- name: SIGNER_TOKEN_FILE
+  value: /run/secrets/signer_token
+{{- end }}
 {{- with .Values.extraEnv }}
 {{ toYaml . }}
 {{- end }}
