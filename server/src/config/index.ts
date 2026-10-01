@@ -328,6 +328,16 @@ const base = z.object({
     SCRIPT_RUNTIME: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,62}$/).optional(),
     // --- end Sprint 19 ---
 
+    // --- Sprint 23: knowledge, integrations and accessibility ---
+    /**
+     * Knowledge sources that fetch over HTTP (an S3-compatible endpoint of a source's own, an internal web site):
+     * internal hosts only, unless this comma list (hosts, *.domain, CIDRs) names them. Link-local never.
+     */
+    KNOWLEDGE_ALLOWED_HOSTS: z.string().default(''),
+    /** Per-request timeout for those fetches (ms). */
+    KNOWLEDGE_FETCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).default(30_000),
+    // --- end Sprint 23 ---
+
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */
     API_RATE_PER_MINUTE: z.coerce.number().int().min(60).max(100_000).default(600),

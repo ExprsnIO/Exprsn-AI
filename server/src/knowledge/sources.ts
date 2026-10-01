@@ -8,6 +8,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { isNeverAddress } from '../mcp/hosts.js';
 import { signV4 } from '../platform/blob.js';
+import { fetch, type Dispatcher } from 'undici';
 import { INDEXABLE_EXT } from './extract.js';
 
 const run = promisify(execFile);
@@ -21,6 +22,8 @@ export interface SourceItem {
   read(): Promise<Buffer>;
   /** Row-level access entries (database sources with an access column); undefined for other sources. */
   acl?: string[] | null;
+  /** The content type when the source knows it (a web page's Content-Type); otherwise it is sniffed. */
+  type?: string;
 }
 
 // ---------- S3 ----------
@@ -42,11 +45,43 @@ export function parseS3(location: string): { bucket: string; prefix: string } | 
 const xmlText = (s: string) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 
 /**
- * Lists and reads objects under a prefix with the platform's S3 credentials (ListObjectsV2 and GET, SigV4). Only
- * objects with an indexable extension and at most `maxBytes` are offered.
+ * A glob for object keys relative to the source's prefix (B-1501): `*` matches within one path segment, `**`
+ * across segments (and a `**` segment before a slash also matches no directory at all), `?` one character.
+ * Anything else is literal.
+ */
+export function globRegex(glob: string): RegExp {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === '*' && glob[i + 1] === '*') {
+      if (glob[i + 2] === '/') {
+        out += '(?:.*/)?';
+        i += 2;
+      } else {
+        out += '.*';
+        i += 1;
+      }
+    } else if (c === '*') out += '[^/]*';
+    else if (c === '?') out += '[^/]';
+    else out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** Whether a key (relative to the prefix) matches any include pattern; no patterns include everything. */
+export const included = (rel: string, patterns: readonly RegExp[]): boolean => !patterns.length || patterns.some((p) => p.test(rel));
+
+/**
+ * Lists and reads objects under a prefix (ListObjectsV2 and GET, SigV4): with the platform's S3 credentials, or a
+ * source's own S3-compatible endpoint and keys through a dispatcher that checks the addresses it dials (B-1501).
+ * Only objects with an indexable extension, at most `maxBytes`, and matching the include patterns are offered; the
+ * ETag is each object's version, so an unchanged object is never downloaded again.
  */
 export class S3Reader {
-  constructor(private readonly o: S3Settings) {}
+  constructor(
+    private readonly o: S3Settings,
+    private readonly dispatcher?: Dispatcher
+  ) {}
 
   private url(bucket: string, key: string, query: Record<string, string> = {}): URL {
     const base = new URL(this.o.endpoint);
@@ -58,10 +93,11 @@ export class S3Reader {
   private async get(url: URL, signal?: AbortSignal): Promise<Response> {
     const headers = signV4({ method: 'GET', url, headers: {}, payloadHash: createHash('sha256').update('').digest('hex'), region: this.o.region, service: 's3', accessKeyId: this.o.accessKeyId, secretAccessKey: this.o.secretAccessKey, date: new Date() });
     delete headers.host;
-    return fetch(url, { headers, signal: signal ?? AbortSignal.timeout(60_000) });
+    return (await fetch(url, { headers, redirect: 'error', signal: signal ?? AbortSignal.timeout(60_000), ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}) })) as unknown as Response;
   }
 
-  async list(bucket: string, prefix: string, maxBytes: number, signal?: AbortSignal): Promise<{ items: SourceItem[]; newest: string | null }> {
+  async list(bucket: string, prefix: string, maxBytes: number, signal?: AbortSignal, include: readonly string[] = []): Promise<{ items: SourceItem[]; newest: string | null }> {
+    const patterns = include.map(globRegex);
     const items: SourceItem[] = [];
     let newest: string | null = null;
     let token: string | undefined;
@@ -78,6 +114,7 @@ export class S3Reader {
         const etag = xmlText(/<ETag>([^<]*)<\/ETag>/.exec(body)?.[1] ?? '').replace(/"/g, '');
         const modified = /<LastModified>([^<]*)<\/LastModified>/.exec(body)?.[1] ?? null;
         if (!key || key.endsWith('/') || !INDEXABLE_EXT.test(key) || size > maxBytes) continue;
+        if (!included(key.slice(prefix.length).replace(/^\/+/, ''), patterns)) continue;
         if (modified && (!newest || modified > newest)) newest = modified;
         items.push({
           key,

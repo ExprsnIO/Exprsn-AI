@@ -7,7 +7,7 @@
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
   const ago = (ms) => { if (!ms) return ''; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
   const size = (n) => (n == null ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table or view' };
+  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table or view', web: 'Internal web site' };
   const REPL = { starting: 'starting', streaming: 'streaming changes', fallback: 'watermarks (replication unavailable)', stopped: 'stopped' };
   const SCHED = { '15m': 'every 15 min, incremental', hourly: 'hourly', daily: 'daily', manual: 'manual' };
   const BUSY_DOC = ['quarantined', 'scanning', 'queued', 'indexing'];
@@ -20,6 +20,8 @@
     if (!s.lastSyncAt) return 'not synced yet';
     if (s.kind === 'git' && s.watermark) return 'commit ' + String(s.watermark).slice(0, 7);
     if (s.kind === 'database' && s.replication && s.replication.state === 'streaming') return 'replication, ' + (s.replication.lastChangeAt ? 'last change ' + ago(s.replication.lastChangeAt) : 'no change yet');
+    if (s.kind === 'web') return 'crawl, ' + ago(s.lastSyncAt);
+    if (s.kind === 'database' && s.config.roleMappings) return 'full read as ' + s.config.roleMappings.length + ' role' + (s.config.roleMappings.length === 1 ? '' : 's') + ', ' + ago(s.lastSyncAt);
     if (s.kind === 'database') return (s.config.watermarkColumn || 'full read') + (s.watermark ? ' ' + s.watermark : '') + ', ' + ago(s.lastSyncAt);
     return 'synced ' + ago(s.lastSyncAt);
   };
@@ -110,7 +112,7 @@
       const kbList = bases.filter((k) => !st.filter || k.name.toLowerCase().indexOf(st.filter.toLowerCase()) >= 0);
       const subOf = (k) => k.documents + ' document' + (k.documents === 1 ? '' : 's') + (k.building ? ', index swap pending' : k.lastSyncAt ? ', synced ' + ago(k.lastSyncAt) : '') + (k.status === 'draft' ? ', draft' : '');
 
-      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository or Postgres view.' });
+      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository, database view or internal web site.' });
       const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [esc(d.name), UI.label(d.label, { sm: true }), esc(origin(d)), String(d.chunks), statePill(docState(d))], attrs: 'data-doc="' + esc(d.id) + '"', selected: st.failedOpen && d.state === 'failed' })), { minWidth: '0', emptyTitle: docs.length ? 'No documents match' : 'No documents yet', emptyText: docs.length ? 'Try another word.' : 'Add a source or upload a file. Documents appear as they are extracted.' });
       const failedDoc = docs.find((d) => d.state === 'failed');
       const failedPanel = st.failedOpen && failedDoc ? '<div class="problem"><div class="ptitle">Extraction failed for ' + esc(failedDoc.name) + '</div><div class="ptext">' + esc(failedDoc.error || 'The document could not be read.') + ' The document keeps its label and stays out of retrieval until a retry succeeds.</div><div class="trace"><span>Trace</span><span class="mono">' + esc(failedDoc.traceId || 'none') + '</span>' + (failedDoc.traceId ? UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + esc(failedDoc.traceId) + '"' }) : '') + '<span class="right"></span>' + (manage ? UI.btn('Retry extraction', { size: 'sm', icon: 'refresh', attrs: 'data-retry="' + esc(failedDoc.id) + '"' }) : '') + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissfail' }) + '</div></div>' : '';
@@ -150,7 +152,7 @@
       else if (st.tab === 'access') body = accessTab();
       else body = testSearch();
 
-      root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}.kb-page > *{flex-shrink:0}</style>'
+      root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}.kb-page > *{flex-shrink:0}.knowledge-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0 10px}</style>'
         + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Knowledge bases</div>' + (curator && !st.member ? UI.btn('New', { size: 'sm', attrs: 'data-newkb' }) : '') + '</div>' + UI.search('Filter', 'data-filter', st.filter).replace('class="search"', 'class="search" style="width:100%"')
         + '<div class="kb-list">' + kbList.map((k) => UI.listItem(esc(k.name), esc(subOf(k)), { active: kb && k.id === kb.id, attrs: 'data-kb="' + esc(k.id) + '"', right: UI.label(k.label, { sm: true }) })).join('') + (kbList.length || !bases.length ? '' : UI.empty('No knowledge base matches', 'Try another word.')) + '</div></div>'
         + '<div class="page kb-page">'
@@ -198,6 +200,9 @@
         const s = sources.find((x) => x.id === t.dataset.src); if (!s) return;
         const status = srcStatus(s, quarantinedDocs.length);
         ctx.drawer({ title: s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', body: UI.kv([['Type', esc(KIND[s.kind])], ['Sync', esc(syncText(s))], ['Documents', String(s.documents)], ['Status', statePill(status)], ['Schedule', esc(SCHED[s.schedule] || s.schedule) + (s.kind === 'database' ? ', incremental by watermark' : s.kind === 'upload' ? '' : ', unchanged documents skipped')], ['Label floor', UI.label(s.labelFloor, { sm: true })]].concat(s.kind === 'git' && s.config.ref ? [['Ref', '<span class="mono">' + esc(s.config.ref) + '</span>']] : [])
+            .concat(s.kind === 's3' ? [['Endpoint', s.config.endpoint ? '<span class="mono">' + esc(s.config.endpoint) + '</span> with its own keys (sealed)' : 'the platform\'s S3 storage'], ['Include', s.config.include && s.config.include.length ? s.config.include.map((g) => '<span class="mono">' + esc(g) + '</span>').join(', ') : 'every indexable file under the prefix']] : [])
+            .concat(s.kind === 'web' ? [['Crawl', 'up to ' + esc(String(s.config.maxPages)) + ' pages, ' + esc(String(s.config.maxDepth)) + ' link' + (s.config.maxDepth === 1 ? '' : 's') + ' deep' + (s.config.pathPrefix ? ', under <span class="mono">' + esc(s.config.pathPrefix) + '</span>' : '') + (s.config.sitemap ? ', with the sitemap' : '')], ['Rules', 'stays on this site, follows robots.txt, re-checks pages by ETag or Last-Modified']] : [])
+            .concat(s.kind === 'database' && s.config.roleMappings ? [['Row security', 'read as ' + s.config.roleMappings.map((m) => '<span class="mono">' + esc(m.role) + '</span> for ' + esc(m.group)).join(', ') + '; the database\'s policies decide which group retrieves each row']] : [])
             .concat(s.kind === 'database' && s.config.accessColumn ? [['Row access', 'column <span class="mono">' + esc(s.config.accessColumn) + '</span> names the ' + (s.config.accessKind === 'user' ? 'users' : 'directory groups') + ' who may retrieve each row']] : [])
             .concat(s.kind === 'database' && s.replication ? [['Replication', esc(REPL[s.replication.state] || s.replication.state) + (s.replication.lsn ? ', at <span class="mono">' + esc(s.replication.lsn) + '</span>' : '')], ['Slot and publication', '<span class="mono">' + esc(s.replication.slot || '') + '</span>, <span class="mono">' + esc(s.replication.publication || '') + '</span>']] : []), 2)
           + (s.replication && s.replication.error ? UI.notice('<b>Replication is not running;</b> the source syncs by watermark on its schedule. ' + esc(s.replication.error), 'warn') : '')
@@ -271,26 +276,37 @@
       ctx.on('click', '[data-addsource]', () => openAdd());
       function openAdd() {
         const needConns = () => (st.conns ? Promise.resolve(st.conns) : App.get('/api/knowledge/connections').then((c) => { st.conns = c; return c; }).catch(() => { st.conns = []; return []; }));
-        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table or view' }], 's3', 'data-type'))
-          + '<div data-loc-wrap>' + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/', attrs: 'data-loc' }), 'Credentials come from the platform or the connection, never from this form.') + '</div>'
+        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table or view' }, { value: 'web', label: 'Internal web site' }], 's3', 'data-type'))
+          + '<div data-loc-wrap>' + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/', attrs: 'data-loc' }), '<span data-loc-hint>The platform\'s S3 storage, or a bucket on its own endpoint below.</span>') + '</div>'
+          + '<div data-s3-wrap>' + UI.field('Include', UI.input('', { placeholder: '**/*.md, policies/*.pdf', attrs: 'data-incl' }), 'Optional. Patterns relative to the prefix, comma separated: * within a folder, ** across folders.')
+            + UI.field('Endpoint', UI.input('', { placeholder: 'https://minio.example.internal (empty: the platform\'s storage)', attrs: 'data-ep' }), 'An S3-compatible endpoint on the internal network, or one an operator allows.')
+            + '<div class="knowledge-two">' + UI.field('Region', UI.input('us-east-1', { attrs: 'data-region' })) + UI.field('Access key id', UI.input('', { attrs: 'data-akid autocomplete="off"' })) + '</div>'
+            + UI.field('Secret access key', UI.input('', { type: 'password', attrs: 'data-secret autocomplete="new-password"' }), 'Sealed with the tenant key and never shown again.')
+            + UI.check('Path-style addressing (bucket in the path)', true, 'data-pathstyle') + '</div>'
+          + '<div data-web-wrap hidden><div class="knowledge-two">' + UI.field('Link depth', UI.input('2', { type: 'number', attrs: 'data-depth min="0" max="5"' }), 'Links followed from the start page.') + UI.field('Page limit', UI.input('100', { type: 'number', attrs: 'data-pages min="1" max="1000"' })) + '</div>'
+            + UI.field('Path prefix', UI.input('', { placeholder: '/handbook/ (empty: the whole site)', attrs: 'data-prefix' }))
+            + UI.check('Also read the pages the sitemap lists', true, 'data-sitemap')
+            + '<div class="fg2">The crawl stays on the start page\'s site, follows robots.txt, and fetches only internal addresses (or hosts an operator allows). Unchanged pages are recognised by ETag or Last-Modified.</div></div>'
           + '<div data-git-wrap hidden>' + UI.field('Ref', UI.input('', { placeholder: 'main (default branch when empty)', attrs: 'data-ref' })) + UI.field('Path', UI.input('', { placeholder: 'docs/ (whole repository when empty)', attrs: 'data-path' })) + '</div>'
           + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn aria-label="Connection"><option value="">Loading…</option></select>', 'PostgreSQL and MySQL connections registered on the Connections screen.') + UI.field('View or table', '<select class="select" data-obj aria-label="View or table"></select>', 'Only objects on the connection\'s allow-list.')
             + UI.field('Row access column', '<select class="select" data-acol aria-label="Row access column"></select>', 'Optional. Each row lists who may retrieve it; readers not on a row\'s list never get its text. An empty value lets nobody read the row.')
             + UI.field('The column names', UI.select([{ value: 'group', label: 'directory groups' }, { value: 'user', label: 'users (username or email)' }], 'group', 'data-akind aria-label="What the access column names"'))
+            + '<div data-roles-wrap>' + UI.field('Row security by role', UI.textarea('', { placeholder: 'finance = kb_finance\nops = kb_ops', rows: 3, attrs: 'data-roles' }), 'Optional, PostgreSQL. One group = database role per line: rows are read as each role, so the table\'s row security policies decide which group retrieves each row. Instead of an access column; the source then syncs by full reads.') + '</div>'
             + '<div data-repl-wrap>' + UI.check('Stream changes with logical replication (PostgreSQL tables)', false, 'data-repl') + UI.field('Publication', UI.input('exprsn_knowledge', { attrs: 'data-pub aria-label="Publication"' }), 'The database owner creates it for the table; the connection\'s account needs the REPLICATION attribute. Without them the source keeps syncing by watermark.') + '</div></div>'
           + '<div data-file-wrap hidden>' + UI.field('Files', '<input type="file" multiple data-files class="input">', 'Text, Markdown, CSV, JSON, HTML, PDF with a text layer, DOCX.') + '</div>'
           + UI.field('Label floor', UI.select(myLabels.filter((l) => rank(l) >= rank(kb.label)), kb.label, 'data-floor'), 'Documents get at least this label; the auto-classifier can raise it.')
           + '<div data-sched-wrap>' + UI.field('Sync', UI.select([{ value: '15m', label: 'every 15 min, incremental' }, { value: 'hourly', label: 'hourly' }, { value: 'daily', label: 'daily' }, { value: 'manual', label: 'manual' }], '15m', 'data-sched')) + '</div>'
-          + UI.notice('Uploads go to quarantine first. Other sources are read with the connection\'s allow-list and sync by watermark or version.', 'info') + '<div data-err></div>',
+          + UI.notice('Uploads go to quarantine first. Other sources sync by version, watermark or page validators; database sources read only the connection\'s allow-list.', 'info') + '<div data-err></div>',
           actions: UI.btn('Add and sync', { kind: 'primary', attrs: 'data-go' }) + UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }), onMount(d) {
             const q = (s) => d.querySelector(s);
             const connOf = () => (st.conns || []).find((x) => x.id === q('[data-conn]').value);
             const fillCols = () => { const c = connOf(); const cols = c && c.columns ? c.columns[q('[data-obj]').value] || [] : []; q('[data-acol]').innerHTML = '<option value="">none: the base\'s access decides</option>' + cols.map((x) => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join(''); };
-            const fillObjs = () => { const c = connOf(); q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : ''; q('[data-repl-wrap]').hidden = !c || c.engine !== 'postgres'; fillCols(); };
+            const fillObjs = () => { const c = connOf(); q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : ''; q('[data-repl-wrap]').hidden = !c || c.engine !== 'postgres'; q('[data-roles-wrap]').hidden = !c || c.engine !== 'postgres'; fillCols(); };
             const sync = () => {
               const t = q('[data-type]').value;
-              q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload';
-              q('[data-loc]').placeholder = t === 'git' ? 'https://git.example.internal/org/repo.git' : 's3://bucket/prefix/';
+              q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload'; q('[data-s3-wrap]').hidden = t !== 's3'; q('[data-web-wrap]').hidden = t !== 'web';
+              q('[data-loc]').placeholder = t === 'git' ? 'https://git.example.internal/org/repo.git' : t === 'web' ? 'https://intranet.example.internal/' : 's3://bucket/prefix/';
+              q('[data-loc-hint]').textContent = t === 'git' ? 'An https:// repository the server may read.' : t === 'web' ? 'The start page of an internal site.' : 'The platform\'s S3 storage, or a bucket on its own endpoint below.';
               if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.engine === 'mysql' ? 'MySQL' : 'PostgreSQL') + ', ' + esc(c.label) + ')</option>').join('') : '<option value="">No PostgreSQL or MySQL connection registered</option>'; fillObjs(); });
             };
             q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); q('[data-obj]').addEventListener('change', fillCols); sync();
@@ -303,9 +319,20 @@
                 body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view.'); return; }
                 if (q('[data-acol]').value) { body.accessColumn = q('[data-acol]').value; body.accessKind = q('[data-akind]').value; }
                 const c = connOf(); if (c && c.engine === 'postgres' && q('[data-repl]').checked) { body.replication = true; body.publication = q('[data-pub]').value.trim() || 'exprsn_knowledge'; }
+                if (c && c.engine === 'postgres' && q('[data-roles]').value.trim()) {
+                  const maps = q('[data-roles]').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf('='); return i < 0 ? null : { group: l.slice(0, i).trim(), role: l.slice(i + 1).trim() }; });
+                  if (maps.some((m) => !m || !m.group || !m.role)) { toast('Write each mapping as group = role.'); return; }
+                  body.roleMappings = maps;
+                }
               }
               else { body.location = q('[data-loc]').value.trim(); if (!body.location) { toast('Give the source a location.'); return; } }
               if (t === 'git') { const r = q('[data-ref]').value.trim(); const p = q('[data-path]').value.trim(); if (r) body.ref = r; if (p) body.path = p; }
+              if (t === 's3') {
+                const incl = q('[data-incl]').value.split(',').map((x) => x.trim()).filter(Boolean); if (incl.length) body.include = incl;
+                const ep = q('[data-ep]').value.trim();
+                if (ep) { body.endpoint = ep; body.region = q('[data-region]').value.trim() || 'us-east-1'; body.accessKeyId = q('[data-akid]').value.trim(); body.secretAccessKey = q('[data-secret]').value; body.pathStyle = q('[data-pathstyle]').checked; if (!body.accessKeyId || !body.secretAccessKey) { toast('A bucket on its own endpoint needs its access key id and secret.'); return; } }
+              }
+              if (t === 'web') { body.maxDepth = Math.max(0, Math.min(5, Number(q('[data-depth]').value) || 0)); body.maxPages = Math.max(1, Math.min(1000, Number(q('[data-pages]').value) || 100)); const px = q('[data-prefix]').value.trim(); if (px) body.pathPrefix = px; body.sitemap = q('[data-sitemap]').checked; }
               try { await App.post('/api/knowledge/bases/' + enc(kb.id) + '/sources', body); App.closeOverlay(); st.tab = 'sources'; toast('Source added. First sync started; documents appear as they are extracted.', 'ok'); refresh(); }
               catch (e2) { showErr(e2); }
             });

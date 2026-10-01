@@ -20,6 +20,7 @@ import * as m018 from './018_chat_depth.js';
 import * as m019 from './019_identity3.js';
 import * as m020 from './020_platform3.js';
 import * as m021 from './021_integrations2.js';
+import * as m025 from './025_integrations3.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -48,7 +49,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '018_chat_depth': m018,
   '019_identity3': m019,
   '020_platform3': m020,
-  '021_integrations2': m021
+  '021_integrations2': m021,
+  '025_integrations3': m025
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {
