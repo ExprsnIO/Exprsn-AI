@@ -114,6 +114,7 @@
       const q = st.query.toLowerCase();
       const shown = runs.filter((r) => !q || (r.id + ' ' + r.agent + ' ' + (STATE_TEXT[r.state] || r.state) + ' ' + (r.by || '')).toLowerCase().indexOf(q) >= 0);
       const left = '<div class="leftpane"><div class="hstack"><div class="eyebrow grow">Recent runs</div>' + UI.iconbtn('refresh', 'Refresh', { cls: 'sm ghost', attrs: 'data-refresh' }) + (App.can('agents:run') ? UI.btn('Start', { size: 'sm', attrs: 'data-start' }) : '') + '</div>'
+        + (App.can('agents:run') || App.can('agents:manage') ? '<div>' + UI.btn('Schedules', { size: 'sm', kind: 'ghost', icon: 'clock', attrs: 'data-schedules' }) + '</div>' : '')
         + (admin && App.can('agents:run') ? UI.seg([{ id: 'mine', label: 'Mine' }, { id: 'all', label: 'Tenant' }], st.scope, 'data-scope') : '')
         + UI.search('Filter runs', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
         + '<div class="runs-list">' + shown.map((r) => UI.listItem('<span class="mono">' + esc(shortId(r.id)) + '</span>', esc(r.agent) + ' · ' + esc(clock(r.createdAt)) + ', ' + esc(r.by || ''), { active: r.id === st.run, attrs: 'data-run="' + esc(r.id) + '"', right: statusPill(r.state) })).join('') + (shown.length ? '' : UI.empty(runs.length ? 'No runs match' : 'No runs yet', runs.length ? 'Try another word.' : 'Start a run of a published agent.')) + '</div>'
@@ -231,6 +232,7 @@
       ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
       ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-start]', () => startModal(''));
+      ctx.on('click', '[data-schedules]', () => schedulesModal());
       ctx.on('click', '[data-copyprov]', () => {
         const d = sel.detail;
         const text = d.arguments.expression + ' = ' + d.result.decimal + ' (exactly ' + d.result.fraction + '); run ' + run.id + ' step ' + sel.n + ', ' + sel.meta.tool + ' ' + (sel.meta.version || '') + ', label ' + run.label;
@@ -275,6 +277,54 @@
             m.querySelector('[data-ok]').addEventListener('click', async () => { const body = { agent: m.querySelector('[data-agent]').value, input: m.querySelector('[data-input]').value.trim(), label: m.querySelector('[data-label]').value }; if (!body.input) { toast('Write a request for the agent first.', 'warn'); return; } App.closeOverlay(); const r = await act(() => App.post('/api/runs', body), 'Run started. Steps appear as they happen.'); if (r && r.id) { st.run = r.id; st.sel = null; st.view = null; st.scope = 'mine'; } });
           } });
         }).catch((err) => App.fail(err, 'Agents could not be loaded'));
+      }
+      /**
+       * Scheduled runs (B-1306): each starts at its UTC cron time as its owner, with the roles and memberships the
+       * owner holds then; a disabled owner or one who lost access gets a skip in the history instead of a run.
+       */
+      function schedulesModal() {
+        const me = App.me && App.me.user ? App.me.user : {};
+        const when2 = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
+        const OUT = { started: 'ok', skipped: 'warn', failed: 'danger' };
+        let list = []; let agents = []; let hist = null; let err = null;
+        const fetchAll = () => Promise.all([App.get('/api/agent-schedules' + (App.can('agents:run') ? '' : '?all=true')), App.can('agents:run') ? App.get('/api/agents') : Promise.resolve([])]).then(([a, b]) => { list = a; agents = b; err = null; }).catch((e) => { err = e; });
+        const draw = (host) => {
+          const rows = list.map((x) => [esc(x.name) + (x.mine ? '' : '<div class="muted" style="font-size:12px">' + esc(x.owner || '') + '</div>'), esc(x.agent), '<span class="mono">' + esc(x.cron) + '</span><div class="muted" style="font-size:12px">next ' + esc(x.enabled ? when2(x.nextRunAt) : 'paused') + '</div>', UI.label(x.label, { sm: true }), esc(clip(x.lastResult || 'not run yet', 80)),
+            '<span class="hstack wrap gap6" style="justify-content:flex-end">' + UI.btn(x.enabled ? 'Pause' : 'Resume', { size: 'xs', kind: 'ghost', attrs: 'data-sctoggle="' + esc(x.id) + '"' }) + UI.btn('History', { size: 'xs', kind: 'ghost', attrs: 'data-schist="' + esc(x.id) + '"' }) + UI.btn('Delete', { size: 'xs', kind: 'ghost', attrs: 'data-scdel="' + esc(x.id) + '"' }) + '</span>']);
+          host.innerHTML = (err ? UI.notice(esc(err.message), 'danger') : '')
+            + UI.table(['Schedule', 'Agent', 'When (UTC)', 'Label', 'Last', { label: '', right: true }], rows, { clickable: false, minWidth: '0', emptyTitle: 'No schedules', emptyText: 'A schedule starts a run of an agent at set times, as you.' })
+            + (hist ? '<div class="eyebrow">History of ' + esc(hist.name) + '</div>' + UI.table(['Due', 'Outcome', 'Run', 'Why'], hist.rows.map((h2) => [esc(when2(h2.dueAt)), UI.pill(h2.outcome, OUT[h2.outcome]), h2.runId ? '<a href="#" data-scrun="' + esc(h2.runId) + '" class="mono">' + esc(shortId(h2.runId)) + '</a> ' + (h2.runState ? statusPill(h2.runState) : '') : '—', esc(h2.reason || '')]), { clickable: false, minWidth: '0', emptyTitle: 'Not due yet', emptyText: 'Runs and skips appear here at each due time.' }) : '')
+            + (App.can('agents:run') ? '<div class="eyebrow">New schedule</div>' + (agents.length ? '<div class="formgrid" style="--cols:2">'
+              + UI.field('Name', UI.input('', { attrs: 'data-scname maxlength="120"', placeholder: 'Morning report' }))
+              + UI.field('Agent', UI.select(agents.map((a) => ({ value: a.name, label: a.name + ' ' + a.version })), agents[0].name, 'data-scagent'))
+              + UI.field('Cron (minute hour day month weekday, UTC)', UI.input('0 7 * * 1-5', { attrs: 'data-sccron class="input mono" maxlength="120"' }).replace('class="input" ', ''), 'For example 0 7 * * 1-5 for 07:00 on weekdays')
+              + UI.field('Data label', UI.select(LABELS.filter((l) => !me.clearance || LABELS.indexOf(l) <= LABELS.indexOf(me.clearance)), 'internal', 'data-sclabel'))
+              + '</div>' + UI.field('Request', UI.textarea('', { rows: 3, attrs: 'data-scinput', placeholder: 'What should the agent do each time?' }))
+              + '<div data-scerr></div><div>' + UI.btn('Add schedule', { kind: 'primary', attrs: 'data-scadd' }) + '</div>' : UI.notice('No agent is published to this workspace yet. Publish one in the Registry.', 'info')) : '');
+        };
+        fetchAll().then(() => {
+          ctx.modal({ title: 'Scheduled runs', cls: 'wide', body: '<div class="vstack gap12" data-schost></div>', actions: UI.btn('Close', { attrs: 'data-close' }), onClose() { load(); }, onMount(m) {
+            const host = m.querySelector('[data-schost]');
+            const redraw = () => fetchAll().then(() => draw(host));
+            draw(host);
+            host.addEventListener('click', async (e) => {
+              const t = e.target.closest('button,a'); if (!t) return;
+              try {
+                if (t.dataset.sctoggle) { const x = list.find((y) => y.id === t.dataset.sctoggle); await App.patch('/api/agent-schedules/' + x.id, { enabled: !x.enabled }); toast('Schedule ' + esc(x.name) + (x.enabled ? ' paused.' : ' resumed.')); await redraw(); }
+                else if (t.dataset.schist) { const x = list.find((y) => y.id === t.dataset.schist); hist = { name: x.name, rows: await App.get('/api/agent-schedules/' + x.id + '/history') }; draw(host); }
+                else if (t.dataset.scdel && !t.dataset.armed) { t.dataset.armed = '1'; t.textContent = 'Confirm delete'; }
+                else if (t.dataset.scdel) { const x = list.find((y) => y.id === t.dataset.scdel); await App.del('/api/agent-schedules/' + x.id); hist = null; toast('Schedule ' + esc(x.name) + ' deleted. Audit entry written.'); await redraw(); }
+                else if (t.dataset.scrun) { e.preventDefault(); App.closeOverlay(); st.run = t.dataset.scrun; st.sel = null; st.view = null; load(); }
+                else if (t.hasAttribute('data-scadd')) {
+                  const val = (sel) => host.querySelector(sel).value.trim();
+                  const body = { name: val('[data-scname]'), agent: val('[data-scagent]'), cron: val('[data-sccron]'), label: val('[data-sclabel]'), input: val('[data-scinput]') };
+                  if (!body.name || !body.input) { host.querySelector('[data-scerr]').innerHTML = UI.notice('Give the schedule a name and a request.', 'danger'); return; }
+                  await App.post('/api/agent-schedules', body); toast('Schedule ' + esc(body.name) + ' added. It runs as you at each due time.', 'ok'); await redraw();
+                }
+              } catch (e2) { const box = host.querySelector('[data-scerr]'); if (box) box.innerHTML = UI.notice(esc(e2.message), 'danger'); else App.fail(e2); }
+            });
+          } });
+        });
       }
       if (st.openStart) { const a = typeof st.openStart === 'string' ? st.openStart : ''; st.openStart = false; setTimeout(() => startModal(a), 30); }
       if (st.openReplay) { st.openReplay = false; if (run) setTimeout(() => openReplay((run.steps.find((s) => s.state === 'failed' || s.state === 'denied') || { n: 1 }).n), 30); }

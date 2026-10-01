@@ -69,7 +69,7 @@
           .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } later(); });
       };
       if (!st.loaded && !st.loadError) load();
-      const refresh = () => { st.versions = {}; load(); };
+      const refresh = () => { st.versions = {}; st.evals = {}; load(); };
       const reload = () => { st.loaded = false; st.loadError = null; st.versions = {}; ctx.rerender(); };
       /** Runs one server call; a refusal stays on the page as a notice as well as a toast. */
       const act = async (fn, okMsg, pid) => {
@@ -157,6 +157,47 @@
       };
       const conflictNotice = (x) => (st.conflict && st.conflict.id === x.id ? UI.notice('<b>' + esc(st.conflict.title) + '.</b> ' + esc(st.conflict.detail) + (st.conflict.trace ? ' <span class="mono muted" style="font-size:11px">trace ' + esc(st.conflict.trace) + '</span>' : ''), 'danger', UI.btn('Dismiss', { kind: 'ghost', size: 'xs', attrs: 'data-dismiss' })) : '');
 
+      // ---- Evaluations (B-1303): eval sets, runs and the publish gate for the saved settings ----
+      st.evals = st.evals || {};
+      const loadEvals = (id) => {
+        if (st.eLoading === id) return;
+        st.eLoading = id;
+        App.get('/api/admin/profiles/' + enc(id) + '/evaluations').then((r) => { st.evals[id] = r; }).catch((err) => { st.evals[id] = { error: err }; }).finally(() => {
+          st.eLoading = null; later();
+          const e = st.evals[id];
+          // Runs are jobs: look again while one is queued or running and this tab is open.
+          if (e && e.runs && e.runs.some((x) => x.state === 'queued' || x.state === 'running')) setTimeout(() => { if (App.state.route === 'profiles' && st.sel === id && st.ptab === 'evals') loadEvals(id); }, 2000);
+        });
+      };
+      const RUN_KIND = { passed: 'ok', failed: 'danger', error: 'danger', queued: 'info', running: 'info' };
+      const pct = (v) => (v == null ? '—' : Math.round(v * 100) + '%');
+      const evalPanel = (x) => {
+        const e = st.evals[x.id];
+        if (!e) { loadEvals(x.id); return UI.notice('Loading evaluations…', 'info'); }
+        if (e.error) return UI.problem('Evaluations could not be loaded', e.error.message, e.error.problem && e.error.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-ereload' }) + '</div>';
+        const g = e.gate; const me = App.me && App.me.user ? App.me.user.id : null;
+        const busy = e.runs.some((r) => r.state === 'queued' || r.state === 'running');
+        const gateText = !g.gated ? 'No eval set gates publishing. Mark a set as a gate to require it.'
+          : g.failing.length ? (g.overridden ? 'An approved override lets these settings be published although: ' : 'Publishing these settings is refused until: ') + g.failing.map((f2) => esc(f2.set) + ', ' + esc(f2.reason)).join('; ') + '.'
+          : 'Every gated set passed for the saved settings (version ' + x.version + '). Publishing is allowed.';
+        const pending = e.overrides.filter((o) => o.state === 'pending');
+        const gateNotice = UI.notice(gateText, !g.gated ? 'info' : g.failing.length && !g.overridden ? 'warn' : 'ok',
+          '<span class="hstack gap6">' + UI.btn(busy ? 'Running…' : 'Run evaluations', { size: 'sm', attrs: 'data-erun', disabled: busy || !e.sets.length }) + (g.failing.length && !g.overridden && !pending.length ? UI.btn('Request override', { size: 'sm', kind: 'ghost', attrs: 'data-eoverride' }) : '') + '</span>');
+        const latest = (setId) => e.runs.find((r) => r.setId === setId && r.configHash === g.configHash);
+        const sets = UI.table(['Set', 'Cases', 'Threshold', 'Gate', 'Judge', 'Label', 'Saved settings', { label: '', right: true }], e.sets.map((x2) => {
+          const r = latest(x2.id);
+          return [esc(x2.name) + (x2.description ? '<div class="muted" style="font-size:12px">' + esc(x2.description) + '</div>' : ''), '<span class="num">' + x2.cases.length + '</span>', '<span class="num">' + pct(x2.threshold) + '</span>', x2.gate ? UI.pill('gates publishing', 'accent') : UI.pill('advisory', 'outline'), esc(x2.judgeProfile || 'none'), UI.label(x2.label, { sm: true }),
+            r ? UI.pill(r.state + (r.score != null ? ', ' + pct(r.score) : ''), RUN_KIND[r.state]) : '<span class="muted">not run</span>',
+            '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Run', { kind: 'ghost', size: 'xs', attrs: 'data-erunset="' + esc(x2.id) + '"', disabled: busy }) + UI.btn('Edit', { kind: 'ghost', size: 'xs', attrs: 'data-eedit="' + esc(x2.id) + '"' }) + UI.btn('Delete', { kind: 'ghost', size: 'xs', attrs: 'data-edel="' + esc(x2.id) + '"' }) + '</span>'];
+        }), { clickable: false, minWidth: '0', emptyTitle: 'No eval sets', emptyText: 'Add a set of cases: prompts with the properties their answers must have.' });
+        const history = UI.table(['When', 'Set', 'Version', 'Score', 'Threshold', 'Result', 'By', { label: '', right: true }], e.runs.slice(0, 30).map((r) => [esc(when(r.createdAt)), esc(r.set || ''), '<span class="num">' + r.profileVersion + '</span>' + (r.configHash === g.configHash ? ' ' + UI.pill('saved settings', 'outline') : ''), '<span class="num">' + pct(r.score) + (r.total != null ? ' <span class="muted">(' + r.passed + ' of ' + r.total + ')</span>' : '') + '</span>', '<span class="num">' + pct(r.threshold) + '</span>', UI.pill(r.state, RUN_KIND[r.state]), esc(r.createdByName || ''), '<span class="hstack" style="justify-content:flex-end">' + (r.state === 'queued' || r.state === 'running' ? '' : UI.btn('Details', { kind: 'ghost', size: 'xs', attrs: 'data-erundetail="' + esc(r.id) + '"' })) + '</span>']), { clickable: false, minWidth: '0', emptyTitle: 'No runs yet', emptyText: 'Run the evaluations to score the saved settings.' });
+        const overrides = e.overrides.length ? UI.panel('Overrides', UI.table(['Requested', 'By', 'Reason', 'Version', 'State', { label: '', right: true }], e.overrides.map((o) => [esc(when(o.requestedAt)), esc(o.requestedByName || ''), esc(o.reason), '<span class="num">' + o.profileVersion + '</span>', UI.pill(o.state, o.state === 'approved' ? 'ok' : o.state === 'rejected' ? 'danger' : 'warn') + (o.decidedByName ? ' <span class="muted" style="font-size:12px">by ' + esc(o.decidedByName) + '</span>' : ''), '<span class="hstack" style="justify-content:flex-end">' + (o.state === 'pending' && o.requestedBy !== me ? UI.btn('Approve', { size: 'xs', attrs: 'data-edecide="approve" data-oid="' + esc(o.id) + '"' }) + UI.btn('Reject', { kind: 'ghost', size: 'xs', attrs: 'data-edecide="reject" data-oid="' + esc(o.id) + '"' }) : o.state === 'pending' ? '<span class="muted" style="font-size:12px">another profile admin decides</span>' : '') + '</span>']), { clickable: false, minWidth: '0' }) + '<div class="muted" style="font-size:12px">An override lets one set of settings be published although its evaluations did not pass. Someone other than the requester approves it.</div>') : '';
+        return gateNotice
+          + UI.panel('Eval sets', sets + '<div class="muted" style="font-size:12px">Each case is answered by the saved profile through the gateway and its output checkpoint, then checked: contains, does not contain, a pattern, a JSON schema, or a rubric scored by a judge profile. The score is the share of cases that pass.</div>', { actions: UI.btn('New eval set', { size: 'xs', icon: 'plus', attrs: 'data-enew' }) })
+          + UI.panel('Score history', history)
+          + overrides;
+      };
+
       let main = '';
       let f = null; let dirty = false; let checks = [];
       if (!p) {
@@ -221,6 +262,8 @@
           + (p.model && p.model.state === 'retired' ? UI.notice(esc(p.model.name) + ' is retired; choose another model.', 'danger') : '')
           + (p.status === 'published' && p.residency === 'unavailable' ? UI.notice('No instance in ' + esc(p.pool || 'any pool') + ' has ' + esc(p.model ? p.model.name : 'the model') + ' pulled. Requests will fail until it is placed and pulled. <a href="#" data-go="models">Open Models</a>', 'danger') : '')
           + (dirty ? UI.notice('Unsaved changes. ' + (p.status === 'published' ? 'This profile is published, so saving runs the publishing checks and users get the new version on their next turn.' : 'Saving creates a new draft version.'), 'accent') : '')
+          + UI.tabs([{ id: 'settings', label: 'Settings' }, { id: 'evals', label: 'Evaluations', count: st.evals && st.evals[p.id] && st.evals[p.id].sets ? st.evals[p.id].sets.length : null }], st.ptab === 'evals' ? 'evals' : 'settings')
+          + (st.ptab === 'evals' ? '<div class="vstack gap12" style="min-width:0">' + evalPanel(p) + '</div>' : '<div class="vstack gap12" style="min-width:0">'
           + '<div class="formgrid" style="--cols:3">'
           + UI.field('Display name', UI.input(f.displayName, { attrs: 'data-f="displayName" maxlength="200"' }))
           + UI.field('Model', UI.select(modelOpts, f.modelId, 'data-f="model" data-key="modelId"'), m ? esc(short(m.digest)) + ', ' + esc(m.capabilities.join(', ')) + (models ? ' · <a href="#" data-go="models">Open in Models</a>' : '') : 'Only approved models are offered')
@@ -244,7 +287,7 @@
             + '<div class="hstack wrap gap6">' + UI.btn(p.canary ? 'Change canary' : 'Start canary', { size: 'sm', icon: 'branch', attrs: 'data-canary', disabled: !p.model || dirty, title: dirty ? 'Save or reset your changes first' : '' }) + UI.btn('Promote', { size: 'sm', attrs: 'data-promote', disabled: !p.canary || dirty }) + UI.btn('Stop canary', { size: 'sm', kind: 'ghost', attrs: 'data-stopcanary', disabled: !p.canary || dirty }) + '</div>')
           + wsPanel(p, 'Your workspaces and this profile')
           + versionsPanel(p)
-          + '</div><div class="pf-side">' + UI.panel('Saved version', '<pre class="pf-yaml" tabindex="0" aria-label="Saved version as YAML">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy' }) }) + '</div></div>';
+          + '</div><div class="pf-side">' + UI.panel('Saved version', '<pre class="pf-yaml" tabindex="0" aria-label="Saved version as YAML">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy' }) }) + '</div></div></div>');
       }
 
       root.innerHTML = '<style>'
@@ -252,6 +295,7 @@
         + '.pf-yaml{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre;overflow:auto;min-height:210px}'
         + '.pf-check{display:flex;gap:8px;align-items:baseline;font-size:13px}.pf-check .pill{flex-shrink:0}'
         + '.pf-side{width:330px;flex-shrink:0;min-width:0}@media (max-width:1100px){.pf-side{width:100%}}'
+        + '.pf-out{max-height:120px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--fg2)}'
         + '</style>'
         + side
         + '<div class="page">' + main + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
@@ -358,6 +402,87 @@
               if (r) { delete st.form[p.id]; toast('<b>' + esc(p.name) + '</b> saved as version ' + r.version + '.', 'ok', 5000); }
             });
           } });
+        });
+
+        // ---- Evaluations tab ----
+        ctx.on('click', '[data-tab]', (e, t) => { st.ptab = t.dataset.tab === 'evals' ? 'evals' : 'settings'; ctx.rerender(); });
+        ctx.on('click', '[data-ereload]', () => { delete st.evals[p.id]; ctx.rerender(); });
+        const evalAct = async (fn, okMsg) => {
+          try { const r = await fn(); if (okMsg) toast(okMsg, 'ok', 5000); delete st.evals[p.id]; ctx.rerender(); return r || true; }
+          catch (err) { App.fail(err); return null; }
+        };
+        const runEvals = (setId) => evalAct(() => App.post('/api/admin/profiles/' + enc(p.id) + '/evaluations/run', setId ? { setId } : {}), 'Evaluation queued for version ' + p.version + ' of <b>' + esc(p.name) + '</b>. Scores appear here when the run finishes.');
+        ctx.on('click', '[data-erun]', () => runEvals(null));
+        ctx.on('click', '[data-erunset]', (e, t) => runEvals(t.dataset.erunset));
+        const CASE_TEMPLATE = JSON.stringify([{ id: 'greeting', prompt: 'Say hello to a new customer.', checks: [{ kind: 'contains', value: 'hello' }] }, { id: 'format', prompt: 'Give the total as JSON with a number field "total".', checks: [{ kind: 'json-schema', schema: { type: 'object', required: ['total'], properties: { total: { type: 'number' } } } }] }], null, 2);
+        const setModal = (x2) => {
+          const judges = (st.profiles || []).filter((y) => y.status === 'published' || y.aliasOf);
+          const ev = st.evals[p.id] || {};
+          ctx.modal({ title: x2 ? 'Edit eval set ' + esc(x2.name) : 'New eval set for ' + esc(p.name), cls: 'wide',
+            body: '<div class="vstack gap12"><div class="formgrid" style="--cols:2">'
+              + UI.field('Name', UI.input(x2 ? x2.name : '', { attrs: 'data-en maxlength="120"', placeholder: 'Regression' }))
+              + UI.field('Threshold (share of cases that must pass)', UI.input(x2 ? String(x2.threshold) : '0.9', { attrs: 'data-et class="input mono" inputmode="decimal"' }).replace('class="input" ', ''), '0 to 1')
+              + UI.field('Judge profile', UI.select([{ value: '', label: 'None (no rubric cases)' }].concat(judges.map((y) => ({ value: y.name, label: y.name + ', up to ' + y.label }))), x2 ? (x2.judgeProfile || '') : '', 'data-ej'), 'Scores rubric cases through the gateway; it must handle this set\'s label')
+              + UI.field('Description', UI.input(x2 ? (x2.description || '') : '', { attrs: 'data-ed maxlength="500"', placeholder: 'What these cases protect' }))
+              + '</div>'
+              + UI.check('Gate publishing on this set', x2 ? x2.gate : true, 'data-eg')
+              + UI.field('Cases (JSON)', UI.textarea(x2 ? JSON.stringify(x2.cases, null, 2) : CASE_TEMPLATE, { attrs: 'data-ec spellcheck="false" class="textarea mono"', rows: 12 }).replace('class="textarea" ', ''), 'Each case: an id, a prompt and checks. Check kinds: contains, not-contains (value), regex (pattern, RE2), json-schema (schema), judge (rubric, minScore).')
+              + (x2 ? UI.notice('Changing the cases, threshold or judge starts a new revision: earlier runs no longer open the publish gate.', 'info') : (ev.sets && ev.sets.length ? '' : UI.notice('Sets gate publishing by default: once this set exists, publishing needs a passing run for the saved settings.', 'info')))
+              + '<div data-eerr></div></div>',
+            actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(x2 ? 'Save set' : 'Create set', { kind: 'primary', attrs: 'data-eok' }),
+            onMount(mEl) {
+              mEl.querySelector('[data-eok]').addEventListener('click', async () => {
+                const val = (sel) => mEl.querySelector(sel).value.trim();
+                const err = (msg) => { mEl.querySelector('[data-eerr]').innerHTML = UI.notice(esc(msg), 'danger'); };
+                let cases;
+                try { cases = JSON.parse(val('[data-ec]')); } catch (e2) { err('The cases are not valid JSON: ' + e2.message); return; }
+                const threshold = Number(val('[data-et]'));
+                if (!(threshold >= 0 && threshold <= 1)) { err('The threshold is a number from 0 to 1.'); return; }
+                const body = { name: val('[data-en]'), threshold, gate: mEl.querySelector('[data-eg]').checked, judgeProfile: val('[data-ej]') || null, description: val('[data-ed]') || null, cases };
+                try {
+                  if (x2) await App.patch('/api/admin/profiles/' + enc(p.id) + '/eval-sets/' + enc(x2.id), body);
+                  else await App.post('/api/admin/profiles/' + enc(p.id) + '/eval-sets', body);
+                  App.closeOverlay(); delete st.evals[p.id];
+                  toast('Eval set <b>' + esc(body.name) + '</b> ' + (x2 ? 'saved.' : 'created.') + ' Run it to score the saved settings.', 'ok', 5000);
+                  ctx.rerender();
+                } catch (e3) { err(e3.message); }
+              });
+            } });
+        };
+        ctx.on('click', '[data-enew]', () => setModal(null));
+        ctx.on('click', '[data-eedit]', (e, t) => { const x2 = ((st.evals[p.id] || {}).sets || []).find((y) => y.id === t.dataset.eedit); if (x2) setModal(x2); });
+        ctx.on('click', '[data-edel]', async (e, t) => {
+          const x2 = ((st.evals[p.id] || {}).sets || []).find((y) => y.id === t.dataset.edel); if (!x2) return;
+          const ok = await ctx.confirm({ title: 'Delete eval set ' + x2.name + '?', tag: 'cannot be undone', tone: 'danger', body: '<p style="margin:0" class="fg2">Its runs and scores are deleted with it' + (x2.gate ? ', and it no longer gates publishing' : '') + '.</p>', ok: 'Delete set' });
+          if (ok) evalAct(() => App.del('/api/admin/profiles/' + enc(p.id) + '/eval-sets/' + enc(x2.id)), 'Eval set ' + esc(x2.name) + ' deleted. Audit entry written.');
+        });
+        ctx.on('click', '[data-eoverride]', () => {
+          ctx.modal({ title: 'Request an override for ' + esc(p.name),
+            body: '<div class="vstack gap12"><p class="fg2" style="margin:0">Lets version ' + p.version + '\'s settings be published although its evaluations did not pass. Another profile admin approves or rejects it.</p>' + UI.field('Reason', UI.textarea('', { attrs: 'data-or maxlength="500"', placeholder: 'Why this cannot wait for passing evaluations', rows: 3 })) + '<div data-oerr></div></div>',
+            actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Request override', { kind: 'primary', attrs: 'data-ook' }),
+            onMount(mEl) {
+              mEl.querySelector('[data-ook]').addEventListener('click', async () => {
+                const reason = mEl.querySelector('[data-or]').value.trim();
+                if (reason.length < 10) { mEl.querySelector('[data-oerr]').innerHTML = UI.notice('Give a reason of at least ten characters.', 'danger'); return; }
+                App.closeOverlay();
+                await evalAct(() => App.post('/api/admin/profiles/' + enc(p.id) + '/evaluations/overrides', { reason }), 'Override requested. Another profile admin decides on it.');
+              });
+            } });
+        });
+        ctx.on('click', '[data-edecide]', async (e, t) => {
+          const approve = t.dataset.edecide === 'approve';
+          const ok = await ctx.confirm({ title: (approve ? 'Approve' : 'Reject') + ' this override?', tag: 'dual control', tone: approve ? 'warn' : 'info', body: '<p style="margin:0" class="fg2">' + (approve ? 'The settings of the requested version can then be published without passing evaluations.' : 'Publishing stays refused until the evaluations pass.') + '</p>', ok: approve ? 'Approve override' : 'Reject override' });
+          if (ok) evalAct(() => App.post('/api/admin/profiles/' + enc(p.id) + '/evaluations/overrides/' + enc(t.dataset.oid) + '/decide', { decision: approve ? 'approve' : 'reject' }), 'Override ' + (approve ? 'approved' : 'rejected') + '. Audit entry written.');
+        });
+        ctx.on('click', '[data-erundetail]', async (e, t) => {
+          let r;
+          try { r = await App.get('/api/admin/profiles/' + enc(p.id) + '/evaluations/runs/' + enc(t.dataset.erundetail)); } catch (err) { App.fail(err); return; }
+          const rows = (r.results || []).map((c) => [esc(c.name || c.caseId), c.passed ? UI.pill('passed', 'ok') : UI.pill('failed', 'danger'), c.checks.map((k) => esc(k.kind) + ' ' + (k.passed ? 'passed' : 'failed' + (k.detail ? ': ' + esc(k.detail) : ''))).join('<br>'), '<div class="pf-out">' + esc(c.output) + '</div>']);
+          ctx.modal({ title: 'Run of ' + esc(r.set || 'eval set') + ', version ' + r.profileVersion, cls: 'wide',
+            body: UI.kv([['Result', UI.pill(r.state, RUN_KIND[r.state])], ['Score', pct(r.score) + (r.total != null ? ' (' + r.passed + ' of ' + r.total + ')' : '')], ['Threshold', pct(r.threshold)], ['Set revision', String(r.setRevision)]], 4)
+              + (r.error ? UI.notice(esc(r.error), 'danger') : '')
+              + UI.table(['Case', 'Result', 'Checks', 'Answer'], rows, { clickable: false, minWidth: '0', emptyTitle: 'No cases ran', emptyText: '' }),
+            actions: UI.btn('Close', { attrs: 'data-close' }) });
         });
 
         ctx.on('click', '[data-status]', async (e, t) => {
