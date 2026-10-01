@@ -29,6 +29,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 17 | Identity, security and accessibility: sign-in notices, strength meter, upstream step-up, DPoP nonces, SAML metadata, enrolment links, automated WCAG checks and reflow (1.2.0) | Sign in, Settings, User stores, Identity, Platform; accessibility in Pools, Media, Models, Workflows | **Done** |
 | 18 | Platform hardening: service URL checks, backend TLS, consistent backups, ACME binding and hooks, sealed training data, input caps, zone re-checks, registry pushes (1.2.0) | Platform, Zones | **Done** |
 | 19 | Knowledge, integrations and workflows: MySQL sources, row access, logical replication, ordered and Ed25519 webhooks, price books and Stripe reconciliation, awaited workflow tools (1.2.0) | Knowledge, Tenants, Usage and audit, Runs, Workflows, Images | **Done** |
+| 20–23 | 1.3.0: keys and supply chain, AI, operations, knowledge and integrations | see [Backlog-1.3.0.md](Backlog-1.3.0.md) | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
