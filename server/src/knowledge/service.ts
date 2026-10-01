@@ -21,6 +21,9 @@ import { chunkText, DEFAULT_CHUNKING, type ChunkOptions, type TextChunk } from '
 import { detectType, ExtractionError, extractText } from './extract.js';
 import { gitItems, parseS3, S3Reader, type GitFetcher, type S3Settings, type SourceItem } from './sources.js';
 import { bm25, rrf, termCounts, TermKeys, tokenize } from './terms.js';
+import { aclAllows, readAcl, readerEntries, rowAcl, type AccessKind } from './acl.js';
+import { ReplicationManager } from './replication.js';
+import type { MaskedChange } from '../connections/service.js';
 
 export const SOURCE_KINDS = ['upload', 's3', 'git', 'database'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
@@ -71,7 +74,7 @@ export interface SourceRow {
   kb_id: string;
   kind: SourceKind;
   location: string;
-  config: { bucket?: string; prefix?: string; url?: string; ref?: string | null; path?: string; connectionId?: string; object?: string; idColumn?: string | null; watermarkColumn?: string | null };
+  config: { bucket?: string; prefix?: string; url?: string; ref?: string | null; path?: string; connectionId?: string; object?: string; idColumn?: string | null; watermarkColumn?: string | null; engine?: 'postgres' | 'mysql'; accessColumn?: string | null; accessKind?: AccessKind; replication?: boolean; publication?: string | null };
   label_floor: Label;
   schedule: Schedule;
   state: 'idle' | 'syncing' | 'failed';
@@ -111,6 +114,8 @@ export interface DocRow {
   created_at: number;
   updated_at: number;
   indexed_at: number | null;
+  /** Row-level access entries (B-1002), or null when the row carries none. */
+  acl: string[] | null;
 }
 
 export interface SearchHit {
@@ -135,6 +140,8 @@ export interface KnowledgeOptions {
   clamd?: { host: string; port: number };
   s3?: S3Settings;
   git: GitFetcher;
+  /** Logical replication for PostgreSQL sources (B-1003): KNOWLEDGE_REPLICATION and its tick. */
+  replication?: { enabled: boolean; tickMs: number };
 }
 
 export interface KnowledgeDeps {
@@ -157,7 +164,7 @@ const num = (v: unknown) => (v == null ? null : Number(v));
 const kbFrom = (r: Record<string, unknown>): KbRow => ({ ...(r as unknown as KbRow), chunking: json<ChunkOptions>(r.chunking, DEFAULT_CHUNKING), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 const indexFrom = (r: Record<string, unknown>): IndexRow => ({ ...(r as unknown as IndexRow), version: Number(r.version), dims: num(r.dims), progress: Number(r.progress), chunks: Number(r.chunks), created_at: Number(r.created_at), built_at: num(r.built_at) });
 const sourceFrom = (r: Record<string, unknown>): SourceRow => ({ ...(r as unknown as SourceRow), config: json<SourceRow['config']>(r.config, {}), last_sync_at: num(r.last_sync_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
-const docFrom = (r: Record<string, unknown>): DocRow => ({ ...(r as unknown as DocRow), size: Number(r.size), chunks: Number(r.chunks), detections: json<Record<string, number> | null>(r.detections, null), created_at: Number(r.created_at), updated_at: Number(r.updated_at), indexed_at: num(r.indexed_at) });
+const docFrom = (r: Record<string, unknown>): DocRow => ({ ...(r as unknown as DocRow), size: Number(r.size), chunks: Number(r.chunks), detections: json<Record<string, number> | null>(r.detections, null), created_at: Number(r.created_at), updated_at: Number(r.updated_at), indexed_at: num(r.indexed_at), acl: readAcl(r.acl) });
 const labelsUpTo = (l: Label): Label[] => LABELS.filter((x) => labelRank(x) <= labelRank(l));
 const traceId = () => randomBytes(16).toString('hex');
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
@@ -225,10 +232,22 @@ export const docView = (d: DocRow, source?: SourceRow) => ({
   error: d.error,
   traceId: d.trace_id,
   chunks: d.chunks,
+  access: d.acl,
   createdAt: d.created_at,
   updatedAt: d.updated_at,
   indexedAt: d.indexed_at
 });
+
+/**
+ * One database row as a source item: a text document of `column: value` lines, versioned by its content hash,
+ * carrying the row's access list when the source has an access column. Shared by the watermark sync and the
+ * replication stream so both write the same document for the same row.
+ */
+export function rowItem(cfg: SourceRow['config'], id: string, columns: string[], row: unknown[], access: unknown): SourceItem {
+  const body = `# ${cfg.object} ${id}\n\n` + columns.map((col, j) => `${col}: ${row[j] == null ? '' : row[j] instanceof Date ? (row[j] as Date).toISOString() : String(row[j])}`).join('\n');
+  const data = Buffer.from(body, 'utf8');
+  return { key: `${cfg.object}#${id}`, name: `${cfg.object} #${id}`, version: sha(data), size: data.length, read: async () => data, ...(cfg.accessColumn ? { acl: rowAcl(cfg.accessKind ?? 'group', access) } : {}) };
+}
 
 /**
  * Knowledge bases: sources (uploads through quarantine, S3 prefixes, Git repositories, database views through a
@@ -240,6 +259,7 @@ export const docView = (d: DocRow, source?: SourceRow) => ({
  */
 export class KnowledgeService {
   readonly terms: TermKeys;
+  readonly replication: ReplicationManager;
   private readonly db: Db;
 
   constructor(
@@ -248,6 +268,16 @@ export class KnowledgeService {
   ) {
     this.db = d.db;
     this.terms = new TermKeys(d.db, d.keys);
+    this.replication = new ReplicationManager(
+      {
+        db: d.db,
+        connections: d.connections,
+        log: d.log,
+        sources: async () => ((await this.db('knowledge_sources').where({ kind: 'database' })) as Record<string, unknown>[]).map(sourceFrom),
+        apply: (src, changes) => this.applyReplicated(src, changes)
+      },
+      o.replication ?? { enabled: false, tickMs: 10_000 }
+    );
     d.jobs.register('knowledge.scan', (p) => this.scanJob(String(p.documentId)), { timeoutMs: 10 * 60_000 });
     d.jobs.register('knowledge.index', (p, ctx) => this.indexJob(String(p.documentId), ctx), { timeoutMs: 30 * 60_000 });
     d.jobs.register('knowledge.sync', (p, ctx) => this.syncJob(String(p.sourceId), ctx), { timeoutMs: 2 * 60 * 60_000 });
@@ -412,6 +442,7 @@ export class KnowledgeService {
   async remove(p: Principal, id: string): Promise<{ documents: number }> {
     const kb = await this.base(p, id, 'manage');
     const docs = ((await this.db('knowledge_documents').where({ kb_id: kb.id })) as Record<string, unknown>[]).map(docFrom);
+    for (const src of await this.sources(kb.id)) await this.replication.release(src);
     for (const i of await this.indexes(kb.id)) await this.d.vectors.drop(i.id);
     for (const d of docs) if (d.blob_key) await this.d.blobs.delete(d.blob_key);
     await this.db('knowledge_terms').whereIn('index_id', this.db('knowledge_indexes').where({ kb_id: kb.id }).select('id')).delete();
@@ -451,7 +482,7 @@ export class KnowledgeService {
 
   // ---------- sources ----------
 
-  async addSource(p: Principal, kbId: string, input: { kind: SourceKind; location: string; labelFloor?: Label; schedule?: Schedule; ref?: string | null; path?: string; connectionId?: string; idColumn?: string | null; watermarkColumn?: string | null }): Promise<SourceRow> {
+  async addSource(p: Principal, kbId: string, input: { kind: SourceKind; location: string; labelFloor?: Label; schedule?: Schedule; ref?: string | null; path?: string; connectionId?: string; idColumn?: string | null; watermarkColumn?: string | null; accessColumn?: string | null; accessKind?: AccessKind; replication?: boolean; publication?: string | null }): Promise<SourceRow> {
     const kb = await this.base(p, kbId, 'manage');
     const floor = highest(kb.label, input.labelFloor ?? kb.label);
     if (!clears(p.clearance, floor)) throw forbidden(`Your clearance is ${p.clearance}.`, { step: 'clearance' });
@@ -472,9 +503,11 @@ export class KnowledgeService {
     } else {
       if (!input.connectionId) throw new HttpProblem(400, 'Invalid request', 'Pick the data connection the view is read through.');
       const conn = await this.d.connections.get(p.tenantId, input.connectionId);
-      if (conn.engine !== 'postgres') throw conflict('Only PostgreSQL tables and views can be a knowledge source.');
-      const object = location.replace(/^pg:\s*/i, '');
-      const schema = (conn.schema ?? []).find((o) => o.name.toLowerCase() === object.toLowerCase() || o.name.toLowerCase() === `public.${object.toLowerCase()}`);
+      if (conn.engine !== 'postgres' && conn.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views can be a knowledge source.');
+      const object = location.replace(/^(pg|mysql):\s*/i, '');
+      // PostgreSQL names default to the public schema, MySQL names to the connection's database.
+      const home = conn.engine === 'postgres' ? 'public' : (conn.database ?? '');
+      const schema = (conn.schema ?? []).find((o) => o.name.toLowerCase() === object.toLowerCase() || (!!home && o.name.toLowerCase() === `${home}.${object}`.toLowerCase()));
       if (!schema) throw conflict(`${object} is not in ${conn.name}'s introspected schema. Refresh the schema on the Connections screen.`);
       if (!conn.allow_list.map((x) => x.toLowerCase()).includes(schema.name.toLowerCase())) throw conflict(`${schema.name} is not on ${conn.name}'s schema allow-list.`);
       const cols = schema.columns.map((c) => c.name);
@@ -482,8 +515,12 @@ export class KnowledgeService {
       if (wm && !cols.includes(wm)) throw conflict(`${schema.name} has no column ${wm}.`);
       const idCol = input.idColumn ?? (cols.includes('id') ? 'id' : (cols[0] ?? null));
       if (idCol && !cols.includes(idCol)) throw conflict(`${schema.name} has no column ${idCol}.`);
-      location = `pg: ${schema.name}`;
-      config = { connectionId: conn.id, object: schema.name, idColumn: idCol, watermarkColumn: wm };
+      if (input.accessColumn && !cols.includes(input.accessColumn)) throw conflict(`${schema.name} has no column ${input.accessColumn}.`);
+      if (input.replication && conn.engine !== 'postgres') throw conflict('Logical replication is for PostgreSQL sources; MySQL sources sync by watermark.');
+      if (input.replication && schema.kind === 'view') throw conflict(`${schema.name} is a view: PostgreSQL replicates tables only. Point the source at the table, or leave replication off to sync the view by watermark.`);
+      if (input.replication && !idCol) throw conflict('Replication needs an id column to match changed rows to documents.');
+      location = `${conn.engine === 'postgres' ? 'pg' : 'mysql'}: ${schema.name}`;
+      config = { connectionId: conn.id, object: schema.name, idColumn: idCol, watermarkColumn: wm, engine: conn.engine, accessColumn: input.accessColumn ?? null, ...(input.accessColumn ? { accessKind: input.accessKind ?? 'group' } : {}), ...(input.replication ? { replication: true, publication: input.publication ?? 'exprsn_knowledge' } : {}) };
       // Rows are read at the connection's label: the source floor is at least that.
       if (labelRank(conn.label) > labelRank(floor)) input = { ...input, labelFloor: conn.label };
     }
@@ -511,6 +548,7 @@ export class KnowledgeService {
     const s = await this.source(p.tenantId, sourceId);
     await this.base(p, s.kb_id, 'manage');
     const docs = ((await this.db('knowledge_documents').where({ source_id: s.id })) as Record<string, unknown>[]).map(docFrom);
+    await this.replication.release(s);
     for (const d of docs) await this.purgeDocument(d);
     await this.db('knowledge_sources').where({ id: s.id }).delete();
     return { documents: docs.length };
@@ -522,7 +560,11 @@ export class KnowledgeService {
     const kb = await this.base(p, kbId);
     const q = this.db('knowledge_documents').where({ kb_id: kb.id }).whereIn('label', labelsUpTo(p.clearance));
     if (opts.q) q.andWhere('name', 'like', `%${opts.q.replace(/[%_\\]/g, (c) => '\\' + c)}%`);
-    const rows = ((await q.orderBy('updated_at', 'desc').limit(Math.min(opts.limit ?? 200, 1000))) as Record<string, unknown>[]).map(docFrom);
+    let rows = ((await q.orderBy('updated_at', 'desc').limit(Math.min(opts.limit ?? 200, 1000))) as Record<string, unknown>[]).map(docFrom);
+    if (!this.canCurate(p) && rows.some((d) => d.acl)) {
+      const reader = await readerEntries(this.db, p);
+      rows = rows.filter((d) => aclAllows(d.acl, reader));
+    }
     const sources = new Map((await this.sources(kb.id)).map((s) => [s.id, s]));
     return rows.map((d) => docView(d, sources.get(d.source_id)));
   }
@@ -532,6 +574,7 @@ export class KnowledgeService {
     const doc = await this.document(p.tenantId, id);
     const kb = await this.base(p, doc.kb_id, need);
     if (!clears(p.clearance, doc.label)) throw notFound('Document');
+    if (doc.acl && !this.canCurate(p) && !aclAllows(doc.acl, await readerEntries(this.db, p))) throw notFound('Document');
     return { doc, kb };
   }
 
@@ -787,7 +830,7 @@ export class KnowledgeService {
     const records = [];
     for (const [i, c] of chunks.entries()) {
       const id = ulid();
-      rows.push({ id, tenant_id: doc.tenant_id, kb_id: doc.kb_id, index_id: idx.id, document_id: doc.id, seq: i, content: await this.sealChunk(doc.tenant_id, id, { text: c.text, heading: c.heading }), label, label_rank: rank, tokens: 0, created_at: t });
+      rows.push({ id, tenant_id: doc.tenant_id, kb_id: doc.kb_id, index_id: idx.id, document_id: doc.id, seq: i, content: await this.sealChunk(doc.tenant_id, id, { text: c.text, heading: c.heading }), label, label_rank: rank, tokens: 0, created_at: t, acl: doc.acl == null ? null : JSON.stringify(doc.acl) });
       const { counts, length } = termCounts(`${c.heading ?? ''} ${c.text}`);
       rows[rows.length - 1]!.tokens = length;
       const hashed = await this.terms.terms(doc.tenant_id, [...counts.keys()]);
@@ -873,22 +916,23 @@ export class KnowledgeService {
     }
     if (s.kind === 'database') {
       const cfg = s.config;
-      const r = await this.d.connections.readRows(s.tenant_id, cfg.connectionId!, cfg.object!, { watermarkColumn: cfg.watermarkColumn ?? null, after: cfg.watermarkColumn ? s.watermark : null, limit: 5000 });
+      const r = await this.d.connections.readRows(s.tenant_id, cfg.connectionId!, cfg.object!, { watermarkColumn: cfg.watermarkColumn ?? null, after: cfg.watermarkColumn ? s.watermark : null, limit: 5000, rawColumn: cfg.accessColumn ?? null });
       const idAt = cfg.idColumn ? r.columns.indexOf(cfg.idColumn) : -1;
       const wmAt = cfg.watermarkColumn ? r.columns.indexOf(cfg.watermarkColumn) : -1;
+      const accessAt = cfg.accessColumn ? r.columns.indexOf(cfg.accessColumn) : -1;
+      if (cfg.accessColumn && accessAt < 0) throw new Error(`${cfg.object} no longer has the access column ${cfg.accessColumn}; nothing was synced.`);
       let watermark = s.watermark;
       let best: unknown = null;
       const later = (a: unknown, b: unknown) => (a instanceof Date && b instanceof Date ? a.getTime() > b.getTime() : typeof a === 'number' && typeof b === 'number' ? a > b : String(a) > String(b));
       const items: SourceItem[] = r.rows.map((row, i) => {
         const id = idAt >= 0 ? String(row[idAt]) : String(i + 1);
-        const body = `# ${cfg.object} ${id}\n\n` + r.columns.map((col, j) => `${col}: ${row[j] == null ? '' : row[j] instanceof Date ? (row[j] as Date).toISOString() : String(row[j])}`).join('\n');
         // Rows arrive ordered by the watermark column; the last is the newest, compared in its own type.
         if (wmAt >= 0 && row[wmAt] != null && (best == null || later(row[wmAt], best))) {
           best = row[wmAt];
           watermark = best instanceof Date ? best.toISOString() : String(best);
         }
-        const data = Buffer.from(body, 'utf8');
-        return { key: `${cfg.object}#${id}`, name: `${cfg.object} #${id}`, version: sha(data), size: data.length, read: async () => data };
+        // The access value comes unmasked (an email address names a user); the document body has it masked.
+        return rowItem(cfg, id, r.columns, row, accessAt >= 0 ? r.raw?.[i] : undefined);
       });
       // With a watermark only changed rows arrive, so absence means nothing; without one, it means the row is gone.
       const out = await this.apply(s, items, !cfg.watermarkColumn, ctx, 'text/plain');
@@ -902,7 +946,7 @@ export class KnowledgeService {
    * re-indexed, unchanged ones are skipped by version or content hash, and (for full listings) keys no longer
    * present are removed. Removed tombstones stay removed.
    */
-  private async apply(s: SourceRow, items: SourceItem[], full: boolean, ctx: JobContext, forceType?: string): Promise<{ added: number; changed: number; unchanged: number; removed: number }> {
+  private async apply(s: SourceRow, items: SourceItem[], full: boolean, ctx: Pick<JobContext, 'signal' | 'progress'>, forceType?: string): Promise<{ added: number; changed: number; unchanged: number; removed: number }> {
     const existing = new Map(((await this.db('knowledge_documents').where({ source_id: s.id })) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
     const seen = new Set<string>();
     let added = 0;
@@ -936,13 +980,13 @@ export class KnowledgeService {
       let doc: DocRow;
       if (prev) {
         const blobKey = await this.store(prev, data);
-        await this.db('knowledge_documents').where({ id: prev.id }).update({ name: it.name.slice(0, 300), size: data.length, sha256: hash, version: it.version, type, blob_key: blobKey, state: 'queued', updated_at: t });
+        await this.db('knowledge_documents').where({ id: prev.id }).update({ name: it.name.slice(0, 300), size: data.length, sha256: hash, version: it.version, type, blob_key: blobKey, state: 'queued', updated_at: t, ...(it.acl !== undefined ? { acl: it.acl == null ? null : JSON.stringify(it.acl) } : {}) });
         doc = await this.document(s.tenant_id, prev.id);
         changed++;
       } else {
         const id = ulid();
         const blobKey = await this.store({ id, tenant_id: s.tenant_id }, data);
-        await this.db('knowledge_documents').insert({ id, tenant_id: s.tenant_id, kb_id: s.kb_id, source_id: s.id, external_key: key, name: it.name.slice(0, 300), type, size: data.length, sha256: hash, version: it.version, label: highest(kb.label, s.label_floor), auto_label: null, manual_label: null, label_origin: 'inherited', detections: null, state: 'queued', blob_key: blobKey, chunks: 0, created_at: t, updated_at: t });
+        await this.db('knowledge_documents').insert({ id, tenant_id: s.tenant_id, kb_id: s.kb_id, source_id: s.id, external_key: key, name: it.name.slice(0, 300), type, size: data.length, sha256: hash, version: it.version, label: highest(kb.label, s.label_floor), auto_label: null, manual_label: null, label_origin: 'inherited', detections: null, state: 'queued', blob_key: blobKey, chunks: 0, created_at: t, updated_at: t, acl: it.acl == null ? null : JSON.stringify(it.acl) });
         doc = await this.document(s.tenant_id, id);
         added++;
       }
@@ -961,6 +1005,52 @@ export class KnowledgeService {
       }
     }
     return { added, changed, unchanged, removed };
+  }
+
+  /**
+   * One committed transaction from a source's replication stream (B-1003): inserted and updated rows become or
+   * refresh documents exactly as the watermark sync writes them, deleted rows are removed from every index, and a
+   * truncate removes every document of the source. Nothing is acknowledged to the database until this resolves.
+   */
+  async applyReplicated(s: SourceRow, changes: MaskedChange[]): Promise<{ upserted: number; removed: number }> {
+    const cfg = s.config;
+    const ctx = { signal: new AbortController().signal, progress: async () => undefined };
+    let removed = 0;
+    let upserted = 0;
+    const idOf = (ch: MaskedChange, row: unknown[] | null) => {
+      const at = cfg.idColumn ? ch.columns.indexOf(cfg.idColumn) : -1;
+      return at >= 0 && row && row[at] != null ? String(row[at]) : null;
+    };
+    const remove = async (id: string) => {
+      const d = await this.db('knowledge_documents').where({ source_id: s.id, external_key: sha(`${cfg.object}#${id}`) }).first();
+      if (d && d.state !== 'removed') {
+        await this.purgeDocument(docFrom(d));
+        removed++;
+      }
+    };
+    for (const ch of changes) {
+      if (ch.op === 'truncate') {
+        for (const d of ((await this.db('knowledge_documents').where({ source_id: s.id }).whereNot({ state: 'removed' })) as Record<string, unknown>[]).map(docFrom)) {
+          await this.purgeDocument(d);
+          removed++;
+        }
+        continue;
+      }
+      if (ch.op === 'delete') {
+        const id = idOf(ch, ch.old);
+        if (id) await remove(id);
+        else this.d.log.warn({ source: s.id }, 'a replicated delete carries no id column value; set REPLICA IDENTITY FULL or make the id column the primary key');
+        continue;
+      }
+      const id = idOf(ch, ch.values);
+      if (!id) continue;
+      // An update that changed the id moves the document.
+      const oldId = ch.op === 'update' ? idOf(ch, ch.old) : null;
+      if (oldId && oldId !== id) await remove(oldId);
+      const out = await this.apply(s, [rowItem(cfg, id, ch.columns, ch.values!, ch.raw)], false, ctx, 'text/plain');
+      upserted += out.added + out.changed;
+    }
+    return { upserted, removed };
   }
 
   // ---------- search ----------
@@ -1012,6 +1102,13 @@ export class KnowledgeService {
     vectorList.sort((a, b) => b.score - a.score);
     keywordList.sort((a, b) => b.score - a.score);
     const fused = rrf([vectorList.slice(0, 40).map((x) => x.id), keywordList.slice(0, 40).map((x) => x.id)]);
+    // Row-level access (B-1002): chunks whose row names neither the reader nor one of their groups are dropped
+    // before ranking is cut to k, so they are never read, returned or counted.
+    const restricted = fused.size ? ((await this.db('knowledge_chunks').whereIn('id', [...fused.keys()]).whereNotNull('acl').select('id', 'acl')) as { id: string; acl: string }[]) : [];
+    if (restricted.length) {
+      const reader = await readerEntries(this.db, p);
+      for (const r of restricted) if (!aclAllows(readAcl(r.acl), reader)) fused.delete(r.id);
+    }
     const vScore = new Map(vectorList.map((x) => [x.id, x.score]));
     const maxKw = keywordList[0]?.score ?? 0;
     const kScore = new Map(keywordList.map((x) => [x.id, maxKw ? x.score / maxKw : 0]));
@@ -1090,7 +1187,7 @@ export class KnowledgeService {
 
   /** The chat context provider: published bases bound to the conversation or granted to the profile, which the user may read. */
   async contextFor(req: ContextRequest): Promise<ContextItem[]> {
-    const ids = new Set([...(await this.bindings(req.conversationId)), ...((await this.db('knowledge_access').where({ tenant_id: req.tenantId, principal_kind: 'profile', principal_id: req.profile.id }).select('kb_id')) as { kb_id: string }[]).map((r) => r.kb_id)]);
+    const ids = new Set(req.kbIds ?? [...(await this.bindings(req.conversationId)), ...((await this.db('knowledge_access').where({ tenant_id: req.tenantId, principal_kind: 'profile', principal_id: req.profile.id }).select('kb_id')) as { kb_id: string }[]).map((r) => r.kb_id)]);
     if (!ids.size || !req.query.trim()) return [];
     const kbs = (await this.visible(req.principal)).map((x) => x.kb).filter((kb) => ids.has(kb.id) && kb.status === 'published');
     if (!kbs.length) return [];

@@ -11,6 +11,8 @@ import { specPatchSchema, specSchema, ZONE_ID } from '../../zones/spec.js';
 const zoneId = z.string().regex(ZONE_ID, 'A zone id');
 const poolName = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 const reason = z.string().trim().max(500).nullable().default(null);
+/** Sprint 18 (B-908): connections and MCP servers a proposal moves into the zone. */
+const moveMembers = z.array(z.object({ kind: z.enum(['connection', 'mcp']), id: z.string().regex(/^[0-9A-Za-z]{26}$/) }).strict()).max(50).default([]);
 const note = z.object({ note: z.string().trim().max(500).nullable().default(null) }).strict();
 const address = z
   .string()
@@ -47,15 +49,40 @@ export function zoneAdminRoutes(s: Services): Router {
     return [...byTenant.values()].reduce((a, x) => a + x.length, 0);
   };
 
+  /**
+   * B-908: when the first zone gets a current definition (an approval or the default set), connections and MCP
+   * servers registered before are checked against it; the misplaced ones are audited and system admins are told,
+   * so each can be moved with a proposal from the Zones screen.
+   */
+  const recheckIfFirst = async (req: Request, wasDefined: boolean) => {
+    if (wasDefined || !(await zones.anyDefined())) return 0;
+    const list = await zones.misplaced();
+    if (list.length) {
+      await audit(req, 'zone.members.rechecked', {}, { misplaced: list.length, members: list.slice(0, 100).map((m) => ({ kind: m.kind, id: m.id, name: m.name, zone: m.zone, suggestion: m.suggestion })) });
+      const admins = (await s.db('users as u').join('user_roles as r', 'r.user_id', 'u.id').where({ 'u.state': 'active', 'r.role': 'system-admin' }).distinct('u.id', 'u.tenant_id')) as { id: string; tenant_id: string }[];
+      const byTenant = new Map<string, string[]>();
+      for (const u of admins) byTenant.set(u.tenant_id, [...(byTenant.get(u.tenant_id) ?? []), u.id]);
+      for (const [tenantId, userIds] of byTenant) await s.notifications.notify({ tenantId, userIds, kind: 'zones', title: `${list.length} ${list.length === 1 ? 'member is' : 'members are'} outside their zone`, body: 'Connections and MCP servers registered before zones were defined. Review them under Zones and propose a move.', route: 'zones', label: 'internal' });
+    }
+    return list.length;
+  };
+
+  /** B-908: members outside what their zone admits, with a suggested zone for a one-click move proposal. */
+  r.get('/zones/misplaced', async (_req, res) => {
+    res.json({ misplaced: await zones.misplaced() });
+  });
+
   r.get('/zones', async (req, res) => {
     res.json(await zones.overview(principalOf(req)));
   });
 
   /** Creates the default zone set for ids that do not exist yet (see ZoneService.seedDefaults). */
   r.post('/zones/seed', async (req, res) => {
+    const wasDefined = await zones.anyDefined();
     const out = await zones.seedDefaults(principalOf(req));
     if (out.created.length) await audit(req, 'zone.seeded', { zones: out.created }, { adjusted: out.adjusted, skipped: out.skipped });
-    res.status(out.created.length ? 201 : 200).json(out);
+    const misplaced = await recheckIfFirst(req, wasDefined);
+    res.status(out.created.length ? 201 : 200).json({ ...out, misplaced });
   });
 
   /** Rendered configuration of every current zone, as a file. */
@@ -127,9 +154,9 @@ export function zoneAdminRoutes(s: Services): Router {
   r.post('/zones/:id/proposals', async (req, res) => {
     const p = principalOf(req);
     const id = idOf(req);
-    const body = parseBody(z.object({ patch: specPatchSchema.default({}), movePools: z.array(poolName).max(50).default([]), reason }).strict(), req.body);
-    const v = await zones.propose(p, id, { create: false, patch: body.patch, movePools: body.movePools, reason: body.reason });
-    await audit(req, 'zone.proposed', { zone: id, version: v.version }, { fields: Object.keys(body.patch), reason: body.reason, maxLabel: v.spec.maxLabel, movePools: body.movePools });
+    const body = parseBody(z.object({ patch: specPatchSchema.default({}), movePools: z.array(poolName).max(50).default([]), moveMembers, reason }).strict(), req.body);
+    const v = await zones.propose(p, id, { create: false, patch: body.patch, movePools: body.movePools, moveMembers: body.moveMembers, reason: body.reason });
+    await audit(req, 'zone.proposed', { zone: id, version: v.version }, { fields: Object.keys(body.patch), reason: body.reason, maxLabel: v.spec.maxLabel, movePools: body.movePools, moveMembers: v.move_members });
     const notified = await notifyReviewers(req, `Zone ${id} v${v.version} waits for a second approver`);
     res.status(201).json({ zone: id, version: v.version, status: v.status, notified });
   });
@@ -138,9 +165,11 @@ export function zoneAdminRoutes(s: Services): Router {
   r.post('/zones/:id/draft/approve', async (req, res) => {
     const id = idOf(req);
     const body = parseBody(note, req.body ?? {});
+    const wasDefined = await zones.anyDefined();
     const out = await zones.approve(principalOf(req), id, body.note);
-    await audit(req, 'zone.approved', { zone: id, version: out.version.version }, { previous: out.previous, proposedBy: out.version.proposed_by, movedPools: out.moved, maxLabel: out.version.spec.maxLabel, note: body.note });
-    res.json({ zone: id, version: out.version.version, status: out.version.status, previous: out.previous, movedPools: out.moved });
+    await audit(req, 'zone.approved', { zone: id, version: out.version.version }, { previous: out.previous, proposedBy: out.version.proposed_by, movedPools: out.moved, movedMembers: out.movedMembers, maxLabel: out.version.spec.maxLabel, note: body.note });
+    const misplaced = await recheckIfFirst(req, wasDefined);
+    res.json({ zone: id, version: out.version.version, status: out.version.status, previous: out.previous, movedPools: out.moved, movedMembers: out.movedMembers, misplaced });
   });
 
   r.post('/zones/:id/draft/reject', async (req, res) => {

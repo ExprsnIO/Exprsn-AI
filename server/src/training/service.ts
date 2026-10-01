@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { TrainingWorkerGate } from './worker.js';
 import type { Services } from '../services.js';
 import type { Scheduler } from '../platform/jobs.js';
 import { json } from '../db/knex.js';
@@ -299,7 +300,12 @@ export interface SubmitInput {
  * fires recurring schedules and dispatches the queue, so any instance can pick up where another left off.
  */
 export class TrainingService {
-  constructor(private readonly s: () => Services) {}
+  /** Sprint 18 (B-905): run keys and artefacts for workers on contract 2. */
+  readonly worker: TrainingWorkerGate;
+
+  constructor(private readonly s: () => Services) {
+    this.worker = new TrainingWorkerGate(s);
+  }
 
   private get db() {
     return this.s().db;
@@ -1068,10 +1074,15 @@ export class TrainingService {
     // or another instance does not start it twice. A failed submit puts it back.
     const claimed = await this.db('training_jobs').where({ id: j.id, state: j.state, hold: false }).whereNull('run_id').update({ state: 'running', run_id: null, wait_reason: 'starting', updated_at: Date.now() });
     if (!claimed) return;
-    const release = () => this.db('training_jobs').where({ id: j.id, state: 'running' }).whereNull('run_id').update({ state: j.state, updated_at: Date.now() });
+    // Put back the wait reason too, so a failure that repeats on the next tick is still shown (not "starting").
+    const release = () => this.db('training_jobs').where({ id: j.id, state: 'running' }).whereNull('run_id').update({ state: j.state, wait_reason: j.wait_reason, updated_at: Date.now() });
     let runId: string;
     try {
-      const data = await this.getSealed(d.tenant_id, d.blob_key);
+      const plain = await this.getSealed(d.tenant_id, d.blob_key);
+      // B-905: a contract-2 worker gets the rows encrypted with a run key it fetches once; contract 1 only if allowed.
+      const contract = (await s.trainer.info()).contract ?? 1;
+      if (contract < 2 && !s.cfg.TRAINER_PLAINTEXT_FALLBACK) throw conflict('The training worker speaks contract 1, which takes dataset rows in plaintext. Upgrade it to contract 2, or set TRAINER_PLAINTEXT_FALLBACK=true to allow it.');
+      const data = contract >= 2 ? await this.worker.seal(j, d.rows, plain) : plain;
       const spec: TrainSpec = {
         job: j.id, name: j.name, baseModel: j.base_model, baseDigest: j.base_digest, method: j.method, trainer: j.trainer, hardware: j.hardware, steps: j.steps, checkpointEvery: j.checkpoint_every,
         dataset: { id: d.id, name: d.name, version: d.version, hash: d.hash!, rows: d.rows, splits: d.splits.rows ?? splitCounts(d.rows, d.splits.pct) },
@@ -1094,6 +1105,15 @@ export class TrainingService {
     const pools = (await this.s().gateway.repo.pools()).filter((p) => labelRank(p.label_ceiling) >= labelRank(label));
     const classes = [...new Set(pools.map((p) => p.accelerator))];
     return classes.length ? classes : [fallback];
+  }
+
+  /** B-906: whether a registered model card's KMS signature still verifies (after a key-encryption-key change, too). */
+  async verifyCard(tenantId: string, jobId: string): Promise<boolean> {
+    const r = await this.db('training_jobs').where({ tenant_id: tenantId, id: jobId }).first();
+    if (!r) throw notFound('Training job');
+    const j = jobFrom(r);
+    if (!j.card.manifest) return false;
+    return this.s().kms.verifyHmac(j.card.manifest.key, canonicalJson(cardManifest(j, j.card)), j.card.manifest.signature).catch(() => false);
   }
 
   async evals(p: Principal) {
@@ -1220,7 +1240,7 @@ export class TrainingService {
       await repo.updateModel(model.id, { format: 'gguf', quantization: conv.quantization, family: base?.family ?? null, parameter_size: base?.parameter_size ?? null, capabilities: (base?.capabilities ?? ['completion']).filter((c) => c !== 'tools' || j.card.evals.some((e) => e.suite === 'tools' && e.result === 'pass')), context_length: base?.context_length ?? null, size_bytes: conv.sizeBytes });
     }
     const card: ModelCard = { ...j.card, packaging, registration: { state: 'registered', reason: null, modelId: model.id, model: model.name } };
-    const manifest = { job: j.id, name: j.name, model: model.name, baseModel: card.baseModel, baseDigest: card.baseDigest, dataset: card.dataset, container: card.container, hyperparameters: card.hyperparameters, evals: card.evals.map((e) => ({ suite: e.suite, hardware: e.hardware, score: e.score, threshold: e.threshold, result: e.result })), packaging, approval: card.approval };
+    const manifest = cardManifest(j, card);
     const key = `${s.cfg.OPENBAO_KEY_PREFIX}training-manifests`;
     card.manifest = { signature: await s.kms.hmac(key, canonicalJson(manifest)), key, signedAt: Date.now() };
     await this.update(j, { stage: ST.modelApproval, model_id: model.id, card, note: null });
@@ -1408,4 +1428,12 @@ export class TrainingService {
       lastJobId: sc.last_job_id
     };
   }
+}
+
+/**
+ * The signed part of a model card (Sprint 9), rebuilt from the card as it was at registration. Sprint 18 (B-906):
+ * `kms:rewrap` re-signs it, and `verifyCard` checks it.
+ */
+export function cardManifest(j: { id: string; name: string }, card: ModelCard): Record<string, unknown> {
+  return { job: j.id, name: j.name, model: card.registration.model, baseModel: card.baseModel, baseDigest: card.baseDigest, dataset: card.dataset, container: card.container, hyperparameters: card.hyperparameters, evals: card.evals.map((e) => ({ suite: e.suite, hardware: e.hardware, score: e.score, threshold: e.threshold, result: e.result })), packaging: card.packaging, approval: card.approval };
 }

@@ -167,8 +167,10 @@
       const row = (p, i) => {
         const h = st.busy[i.id] === 'draining' && i.state !== 'draining' ? 'draining' : healthOf(i);
         const loading = (i.loading || []).concat(st.busy[i.id] && st.busy[i.id].indexOf('load:') === 0 && (i.loading || []).indexOf(st.busy[i.id].slice(5)) < 0 && !i.loaded.some((m) => m.name === st.busy[i.id].slice(5)) ? [st.busy[i.id].slice(5)] : []);
-        return '<div class="pl-grid row" data-inst="' + esc(i.id) + '" role="button" tabindex="0">'
-          + '<div class="vstack" style="gap:1px"><span class="mono" style="font-weight:500">' + esc(i.name) + '</span><span class="muted" style="font-size:11px">' + esc([i.settings.hardware, i.deploy].filter(Boolean).join(', ')) + '</span></div>'
+        // The row opens the instance on click; the name is the keyboard control (a row with role button would nest
+        // the model buttons inside another control).
+        return '<div class="pl-grid row" data-inst="' + esc(i.id) + '">'
+          + '<div class="vstack" style="gap:1px"><button type="button" class="pl-instname mono" data-inst-open="' + esc(i.id) + '" aria-label="Open instance ' + esc(i.name) + '">' + esc(i.name) + '</button><span class="muted" style="font-size:11px">' + esc([i.settings.hardware, i.deploy].filter(Boolean).join(', ')) + '</span></div>'
           + '<div class="vstack gap4">' + memBar(i) + '<span class="muted" style="font-size:11px">' + esc(memText(i)) + '</span></div>'
           + '<div class="hstack wrap gap6">' + i.loaded.map((m) => chip(i, m)).join('') + loading.map((n) => '<span class="pl-model loading"><span class="mono">' + esc(n) + '</span> <span class="muted">loading</span></span>').join('')
           + (i.loaded.length || loading.length ? '' : '<span class="muted" style="font-size:11px">nothing loaded</span>') + '</div>'
@@ -231,7 +233,7 @@
         const title = p.name + ', ' + p.accelerator + ', zone ' + p.zone + ', ceiling ' + p.label_ceiling;
         const upRunning = upOn;
         const actions = UI.btn('Add instance', { size: 'sm', icon: 'plus', attrs: 'data-addinst="' + esc(p.id) + '"' }) + UI.btn(upRunning ? 'Upgrade running' : 'Roll upgrade', { size: 'sm', attrs: 'data-roll="' + esc(p.id) + '"', disabled: upRunning || !p.instances.length }) + UI.iconbtn('edit', 'Edit pool', { attrs: 'data-editpool="' + esc(p.id) + '"', cls: 'sm ghost' }) + UI.iconbtn('trash', 'Delete pool', { attrs: 'data-delpool="' + esc(p.id) + '"', cls: 'sm ghost' });
-        const grid = p.instances.length ? '<div class="pl-wrap">' + head + p.instances.map((i) => row(p, i)).join('') + '</div>' : UI.empty('No instances', 'Register the Ollama endpoints that serve this pool.', UI.btn('Add instance', { size: 'sm', kind: 'primary', attrs: 'data-addinst="' + esc(p.id) + '"' }));
+        const grid = p.instances.length ? '<div class="pl-wrap" data-scroll-x>' + head + p.instances.map((i) => row(p, i)).join('') + '</div>' : UI.empty('No instances', 'Register the Ollama endpoints that serve this pool.', UI.btn('Add instance', { size: 'sm', kind: 'primary', attrs: 'data-addinst="' + esc(p.id) + '"' }));
         return UI.panel(title, (p.description ? '<div class="fg2" style="font-size:12px">' + esc(p.description) + '</div>' : '') + '<div class="hstack gap6">' + UI.label(p.label_ceiling, { sm: true }) + '<a href="#" class="muted" style="font-size:12px" data-go="zones">zone ' + esc(p.zone) + '</a></div>' + grid + notices
           + '<div class="eyebrow">Placements</div>' + placementsHtml(p), { actions });
       };
@@ -243,8 +245,8 @@
       else body = pools.map(poolPanel).join('');
 
       root.innerHTML = '<style>'
-        + '.pl-wrap{overflow-x:auto}.pl-grid{display:grid;grid-template-columns:160px minmax(180px,1fr) 250px 64px 54px 70px 72px 92px;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--line2);min-width:980px;font-size:13px}.pl-grid.head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom-color:var(--line)}.pl-grid.row{cursor:pointer;border-radius:4px}.pl-grid.row:hover,.pl-grid.row:focus-visible{background:var(--sel)}.pl-grid:last-child{border-bottom:0}.pl-grid .pill{padding:0 5px;font-size:11px}'
-        + '.pl-mem{display:flex;height:10px;background:var(--sel);border-radius:2px;overflow:hidden;gap:1px}.pl-mem .pinned{background:var(--meter)}.pl-mem .warm{background:var(--faint)}.pl-mem .cold{background:var(--line)}.pl-mem .draining{background:var(--warn-fg)}'
+        + '.pl-wrap{position:relative;overflow-x:auto}.pl-grid{display:grid;grid-template-columns:160px minmax(180px,1fr) 250px 64px 54px 70px 72px 92px;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--line2);min-width:980px;font-size:13px}.pl-grid.head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom-color:var(--line)}.pl-grid.row{cursor:pointer;border-radius:4px}.pl-grid.row:hover,.pl-grid.row:focus-visible{background:var(--sel)}.pl-grid:last-child{border-bottom:0}.pl-grid .pill{padding:0 5px;font-size:11px}'
+        + '.pl-instname{all:unset;cursor:pointer;font-family:var(--mono);font-weight:500;color:var(--fg)}.pl-instname:hover{text-decoration:underline}.pl-instname:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}.pl-mem{display:flex;height:10px;background:var(--sel);border-radius:2px;overflow:hidden;gap:1px}.pl-mem .pinned{background:var(--meter)}.pl-mem .warm{background:var(--faint)}.pl-mem .cold{background:var(--line)}.pl-mem .draining{background:var(--warn-fg)}'
         + '.pl-model{display:inline-flex;gap:4px;align-items:center;font-size:11px;border:1px solid var(--line);border-radius:4px;background:var(--panel);padding:1px 6px;cursor:pointer;font-family:inherit;color:var(--fg)}.pl-model:hover{border-color:var(--muted)}.pl-model.loading{cursor:default;border-style:dashed;color:var(--info-fg)}.pl-model.drift{border-color:var(--info-fg)}'
         + '.pl-drift{font-size:10px;padding:0 4px;border-radius:3px;background:var(--info-bg);color:var(--info-fg)}'
         + '.pl-legend{display:flex;gap:14px;font-size:11px;color:var(--muted);align-items:center;flex-wrap:wrap}.pl-legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}'
@@ -400,8 +402,7 @@
               .catch((err) => { const box = d.querySelector('[data-events]'); if (box) box.innerHTML = UI.notice('History could not be loaded: ' + esc(err.message), 'danger'); });
           } });
       };
-      ctx.on('click', '.pl-grid.row', (e, t) => { if (e.target.closest('.pl-model')) return; instDrawer(t.dataset.inst); });
-      ctx.on('keydown', '.pl-grid.row', (e, t) => { if (e.key === 'Enter' && e.target === t) instDrawer(t.dataset.inst); });
+      ctx.on('click', '.pl-grid.row', (e, t) => { if (e.target.closest('.pl-model,[data-inst-open]')) return; instDrawer(t.dataset.inst); });
       ctx.on('click', '[data-inst-open]', (e, t) => instDrawer(t.dataset.instOpen));
 
       const toggleInst = async (i) => {

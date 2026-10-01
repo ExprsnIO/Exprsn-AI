@@ -243,9 +243,10 @@ export async function rowCounts(db: Db, tables: string[]): Promise<{ table: stri
 }
 
 /** The blob store as a tar stream (paths are object keys), skipping keys under any of `exclude`. */
-export async function* blobTar(blobs: BlobStore, exclude: string[], counter: { objects: number; bytes: number }): AsyncGenerator<Buffer> {
+export async function* blobTar(blobs: BlobStore, exclude: string[], counter: { objects: number; bytes: number }, include?: (key: string) => boolean): AsyncGenerator<Buffer> {
   for await (const o of blobs.list('')) {
     if (exclude.some((p) => o.key.startsWith(p))) continue;
+    if (include && !include(o.key)) continue;
     const got = await blobs.getStream(o.key);
     if (!got) continue; // deleted since the listing
     yield entryHeader(o.key, got.size);

@@ -73,6 +73,8 @@ async function main() {
   const cfg = loadConfig({
     NODE_ENV: 'development',
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn',
+    // The suite opens every screen and design state several times as one admin; keep it clear of the per-user limit.
+    API_RATE_PER_MINUTE: '6000',
     HOST: '127.0.0.1',
     PORT: String(port),
     PUBLIC_URL: url,
@@ -101,11 +103,13 @@ async function main() {
   await migrate(db);
   const runner = new FakeRunner();
   runner.handler = (req) => ({ stdout: req.stdin ? `echo: ${req.stdin}` : 'hello from the fake sandbox\n', exitCode: 0 });
+  // Worker contract 2 (Sprint 18): the fake fetches run keys and stores checkpoints through the app.
+  const trainer = new FakeTrainer();
   const s = createServices(cfg, db, createLogger(cfg.LOG_LEVEL, false), new Metrics(), {
     mediaRunner: new FakeMediaRunner(),
     imageBackends: [new FakeImageBackend()],
     imageSafety: new FakeSafety(),
-    trainer: new FakeTrainer()
+    trainer
   });
   s.scripts.runner = runner;
   await bootstrap(s);
@@ -181,6 +185,7 @@ async function main() {
 
   // ---- HTTP ----
   const app = createApp(s);
+  trainer.useApp(app);
   const server: Server = createServer(app);
   const realtime = attachRealtime(server, s);
   s.jobs.start();

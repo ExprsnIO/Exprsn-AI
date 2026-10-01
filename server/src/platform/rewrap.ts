@@ -5,6 +5,9 @@ import type { Config } from '../config/index.js';
 import type { Db } from '../db/knex.js';
 import type { BlobStore } from './blob.js';
 import { LocalKms, OpenBaoKms, type Kms } from './kms.js';
+import { addText, isPng, removeText } from '../images/png.js';
+import { asciiJson, PROVENANCE_KEYWORD } from '../images/service.js';
+import { cardManifest } from '../training/service.js';
 
 /**
  * Key-encryption-key re-wrap (B-407). A KEK change (a new DATA_KEY, or moving between the local KMS and OpenBao)
@@ -63,7 +66,16 @@ export interface RewrapReport {
   dataKeys: { total: number; rewrapped: number; already: number; destroyed: number; failed: { id: string; scope: string; version: number; error: string }[] };
   checkpoints: { total: number; resigned: number; already: number; failed: { id: string; error: string }[] };
   backups: { total: number; rewrapped: number; already: number; failed: { id: string; error: string }[] };
+  /** Sprint 18 (B-906): image provenance manifests (the row and the PNG chunk) and training model cards. */
+  images: { total: number; resigned: number; already: number; failed: { id: string; error: string }[] };
+  modelCards: { total: number; resigned: number; already: number; failed: { id: string; error: string }[] };
   verified: boolean;
+}
+
+/** Opens and seals tenant content (the data keys), so a stored image's embedded provenance chunk can be rewritten. */
+export interface RewrapSealer {
+  openBytes(scope: string, sealed: string, aad: string): Promise<Buffer>;
+  sealBytes(scope: string, plaintext: Buffer, aad: string): Promise<string>;
 }
 
 interface KeyRow {
@@ -95,13 +107,15 @@ async function firstOk<T>(attempts: (() => Promise<T>)[]): Promise<T> {
  * `target`. `kekName` maps a key scope to its KEK name under the target (the prefix may differ). Then verifies that
  * every row opens with `target` alone.
  */
-export async function rewrapAll(o: { db: Db; blobs: BlobStore; target: Kms; previous: Kms; kekName: (scope: string) => string; progress?: (msg: string) => void }): Promise<RewrapReport> {
+export async function rewrapAll(o: { db: Db; blobs: BlobStore; target: Kms; previous: Kms; kekName: (scope: string) => string; progress?: (msg: string) => void; keys?: RewrapSealer }): Promise<RewrapReport> {
   const { db, target, previous } = o;
   const report: RewrapReport = {
     target: target.kind,
     dataKeys: { total: 0, rewrapped: 0, already: 0, destroyed: 0, failed: [] },
     checkpoints: { total: 0, resigned: 0, already: 0, failed: [] },
     backups: { total: 0, rewrapped: 0, already: 0, failed: [] },
+    images: { total: 0, resigned: 0, already: 0, failed: [] },
+    modelCards: { total: 0, resigned: 0, already: 0, failed: [] },
     verified: false
   };
 
@@ -210,8 +224,64 @@ export async function rewrapAll(o: { db: Db; blobs: BlobStore; target: Kms; prev
     }
   }
 
+  // 5. Image provenance (B-906): the manifest HMAC in the row is verified with the previous key and signed again; the
+  // copy embedded in the stored PNG is replaced too when the data keys are at hand (`keys`).
+  const images = (await db('image_jobs').whereNotNull('provenance').select('id', 'tenant_id', 'provenance', 'blob_key')) as { id: string; tenant_id: string; provenance: string; blob_key: string | null }[];
+  report.images.total = images.length;
+  for (const img of images) {
+    try {
+      const sidecar = JSON.parse(img.provenance) as Record<string, unknown> & { signature: string; key: string };
+      const { signature: oldSig, key, ...manifest } = sidecar;
+      const payload = canonicalJson(manifest);
+      if (await target.verifyHmac(key, payload, oldSig).catch(() => false)) {
+        report.images.already++;
+        continue;
+      }
+      if (!(await previous.verifyHmac(key, payload, oldSig).catch(() => false))) throw new Error('The provenance signature does not verify with the previous key either');
+      await target.ensureKey(key);
+      const next = { ...manifest, signature: await target.hmac(key, payload), key };
+      if (o.keys && img.blob_key) {
+        const raw = await o.blobs.get(img.blob_key);
+        if (raw) {
+          const bytes = await o.keys.openBytes(img.tenant_id, raw.toString('utf8'), `image:${img.id}`);
+          if (isPng(bytes)) {
+            const png = addText(removeText(bytes, PROVENANCE_KEYWORD), PROVENANCE_KEYWORD, asciiJson(next));
+            await o.blobs.put(img.blob_key, Buffer.from(await o.keys.sealBytes(img.tenant_id, png, `image:${img.id}`)));
+          }
+        }
+      }
+      await db('image_jobs').where({ id: img.id, provenance: img.provenance }).update({ provenance: JSON.stringify(next) });
+      report.images.resigned++;
+    } catch (err) {
+      report.images.failed.push({ id: img.id, error: (err as Error).message.slice(0, 300) });
+    }
+  }
+
+  // 6. Training model cards (B-906): the registration manifest's signature.
+  const jobs = (await db('training_jobs').whereNotNull('card').select('id', 'name', 'card')) as { id: string; name: string; card: string | Record<string, unknown> }[];
+  for (const j of jobs) {
+    const card = (typeof j.card === 'string' ? JSON.parse(j.card) : j.card) as Parameters<typeof cardManifest>[1];
+    if (!card?.manifest) continue;
+    report.modelCards.total++;
+    try {
+      const payload = canonicalJson(cardManifest(j, card));
+      const m = card.manifest;
+      if (await target.verifyHmac(m.key, payload, m.signature).catch(() => false)) {
+        report.modelCards.already++;
+        continue;
+      }
+      if (!(await previous.verifyHmac(m.key, payload, m.signature).catch(() => false))) throw new Error('The model card signature does not verify with the previous key either');
+      await target.ensureKey(m.key);
+      const next = { ...card, manifest: { ...m, signature: await target.hmac(m.key, payload), resignedAt: Date.now() } };
+      await db('training_jobs').where({ id: j.id }).update({ card: JSON.stringify(next) });
+      report.modelCards.resigned++;
+    } catch (err) {
+      report.modelCards.failed.push({ id: j.id, error: (err as Error).message.slice(0, 300) });
+    }
+  }
+
   // 4. Verify with the target alone.
-  let ok = !report.dataKeys.failed.length && !report.checkpoints.failed.length && !report.backups.failed.length;
+  let ok = !report.dataKeys.failed.length && !report.checkpoints.failed.length && !report.backups.failed.length && !report.images.failed.length && !report.modelCards.failed.length;
   for (const row of (await db('tenant_keys').whereNotNull('wrapped')) as KeyRow[]) {
     if (!(await target.unwrap(row.key_name, row.wrapped!, dekAad(row)).then(() => true, () => false))) {
       ok = false;

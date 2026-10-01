@@ -21,7 +21,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { parseArgs } from 'node:util';
 import { performance } from 'node:perf_hooks';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import { io as ioClient, type Socket } from 'socket.io-client';
 
 /* ------------------------------------------------------------------ options */
@@ -43,6 +43,9 @@ const { values: opt } = parseArgs({
     parallel: { type: 'string', default: '8' },
     instances: { type: 'string', default: '1' },
     'fake-ollama': { type: 'string' },
+    'guard-model': { type: 'boolean', default: false },
+    holdback: { type: 'string' },
+    'sentence-words': { type: 'string', default: '0' },
     // thresholds
     'max-error-rate': { type: 'string', default: '0.01' },
     'max-p95-ttft-ms': { type: 'string' },
@@ -72,6 +75,10 @@ const USAGE = `Usage: npx tsx server/loadtest/stream.ts [options]
   --parallel <n>             Parallel requests per fake instance (default 8)
   --instances <n>            Fake Ollama instances in the pool (default 1)
   --fake-ollama <port>       Only start a fake Ollama on this port (for a pool instance in a running stack) and wait
+  --sentence-words <n>       End a sentence every n words of the fake answer (default 0: no sentence ends)
+  --guard-model              Also publish a guard-model rule at model-output, so answers are screened while they
+                             stream (Sprint 16); the fake guard model answers "safe"
+  --holdback <n>             CHAT_GUARD_HOLDBACK_SENTENCES for the in-process server
 
   Thresholds (exit 1 when exceeded):
   --max-error-rate <0..1>    default 0.01
@@ -93,7 +100,10 @@ const optNum = (v: string | undefined, name: string): number | null => (v === un
 /* ------------------------------------------------------------------ fake Ollama */
 
 const WORDS = 'the gateway leases a slot on an instance streams tokens back and meters the answer when it ends'.split(' ');
-const replyText = (n: number) => Array.from({ length: n }, (_, i) => WORDS[i % WORDS.length]).join(' ');
+const replyText = (n: number) => {
+  const every = num(opt['sentence-words'], 'sentence-words');
+  return Array.from({ length: n }, (_, i) => WORDS[i % WORDS.length] + (every && (i + 1) % every === 0 ? '.' : '')).join(' ');
+};
 
 async function startFakeOllama(port = 0) {
   const { FakeOllama } = await import('../test/fake-ollama.js');
@@ -130,7 +140,7 @@ interface Target {
 async function inProcessTarget(users: number): Promise<Target> {
   const { harness, localUser, PASSWORD } = await import('../test/helpers.js');
   const { attachRealtime } = await import('../src/realtime/socket.js');
-  const h = await harness({ OLLAMA_POLL_MS: '600000', OLLAMA_QUEUE_TIMEOUT_MS: String(num(opt.timeout, 'timeout')) });
+  const h = await harness({ OLLAMA_POLL_MS: '600000', OLLAMA_QUEUE_TIMEOUT_MS: String(num(opt.timeout, 'timeout')), ...(opt.holdback != null ? { CHAT_GUARD_HOLDBACK_SENTENCES: String(num(opt.holdback, 'holdback')) } : {}) });
   const fakes: Awaited<ReturnType<typeof startFakeOllama>>[] = [];
   for (let i = 0; i < Math.max(1, num(opt.instances, 'instances')); i++) fakes.push(await startFakeOllama());
 
@@ -144,6 +154,17 @@ async function inProcessTarget(users: number): Promise<Target> {
   await repo.place(model.id, pool.id, 'warm', 'loadtest');
   const t = Date.now();
   await repo.createProfile({ id: 'LOADTEST000000000000000000', tenant_id: h.tenantId, name: String(opt.profile), display_name: 'Load test', description: null, alias_of: null, model_id: model.id, pool_id: pool.id, num_ctx: 8192, temperature: 0.2, think_default: 'off', think_ceiling: 'off', system_prompt: 'Be brief.', fallback: null, canary: null, tools: [], label: 'internal', status: 'published', version: 1, updated_by: null, created_at: t, updated_at: t });
+  if (opt['guard-model']) {
+    // Sprint 16: a guard model on the same pool, and a published tenant rule that uses it at model-output.
+    for (const f of fakes) f.addAvailable({ name: 'llama-guard3:8b', size: 5_000_000_000, capabilities: ['completion'] });
+    const guard = await repo.createModel({ name: 'llama-guard3:8b', source: 'Ollama library', expectedDigest: null, license: { name: 'test' }, label: 'confidential', notes: null, requestedBy: 'loadtest', requestedTenant: h.tenantId });
+    await repo.updateModel(guard.id, { state: 'approved', import_state: 'pulled', capabilities: ['completion'], size_bytes: 5_000_000_000 });
+    await repo.place(guard.id, pool.id, 'warm', 'loadtest');
+    await repo.createProfile({ id: 'LOADTESTGUARD0000000000000', tenant_id: h.tenantId, name: 'llama-guard', display_name: 'Guard', description: null, alias_of: null, model_id: guard.id, pool_id: pool.id, num_ctx: 8192, temperature: 0, think_default: 'off', think_ceiling: 'off', system_prompt: null, fallback: null, canary: null, tools: [], label: 'confidential', status: 'published', version: 1, updated_by: null, created_at: t, updated_at: t });
+    const set = await h.s.guard.sets.create(h.tenantId, { name: 'Load test guard', scope: 'tenant' }, 'loadtest');
+    await h.s.guard.sets.saveDraft(set, [{ id: 'safety', name: 'Safety', checkpoint: 'model-output', type: 'guard model', mechanism: { kind: 'guard-model', profile: 'llama-guard' }, action: 'block', stage: 'enforce' }], 'loadtest');
+    await h.s.guard.sets.publish(set, 'loadtest');
+  }
   await h.s.gateway.pollAll();
 
   const accounts: Target['accounts'] = [];
@@ -223,7 +244,7 @@ async function signIn(url: string, a: Target['accounts'][number], tenant: string
   let s: Session = { cookie: mergeCookies('', res), csrf: String(body.csrf) };
   if (body.stage === 'mfa') {
     if (!a.totp) throw new Error(`sign-in ${a.username}: a second factor is required; add :<totp-secret> in LOADTEST_USERS`);
-    const r2 = await post(url, '/api/auth/mfa/totp', { code: authenticator.generate(a.totp) }, s, extra);
+    const r2 = await post(url, '/api/auth/mfa/totp', { code: totp.generate(a.totp) }, s, extra);
     const b2 = (await r2.json().catch(() => ({}))) as { stage?: string; csrf?: string; detail?: string };
     if (!r2.ok) throw new Error(`second factor ${a.username}: ${r2.status} ${b2.detail ?? ''}`);
     s = { cookie: mergeCookies(s.cookie, r2), csrf: String(b2.csrf) };

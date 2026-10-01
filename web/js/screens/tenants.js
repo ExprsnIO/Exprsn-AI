@@ -75,8 +75,8 @@
     const ig = st.integ = st.integ || {};
     if (ig.loading || ig.loaded) return;
     ig.loading = true;
-    Promise.all([App.can('webhooks:manage') ? App.get('/api/admin/webhooks') : null, App.can('tenant:manage') ? App.get('/api/admin/integrations/hosts') : null])
-      .then(([hooks, hosts]) => { Object.assign(ig, { hooks, hosts, loaded: true, error: null }); if (hooks && !hooks.webhooks.some((w) => w.id === ig.sel)) ig.sel = hooks.webhooks.length ? hooks.webhooks[0].id : null; })
+    Promise.all([App.can('webhooks:manage') ? App.get('/api/admin/webhooks') : null, App.can('tenant:manage') ? App.get('/api/admin/integrations/hosts') : null, App.can('webhooks:manage') ? App.get('/api/admin/webhooks/signing-key').catch(() => null) : null])
+      .then(([hooks, hosts, signingKey]) => { Object.assign(ig, { hooks, hosts, signingKey, loaded: true, error: null }); if (hooks && !hooks.webhooks.some((w) => w.id === ig.sel)) ig.sel = hooks.webhooks.length ? hooks.webhooks[0].id : null; })
       .catch((err) => { ig.error = err; ig.loaded = true; })
       .finally(() => { ig.loading = false; if (App.state.route === 'tenants') ctx.rerender(); });
   }
@@ -98,18 +98,23 @@
     if (sel && !(ig.deliveries && ig.deliveries[sel.id]) && ig.delLoading !== sel.id) integDeliveries(st, ctx, sel.id);
     const dl = sel && ig.deliveries ? ig.deliveries[sel.id] : null;
     const s = ig.hooks.settings;
-    let h = '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Events from this tenant are posted to your endpoints as signed JSON. <span class="mono">X-Exprsn-Signature</span> is <span class="mono">sha256=</span> HMAC-SHA256 of <span class="mono">&lt;X-Exprsn-Timestamp&gt;.&lt;body&gt;</span> with the webhook\'s secret. Failed deliveries are retried ' + esc(s.maxAttempts - 1) + ' times with growing gaps; ' + esc(s.breakerThreshold) + ' failures in a row pause the endpoint for ' + esc(Math.round(s.breakerCooldownMs / 60000)) + ' min.</span>'
+    let h = '<div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">Events from this tenant are posted to your endpoints as signed JSON. <span class="mono">X-Exprsn-Signature</span> is <span class="mono">sha256=</span> HMAC-SHA256 of <span class="mono">&lt;X-Exprsn-Timestamp&gt;.&lt;body&gt;</span> with the webhook\'s secret, or, for webhooks signed with Ed25519, <span class="mono">X-Exprsn-Signature-Ed25519</span> over the same text with the key named in <span class="mono">X-Exprsn-Key-Id</span>. Ordered webhooks send one delivery at a time in event order (<span class="mono">X-Exprsn-Sequence</span>). Failed deliveries are retried ' + esc(s.maxAttempts - 1) + ' times with growing gaps; ' + esc(s.breakerThreshold) + ' failures in a row pause the endpoint for ' + esc(Math.round(s.breakerCooldownMs / 60000)) + ' min.</span>'
       + UI.btn('New webhook', { kind: 'primary', icon: 'plus', attrs: 'data-whnew' }) + '</div>';
-    h += UI.table(['Name', 'Endpoint', 'Events', 'Up to', 'State', 'Breaker', 'Last delivery'], list.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(w.url) + '</span>', esc(w.events.join(', ')), UI.label(w.maxLabel, { sm: true }), UI.pill(w.state, w.state === 'active' ? 'ok' : 'outline'), w.breaker === 'open' ? UI.pill('open', 'danger') : UI.pill('closed', 'ok'), esc(w.lastDeliveryAt ? whWhen(w.lastDeliveryAt) + ', ' + (w.lastStatus || '') : 'never')], attrs: 'data-whsel="' + esc(w.id) + '"', selected: sel && sel.id === w.id })), { minWidth: '760px', emptyTitle: 'No webhooks', emptyText: 'Add one to post audit actions, job states, flags and approvals to an internal endpoint.' });
+    h += UI.table(['Name', 'Endpoint', 'Events', 'Up to', 'State', 'Breaker', 'Last delivery'], list.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>' + (w.ordered ? ' ' + UI.pill('ordered', 'outline') : '') + (w.signing === 'ed25519' ? ' ' + UI.pill('Ed25519', 'outline') : ''), '<span class="mono" style="overflow-wrap:anywhere">' + esc(w.url) + '</span>', esc(w.events.join(', ')), UI.label(w.maxLabel, { sm: true }), UI.pill(w.state, w.state === 'active' ? 'ok' : 'outline'), w.breaker === 'open' ? UI.pill('open', 'danger') : UI.pill('closed', 'ok'), esc(w.lastDeliveryAt ? whWhen(w.lastDeliveryAt) + ', ' + (w.lastStatus || '') : 'never')], attrs: 'data-whsel="' + esc(w.id) + '"', selected: sel && sel.id === w.id })), { minWidth: '760px', emptyTitle: 'No webhooks', emptyText: 'Add one to post audit actions, job states, flags and approvals to an internal endpoint.' });
     if (sel) {
       h += (sel.breaker === 'open' ? UI.notice('<b>Paused after ' + esc(sel.failures) + ' failed attempts.</b> Deliveries wait until ' + esc(whWhen(sel.retryAt)) + '; the first one after that is a trial that closes the breaker when it succeeds.', 'warn') : '')
-        + UI.panel(esc(sel.name), UI.kv([['Endpoint', '<span class="mono">' + esc(sel.url) + '</span>'], ['Events', esc(sel.events.join(', '))], ['Carries events up to', UI.label(sel.maxLabel, { sm: true })], ['Consecutive failures', esc(sel.failures)], ['Created', esc(whWhen(sel.createdAt))]], 2), {
+        + UI.panel(esc(sel.name), UI.kv([['Endpoint', '<span class="mono">' + esc(sel.url) + '</span>'], ['Events', esc(sel.events.join(', '))], ['Carries events up to', UI.label(sel.maxLabel, { sm: true })], ['Consecutive failures', esc(sel.failures)], ['Signed with', sel.signing === 'ed25519' ? 'Ed25519, the published key below' : 'HMAC-SHA256, the webhook\'s secret'], ['Delivery order', sel.ordered ? 'one at a time, in event order' : 'as they come'], ['Created', esc(whWhen(sel.createdAt))]], 2), {
           actions: UI.btn('Send test', { size: 'sm', attrs: 'data-whtest' }) + UI.btn('Edit', { size: 'sm', kind: 'ghost', attrs: 'data-whedit' }) + UI.btn('Rotate secret', { size: 'sm', kind: 'ghost', attrs: 'data-whrotate' })
             + UI.btn(sel.state === 'active' ? 'Disable' : 'Enable', { size: 'sm', kind: 'ghost', attrs: 'data-whtoggle' }) + UI.btn('Delete', { size: 'sm', kind: 'danger', attrs: 'data-whdel' }) })
         + '<div class="hstack"><span class="eyebrow grow">Delivery log</span>' + UI.btn('Refresh', { size: 'xs', kind: 'ghost', icon: 'refresh', attrs: 'data-whrefresh' }) + '</div>'
         + (!dl ? UI.notice('Loading…', 'info') : dl.error ? UI.problem('Deliveries could not be loaded', dl.error.message, dl.error.problem && dl.error.problem.trace_id)
           : UI.table(['Event', 'State', 'Attempts', 'Answer', 'Next attempt', 'Created', ''], dl.deliveries.map((d) => [esc(d.event) + (d.replayOf ? ' <span class="muted">replay</span>' : ''), UI.pill(d.state, WH_TONE[d.state] || ''), esc(d.attempts), esc(d.statusCode != null ? d.statusCode : '') + (d.error ? ' <span class="muted">' + esc(d.error) + '</span>' : ''), esc(d.state === 'pending' ? whWhen(d.nextAttemptAt) : ''), esc(whWhen(d.createdAt)), UI.btn('Replay', { size: 'xs', kind: 'ghost', attrs: 'data-whreplay="' + esc(d.id) + '"' })]), { minWidth: '720px', emptyTitle: 'No deliveries yet', emptyText: 'Send a test, or wait for a subscribed event.' })
             + (dl.withheld ? '<div class="muted" style="font-size:12px">' + esc(dl.withheld) + ' deliveries above your clearance are not listed.</div>' : ''));
+    }
+    const k = ig.signingKey;
+    if (k) {
+      h += UI.panel('Ed25519 signing key', (k.active ? UI.kv([['Key id', '<span class="mono">' + esc(k.active.kid) + '</span>'], ['Public key (JWK x)', '<span class="mono" style="overflow-wrap:anywhere">' + esc(k.active.publicKey) + '</span>'], ['Published at', '<span class="mono" style="overflow-wrap:anywhere">' + esc(k.jwksUrl) + '</span>'], ['Created', esc(whWhen(k.active.createdAt))], ['Earlier keys, still published', esc(String(k.retired.length))]], 1)
+        : '<p class="fg2" style="margin:0;font-size:12px">No key yet. The first webhook signed with Ed25519 creates one; receivers verify with the public key published at <span class="mono">' + esc(k.jwksUrl) + '</span>, with no shared secret.</p>'), { actions: UI.btn(k.active ? 'Rotate key' : 'Create key', { size: 'sm', kind: 'ghost', attrs: 'data-whkey' }) });
     }
     return h;
   }
@@ -133,7 +138,9 @@
     ctx.modal({
       title: existing ? 'Edit webhook' : 'New webhook', cls: 'wide',
       body: '<div class="formgrid">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-whname maxlength="100"' })) + UI.field('Endpoint URL', UI.input(existing ? existing.url : '', { attrs: 'data-whurl maxlength="2000"', placeholder: 'https://hooks.corp.internal/exprsn' }), 'Checked now and at every delivery against the internal-address rules and this tenant\'s allowed hosts.')
-        + UI.field('Carry events up to', UI.select(labels, existing ? existing.maxLabel : 'internal', 'data-whlabel'), 'Events labelled above this are not sent.') + '</div>'
+        + UI.field('Carry events up to', UI.select(labels, existing ? existing.maxLabel : 'internal', 'data-whlabel'), 'Events labelled above this are not sent.')
+        + UI.field('Signature', UI.select([{ value: 'hmac', label: 'HMAC-SHA256 with a shared secret' }, { value: 'ed25519', label: 'Ed25519 with the published key' }], existing ? existing.signing : 'hmac', 'data-whsigning'), 'Ed25519 lets receivers verify with a public key instead of holding a secret.')
+        + UI.field('Delivery order', UI.select([{ value: '', label: 'As they come (faster)' }, { value: 'ordered', label: 'One at a time, in event order' }], existing && existing.ordered ? 'ordered' : '', 'data-whordered'), 'In order, a delivery that keeps failing holds the ones after it until it gives up.') + '</div>'
         + '<div class="field" role="group" aria-label="Events"><span class="fl">Events</span><div class="tn-pick">' + groups.map((g) => '<label class="tn-pickrow"><input type="checkbox" data-whev value="' + esc(g.pattern) + '"' + (chosen.indexOf(g.pattern) >= 0 ? ' checked' : '') + '><span class="mono">' + esc(g.pattern) + '</span><span class="muted" style="font-size:12px">' + esc(g.description) + '</span></label>').join('') + '</div></div>'
         + UI.field('Other events, comma separated', UI.input(custom.join(', '), { attrs: 'data-whcustom', placeholder: 'prompt.published, tenant.hosts.updated' }), 'Any audit action name, or a prefix ending in .*')
         + '<div data-err></div>',
@@ -141,7 +148,7 @@
       onMount(m) {
         m.querySelector('[data-whsave]').addEventListener('click', async (e) => {
           const events = Array.prototype.slice.call(m.querySelectorAll('[data-whev]:checked')).map((i) => i.value).concat(m.querySelector('[data-whcustom]').value.split(',').map((x) => x.trim()).filter(Boolean));
-          const body = { name: m.querySelector('[data-whname]').value.trim(), url: m.querySelector('[data-whurl]').value.trim(), events, maxLabel: m.querySelector('[data-whlabel]').value };
+          const body = { name: m.querySelector('[data-whname]').value.trim(), url: m.querySelector('[data-whurl]').value.trim(), events, maxLabel: m.querySelector('[data-whlabel]').value, signing: m.querySelector('[data-whsigning]').value, ordered: m.querySelector('[data-whordered]').value === 'ordered' };
           m.querySelector('[data-err]').innerHTML = '';
           if (!body.name || !body.url || !events.length) { m.querySelector('[data-err]').innerHTML = UI.notice('A name, an endpoint and at least one event are needed.', 'warn'); return; }
           e.target.disabled = true;
@@ -185,6 +192,13 @@
       const ok = await ctx.confirm({ title: 'Rotate the signing secret?', tone: 'danger', body: 'Deliveries from now on are signed with the new secret. Update the receiver before the next event, or it will refuse them.', ok: 'Rotate secret' });
       if (!ok) return;
       try { const r = await App.post(wUrl() + '/secret', {}); secretModal(ctx, w.name, r.secret); } catch (err) { App.fail(err, 'Could not rotate the secret'); }
+    });
+    ctx.on('click', '[data-whkey]', async () => {
+      const k = ig.signingKey;
+      const rotating = !!(k && k.active);
+      const ok = await ctx.confirm({ title: rotating ? 'Rotate the Ed25519 key?' : 'Create an Ed25519 key?', tone: rotating ? 'danger' : 'info', body: rotating ? 'Deliveries from now on are signed with a new key. The old key stays published so receivers can still verify deliveries signed before; receivers that pin a key id must fetch the key list again.' : 'A key pair is created for this tenant. The private key is sealed and never shown; the public key is published.', ok: rotating ? 'Rotate key' : 'Create key' });
+      if (!ok) return;
+      try { ig.signingKey = await App.post('/api/admin/webhooks/signing-key/rotate', {}); ctx.toast(rotating ? 'Key rotated. Audit entry written.' : 'Key created. Audit entry written.', 'ok'); ctx.rerender(); } catch (err) { App.fail(err, 'Could not change the key'); }
     });
     ctx.on('click', '[data-whtoggle]', async () => {
       const w = sel(); if (!w) return;
@@ -281,7 +295,7 @@
         const done = (data) => { if (st.node === key) { st.nodeData = data; st.nodeKey = key; } };
         const p = node.type === 'workspace'
           ? Promise.all([App.get(wUrl(tenant.id, node.ws.id) + '/members'), App.get(wUrl(tenant.id, node.ws.id) + '/quota')]).then(([members, quota]) => done({ members, quota }))
-          : Promise.all([Promise.all(tenant.workspaces.map((w) => App.get(wUrl(tenant.id, w.id) + '/quota').then((q) => [w.id, q]))), App.get(tUrl(tenant.id) + '/retention').catch(() => null)]).then(([list, retention]) => { const quotas = {}; list.forEach((x) => { quotas[x[0]] = x[1]; }); done({ quotas, retention }); });
+          : Promise.all([Promise.all(tenant.workspaces.map((w) => App.get(wUrl(tenant.id, w.id) + '/quota').then((q) => [w.id, q]))), App.get(tUrl(tenant.id) + '/retention').catch(() => null), App.get(tUrl(tenant.id) + '/sharing').catch(() => null)]).then(([list, retention, sharing]) => { const quotas = {}; list.forEach((x) => { quotas[x[0]] = x[1]; }); done({ quotas, retention, sharing }); });
         p.catch((err) => { if (st.node === key) { st.nodeData = { error: err }; st.nodeKey = key; } })
           .finally(() => { if (st.nodeLoading === key) st.nodeLoading = null; if (App.state.route === 'tenants') ctx.rerender(); });
       };
@@ -369,7 +383,7 @@
             ['Workspaces', num(wss.filter((w) => w.state === 'active').length) + (wss.some((w) => w.state !== 'active') ? ', ' + num(wss.filter((w) => w.state !== 'active').length) + ' archived' : '')]
           ], 2), { actions: (canMap && t.state === 'active' && (st.providers || []).some((p) => p.kind !== 'local' && p.enabled) ? UI.btn('Sync now', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-sync' }) : '') + (own && App.can('identity:manage') ? UI.btn('Open user stores', { size: 'sm', kind: 'ghost', attrs: 'data-go="directories"' }) : '') })
           + UI.panel('Quota, tenant total', LIMITS.map((L) => meterFor(t.quota, L)).join('') + '<div class="muted" style="font-size:12px">Workspace limits nest under the tenant limit. Raised by a system admin.</div>', { actions: isSys() ? UI.btn('Raise limits', { size: 'sm', kind: 'ghost', attrs: 'data-traise' }) : '' }) + '</div>'
-          + retentionPanel(nd && nd.retention)
+          + retentionPanel(nd && nd.retention) + sharingPanel(nd && nd.sharing)
           + '<div class="eyebrow">Workspaces</div>' + UI.table(['Workspace', { label: 'Members', right: true }, 'Label ceiling', 'Visibility', { label: 'Mappings', right: true }, 'Tokens today'], wss.map((w) => ({ cells: ['<b>' + esc(w.name) + '</b>' + (w.state !== 'active' ? ' ' + UI.pill(w.state, 'outline') : ''), '<span class="num">' + num(w.members) + '</span>', UI.label(w.label, { sm: true }), w.visibility === 'tenant' ? 'whole tenant' : 'members only', own && st.mappings ? '<span class="num">' + num(wsMappings(w.id).length) + '</span>' : '<span class="muted">n/a</span>', esc(qTokens(w))], attrs: 'data-node="w:' + esc(w.id) + '"' })), { minWidth: '560px', emptyTitle: 'No workspaces', emptyText: 'Create one to give a directory group a place to work.' });
         // Sprint 13: the tenant's own integrations, as tabs beside the overview.
         const canHooks = own && App.can('webhooks:manage'), canHosts = own && App.can('tenant:manage');
@@ -590,8 +604,79 @@
         if (!r) return '';
         const keep = r.conversationDays == null ? 'until their owners delete them' : 'deleted after ' + num(r.conversationDays) + ' days without activity';
         const last = r.lastRunAt ? new Date(r.lastRunAt).toLocaleString() + ', ' + num(r.lastPurged || 0) + ' deleted' : 'not run yet';
-        return UI.panel('Conversation retention', UI.kv([['Conversations', esc(keep)], ['Checked', 'every ' + num(r.sweepMinutes) + ' min'], ['Last run', esc(last)]], 3) + '<div class="muted" style="font-size:12px">Each purge is written to the audit chain with its counts. Messages, their catch-up buffers and attachments no remaining message uses are deleted with the conversation.</div>',
-          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-retention' }) + (r.conversationDays != null ? UI.btn('Run now', { size: 'sm', kind: 'ghost', attrs: 'data-retrun' }) : '') });
+        // Sprint 16: shorter periods for a workspace or a user; the shortest period that applies wins.
+        const scopes = r.scopes || [];
+        const rows = scopes.length ? '<div class="tablewrap"><table class="dt"><thead><tr><th>Applies to</th><th>Kind</th><th class="r">Days</th><th></th></tr></thead><tbody>' + scopes.map((x) => '<tr><td>' + esc(x.name || x.scopeId) + '</td><td>' + esc(x.scope) + '</td><td class="r num">' + num(x.conversationDays) + '</td><td>' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-rscopedel="' + esc(x.scope + ':' + x.scopeId) + '" aria-label="Remove the period for ' + esc(x.name || x.scopeId) + '"' }) + '</td></tr>').join('') + '</tbody></table></div>' : '<div class="muted" style="font-size:12px">No workspace or user has a shorter period.</div>';
+        return UI.panel('Conversation retention', UI.kv([['Conversations', esc(keep)], ['Checked', 'every ' + num(r.sweepMinutes) + ' min'], ['Last run', esc(last)]], 3)
+          + '<div class="eyebrow">Shorter periods</div>' + rows
+          + '<div class="muted" style="font-size:12px">A conversation is deleted after the shortest period that applies to it: the tenant\'s, its workspace\'s or its owner\'s. Each purge is written to the audit chain with its counts. Messages, their catch-up buffers and attachments no remaining message uses are deleted with the conversation.</div>',
+          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-retention' }) + UI.btn('Add a shorter period', { size: 'sm', kind: 'ghost', attrs: 'data-rscope' }) + (r.conversationDays != null || scopes.length ? UI.btn('Run now', { size: 'sm', kind: 'ghost', attrs: 'data-retrun' }) : '') });
+      }
+
+      function retentionScopeModal() {
+        const r = nd && nd.retention; if (!r) return;
+        const wsOpts = (tenant.workspaces || []).filter((w) => w.state === 'active').map((w) => ({ value: w.id, label: w.name }));
+        const local = { scope: wsOpts.length ? 'workspace' : 'user', userId: null };
+        ctx.modal({
+          title: 'Shorter retention period, ' + esc(tenant.name),
+          body: '<div class="formgrid">' + UI.field('Applies to', UI.select([{ value: 'workspace', label: 'A workspace' }, { value: 'user', label: 'A user' }], local.scope, 'data-rsk')) + '<div data-rspick></div>'
+            + UI.field('Delete their conversations idle for more than (days)', UI.input('', { attrs: 'data-rsdays inputmode="numeric"', placeholder: 'for example 30' }), 'Between 1 and 3650. It only shortens what applies: the tenant\'s period still applies when it is shorter.') + '</div>'
+            + UI.notice('Deletion cannot be undone. It applies from the next scheduled run.', 'warn') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-rssave' }),
+          onMount(m) {
+            const pick = m.querySelector('[data-rspick]');
+            const paint = () => {
+              if (local.scope === 'workspace') { pick.innerHTML = UI.field('Workspace', UI.select(wsOpts.length ? wsOpts : [{ value: '', label: 'No active workspace' }], wsOpts[0] ? wsOpts[0].value : '', 'data-rsws')); return; }
+              pick.innerHTML = UI.search('Search users by name or username', 'data-rsq') + '<div data-rsusers class="tn-pick"></div>';
+              const q = pick.querySelector('[data-rsq]'), list = pick.querySelector('[data-rsusers]');
+              let timer = null;
+              const search = async () => {
+                let users; try { users = await App.get('/api/admin/users?limit=20' + (q.value.trim() ? '&q=' + enc(q.value.trim()) : '')); } catch (err) { errorBox(m, err); return; }
+                list.innerHTML = users.length ? users.map((u) => '<label class="tn-pickrow"><input type="radio" name="tn-rsuser" value="' + esc(u.id) + '"' + (local.userId === u.id ? ' checked' : '') + '> <span class="grow"><b>' + esc(u.displayName) + '</b> <span class="mono muted">' + esc(u.username) + '</span></span></label>').join('') : '<div class="muted" style="padding:8px">No users match.</div>';
+              };
+              q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+              list.addEventListener('change', (e) => { if (e.target && e.target.name === 'tn-rsuser') local.userId = e.target.value; });
+              search();
+            };
+            m.querySelector('[data-rsk]').addEventListener('change', (e) => { local.scope = e.target.value; paint(); });
+            paint();
+            submit(m, '[data-rssave]', () => {
+              const days = Number(String(m.querySelector('[data-rsdays]').value || '').trim());
+              if (!(Number.isInteger(days) && days >= 1 && days <= 3650)) { errorBox(m, new Error('Enter whole days between 1 and 3650.')); return false; }
+              const scopeId = local.scope === 'workspace' ? (m.querySelector('[data-rsws]') || {}).value : local.userId;
+              if (!scopeId) { errorBox(m, new Error(local.scope === 'workspace' ? 'Pick a workspace.' : 'Pick a user.')); return false; }
+              st.nodeKey = null;
+              return App.api('PUT', tUrl(tenant.id) + '/retention/scopes', { scope: local.scope, scopeId, conversationDays: days });
+            }, 'Shorter period saved. It applies from the next run.');
+          }
+        });
+      }
+
+      /** Conversation sharing (Sprint 16): anonymous links, off until a tenant admin turns them on. */
+      function sharingPanel(sh) {
+        if (!sh) return '';
+        return UI.panel('Conversation sharing', UI.kv([['Links without sign-in', sh.anonymousLinks ? UI.pill('allowed', 'warn') : UI.pill('off', 'outline')], ['Longest such link', num(sh.anonymousMaxHours) + ' hours']], 2)
+          + '<div class="muted" style="font-size:12px">When allowed, owners can share a public conversation through a link anyone can open without signing in. It stops working when the conversation is no longer public, when it expires, or when this is turned off. Every opening is written to the audit chain with the address.</div>',
+          { actions: UI.btn('Change', { size: 'sm', kind: 'ghost', attrs: 'data-sharingset' }) });
+      }
+
+      function sharingModal() {
+        const sh = nd && nd.sharing; if (!sh) return;
+        ctx.modal({
+          title: 'Conversation sharing, ' + esc(tenant.name),
+          body: '<div class="formgrid"><label class="tn-pickrow"><input type="checkbox" data-shanon' + (sh.anonymousLinks ? ' checked' : '') + '> <span class="grow">Allow links that open without signing in<span class="muted" style="display:block;font-size:11px">Only for conversations labelled public.</span></span></label>'
+            + UI.field('Longest such link (hours)', UI.input(String(sh.anonymousMaxHours), { attrs: 'data-shhours inputmode="numeric"' }), 'Between 1 and 720.') + '</div>'
+            + UI.notice('Turning this off ends every such link at once.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-shsave' }),
+          onMount(m) {
+            submit(m, '[data-shsave]', () => {
+              const hours = Number(String(m.querySelector('[data-shhours]').value || '').trim());
+              if (!(Number.isInteger(hours) && hours >= 1 && hours <= 720)) { errorBox(m, new Error('Enter whole hours between 1 and 720.')); return false; }
+              st.nodeKey = null;
+              return App.api('PUT', tUrl(tenant.id) + '/sharing', { anonymousLinks: !!m.querySelector('[data-shanon]').checked, anonymousMaxHours: hours });
+            }, (x) => (x.anonymousLinks ? 'Links without sign-in are allowed for public conversations.' : 'Links without sign-in are off.'));
+          }
+        });
       }
 
       function retentionModal() {
@@ -687,9 +772,18 @@
       ctx.on('click', '[data-raise]', () => limitsModal('workspace'));
       ctx.on('click', '[data-traise]', () => limitsModal('tenant'));
       ctx.on('click', '[data-retention]', () => retentionModal());
+      ctx.on('click', '[data-rscope]', () => retentionScopeModal());
+      ctx.on('click', '[data-sharingset]', () => sharingModal());
+      ctx.on('click', '[data-rscopedel]', async (e, t) => {
+        const parts = t.dataset.rscopedel.split(':');
+        const ok = await ctx.confirm({ title: 'Remove this shorter period?', body: '<div class="fg2">Their conversations follow the tenant\'s period again.</div>', ok: 'Remove' });
+        if (!ok) return;
+        st.nodeKey = null;
+        await act(() => App.api('PUT', tUrl(tenant.id) + '/retention/scopes', { scope: parts[0], scopeId: parts[1], conversationDays: null }), 'Shorter period removed.');
+      });
       ctx.on('click', '[data-retrun]', async () => {
         const r = nd && nd.retention; if (!r) return;
-        const ok = await ctx.confirm({ title: 'Apply the retention policy now?', tone: 'danger', body: 'Conversations idle for more than ' + num(r.conversationDays) + ' days are deleted now, as the schedule would. This cannot be undone.', ok: 'Run now' });
+        const ok = await ctx.confirm({ title: 'Apply the retention policy now?', tone: 'danger', body: 'Conversations idle for longer than the shortest period that applies to them' + (r.conversationDays != null ? ' (at most ' + num(r.conversationDays) + ' days)' : '') + ' are deleted now, as the schedule would. This cannot be undone.', ok: 'Run now' });
         if (!ok) return;
         st.nodeKey = null;
         await act(() => App.post(tUrl(tenant.id) + '/retention/run', {}), 'Retention run queued. The result shows here when it finishes.');

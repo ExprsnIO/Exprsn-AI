@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import pino from 'pino';
 import request from 'supertest';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/http/app.js';
 import { sha256 } from '../src/crypto/index.js';
@@ -58,7 +58,9 @@ describe('Sprint 11: account self-service', () => {
       // B-109: the owner is told, in the console and by email, without any secret.
       const notes = (await a.agent.get('/api/me/notifications')).body.items as { title: string }[];
       expect(notes.some((n) => n.title === 'Your password was changed')).toBe(true);
-      const sent = await mail.next(u.email);
+      // Sprint 17: the second browser's sign-in sent a new-sign-in notice first; find the password notice.
+      let sent = await mail.next(u.email);
+      for (let i = 1; !sent.subject.includes('Your password was changed'); i++) sent = await mail.next(u.email, i);
       expect(sent.subject).toContain('Your password was changed');
       expect(sent.text).not.toContain(NEW_PASSWORD);
       expect(sent.html).not.toContain(NEW_PASSWORD);
@@ -151,7 +153,7 @@ describe('Sprint 11: account self-service', () => {
       const a = await login(h, 'newadmin', 'initial harbour 2028');
       expect(a.res.body.stage).toBe('enroll');
       const begin = await a.agent.post('/api/me/mfa/totp').set('x-csrf-token', a.csrf).send({});
-      const confirm = await a.agent.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', a.csrf).send({ code: authenticator.generate(begin.body.secret) }).expect(201);
+      const confirm = await a.agent.post(`/api/me/mfa/totp/${begin.body.id}/confirm`).set('x-csrf-token', a.csrf).send({ code: totp.generate(begin.body.secret) }).expect(201);
       expect(confirm.body.stage).toBe('password');
       await a.agent.get('/api/me').expect(401);
       await a.agent.post('/api/me/password').set('x-csrf-token', confirm.body.csrf).send({ currentPassword: 'initial harbour 2028', newPassword: NEW_PASSWORD }).expect(200);
@@ -346,7 +348,7 @@ describe('Sprint 11: account self-service', () => {
       await age(h, (await h.s.users.byUsername(h.tenantId, 'stepadmin'))!.id);
       await a.agent.post('/api/me/mfa/recovery-codes').set('x-csrf-token', a.csrf).expect(401);
       await a.agent.delete(`/api/me/mfa/${factors[0]!.id}`).set('x-csrf-token', a.csrf).expect(401);
-      const next = authenticator.clone({ epoch: Date.now() + 30_000 }).generate(a.totpSecret);
+      const next = totp.generate(a.totpSecret, Date.now() + 30_000);
       const ok = await a.agent.post('/api/me/step-up').set('x-csrf-token', a.csrf).send({ code: next }).expect(200);
       expect(ok.body.method).toBe('TOTP');
       await a.agent.post('/api/me/mfa/recovery-codes').set('x-csrf-token', a.csrf).expect(201);

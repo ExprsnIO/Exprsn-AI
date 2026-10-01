@@ -93,6 +93,7 @@ describe('training', () => {
   async function setup() {
     trainer = new FakeTrainer();
     h = await harnessWith({ trainer });
+    trainer.useApp(h.app);
     await seedBase(h);
     const ml1 = await admin(h, 'mara', ['ml-admin']);
     const ml2 = await admin(h, 'sam', ['ml-admin']);
@@ -247,6 +248,7 @@ describe('training', () => {
   it('lends a pool in a window: drains it on open, checkpoints jobs and reloads pinned models before close', async () => {
     trainer = new FakeTrainer();
     h = await harnessWith({ trainer });
+    trainer.useApp(h.app);
     await seedBase(h);
     ollama = await new FakeOllama().start();
     ollama.addAvailable({ name: 'pinned-8b', size: 2 * GB });

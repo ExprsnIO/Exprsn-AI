@@ -17,6 +17,9 @@
   const mins = (m) => (m % 1440 === 0 ? (m / 1440) + (m === 1440 ? ' day' : ' days') : m % 60 === 0 ? (m / 60) + ' h' : m + ' min');
   const pillFor = (t) => UI.pill(t, /verified|clean|passed|in production|^ok$|within target|valid|succeeded|active|healthy|licences ok/.test(t) ? 'ok' : /failed|rejected|missed|quarantined|revoked|expired|unreachable/.test(t) ? 'danger' : /running|expedited|verifying|awaiting|promoting|pending|issuing|queued/.test(t) ? 'info' : /ready/.test(t) ? 'accent' : /older|stale|never|not configured|expir|no scanner/.test(t) ? 'warn' : '');
 
+  // Sprint 18 (B-909): mirrors whose registry can be pushed to through its API.
+  const PUSHABLE = { images: 'Harbor (OCI registry)', npm: 'Verdaccio (npm registry)', pypi: 'devpi (package index)' };
+
   function signatureOf(b) {
     const s = b.steps[1];
     if (s.state === 'passed') return 'verified';
@@ -71,9 +74,10 @@
       const load = () => {
         if (st.loading) return;
         st.loading = true;
-        Promise.all(['summary', 'bundles', 'signers', 'mirrors', 'certificates', 'keys', 'backups', 'signers/proposals'].map((p) => App.get('/api/admin/platform/' + p)))
+        Promise.all(['summary', 'bundles', 'signers', 'mirrors', 'certificates', 'keys', 'backups', 'signers/proposals', 'push-targets'].map((p) => App.get('/api/admin/platform/' + p)))
           .then((r) => {
-            st.data = { summary: r[0], bundles: r[1], signers: r[2], mirrors: r[3], certs: r[4], keys: r[5], backups: r[6], proposals: r[7] };
+            st.data = { summary: r[0], bundles: r[1], signers: r[2], mirrors: r[3], certs: r[4], keys: r[5], backups: r[6], proposals: r[7], pushTargets: r[8] };
+            st.pushes = {};
             st.loaded = true; st.loadError = null;
           })
           .catch((err) => { st.loadError = err; })
@@ -131,8 +135,8 @@
         body = (staleTrivy ? UI.notice('<b>Stale vulnerability data.</b> ' + esc(staleTrivy.name) + (staleTrivy.lastPromotedAt ? ' is ' + staleTrivy.ageDays + ' days old' : ' has never been promoted') + ', against a policy of ' + staleTrivy.maxAgeDays + ' days. CI scans are unreliable until a fresh database bundle is promoted' + (freshTrivyBundle ? '; ' + esc(freshTrivyBundle.name) + ' carries one.' : '.'), 'warn', freshTrivyBundle ? UI.btn('Promote ' + freshTrivyBundle.name, { size: 'sm', attrs: 'data-promote="' + esc(freshTrivyBundle.id) + '"' }) : '') : st.focusStale ? UI.notice(trivy.length ? 'The vulnerability database mirror is within its policy.' : 'No vulnerability database mirror is registered yet. Add one with the kind Trivy.', trivy.length ? 'ok' : 'info') : '')
           + (st.showLinks ? UI.notice('<b>No outbound links.</b> Every mirror URL must resolve to an internal address, checked when it is added and again at every probe; nothing on this page opens the internet.', 'info') : '')
           + '<div class="hstack wrap"><span class="grow"></span>' + UI.btn('Check all', { size: 'sm', icon: 'refresh', attrs: 'data-check-mirrors', disabled: !mirrors.length }) + UI.btn('Add mirror', { size: 'sm', kind: 'primary', attrs: 'data-add-mirror' }) + '</div>'
-          + UI.table(['Mirror', 'Store', 'Freshness', 'Policy', 'Consumer'].concat(st.showLinks ? ['Resolves to'] : []).concat(['Last check', '']), mirrors.map((m) => ['<b>' + esc(m.name) + '</b><div class="muted" style="font-size:11px">' + esc((MIRROR_KINDS.find((k) => k.value === m.kind) || {}).label || m.kind) + '</div>', esc(m.store), esc(ageText(m)) + (m.lastBundle ? '<div class="muted mono" style="font-size:11px">' + esc(m.lastBundle) + '</div>' : ''), pillFor(m.policy), esc(m.consumer || '')].concat(st.showLinks ? ['<span class="mono">' + esc(m.host || m.url) + '</span>'] : []).concat([m.lastCheckAt ? pillFor(m.lastCheckOk ? 'ok' : 'unreachable') + '<div class="muted" style="font-size:11px" title="' + esc(m.lastCheckDetail || '') + '">' + esc(ago(m.lastCheckAt)) + '</div>' : '<span class="muted">not checked</span>', '<span class="hstack gap6">' + UI.btn('Check', { size: 'xs', kind: 'ghost', attrs: 'data-check-mirror="' + esc(m.id) + '"' }) + UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-edit-mirror="' + esc(m.id) + '"' }) + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-remove-mirror="' + esc(m.id) + '"' }) + '</span>'])), { clickable: false, minWidth: '820px', emptyTitle: 'No mirrors registered', emptyText: 'Add the internal mirrors that promoted bundles feed.' })
-          + '<div class="muted" style="font-size:12px">Policy: dependency and database mirrors older than their limit (7 days unless set) are flagged. Model weights are content-addressed by sha256 and never expire. Promotion writes each file into the mirror store at mirrors/&lt;kind&gt;/sha256/&lt;digest&gt;.</div>';
+          + UI.table(['Mirror', 'Store', 'Freshness', 'Policy', 'Consumer'].concat(st.showLinks ? ['Resolves to'] : []).concat(['Last check', '']), mirrors.map((m) => ['<b>' + esc(m.name) + '</b><div class="muted" style="font-size:11px">' + esc((MIRROR_KINDS.find((k) => k.value === m.kind) || {}).label || m.kind) + '</div>', esc(m.store) + pushLine(m), esc(ageText(m)) + (m.lastBundle ? '<div class="muted mono" style="font-size:11px">' + esc(m.lastBundle) + '</div>' : ''), pillFor(m.policy), esc(m.consumer || '')].concat(st.showLinks ? ['<span class="mono">' + esc(m.host || m.url) + '</span>'] : []).concat([m.lastCheckAt ? pillFor(m.lastCheckOk ? 'ok' : 'unreachable') + '<div class="muted" style="font-size:11px" title="' + esc(m.lastCheckDetail || '') + '">' + esc(ago(m.lastCheckAt)) + '</div>' : '<span class="muted">not checked</span>', '<span class="hstack gap6">' + UI.btn('Check', { size: 'xs', kind: 'ghost', attrs: 'data-check-mirror="' + esc(m.id) + '"' }) + UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-edit-mirror="' + esc(m.id) + '"' }) + (PUSHABLE[m.kind] ? UI.btn('Push target', { size: 'xs', kind: 'ghost', attrs: 'data-push-target="' + esc(m.id) + '"' }) : '') + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-remove-mirror="' + esc(m.id) + '"' }) + '</span>'])), { clickable: false, minWidth: '820px', emptyTitle: 'No mirrors registered', emptyText: 'Add the internal mirrors that promoted bundles feed.' })
+          + '<div class="muted" style="font-size:12px">Policy: dependency and database mirrors older than their limit (7 days unless set) are flagged. Model weights are content-addressed by sha256 and never expire. Promotion writes each file into the mirror store at mirrors/&lt;kind&gt;/sha256/&lt;digest&gt;, and, where a push target is set, into the registry through its API (Harbor for images, Verdaccio for npm, devpi for wheels).</div>';
       } else if (st.tab === 'certs') {
         const soon = certs.filter((c) => c.status === 'expiring' || c.status === 'expired').sort((a, b) => a.days - b.days);
         const first = soon[0];
@@ -144,6 +148,7 @@
             const actions = [];
             if (c.method === 'acme' && c.status !== 'pending' && c.status !== 'issuing') actions.push(UI.btn(c.status === 'failed' ? 'Retry' : 'Renew', { size: 'xs', kind: 'ghost', attrs: 'data-renew="' + esc(c.id) + '"' }));
             if (c.serial) actions.push('<a class="btn ghost xs" href="/api/admin/platform/certificates/' + encodeURIComponent(c.id) + '/chain" download>Chain</a>');
+            if (c.method === 'acme' && c.status !== 'revoked') actions.push(UI.btn('Hooks', { size: 'xs', kind: 'ghost', attrs: 'data-cert-hooks="' + esc(c.id) + '"' }));
             if (c.hasKey && c.status !== 'revoked') actions.push(UI.btn('Export key', { size: 'xs', kind: 'ghost', attrs: 'data-export-key="' + esc(c.id) + '"' }));
             if (c.method === 'acme' && c.serial && c.status !== 'revoked') actions.push(UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-revoke="' + esc(c.id) + '"' }));
             if (c.method === 'tracked' || c.status === 'failed' || c.status === 'revoked' || c.status === 'expired') actions.push(UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-remove-cert="' + esc(c.id) + '"' }));
@@ -195,21 +200,29 @@
         const r = bundle.report || {};
         const hasModels = r.byMirror && r.byMirror.models;
         const findings = r.findings ? r.findings.length + ' findings' + (r.blocking ? ', ' + r.blocking + ' blocking' : '') : r.scanner === null && bundle.steps[3].state === 'skipped' ? 'no scanner configured' : 'not run';
+        const pushes = st.pushes[bundle.id];
+        if (bundle.state === 'in production' && !pushes) { st.pushes[bundle.id] = []; App.get('/api/admin/platform/bundles/' + encodeURIComponent(bundle.id) + '/pushes').then((list) => { st.pushes[bundle.id] = list; refresh(); }).catch(() => undefined); }
+        const pushInfo = pushes && pushes.length ? '<div class="eyebrow">Registry pushes</div>' + UI.table(['File', 'Artefact', 'State'], pushes.slice(-12).map((x) => ['<span class="mono" style="font-size:11px">' + esc(x.path.split('/').pop()) + '</span>', '<span class="mono" style="font-size:11px">' + esc(x.artefact || '') + '</span>', pillFor(x.state === 'pushed' ? 'succeeded' : x.state === 'exists' ? 'ok' : 'failed') + (x.detail && x.state === 'failed' ? '<div class="muted" style="font-size:11px">' + esc(x.detail) + '</div>' : '')]), { clickable: false, minWidth: '0', cls: 'bare' }) : '';
         insp += '<div style="font-size:15px;font-weight:600" class="mono">' + esc(bundle.name) + '</div><div class="hstack gap6">' + pillFor(bundle.state) + (bundle.expedited ? UI.pill('expedited', 'info') : '') + '</div>'
           + (sigFailed ? UI.notice('<b>Signature failed.</b> The bundle is quarantined and cannot be promoted or staged. Expected signer <span class="mono">' + esc(active.join(', ') || 'none registered') + '</span>; actual signer <span class="mono">' + esc(bundle.signer ? (bundle.signer.name ? bundle.signer.name + ' (' + bundle.signer.state + ') ' : 'unknown key ') + bundle.signer.short : 'unreadable') + '</span>.', 'danger') : bundle.state === 'rejected' && bundle.error ? UI.notice('<b>Rejected.</b> ' + esc(bundle.error), 'danger') : '')
           + UI.kv([['Contents', esc(bundle.contents || 'awaiting manifest')], ['Size', esc(size(bundle.size))], ['Received', bundle.receivedAt ? esc(when(bundle.receivedAt)) + ', ' + esc(bundle.transfer) : 'awaiting transfer, ' + esc(bundle.transfer)], ['Digest', '<span class="mono">' + esc(bundle.digest ? bundle.digest.slice(0, 19) + '…' + bundle.digest.slice(-4) : 'pending') + '</span>'], ['Signer', bundle.signer ? esc((bundle.signer.name || 'unknown key') + ' (' + (bundle.signer.algorithm || 'unregistered') + ', ' + bundle.signer.short + ')') : esc(active.length ? 'expected ' + active.join(', ') : 'no signer keys registered')], ['Scan and licence', pillFor(scanOf(bundle)) + ' <span class="muted" style="font-size:12px">' + esc(findings) + '</span>']].concat(bundle.ticket ? [['Security ticket', '<span class="mono">' + esc(bundle.ticket) + '</span>']] : []), 1)
           + '<div class="eyebrow">Verification</div>' + UI.timeline(steps)
+          + pushInfo
           + '<div class="vstack gap6">'
           + (bundle.state === 'awaiting transfer' || bundle.state === 'rejected' ? UI.btn(bundle.state === 'rejected' ? 'Upload a new transfer' : 'Upload transfer', { size: 'sm', icon: 'upload', attrs: 'data-upload' }) + '<input type="file" data-file hidden>' : '')
           + (bundle.digest && bundle.state !== 'in production' && bundle.state !== 'promoting' && bundle.state !== 'awaiting transfer' ? UI.btn(bundle.state === 'verifying' ? 'Verifying' : 'Verify bundle', { size: 'sm', icon: 'refresh', attrs: 'data-verify', disabled: bundle.state === 'verifying' }) : '')
           + (bundle.state === 'ready to promote' ? UI.btn('Promote', { size: 'sm', kind: 'primary', attrs: 'data-promote="' + esc(bundle.id) + '"' }) : '')
+          + (bundle.state === 'in production' && (d.pushTargets || []).some((t) => t.state === 'active') ? UI.btn('Push to registries again', { size: 'sm', icon: 'upload', attrs: 'data-push-bundle="' + esc(bundle.id) + '"' }) : '')
           + (hasModels ? UI.btn('Open models', { size: 'sm', kind: 'ghost', attrs: 'data-go="models"' }) : '')
           + (bundle.state === 'rejected' ? UI.btn('Delete quarantined bundle', { size: 'sm', kind: 'danger', attrs: 'data-delete' }) : bundle.state === 'awaiting transfer' ? UI.btn('Cancel import', { size: 'sm', kind: 'ghost', attrs: 'data-delete' }) : '')
           + '</div>';
       }
 
       root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}</style><div class="page">' + UI.pagehead('Imports and platform', 'Everything that runs here arrived through one signed import path', UI.btn('Run restore drill', { attrs: 'data-drill', disabled: !lastBackup }) + UI.btn('Start expedited import', { kind: 'primary', attrs: 'data-expedited' }))
-        + strip + tabs + body
+        + strip
+        // B-802: local and reset passwords are only checked against breach lists when BREACHED_PASSWORDS is set.
+        + (sum.passwords && sum.passwords.breachedCheck === 'off' ? UI.notice('<b>New passwords are not checked against breached-password lists.</b> Set <span class="mono">BREACHED_PASSWORDS</span> to <span class="mono">hibp</span> (with an internal mirror in <span class="mono">BREACHED_HIBP_URL</span>), <span class="mono">file</span> or <span class="mono">both</span> so that known-breached passwords are refused.', 'warn') : '')
+        + tabs + body
         + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(self.states) + '</div></div>'
         + '<aside class="inspector">' + insp + '</aside>';
       if (st.focusStale && st.tab !== 'mirrors') st.focusStale = false;
@@ -329,6 +342,63 @@
             .catch((err) => App.fail(err, 'The key could not be exported'));
         });
       }
+      function pushLine(m) {
+        const t = (d.pushTargets || []).find((x) => x.mirrorId === m.id);
+        if (!t) return '';
+        return '<div class="muted" style="font-size:11px">pushes to ' + esc(t.url.replace(/^https?:\/\//, '')) + (t.state === 'disabled' ? ', paused' : '') + (t.lastPushAt ? ', ' + (t.lastPushOk ? 'last push ok' : 'last push failed') : '') + '</div>';
+      }
+      function pushTargetModal(m) {
+        const t = (d.pushTargets || []).find((x) => x.mirrorId === m.id) || null;
+        ctx.modal({ title: 'Push target for ' + esc(m.name),
+          body: '<div class="fg2" style="font-size:12px;margin-bottom:8px">Promoted ' + esc(m.kind) + ' files are pushed to ' + esc(PUSHABLE[m.kind]) + ' through its API after each promotion. The address must be internal; the secret is stored sealed and never shown again.</div>'
+            + '<div class="formgrid">' + UI.field('API URL', UI.input(t ? t.url : m.url, { attrs: 'data-purl placeholder="https://harbor.data.internal"' }))
+            + (m.kind === 'npm' ? '' : UI.field(m.kind === 'images' ? 'Harbor project' : 'Index (user/index)', UI.input(t ? t.repository || '' : '', { attrs: 'data-prepo placeholder="' + (m.kind === 'images' ? 'platform' : 'root/prod') + '"' })))
+            + UI.field('Username', UI.input(t ? t.username || '' : '', { attrs: 'data-puser placeholder="' + (m.kind === 'npm' ? 'leave empty for a token' : 'robot$push') + '"' }))
+            + UI.field(m.kind === 'npm' ? 'Token or password' : 'Password or robot secret', UI.input('', { type: 'password', attrs: 'data-psecret autocomplete="new-password" placeholder="' + (t && t.hasSecret ? 'keep the stored secret' : '') + '"' }))
+            + UI.field('State', UI.select([{ value: 'active', label: 'Active' }, { value: 'disabled', label: 'Paused' }], t ? t.state : 'active', 'data-pstate')) + '</div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + (t ? UI.btn('Remove target', { kind: 'danger', attrs: 'data-pdel' }) : '') + UI.btn('Save', { kind: 'primary', attrs: 'data-psave' }),
+          onClose,
+          onMount(el) {
+            el.querySelector('[data-psave]').addEventListener('click', () => {
+              const val = (sel) => { const i = el.querySelector(sel); return i ? i.value.trim() : ''; };
+              const payload = { url: val('[data-purl]'), username: val('[data-puser]') || null, state: val('[data-pstate]') };
+              if (m.kind !== 'npm') payload.repository = val('[data-prepo]') || null;
+              if (val('[data-psecret]')) payload.secret = val('[data-psecret]');
+              App.api('PUT', '/api/admin/platform/mirrors/' + encodeURIComponent(m.id) + '/push-target', payload)
+                .then(() => { App.closeOverlay(); ctx.toast('Push target saved. Audit event written.', 'ok'); reload(); })
+                .catch((err) => App.fail(err, 'The push target could not be saved'));
+            });
+            const del = el.querySelector('[data-pdel]');
+            if (del) del.addEventListener('click', () => App.del('/api/admin/platform/mirrors/' + encodeURIComponent(m.id) + '/push-target').then(() => { App.closeOverlay(); ctx.toast('Push target removed. Audit event written.', 'ok'); reload(); }).catch((err) => App.fail(err)));
+          }
+        });
+      }
+      function hooksModal(c) {
+        App.get('/api/admin/platform/certificates/' + encodeURIComponent(c.id) + '/hooks').then((h) => {
+          const rows = h.hooks.map((x) => [esc(x.kind === 'command' ? 'Reload command' : 'Signed webhook'), '<span class="mono" style="font-size:12px">' + esc(x.command || x.url) + '</span>', x.lastState ? pillFor(x.lastState === 'ok' ? 'succeeded' : 'failed') + (x.lastDetail ? '<div class="muted" style="font-size:11px">' + esc(x.lastDetail) + '</div>' : '') : '<span class="muted">not run yet</span>', '<span class="hstack gap6">' + UI.btn('Run now', { size: 'xs', kind: 'ghost', attrs: 'data-htest="' + esc(x.id) + '"', disabled: !c.serial }) + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-hdel="' + esc(x.id) + '"' }) + '</span>']);
+          ctx.modal({ title: 'Hooks for ' + esc(c.name), cls: 'wide',
+            body: '<div class="fg2" style="font-size:12px">After every issue and renewal, each hook runs: a reload command named by the operator in ACME_RELOAD_COMMANDS (on every instance, once its certificate files are written), or a webhook to an internal address, signed with a secret shown once. The webhook carries the chain, never the private key.</div>'
+              + (rows.length ? UI.table(['Kind', 'Target', 'Last run', ''], rows, { clickable: false, minWidth: '0', cls: 'bare' }) : '<div class="muted" style="font-size:12px">No hooks yet.</div>')
+              + '<div id="pl-hsecret"></div>'
+              + '<div class="formgrid">' + UI.field('Reload command', h.commands.length ? UI.select(h.commands.map((n) => ({ value: n, label: n })), h.commands[0], 'data-hcmd') : '<span class="muted" style="font-size:12px">None configured (ACME_RELOAD_COMMANDS)</span>') + UI.field('Webhook URL', UI.input('', { attrs: 'data-hurl placeholder="https://deploy.app.internal/cert-reload"' })) + '</div>',
+            actions: UI.btn('Close', { attrs: 'data-close' }) + (h.commands.length ? UI.btn('Add command', { attrs: 'data-hadd-cmd' }) : '') + UI.btn('Add webhook', { kind: 'primary', attrs: 'data-hadd-url' }),
+            onClose,
+            onMount(el) {
+              const again = () => { App.closeOverlay(); hooksModal(c); };
+              const add = (body) => App.post('/api/admin/platform/certificates/' + encodeURIComponent(c.id) + '/hooks', body).then((x) => {
+                if (x.secret) {
+                  el.querySelector('#pl-hsecret').innerHTML = UI.notice('<b>Webhook secret, shown once.</b> Verify the X-Exprsn-Signature header with it: <span class="mono">' + esc(x.secret) + '</span>', 'warn');
+                  ctx.toast('Webhook added. Copy its secret now; it is not shown again.', 'ok', 6000);
+                } else { ctx.toast('Reload command added. Audit event written.', 'ok'); again(); }
+              }).catch((err) => App.fail(err, 'The hook could not be added'));
+              const cmd = el.querySelector('[data-hadd-cmd]'); if (cmd) cmd.addEventListener('click', () => add({ kind: 'command', command: el.querySelector('[data-hcmd]').value }));
+              el.querySelector('[data-hadd-url]').addEventListener('click', () => add({ kind: 'webhook', url: el.querySelector('[data-hurl]').value.trim() }));
+              el.querySelectorAll('[data-htest]').forEach((b) => b.addEventListener('click', () => App.post('/api/admin/platform/certificates/' + encodeURIComponent(c.id) + '/hooks/' + encodeURIComponent(b.dataset.htest) + '/test').then((x) => { ctx.toast(x.lastState === 'ok' ? 'Hook ran: ' + esc(x.lastDetail || 'ok') : 'Hook failed: ' + esc(x.lastDetail || ''), x.lastState === 'ok' ? 'ok' : 'warn', 6000); again(); }).catch((err) => App.fail(err))));
+              el.querySelectorAll('[data-hdel]').forEach((b) => b.addEventListener('click', () => App.del('/api/admin/platform/certificates/' + encodeURIComponent(c.id) + '/hooks/' + encodeURIComponent(b.dataset.hdel)).then(() => { ctx.toast('Hook removed. Audit event written.', 'ok'); again(); }).catch((err) => App.fail(err))));
+            }
+          });
+        }).catch((err) => App.fail(err, 'The hooks could not be loaded'));
+      }
       if (st.openExpedited) { st.openExpedited = false; setTimeout(() => openImport(true), 50); }
       if (st.openDrill) { st.openDrill = false; setTimeout(() => drill(null), 50); }
 
@@ -350,6 +420,9 @@
       ctx.on('click', '[data-remove-cert]', (e, t) => { const c = certs.find((x) => x.id === t.dataset.removeCert); if (!c) return; ctx.confirm({ title: 'Remove ' + c.name, tone: 'danger', tag: 'removes tracking', body: '<p class="fg2" style="margin:0">Stops tracking this certificate here. Nothing is revoked.</p>', ok: 'Remove' }).then((ok) => { onClose(); if (ok) act(App.del('/api/admin/platform/certificates/' + encodeURIComponent(c.id)), esc(c.name) + ' removed. Audit event written.'); }); });
       ctx.on('click', '[data-export-key]', (e, t) => { const c = certs.find((x) => x.id === t.dataset.exportKey); if (c) exportKey(c); });
       ctx.on('click', '[data-request-cert]', requestCert);
+      ctx.on('click', '[data-cert-hooks]', (e, t) => { const c = certs.find((x) => x.id === t.dataset.certHooks); if (c) hooksModal(c); });
+      ctx.on('click', '[data-push-target]', (e, t) => { const m = mirrors.find((x) => x.id === t.dataset.pushTarget); if (m) pushTargetModal(m); });
+      ctx.on('click', '[data-push-bundle]', (e, t) => { const b = bundles.find((x) => x.id === t.dataset.pushBundle); if (!b) return; ctx.confirm({ title: 'Push ' + b.name + ' again', tone: 'info', body: '<p class="fg2" style="margin:0">Pushes every promoted file to the registries with an active push target. Files already there are recorded as present.</p>', ok: 'Push' }).then((ok) => { onClose(); if (ok) act(App.post('/api/admin/platform/bundles/' + encodeURIComponent(b.id) + '/push').then((r) => { delete st.pushes[b.id]; return r; }), 'Push of ' + esc(b.name) + ' started.'); }); });
       ctx.on('click', '[data-track-cert]', trackCert);
       ctx.on('click', '[data-add-mirror]', () => mirrorModal(null));
       ctx.on('click', '[data-edit-mirror]', (e, t) => mirrorModal(mirrors.find((m) => m.id === t.dataset.editMirror)));

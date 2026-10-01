@@ -6,9 +6,11 @@ import { badRequest } from '../http/problem.js';
 import type { Services } from '../services.js';
 import { BreachedPasswords } from './breached.js';
 import { checkPasswordPolicy, hashPassword, verifyPassword } from './passwords.js';
+import { SignInNotices } from './signin-notices.js';
 import type { SessionRow, SessionStage } from './sessions.js';
 
-export type PasswordTokenKind = 'reset' | 'admin' | 'invite';
+/** `enrol` (B-810): an `admin:create --enrol-link` link, which sets the password and then asks for the second factor. */
+export type PasswordTokenKind = 'reset' | 'admin' | 'invite' | 'enrol';
 
 export interface PasswordTokenRow {
   id: string;
@@ -37,8 +39,14 @@ export type PasswordHome = { kind: 'local'; mustChange: boolean } | { kind: 'dir
  */
 export class AccountService {
   private checker: BreachedPasswords | null = null;
+  private notices: SignInNotices | null = null;
 
   constructor(private readonly s: () => Services) {}
+
+  /** Sprint 17 (B-801): new-device and new-network sign-in notices. */
+  get signIns(): SignInNotices {
+    return (this.notices ??= new SignInNotices(this.s));
+  }
 
   get breached(): BreachedPasswords {
     const cfg = this.s().cfg;
@@ -184,6 +192,7 @@ export class AccountService {
     const t = Date.now();
     let n = await this.db('account_throttle').where('window_start', '<', t - 24 * 3600_000).delete();
     n += await this.db('password_tokens').where('expires_at', '<', t - 7 * 24 * 3600_000).delete();
+    n += await this.signIns.purge();
     return n;
   }
 

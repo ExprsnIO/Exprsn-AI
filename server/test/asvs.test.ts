@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { authenticator } from 'otplib';
+import { totp } from '../src/identity/totp.js';
 import { checkPasswordPolicy } from '../src/identity/passwords.js';
 import { checkGitUrl } from '../src/knowledge/sources.js';
 import { isNeverAddress } from '../src/mcp/hosts.js';
@@ -146,7 +146,7 @@ describe('ASVS L2 review', () => {
       expect(factors).toHaveLength(1);
       const res = await a.agent.delete(`/api/me/mfa/${factors[0]!.id}`).set('x-csrf-token', a.csrf);
       expect(res.status).toBe(403);
-      expect(authenticator.check(authenticator.generate(a.totpSecret), a.totpSecret)).toBe(true);
+      expect(totp.check(totp.generate(a.totpSecret), a.totpSecret)).toBe(true);
     });
   });
 

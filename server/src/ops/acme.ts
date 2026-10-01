@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, sign, type KeyObject } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, sign, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { Config } from '../config/index.js';
@@ -51,6 +51,22 @@ interface Directory {
   newAccount: string;
   newOrder: string;
   revokeCert: string;
+  meta?: { externalAccountRequired?: boolean };
+}
+
+/** B-904: an external account binding key from the CA (RFC 8555 section 7.3.4). */
+export interface ExternalAccountKey {
+  kid: string;
+  /** The MAC key, base64url as CAs hand it out. */
+  hmacKey: string;
+}
+
+/** The `externalAccountBinding` JWS: the account's public JWK, MACed with the CA-issued key (HS256). */
+export function externalAccountBinding(eab: ExternalAccountKey, accountKey: KeyObject, newAccountUrl: string): { protected: string; payload: string; signature: string } {
+  const p = b64u(JSON.stringify({ alg: 'HS256', kid: eab.kid, url: newAccountUrl }));
+  const payload = b64u(JSON.stringify(publicJwk(accountKey)));
+  const signature = b64u(createHmac('sha256', Buffer.from(eab.hmacKey, 'base64url')).update(`${p}.${payload}`).digest());
+  return { protected: p, payload, signature };
 }
 
 interface Order {
@@ -100,7 +116,7 @@ export class HttpAcmeClient implements AcmeClient {
 
   constructor(
     readonly directoryUrl: string | null,
-    private readonly o: { caFile?: string; pollMs: number; timeoutMs?: number; production?: boolean; fetch?: AcmeFetch } = { pollMs: 2000 }
+    private readonly o: { caFile?: string; pollMs: number; timeoutMs?: number; production?: boolean; fetch?: AcmeFetch; eab?: ExternalAccountKey } = { pollMs: 2000 }
   ) {
     this.agent = o.caFile ? new Agent({ connect: { ca: readFileSync(o.caFile) } }) : undefined;
   }
@@ -166,7 +182,9 @@ export class HttpAcmeClient implements AcmeClient {
 
   async register(key: KeyObject, contact?: string): Promise<string> {
     const d = await this.directory();
-    const r = await this.post(d.newAccount, { termsOfServiceAgreed: true, ...(contact ? { contact: [`mailto:${contact}`] } : {}) }, key, null);
+    if (d.meta?.externalAccountRequired && !this.o.eab) throw new AcmeError('The CA requires external account binding: set ACME_EAB_KID and ACME_EAB_HMAC_KEY to the key it issued.', 'urn:ietf:params:acme:error:externalAccountRequired');
+    const eab = this.o.eab ? { externalAccountBinding: externalAccountBinding(this.o.eab, key, d.newAccount) } : {};
+    const r = await this.post(d.newAccount, { termsOfServiceAgreed: true, ...(contact ? { contact: [`mailto:${contact}`] } : {}), ...eab }, key, null);
     if (!r.location) throw new AcmeError('The ACME server returned no account URL.');
     return r.location;
   }
@@ -242,5 +260,5 @@ export class HttpAcmeClient implements AcmeClient {
 }
 
 export function createAcme(cfg: Config): AcmeClient {
-  return new HttpAcmeClient(cfg.ACME_DIRECTORY_URL ?? null, { ...(cfg.ACME_CA_FILE ? { caFile: cfg.ACME_CA_FILE } : {}), pollMs: cfg.ACME_POLL_MS, production: cfg.NODE_ENV === 'production' });
+  return new HttpAcmeClient(cfg.ACME_DIRECTORY_URL ?? null, { ...(cfg.ACME_CA_FILE ? { caFile: cfg.ACME_CA_FILE } : {}), pollMs: cfg.ACME_POLL_MS, production: cfg.NODE_ENV === 'production', ...(cfg.ACME_EAB_KID && cfg.ACME_EAB_HMAC_KEY ? { eab: { kid: cfg.ACME_EAB_KID, hmacKey: cfg.ACME_EAB_HMAC_KEY } } : {}) });
 }

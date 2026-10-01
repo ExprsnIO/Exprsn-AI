@@ -39,6 +39,21 @@ export function addText(png: Buffer, keyword: string, text: string): Buffer {
   return Buffer.concat([png.subarray(0, iend), chunk('tEXt', Buffer.concat([Buffer.from(keyword, 'latin1'), Buffer.from([0]), Buffer.from(text, 'latin1')])), png.subarray(iend)]);
 }
 
+/** Removes every tEXt chunk with this keyword (Sprint 18: re-signing provenance replaces the chunk). */
+export function removeText(png: Buffer, keyword: string): Buffer {
+  const parts: Buffer[] = [png.subarray(0, 8)];
+  const tag = Buffer.from(`${keyword}\0`, 'latin1');
+  let i = 8;
+  while (i + 8 <= png.length) {
+    const len = png.readUInt32BE(i);
+    const type = png.subarray(i + 4, i + 8).toString('latin1');
+    const ours = type === 'tEXt' && png.subarray(i + 8, i + 8 + tag.length).equals(tag);
+    if (!ours) parts.push(png.subarray(i, i + 12 + len));
+    i += 12 + len;
+  }
+  return Buffer.concat(parts);
+}
+
 /** Reads the tEXt chunks of a PNG. */
 export function readText(png: Buffer): Record<string, string> {
   const out: Record<string, string> = {};

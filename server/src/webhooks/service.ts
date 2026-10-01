@@ -1,3 +1,4 @@
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto';
 import { ulid } from 'ulid';
 import { fetch } from 'undici';
 import { hmac, randomToken, safeEqual } from '../crypto/index.js';
@@ -46,6 +47,22 @@ export const matchesEvent = (patterns: readonly string[], type: string): boolean
 /** The signature header value for a body sent at `timestamp` (seconds). */
 export const signBody = (secret: string, timestamp: number, body: string): string => `sha256=${hmac(secret, `${timestamp}.${body}`)}`;
 
+/**
+ * Receiver-side check of an Ed25519 signature (B-1004): `x-exprsn-signature-ed25519` is the base64 signature over
+ * `<timestamp>.<body>` by the key named in `x-exprsn-key-id`, published at `/webhooks/keys/<tenant>` (JWKS). The
+ * public key is given as the JWK `x` (base64url of the raw 32 bytes) or a KeyObject.
+ */
+export function verifyEd25519(publicKey: string | KeyObject, timestamp: string | undefined, signature: string | undefined, body: string, toleranceSeconds = 300, now = Date.now()): boolean {
+  if (!timestamp || !signature || !/^\d+$/.test(timestamp)) return false;
+  if (Math.abs(now / 1000 - Number(timestamp)) > toleranceSeconds) return false;
+  try {
+    const key = typeof publicKey === 'string' ? createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: publicKey }, format: 'jwk' }) : publicKey;
+    return edVerify(null, Buffer.from(`${timestamp}.${body}`), key, Buffer.from(signature, 'base64'));
+  } catch {
+    return false;
+  }
+}
+
 /** Receiver-side check, also used by the tests: signature over `<timestamp>.<body>` and a timestamp within tolerance. */
 export function verifySignature(secret: string, timestamp: string | undefined, signature: string | undefined, body: string, toleranceSeconds = 300, now = Date.now()): boolean {
   if (!timestamp || !signature || !/^\d+$/.test(timestamp)) return false;
@@ -62,6 +79,10 @@ export interface WebhookRow {
   max_label: Label;
   secret_sealed: string;
   state: 'active' | 'disabled';
+  /** B-1004: deliveries go out one at a time, in the order events were queued. */
+  ordered: boolean;
+  /** B-1004: HMAC with the shared secret, or Ed25519 with the tenant's published key. */
+  signing: 'hmac' | 'ed25519';
   breaker: 'closed' | 'open';
   failures: number;
   opened_at: number | null;
@@ -89,13 +110,26 @@ export interface DeliveryRow {
   replay_of: string | null;
   job_id: string | null;
   dedupe_key: string;
+  /** Position in the webhook's order (ordered webhooks only). */
+  seq: number | null;
   created_at: number;
   delivered_at: number | null;
 }
 
+export interface SigningKeyRow {
+  id: string;
+  tenant_id: string;
+  public_key: string;
+  private_sealed: string;
+  state: 'active' | 'retired';
+  created_by: string | null;
+  created_at: number;
+  retired_at: number | null;
+}
+
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
-const hookFromRow = (r: Record<string, unknown>): WebhookRow => ({ ...(r as unknown as WebhookRow), events: json<string[]>(r.events, []), failures: Number(r.failures ?? 0), opened_at: num(r.opened_at), last_delivery_at: num(r.last_delivery_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
-const deliveryFromRow = (r: Record<string, unknown>): DeliveryRow => ({ ...(r as unknown as DeliveryRow), attempts: Number(r.attempts ?? 0), status_code: num(r.status_code), next_attempt_at: num(r.next_attempt_at), duration_ms: num(r.duration_ms), created_at: Number(r.created_at), delivered_at: num(r.delivered_at) });
+const hookFromRow = (r: Record<string, unknown>): WebhookRow => ({ ...(r as unknown as WebhookRow), ordered: !!r.ordered, signing: r.signing === 'ed25519' ? 'ed25519' : 'hmac', events: json<string[]>(r.events, []), failures: Number(r.failures ?? 0), opened_at: num(r.opened_at), last_delivery_at: num(r.last_delivery_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+const deliveryFromRow = (r: Record<string, unknown>): DeliveryRow => ({ ...(r as unknown as DeliveryRow), seq: num(r.seq), attempts: Number(r.attempts ?? 0), status_code: num(r.status_code), next_attempt_at: num(r.next_attempt_at), duration_ms: num(r.duration_ms), created_at: Number(r.created_at), delivered_at: num(r.delivered_at) });
 
 export interface WebhookOptions {
   allowedHosts: string;
@@ -113,6 +147,8 @@ export const webhookView = (w: WebhookRow, cooldownMs: number) => ({
   events: w.events,
   maxLabel: w.max_label,
   state: w.state,
+  ordered: w.ordered,
+  signing: w.signing,
   breaker: w.breaker,
   failures: w.failures,
   openedAt: w.opened_at,
@@ -136,6 +172,7 @@ export const deliveryView = (d: DeliveryRow) => ({
   nextAttemptAt: d.next_attempt_at,
   durationMs: d.duration_ms,
   replayOf: d.replay_of,
+  seq: d.seq,
   createdAt: d.created_at,
   deliveredAt: d.delivered_at
 });
@@ -145,6 +182,8 @@ export class WebhookService {
   /** Active subscriptions per tenant, for a few seconds, so an audit append does not always query the table. */
   private readonly cache = new Map<string, { at: number; hooks: WebhookRow[] }>();
   private readonly offs: (() => void)[] = [];
+  /** Emits per tenant, one after another, so deliveries are queued in the order events happened on this instance. */
+  private readonly lanes = new Map<string, Promise<unknown>>();
 
   constructor(private readonly s: () => Services, readonly o: WebhookOptions) {
     this.operatorAllow = parseAllowList(o.allowedHosts);
@@ -202,12 +241,21 @@ export class WebhookService {
   }
 
   /** Queues a delivery to every active subscription of the tenant that wants this event at this label. */
-  async emit(tenantId: string, type: string, label: Label, eventId: string, data: Record<string, unknown>): Promise<number> {
-    if (tenantId === 'platform') return 0;
-    const hooks = (await this.active(tenantId)).filter((w) => matchesEvent(w.events, type) && labelRank(label) <= labelRank(w.max_label));
-    let n = 0;
-    for (const w of hooks) if (await this.queue(w, type, label, eventId, data, null)) n++;
-    return n;
+  emit(tenantId: string, type: string, label: Label, eventId: string, data: Record<string, unknown>): Promise<number> {
+    if (tenantId === 'platform') return Promise.resolve(0);
+    // The lane is taken when emit is called (listeners are called in event order), not after the first await.
+    const prev = this.lanes.get(tenantId) ?? Promise.resolve();
+    const run = prev.catch(() => undefined).then(async () => {
+      const hooks = (await this.active(tenantId)).filter((w) => matchesEvent(w.events, type) && labelRank(label) <= labelRank(w.max_label));
+      let n = 0;
+      for (const w of hooks) if (await this.queue(w, type, label, eventId, data, null)) n++;
+      return n;
+    });
+    this.lanes.set(tenantId, run);
+    void run.finally(() => {
+      if (this.lanes.get(tenantId) === run) this.lanes.delete(tenantId);
+    }).catch(() => undefined);
+    return run;
   }
 
   private async queue(w: WebhookRow, type: string, label: Label, eventId: string, data: Record<string, unknown>, replayOf: string | null, body?: string): Promise<DeliveryRow | null> {
@@ -232,9 +280,15 @@ export class WebhookService {
       replay_of: replayOf,
       job_id: null,
       dedupe_key: replayOf ? `${w.id}:replay:${id}` : `${w.id}:${eventId}`.slice(0, 200),
+      seq: null,
       created_at: t,
       delivered_at: null
     };
+    if (w.ordered) {
+      // The next position in the webhook's order (queued one at a time through the tenant's lane).
+      const max = (await s.db('webhook_deliveries').where({ webhook_id: w.id }).max({ m: 'seq' }).first()) as { m: number | string | null } | undefined;
+      row.seq = Number(max?.m ?? 0) + 1;
+    }
     try {
       await s.db('webhook_deliveries').insert(row);
     } catch (err) {
@@ -242,8 +296,30 @@ export class WebhookService {
       if (isUniqueViolation(err)) return null;
       throw err;
     }
-    await this.schedule(row, t);
+    // An ordered webhook sends only its head: later deliveries wait for their turn (next_attempt_at null).
+    if (w.ordered) {
+      await s.db('webhook_deliveries').where({ id: row.id }).update({ next_attempt_at: null });
+      await this.kick(w.id, w.tenant_id);
+    } else await this.schedule(row, t);
     return row;
+  }
+
+  /** The oldest pending delivery of an ordered webhook: the only one that may be sent. */
+  private async head(webhookId: string): Promise<DeliveryRow | null> {
+    const r = await this.s().db('webhook_deliveries').where({ webhook_id: webhookId, state: 'pending' }).whereNotNull('seq').orderBy('seq', 'asc').orderBy('id', 'asc').first();
+    return r ? deliveryFromRow(r) : null;
+  }
+
+  /**
+   * Schedules the head of an ordered webhook when it is waiting for its turn. The claim (next_attempt_at from null)
+   * is atomic, so the head gets exactly one job however many callers kick at once.
+   */
+  private async kick(webhookId: string, tenantId: string): Promise<void> {
+    const h = await this.head(webhookId);
+    if (!h || h.next_attempt_at != null) return;
+    const now = Date.now();
+    const claimed = await this.s().db('webhook_deliveries').where({ id: h.id, tenant_id: tenantId, state: 'pending' }).whereNull('next_attempt_at').update({ next_attempt_at: now });
+    if (claimed === 1) await this.schedule(h, now);
   }
 
   private async schedule(d: DeliveryRow, runAt: number): Promise<void> {
@@ -272,6 +348,15 @@ export class WebhookService {
       await s.db('webhook_deliveries').where({ id: d.id }).update({ state: 'failed', error: 'The webhook is disabled.', next_attempt_at: null });
       return { failed: 'webhook disabled' };
     }
+    if (w.ordered && d.seq != null) {
+      const head = await this.head(w.id);
+      if (head && head.id !== d.id) {
+        // Not its turn: wait without a job; the delivery before it kicks it when it is done.
+        await s.db('webhook_deliveries').where({ id: d.id, state: 'pending' }).update({ next_attempt_at: null, job_id: null });
+        await this.kick(w.id, w.tenant_id);
+        return { waiting: head.id };
+      }
+    }
     const now = Date.now();
     if (w.breaker === 'open' && w.opened_at != null && now < w.opened_at + this.o.breakerCooldownMs) {
       // The breaker is open: wait for the cool-down; the first delivery after it is the trial.
@@ -294,6 +379,7 @@ export class WebhookService {
       const refused = tenantHostProblem(checked.host, checked.addresses, tenantAllow);
       if (refused) throw new HostRefused(refused);
       const ts = Math.floor(Date.now() / 1000);
+      const signature: Record<string, string> = w.signing === 'ed25519' ? await this.edHeaders(w.tenant_id, ts, body) : { 'x-exprsn-signature': signBody(secret, ts, body) };
       const res = await fetch(w.url, {
         method: 'POST',
         body,
@@ -302,8 +388,9 @@ export class WebhookService {
           'user-agent': 'exprsn-ai-webhooks',
           'x-exprsn-event': d.event,
           'x-exprsn-timestamp': String(ts),
-          'x-exprsn-signature': signBody(secret, ts, body),
-          'x-exprsn-delivery-id': d.id
+          ...signature,
+          'x-exprsn-delivery-id': d.id,
+          ...(d.seq != null ? { 'x-exprsn-sequence': String(d.seq) } : {})
         },
         dispatcher: agent,
         redirect: 'manual',
@@ -331,6 +418,7 @@ export class WebhookService {
       await s.db('webhooks').where({ id: w.id }).update({ failures: 0, breaker: 'closed', opened_at: null, last_delivery_at: t, last_status: String(status) });
       if (w.breaker === 'open') await this.breakerAudit(w, 'webhook.breaker.closed', { after: w.failures });
       this.forget(w.tenant_id);
+      if (w.ordered) await this.kick(w.id, w.tenant_id);
       return { delivered: status, attempt };
     }
 
@@ -344,6 +432,8 @@ export class WebhookService {
     const next = retry ? t + this.backoff(attempt) : null;
     await s.db('webhook_deliveries').where({ id: d.id }).update({ state: retry ? 'pending' : 'failed', attempts: attempt, status_code: status, error: (error ?? '').slice(0, 1000), next_attempt_at: next, duration_ms: duration });
     if (retry) await this.schedule({ ...d, attempts: attempt }, next!);
+    // An ordered webhook moves on once the head has given up (it keeps its place while it retries).
+    else if (w.ordered) await this.kick(w.id, w.tenant_id);
     return { failed: error, attempt, retryAt: next };
   }
 
@@ -354,6 +444,47 @@ export class WebhookService {
       const admins = await s.notifications.usersWithRoles(w.tenant_id, ['tenant-admin']);
       await s.notifications.notify({ tenantId: w.tenant_id, userIds: admins, kind: 'webhook', title: `Webhook ${w.name} stopped delivering`, body: `${String(detail.failures)} failed attempts in a row; deliveries resume after the cool-down.`, route: 'tenants?ttab=webhooks', label: 'internal' }).catch(() => undefined);
     }
+  }
+
+  // ---------- Ed25519 signing keys (B-1004) ----------
+
+  private async edHeaders(tenantId: string, ts: number, body: string): Promise<Record<string, string>> {
+    const k = (await this.activeKey(tenantId)) ?? (await this.createKey(tenantId, null)).row;
+    const der = Buffer.from(await this.s().keys.open(tenantId, k.private_sealed, `webhook-signing-key:${k.id}`), 'base64');
+    const key = createPrivateKey({ key: der, format: 'der', type: 'pkcs8' });
+    return { 'x-exprsn-signature-ed25519': edSign(null, Buffer.from(`${ts}.${body}`), key).toString('base64'), 'x-exprsn-key-id': k.id };
+  }
+
+  async activeKey(tenantId: string): Promise<SigningKeyRow | null> {
+    return ((await this.s().db('webhook_signing_keys').where({ tenant_id: tenantId, state: 'active' }).orderBy('created_at', 'desc').first()) as SigningKeyRow | undefined) ?? null;
+  }
+
+  /** Every published key of a tenant: the active one and the retired ones (kept so late deliveries still verify). */
+  async signingKeys(tenantId: string): Promise<SigningKeyRow[]> {
+    return (await this.s().db('webhook_signing_keys').where({ tenant_id: tenantId }).orderBy('created_at', 'desc')) as SigningKeyRow[];
+  }
+
+  /** A new Ed25519 key pair; the private key is sealed with the tenant key and never leaves the server. */
+  async createKey(tenantId: string, by: string | null): Promise<{ row: SigningKeyRow; retired: string | null }> {
+    const s = this.s();
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const id = ulid();
+    const x = String(publicKey.export({ format: 'jwk' }).x);
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+    const prev = await this.activeKey(tenantId);
+    const t = Date.now();
+    // Sealed before the transaction: sealing may read the tenant's data key from the database.
+    const sealed = await s.keys.seal(tenantId, der, `webhook-signing-key:${id}`);
+    await s.db.transaction(async (trx) => {
+      await trx('webhook_signing_keys').where({ tenant_id: tenantId, state: 'active' }).update({ state: 'retired', retired_at: t });
+      await trx('webhook_signing_keys').insert({ id, tenant_id: tenantId, public_key: x, private_sealed: sealed, state: 'active', created_by: by, created_at: t, retired_at: null });
+    });
+    return { row: (await s.db('webhook_signing_keys').where({ id }).first()) as SigningKeyRow, retired: prev?.id ?? null };
+  }
+
+  /** The JWKS a receiver fetches to verify Ed25519 signatures. */
+  async jwks(tenantId: string) {
+    return { keys: (await this.signingKeys(tenantId)).map((k) => ({ kty: 'OKP', crv: 'Ed25519', x: k.public_key, kid: k.id, use: 'sig', alg: 'EdDSA', status: k.state })) };
   }
 
   // ---------- management ----------
@@ -375,14 +506,14 @@ export class WebhookService {
     if (refused) throw new HostRefused(refused);
   }
 
-  async create(tenantId: string, by: string, input: { name: string; url: string; events: string[]; maxLabel: Label }): Promise<{ row: WebhookRow; secret: string }> {
+  async create(tenantId: string, by: string, input: { name: string; url: string; events: string[]; maxLabel: Label; ordered?: boolean; signing?: 'hmac' | 'ed25519' }): Promise<{ row: WebhookRow; secret: string }> {
     const s = this.s();
     await this.checkEndpoint(tenantId, input.url);
     const id = ulid();
     const secret = `whsec_${randomToken(32)}`;
     const t = Date.now();
     try {
-      await s.db('webhooks').insert({ id, tenant_id: tenantId, name: input.name, url: input.url, events: JSON.stringify(input.events), max_label: input.maxLabel, secret_sealed: await s.keys.seal(tenantId, secret, `webhook:${id}`), state: 'active', breaker: 'closed', failures: 0, created_by: by, created_at: t, updated_at: t });
+      await s.db('webhooks').insert({ id, tenant_id: tenantId, name: input.name, url: input.url, events: JSON.stringify(input.events), max_label: input.maxLabel, secret_sealed: await s.keys.seal(tenantId, secret, `webhook:${id}`), state: 'active', ordered: !!input.ordered, signing: input.signing ?? 'hmac', breaker: 'closed', failures: 0, created_by: by, created_at: t, updated_at: t });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict(`A webhook named ${input.name} already exists.`);
       throw err;
@@ -391,7 +522,7 @@ export class WebhookService {
     return { row: await this.get(tenantId, id), secret };
   }
 
-  async update(tenantId: string, id: string, patch: { name?: string; url?: string; events?: string[]; maxLabel?: Label; state?: 'active' | 'disabled' }): Promise<{ before: WebhookRow; after: WebhookRow }> {
+  async update(tenantId: string, id: string, patch: { name?: string; url?: string; events?: string[]; maxLabel?: Label; state?: 'active' | 'disabled'; ordered?: boolean; signing?: 'hmac' | 'ed25519' }): Promise<{ before: WebhookRow; after: WebhookRow }> {
     const before = await this.get(tenantId, id);
     if (patch.url !== undefined && patch.url !== before.url) await this.checkEndpoint(tenantId, patch.url);
     const upd: Record<string, unknown> = { updated_at: Date.now() };
@@ -400,6 +531,8 @@ export class WebhookService {
     if (patch.events !== undefined) upd.events = JSON.stringify(patch.events);
     if (patch.maxLabel !== undefined) upd.max_label = patch.maxLabel;
     if (patch.state !== undefined) upd.state = patch.state;
+    if (patch.ordered !== undefined) upd.ordered = patch.ordered;
+    if (patch.signing !== undefined) upd.signing = patch.signing;
     // Re-enabling, or pointing the webhook elsewhere, starts the breaker afresh.
     if ((patch.state === 'active' && before.state !== 'active') || (patch.url !== undefined && patch.url !== before.url)) Object.assign(upd, { breaker: 'closed', failures: 0, opened_at: null });
     try {
@@ -409,7 +542,13 @@ export class WebhookService {
       throw err;
     }
     this.forget(tenantId);
-    return { before, after: await this.get(tenantId, id) };
+    const after = await this.get(tenantId, id);
+    if (before.ordered && !after.ordered) {
+      // Deliveries waiting for their turn go out now, unordered.
+      const waiting = ((await this.s().db('webhook_deliveries').where({ webhook_id: id, state: 'pending' }).whereNull('next_attempt_at')) as Record<string, unknown>[]).map(deliveryFromRow);
+      for (const d of waiting) await this.schedule(d, Date.now());
+    } else if (after.ordered && after.state === 'active') await this.kick(id, tenantId);
+    return { before, after };
   }
 
   async rotateSecret(tenantId: string, id: string): Promise<string> {

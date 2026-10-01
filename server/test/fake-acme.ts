@@ -1,4 +1,4 @@
-import { createPublicKey, generateKeyPairSync, createHash, randomBytes, sign, verify, type KeyObject } from 'node:crypto';
+import { createHmac, createPublicKey, generateKeyPairSync, createHash, randomBytes, sign, timingSafeEqual, verify, type KeyObject } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { bits, bool, int, name, octets, OID, oid, sanValue, seq, tagged, time, toPem } from '../src/ops/der.js';
@@ -59,6 +59,8 @@ export interface FakeAcme {
   revoked: string[];
   /** Days a certificate is valid for (change between orders to test renewal). */
   validityDays: number;
+  /** Key ids of external account bindings accepted (B-904). */
+  eabBound: string[];
   close(): Promise<void>;
 }
 
@@ -68,7 +70,7 @@ export interface FakeAcme {
  * `resolveTxt` (the TXT records at `_acme-challenge.<name>` must include base64url(sha256(key authorization))),
  * wildcard identifiers (dns-01 only), finalize with CSR checks, a PEM chain signed by its own CA, and revocation.
  */
-export async function startFakeAcme(validate: (domain: string, token: string) => Promise<string | null>, opts: { resolveTxt?: (name: string) => Promise<string[]> } = {}): Promise<FakeAcme> {
+export async function startFakeAcme(validate: (domain: string, token: string) => Promise<string | null>, opts: { resolveTxt?: (name: string) => Promise<string[]>; eab?: { kid: string; key: Buffer } } = {}): Promise<FakeAcme> {
   const ca = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const caSpki = createPublicKey(ca.privateKey).export({ type: 'spki', format: 'der' });
   const caDer = certificate({ serial: randomBytes(8), issuer: 'Fake internal CA', subject: 'Fake internal CA', spki: caSpki, notBefore: Date.now() - 86_400_000, notAfter: Date.now() + 3650 * 86_400_000, ca: true, key: ca.privateKey });
@@ -79,7 +81,7 @@ export async function startFakeAcme(validate: (domain: string, token: string) =>
   const authzs = new Map<string, { status: string; identifier: { type: string; value: string }; wildcard: boolean; token: string; order: string; account: string; challengeStatus: string; dnsStatus: string; error?: string }>();
   let n = 0;
   let base = '';
-  const fake: FakeAcme = { url: '', directory: '', caPem, issued: [], revoked: [], validityDays: 90, close: async () => undefined };
+  const fake: FakeAcme = { url: '', directory: '', caPem, issued: [], revoked: [], validityDays: 90, eabBound: [], close: async () => undefined };
 
   const newNonce = () => {
     const x = b64u(randomBytes(12));
@@ -98,7 +100,7 @@ export async function startFakeAcme(validate: (domain: string, token: string) =>
           res.end(body === undefined ? '' : typeof body === 'string' ? body : JSON.stringify(body));
         };
         const problem = (status: number, type: string, detail: string) => send(status, { type: `urn:ietf:params:acme:error:${type}`, detail, status });
-        if (req.method === 'GET' && path === '/directory') return send(200, { newNonce: `${base}/new-nonce`, newAccount: `${base}/new-account`, newOrder: `${base}/new-order`, revokeCert: `${base}/revoke-cert` });
+        if (req.method === 'GET' && path === '/directory') return send(200, { newNonce: `${base}/new-nonce`, newAccount: `${base}/new-account`, newOrder: `${base}/new-order`, revokeCert: `${base}/revoke-cert`, ...(opts.eab ? { meta: { externalAccountRequired: true } } : {}) });
         if (path === '/new-nonce') return send(req.method === 'HEAD' ? 200 : 204, undefined);
         if (req.method !== 'POST') return problem(405, 'malformed', 'POST only');
         // JWS checks
@@ -127,6 +129,19 @@ export async function startFakeAcme(validate: (domain: string, token: string) =>
         if (path === '/new-account') {
           const existing = [...accounts.entries()].find(([, k]) => thumb(k) === thumb(jwk));
           if (existing) return send(200, { status: 'valid' }, { location: `${base}/acct/${existing[0]}` });
+          // External account binding (RFC 8555 section 7.3.4): an HS256 JWS over the account JWK with the issued key.
+          if (opts.eab) {
+            const b = payload?.externalAccountBinding as { protected?: string; payload?: string; signature?: string } | undefined;
+            if (!b?.protected || !b.payload || !b.signature) return problem(401, 'externalAccountRequired', 'external account binding required');
+            const h = JSON.parse(Buffer.from(b.protected, 'base64url').toString('utf8')) as { alg?: string; kid?: string; url?: string };
+            if (h.alg !== 'HS256' || h.kid !== opts.eab.kid || h.url !== `${base}/new-account`) return problem(401, 'unauthorized', 'bad binding header');
+            const inner = JSON.parse(Buffer.from(b.payload, 'base64url').toString('utf8')) as Record<string, string>;
+            if (thumb(inner) !== thumb(jwk)) return problem(401, 'unauthorized', 'binding is for another key');
+            const mac = createHmac('sha256', opts.eab.key).update(`${b.protected}.${b.payload}`).digest();
+            const got = Buffer.from(b.signature, 'base64url');
+            if (got.length !== mac.length || !timingSafeEqual(got, mac)) return problem(401, 'unauthorized', 'bad binding MAC');
+            fake.eabBound.push(opts.eab.kid);
+          }
           const id = String(++n);
           accounts.set(id, jwk);
           return send(201, { status: 'valid', contact: payload?.contact }, { location: `${base}/acct/${id}` });

@@ -93,6 +93,12 @@ jobs:
             sleep 2
           done
           docker logs openldap; exit 1
+      - name: Turn on logical replication in PostgreSQL (knowledge replication test)
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U exprsn -d exprsn_test -c "ALTER SYSTEM SET wal_level = logical"
+          docker restart ${{ job.services.postgres.id }}
+          for i in $(seq 1 40); do docker exec ${{ job.services.postgres.id }} pg_isready -U exprsn >/dev/null 2>&1 && exit 0; sleep 1; done
+          exit 1
       - run: npm ci
       - run: npm run test:integration -w server
         env:

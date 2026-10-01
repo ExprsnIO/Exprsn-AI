@@ -40,6 +40,8 @@ export interface MediaDeps {
   runner: MediaRunner;
   safety: () => ImageSafety;
   safetyThreshold: number;
+  /** IMAGE_SAFETY_REQUIRED (B-1007): without a classifier, sampled frames are withheld. */
+  safetyRequired?: boolean;
   guardrails: () => Guardrails;
   caps: MediaCaps;
   encoder: 'auto' | 'nvenc' | 'cpu';
@@ -436,10 +438,11 @@ export class MediaService {
         result.withheld = 0;
         result.withheldAt = [];
         result.classifier = safety.name === 'none' ? null : safety.name;
+        const unclassifiedWithheld = !!this.d.safetyRequired && safety.name === 'none';
         for (const [i, f] of files.entries()) {
           const data = await readFile(path.join(dir, f));
-          const v = await safety.classify(data, 'image/jpeg', ctx.signal);
-          if (v && v.score >= this.d.safetyThreshold) {
+          const v = unclassifiedWithheld ? null : await safety.classify(data, 'image/jpeg', ctx.signal);
+          if (unclassifiedWithheld || (v && v.score >= this.d.safetyThreshold)) {
             result.withheld++;
             result.withheldAt.push(fmtTime(start + (i / fps) * 1000));
             continue;
@@ -448,7 +451,7 @@ export class MediaService {
         }
         result.frames = keep.length;
         if (result.withheld) {
-          await this.d.audit.append({ tenantId: j.tenant_id, action: 'media.frames.withheld', kind: 'system', actor: { service: 'media' }, target: { asset: a.id, job: j.id }, label: j.label, detail: { withheld: result.withheld, at: result.withheldAt, classifier: result.classifier } });
+          await this.d.audit.append({ tenantId: j.tenant_id, action: 'media.frames.withheld', kind: 'system', actor: { service: 'media' }, target: { asset: a.id, job: j.id }, label: j.label, detail: { withheld: result.withheld, at: result.withheldAt, classifier: result.classifier, ...(unclassifiedWithheld ? { reason: 'not classified', required: true } : {}) } });
         }
       } else if (preset.output.kind === 'subtitles') {
         await report(95, 'Checking the transcript with guardrails');

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { LABELS } from '../../authz/labels.js';
 import { secretRefProblem } from '../secrets.js';
+import { scrubSecrets } from '../../platform/diagnostics.js';
 
 export interface ExternalUser {
   /** Stable id inside the store: the LDAP DN or the SQL row key. The link to our user row. */
@@ -181,7 +182,8 @@ export const timed = async <T>(steps: Step[] | undefined, title: string, fn: () 
     steps?.push({ title, ok: true, ms: Math.round(performance.now() - t0), ...(describe ? { detail: describe(v) } : {}) });
     return v;
   } catch (err) {
-    steps?.push({ title, ok: false, ms: Math.round(performance.now() - t0), detail: (err as Error).message });
+    // B-907: directory and database messages can carry a bind password or a connection string.
+    steps?.push({ title, ok: false, ms: Math.round(performance.now() - t0), detail: scrubSecrets((err as Error).message) });
     throw err;
   }
 };

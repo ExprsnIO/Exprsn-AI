@@ -160,6 +160,11 @@
         if (st.run && st.run.id === d.runId) { st.run.state = d.state; st.run.error = d.error; refreshRunSoon(); }
         schedule();
       }),
+      // Sprint 19: approvers hear about approvals on runs they may decide, wherever they are on this screen.
+      'workflow.approval': guard((st) => {
+        App.get('/api/workflow-approvals').then((a) => { st.approvals = a; schedule(); }).catch(() => undefined);
+        if (st.runId) refreshRunSoon();
+      }),
       'workflow.step': guard((st, d) => {
         if (d.workflowId !== st.wfId) return;
         const r = (st.runs || []).find((x) => x.id === d.runId);
@@ -377,7 +382,7 @@
           + UI.field('Prompt template', cfgTa('prompt', c.prompt, 4), 'Reads {{input.…}} and {{steps.&lt;id&gt;.…}} of earlier steps');
         else if (n.kind === 'transform') fields = UI.field('Fields', cfgTa('fields', lines(c.fields), 3, 'summary: {{steps.summarise.text}}'), 'One per line: name: template');
         else if (n.kind === 'branch') fields = UI.field('Left', cfgIn('left', c.left)) + '<div class="grid2" style="gap:10px">' + UI.field('Operator', cfgSel('op', OPS, c.op)) + UI.field('Right', cfgIn('right', c.right, { placeholder: c.op === 'truthy' || c.op === 'exists' ? 'not used' : '' })) + '</div><div class="muted" style="font-size:12px">Edges out of a branch carry true or false; the other side is skipped.</div>';
-        else if (n.kind === 'guardrail') fields = UI.field('Checkpoint', cfgSel('checkpoint', CHECKPOINTS, c.checkpoint || 'context')) + UI.field('Text to check', cfgTa('text', c.text, 2)) + UI.field('Approver when rules ask for one', cfgSel('approverRole', ROLES, c.approverRole || 'workflow-admin'), 'Block fails the step; redact passes the masked text on');
+        else if (n.kind === 'guardrail') fields = UI.field('Checkpoint', cfgSel('checkpoint', CHECKPOINTS, c.checkpoint || 'context')) + UI.field('Text to check', cfgTa('text', c.text, 2)) + UI.field('Approver when rules ask for one', cfgSel('approverRole', ROLES, c.approverRole || 'workflow-admin'), 'Block fails the step; redact passes the masked text on') + UI.field('Approval timeout', cfgIn('approvalTimeoutMs', Math.round((c.approvalTimeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. The run fails if nobody decides in time');
         else if (n.kind === 'approval') fields = UI.field('Role', cfgSel('role', ROLES, c.role)) + UI.field('Timeout', cfgIn('timeoutMs', Math.round((c.timeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. The run fails if nobody decides in time') + UI.field('Data the approver sees', cfgTa('show', c.show, 2, '{{steps.summarise.text}}'));
         else if (n.kind === 'http') fields = '<div class="grid2" style="gap:10px;grid-template-columns:90px 1fr">' + UI.field('Method', cfgSel('method', ['GET', 'POST', 'PUT'], c.method || 'GET')) + UI.field('URL', cfgIn('url', c.url)) + '</div>' + UI.field('Body', cfgTa('body', c.body, 2)) + UI.field('Headers', cfgTa('headers', lines(c.headers), 2, 'X-Request-Source: exprsn'), 'Content-Type, Accept and X- headers only') + '<div class="muted" style="font-size:12px">Internal hosts only: private addresses, never link-local or the internet. The host cannot come from a template.</div>';
         else if (n.kind === 'calc') fields = UI.field('Expression', cfgTa('expression', c.expression, 2), 'Exact arithmetic; placeholders are filled first') + '<div class="muted" style="font-size:12px">Exact, deterministic; the result records the fraction and whether it is exact.</div>';
@@ -393,6 +398,7 @@
             + (t ? UI.kv([['Side effect', UI.pill(t.sideEffect, t.sideEffect === 'read' ? 'outline' : t.sideEffect === 'write' ? 'warn' : 'danger')], ['Max label', UI.label(t.label, { sm: true })], ['Version', esc(t.version)], ['Takes', '<span class="mono">' + esc(fmtSchema(t.inputSchema)) + '</span>']], 2) + (t.description ? '<div class="muted" style="font-size:12px">' + esc(t.description) + '</div>' : '') : '')
             + UI.field('Arguments', cfgTa('args', typeof c.args === 'string' ? c.args : lines(c.args), 3, 'summary: {{steps.summarise.text}}'), 'One per line: name: template. Empty: the fields of its input that the tool takes')
             + UI.field('Approver before the call', cfgSel('approverRole', ROLES, c.approverRole || 'workflow-admin'), writes ? 'This is a ' + esc(t.sideEffect) + ' tool: unless an Approval step comes before it on every path, the run pauses for this role, then makes the call' : 'Used when the tool-call guardrail holds the call')
+            + UI.field('Approval timeout', cfgIn('approvalTimeoutMs', Math.round((c.approvalTimeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. When the step pauses for its approver, the run fails if nobody decides in time')
             + '<div class="muted" style="font-size:12px">Dry runs mock the result from the tool\'s output schema and call nothing.</div>';
         }
         const mine = issuesOf(n.id);
@@ -450,7 +456,7 @@
         + (st.conflict ? UI.notice('<b>The draft changed since you opened it.</b> ' + esc(st.conflict) + ' Your unsaved edits stay here until you reload.', 'warn', UI.btn('Reload the draft', { size: 'sm', attrs: 'data-reloaddraft' })) : '')
         + (st.parseError && !viewing ? UI.notice('<b>The draft cannot be checked.</b> ' + esc(st.parseError), 'danger') : '')
         + problem
-        + '<div class="wf-scroll"><div class="wf-canvas" tabindex="0" aria-label="Workflow canvas" style="width:' + canvasW + 'px;height:' + canvasH + 'px">' + svg + nodeHtml + '<div style="position:absolute;right:12px;top:12px;display:flex;gap:6px">' + (manage ? UI.btn(st.starting ? 'Starting' : 'Dry run', { size: 'sm', icon: 'play', attrs: 'data-dryrun', disabled: !!st.starting }) : '') + '</div></div></div>'
+        + '<div class="wf-scroll" data-scroll-x data-scroll-2d><div class="wf-canvas" tabindex="0" aria-label="Workflow canvas" style="width:' + canvasW + 'px;height:' + canvasH + 'px">' + svg + nodeHtml + '<div style="position:absolute;right:12px;top:12px;display:flex;gap:6px">' + (manage ? UI.btn(st.starting ? 'Starting' : 'Dry run', { size: 'sm', icon: 'play', attrs: 'data-dryrun', disabled: !!st.starting }) : '') + '</div></div></div>'
         + '<div class="wf-toolbar">'
         + (manage ? UI.btn('Dry run', { size: 'sm', icon: 'play', attrs: 'data-dryrun', disabled: !!st.starting }) : '')
         + UI.btn('Start run', { size: 'sm', icon: 'play', attrs: 'data-startrun', disabled: !wf.publishedVersion || !!st.starting, title: wf.publishedVersion ? 'Runs the published version ' + wf.publishedVersion : 'Publish a version first' })
@@ -615,7 +621,7 @@
         const n = selNode(); if (!n || !editable) return;
         const k = t.dataset.c; const raw = t.value; const c = n.config = n.config || {};
         if (k === 'fields' || k === 'headers') c[k] = unlines(raw);
-        else if (k === 'timeoutMs') c[k] = Math.max(1, Number(raw) || 24) * 3600000;
+        else if (k === 'timeoutMs' || k === 'approvalTimeoutMs') c[k] = Math.max(1, Number(raw) || 24) * 3600000;
         else if (k === 'ms') c[k] = Math.max(1, Number(raw) || 60) * 1000;
         else if (k === 'right') { const s = raw.trim(); if (s === '') delete c.right; else c.right = s === 'true' ? true : s === 'false' ? false : !isNaN(Number(s)) ? Number(s) : s; }
         else if (k === 'args' && raw.trim()) c[k] = unlines(raw);

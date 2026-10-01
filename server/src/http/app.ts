@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { scrubSecrets } from '../platform/diagnostics.js';
 import path from 'node:path';
 import express, { type ErrorRequestHandler, type Express } from 'express';
 import compression from 'compression';
@@ -32,6 +33,8 @@ import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
+import { integrationPublicRoutes } from '../routes/integrations-public.js';
+import { trainerWorkerRoutes } from '../routes/trainer-worker.js';
 import { openAiRoutes } from '../openai/routes.js';
 import { sharingRoutes } from '../routes/sharing.js';
 import { promptRoutes } from '../routes/prompts.js';
@@ -39,6 +42,7 @@ import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
+import { publicSharingRoutes } from '../routes/sharing-public.js';
 import { mediaHostGuard, mediaOriginRoutes } from '../media/origin.js';
 import { sendBytes } from '../routes/media.js';
 import { authenticate, csrfProtection, noStore } from './middleware.js';
@@ -108,6 +112,10 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(federationPublicRoutes(s));
   // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
   app.use(acmeChallengeRoutes(s));
+  // Sprint 19: published webhook signing keys and the Stripe webhook (public; signatures are the authentication).
+  app.use(integrationPublicRoutes(s));
+  // Sprint 18 (B-905): the training worker's callbacks (run keys, artefacts), grant tokens only.
+  app.use(trainerWorkerRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -122,7 +130,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(csrfProtection(s));
 
   // Counted in the shared counter store: one limit across every instance when REDIS_URL is set.
-  const general = new Limiter(s.counters, 'api', 600, 60_000);
+  const general = new Limiter(s.counters, 'api', s.cfg.API_RATE_PER_MINUTE, 60_000);
   const authLimiter = new Limiter(s.counters, 'auth', 30, 60_000);
   const limit = (limiter: Limiter): express.RequestHandler => async (req, _res, next) => {
     const r = await limiter.consume(req.principal?.userId ?? req.ip ?? 'unknown');
@@ -166,6 +174,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(() => {
     throw notFound('API route');
   });
+  // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
+  app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 
   // Console: static files, and the single page for everything else.
@@ -198,6 +208,9 @@ export function errorHandler(s: Pick<Services, 'log'>): ErrorRequestHandler {
       return;
     }
     for (const [k, v] of Object.entries(problem.headers)) res.setHeader(k, v);
-    res.status(problem.status).type('application/problem+json').send(JSON.stringify(problem.toBody(req.traceId, req.originalUrl)));
+    const body = problem.toBody(req.traceId, req.originalUrl) as { detail?: unknown };
+    // Sprint 18 (B-907): credentials in a detail (a URL with a password, password=...) never reach the client.
+    if (typeof body.detail === 'string') body.detail = scrubSecrets(body.detail);
+    res.status(problem.status).type('application/problem+json').send(JSON.stringify(body));
   };
 }

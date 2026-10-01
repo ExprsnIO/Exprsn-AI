@@ -235,7 +235,7 @@
         })), all.length ? { emptyTitle: 'No models match', emptyText: 'Clear the filters or request an import.' } : { emptyTitle: 'The catalogue is empty', emptyText: 'Request an import to pull a model from the Ollama library onto a pool.' });
 
       root.innerHTML = '<style>'
-        + '.md-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.md-steps span{color:var(--muted);font-weight:500}.md-steps .cur{color:var(--fg);font-weight:700}.md-steps .done{color:var(--fg2)}.md-steps .sep{color:var(--faint)}'
+        + '.md-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.md-steps span{color:var(--muted);font-weight:500}.md-steps .cur{color:var(--fg);font-weight:700}.md-steps .done{color:var(--fg2)}.md-steps .sep{color:var(--faint-text)}'
         + '.md-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
         + '.md-pl{display:inline-flex;align-items:center;gap:4px;margin-right:8px}'
         + '</style>'

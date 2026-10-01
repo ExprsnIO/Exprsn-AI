@@ -1,4 +1,7 @@
-import { createHash, createPublicKey, sign as cryptoSign, verify as cryptoVerify, type JsonWebKey, type KeyObject } from 'node:crypto';
+import { createHash, createPublicKey, sign as cryptoSign, verify as cryptoVerify, type KeyObject, type webcrypto } from 'node:crypto';
+
+// @types/node 26 keeps the JWK type under webcrypto only.
+type JsonWebKey = webcrypto.JsonWebKey;
 
 /** Compact JWS (RFC 7515) for ES256 signing and ES256 / RS256 verification, with node:crypto only. */
 
@@ -142,6 +145,8 @@ export interface DpopProof {
   jkt: string;
   jti: string;
   iat: number;
+  /** The server-issued nonce the proof carries (RFC 9449 section 8), when any. */
+  nonce: string | null;
 }
 
 /** The access-token hash a DPoP proof carries when it is presented with a token. */
@@ -172,5 +177,5 @@ export function verifyDpopProof(proof: string, opts: { method: string; url: stri
   const now = Math.floor((opts.now ?? Date.now()) / 1000);
   if (typeof claims.iat !== 'number' || claims.iat > now + 5 || claims.iat < now - opts.maxAgeS) throw new JwtError('The DPoP proof is too old or from the future.');
   if (opts.accessToken !== undefined && claims.ath !== athOf(opts.accessToken)) throw new JwtError('The DPoP proof does not match the access token.');
-  return { jkt: thumbprint(jwk), jti: claims.jti, iat: claims.iat };
+  return { jkt: thumbprint(jwk), jti: claims.jti, iat: claims.iat, nonce: typeof claims.nonce === 'string' && claims.nonce.length <= 200 ? claims.nonce : null };
 }

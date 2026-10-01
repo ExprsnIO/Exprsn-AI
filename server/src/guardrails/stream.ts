@@ -11,8 +11,19 @@ import type { GuardDecision, GuardFinding } from './types.js';
  * - `redact` releases the new text with the flagged spans replaced.
  * - anything else releases the new text as it is.
  *
- * The guard model and classifiers are not run here (a model call per sentence would cost more than streaming saves);
- * the full check still runs once on the finished answer and can replace what was released.
+ * Sprint 16 (B-703): with a model screen (the enforced guard-model and classifier rules), each window the
+ * deterministic rules passed is also checked by the model screen in the background, over the whole text so far. Checks
+ * never block the event loop or the generation: they are promises, at most one in flight per stream (a newer check
+ * covers every window screened since), and at most `CheckLimiter.max` per instance. With a hold-back of N ≥ 1 a
+ * screened window is released only once a clean verdict covers it and the N - 1 windows after it (so each released
+ * sentence was judged with that much of what follows); the last windows of an answer go out after the full check on
+ * the finished answer. With N = 0 a window is released at once and a verdict can only stop what follows. An unsafe
+ * verdict halts or holds like the deterministic rules; a check that cannot run stops further release (the rest goes
+ * out after the full check, which decides with the rules' own onError).
+ *
+ * The generation never waits for a verdict: a guard model served from the same busy pool as the answers cannot
+ * deadlock them, it only delays what is shown.
+ * The full check still runs once on the finished answer and can replace what was released.
  */
 export const MAX_HOLD_CHARS = 240;
 
@@ -34,6 +45,57 @@ export function lastBoundaryEnd(text: string, from: number, maxHold = MAX_HOLD_C
 
 export type Screen = (text: string) => GuardDecision | Promise<GuardDecision>;
 
+/**
+ * Bounds the background checks one instance runs at once. Waiting callers queue in order; nothing spins or blocks.
+ */
+export class CheckLimiter {
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
+  /** Checks started and the most in flight at once (for the load test and metrics). */
+  readonly stats = { started: 0, peak: 0, queuedPeak: 0 };
+
+  constructor(readonly max: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active >= this.max) {
+      await new Promise<void>((resolve) => {
+        this.waiting.push(resolve);
+        this.stats.queuedPeak = Math.max(this.stats.queuedPeak, this.waiting.length);
+      });
+    }
+    this.active++;
+    this.stats.started++;
+    this.stats.peak = Math.max(this.stats.peak, this.active);
+    try {
+      return await fn();
+    } finally {
+      this.active--;
+      this.waiting.shift()?.();
+    }
+  }
+
+  get inFlight(): number {
+    return this.active;
+  }
+}
+
+export interface ModelScreen {
+  /** The guard-model and classifier rules over the text so far. */
+  screen: Screen;
+  /** Windows kept back behind the verdicts: a window is released once a verdict covers it and the N - 1 after it (0: at once). */
+  holdback: number;
+  limiter: CheckLimiter;
+  /** Releases (and halts or holds) decided by a verdict that arrived outside `push`. */
+  onRelease: (r: Release) => void;
+}
+
+interface Window {
+  from: number;
+  to: number;
+  /** Enforced redactions of the deterministic screen that fall in the window. */
+  findings: GuardFinding[];
+}
+
 export interface Release {
   /** Newly released text (screened, redacted where a rule said so). */
   text: string;
@@ -44,21 +106,51 @@ export interface Release {
 
 export class StreamGuard {
   private buf = '';
+  /** How far the deterministic screen has passed the buffer. */
   private releasedTo = 0;
+  /** How far the buffer has been released (equal to `releasedTo` without a model screen). */
+  private shownTo = 0;
   private out = '';
   private haltDecision: GuardDecision | null = null;
   private holdDecision: GuardDecision | null = null;
+  private readonly queue: Window[] = [];
+  private checkedTo = 0;
+  private inflight: Promise<void> | null = null;
+  private failed = false;
+  private closed = false;
 
   constructor(
     private readonly screen: Screen,
-    private readonly maxHold = MAX_HOLD_CHARS
+    private readonly maxHold = MAX_HOLD_CHARS,
+    private readonly model: ModelScreen | null = null
   ) {}
 
   /** Text already shown before this guard started (a continued answer): screened then, released now. */
   preload(text: string): void {
     this.buf = text;
     this.releasedTo = text.length;
+    this.shownTo = text.length;
+    this.checkedTo = text.length;
     this.out = text;
+  }
+
+  /**
+   * What the deterministic screen passed but no verdict released yet (and the tail after a failed check), once the
+   * stream is finished. The caller releases it after the full check on the finished answer has passed it.
+   */
+  get unreleased(): string {
+    return this.haltDecision || this.holdDecision ? '' : this.buf.slice(this.shownTo, this.releasedTo);
+  }
+
+  /** No verdict releases anything any more (the stream ended some other way). */
+  close(): void {
+    this.closed = true;
+  }
+
+  /** Marks the unreleased text as released by the caller. */
+  markReleased(): void {
+    this.out += this.buf.slice(this.shownTo, this.releasedTo);
+    this.shownTo = this.releasedTo;
   }
 
   get halted(): GuardDecision | null {
@@ -98,28 +190,92 @@ export class StreamGuard {
     return this.screenAndRelease(end);
   }
 
-  /** Screens and releases the rest (the answer ended). */
-  finish(): Promise<Release> {
-    return this.screenAndRelease(this.buf.length);
+  /**
+   * Screens the rest (the answer ended). With a model screen, no later verdict releases anything: what is still
+   * waiting is `unreleased`, for the caller to release once the full check has passed the answer.
+   */
+  async finish(): Promise<Release> {
+    const r = await this.screenAndRelease(this.buf.length, true);
+    this.closed = true;
+    return r;
   }
 
-  private async screenAndRelease(upTo: number): Promise<Release> {
+  private async screenAndRelease(upTo: number, last = false): Promise<Release> {
     const s = this.stopped();
     if (s) return s;
     if (upTo <= this.releasedTo) return { text: '', halted: false, held: false, decision: null };
     const d = await this.screen(this.buf.slice(0, upTo));
     if (d.action === 'block') {
       this.haltDecision = d;
+      this.queue.length = 0;
       return { text: '', halted: true, held: false, decision: d };
     }
     if (d.action === 'require-approval') {
       this.holdDecision = d;
+      this.queue.length = 0;
       return { text: '', halted: false, held: true, decision: d };
     }
-    const text = d.action === 'redact' ? redactSlice(this.buf, this.releasedTo, upTo, d.findings) : this.buf.slice(this.releasedTo, upTo);
+    const w: Window = { from: this.releasedTo, to: upTo, findings: d.action === 'redact' ? d.findings : [] };
     this.releasedTo = upTo;
+    const m = this.model;
+    if (!m || (m.holdback === 0 && !this.failed)) {
+      const text = this.show(w, []);
+      if (m) this.kick();
+      return { text, halted: false, held: false, decision: d };
+    }
+    if (this.failed) return { text: '', halted: false, held: false, decision: d };
+    this.queue.push(w);
+    // The last window is not checked here: the full check on the finished answer decides it.
+    if (!last) this.kick();
+    return { text: '', halted: false, held: false, decision: d };
+  }
+
+  /** Releases a window (with its redactions and a verdict's). */
+  private show(w: Window, extra: GuardFinding[]): string {
+    const findings = [...w.findings, ...extra.filter((f) => f.stage === 'enforce' && f.action === 'redact')];
+    const text = findings.length ? redactSlice(this.buf, w.from, w.to, findings) : this.buf.slice(w.from, w.to);
+    this.shownTo = w.to;
     this.out += text;
-    return { text, halted: false, held: false, decision: d };
+    return text;
+  }
+
+  /** Starts a background check over everything screened so far, unless one is in flight (it will start the next). */
+  private kick(): void {
+    const m = this.model;
+    if (!m || this.inflight || this.closed || this.failed || this.stopped()) return;
+    const upTo = this.releasedTo;
+    if (upTo <= this.checkedTo) return;
+    const text = this.buf.slice(0, upTo);
+    this.inflight = m.limiter
+      .run(async () => m.screen(text))
+      .then(
+        (d) => this.verdict(upTo, d),
+        () => {
+          // The check could not run: nothing more is released until the full check has passed the answer.
+          this.failed = true;
+        }
+      )
+      .finally(() => {
+        this.inflight = null;
+        this.kick();
+      });
+  }
+
+  private verdict(upTo: number, d: GuardDecision): void {
+    if (this.closed || this.stopped()) return;
+    const m = this.model!;
+    if (d.action === 'block' || d.action === 'require-approval') {
+      if (d.action === 'block') this.haltDecision = d;
+      else this.holdDecision = d;
+      this.queue.length = 0;
+      m.onRelease({ text: '', halted: d.action === 'block', held: d.action === 'require-approval', decision: d });
+      return;
+    }
+    this.checkedTo = upTo;
+    let text = '';
+    const n = Math.max(1, m.holdback);
+    while (this.queue.length >= n && this.queue[n - 1]!.to <= upTo) text += this.show(this.queue.shift()!, d.action === 'redact' ? d.findings : []);
+    if (text) m.onRelease({ text, halted: false, held: false, decision: d });
   }
 }
 

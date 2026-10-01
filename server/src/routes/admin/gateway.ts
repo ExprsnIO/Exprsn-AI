@@ -7,6 +7,7 @@ import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } f
 import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../../http/problem.js';
 import { THINK_LEVELS, type ModelRow, type ProfileRow, type ThinkLevel } from '../../gateway/repo.js';
 import type { Services } from '../../services.js';
+import { checkServiceUrl, servicePolicy, ServiceUrlRefused } from '../../platform/egress.js';
 
 const PICKLE = /\.(bin|pt|pth|pkl|pickle|ckpt)(\?|$)/i;
 const secretPath = z.string().regex(/^\/[^\0]+$/, 'An absolute path on the server').max(500);
@@ -150,6 +151,7 @@ export function gatewayAdminRoutes(s: Services): Router {
     if (!pool) throw notFound('Pool');
     const body = parseBody(z.object({ name: z.string().trim().regex(/^[a-z0-9][a-z0-9./-]{0,99}$/), url: urlSchema, deploy: z.enum(['docker', 'baremetal']), tls: tlsSchema.default(null), settings: settingsSchema.default({}) }), req.body);
     if (body.tls && !body.url.startsWith('https://')) throw badRequest('Mutual TLS needs an https:// URL.');
+    await checkInstanceUrl(body.url);
     try {
       const inst = await g.repo.createInstance({ poolId: pool.id, ...body });
       await audit(req, 'instance.created', { instance: inst.id, name: inst.name, pool: pool.name }, { url: inst.url, deploy: inst.deploy, mtls: !!body.tls });
@@ -161,6 +163,16 @@ export function gatewayAdminRoutes(s: Services): Router {
     }
   });
 
+  /** B-901: link-local, metadata and unspecified addresses are refused; the poller's connections re-check at dial time. */
+  const checkInstanceUrl = async (url: string) => {
+    try {
+      await checkServiceUrl(url, servicePolicy(s.cfg));
+    } catch (err) {
+      if (err instanceof ServiceUrlRefused) throw badRequest(`The instance URL is refused: ${err.message}`);
+      throw err;
+    }
+  };
+
   const loadInstance = async (req: Request) => {
     const inst = await g.repo.instance(String(req.params.id));
     if (!inst) throw notFound('Instance');
@@ -170,6 +182,7 @@ export function gatewayAdminRoutes(s: Services): Router {
   r.patch('/instances/:id', pools, async (req, res) => {
     const inst = await loadInstance(req);
     const body = parseBody(z.object({ url: urlSchema.optional(), tls: tlsSchema.optional(), settings: settingsSchema.optional(), state: z.enum(['active', 'disabled']).optional() }).strict(), req.body);
+    if (body.url) await checkInstanceUrl(body.url);
     await g.repo.updateInstance(inst.id, body);
     await audit(req, 'instance.updated', { instance: inst.id, name: inst.name }, { after: { ...body, tls: body.tls === undefined ? undefined : !!body.tls } });
     await g.pollOne(inst.id);

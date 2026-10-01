@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { scrubError } from '../platform/diagnostics.js';
 import { json, type Db } from '../db/knex.js';
 import { clears, type Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
@@ -11,6 +12,14 @@ import type { Guardrails } from '../guardrails/types.js';
 import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
 import type { DynamicCredentials } from './dynamic.js';
 import type { ConnectionSpec, DriverFactory, QueryResult, SchemaObject } from './drivers.js';
+import type { ReplicationOptions, RowChange } from './replication.js';
+
+/** A replicated change after masking; `raw` is the unmasked value of the requested column (the access column). */
+export type MaskedChange = RowChange & { raw: unknown };
+export interface MaskedReplicationStream {
+  run(onBatch: (b: { lsn: string; changes: MaskedChange[] }) => Promise<void>, onReady?: () => void): Promise<void>;
+  stop(): Promise<void>;
+}
 
 export type Engine = ConnectionSpec['engine'];
 export const ENGINES: readonly Engine[] = ['postgres', 'opensearch', 'mysql'];
@@ -288,10 +297,20 @@ export class ConnectionService {
     return { engine: c.engine, endpoint: c.endpoint, database: c.database, tls: c.tls, username: cred?.username ?? null, password: cred?.password ?? null };
   }
 
+  /** B-907: the secrets of the last spec built per connection, masked out of driver messages. */
+  private readonly secretsOf = new Map<string, string[]>();
+
   private async driver(c: ConnectionRow) {
     const make = this.drivers[c.engine];
     if (!make) throw conflict(`The ${c.engine} engine is not installed on this platform.`);
-    return make(await this.spec(c));
+    const spec = await this.spec(c);
+    this.secretsOf.set(c.id, spec.password ? [spec.password] : []);
+    return make(spec);
+  }
+
+  /** A driver's error message with the connection's password and any other credentials masked. */
+  private scrub(c: ConnectionRow, err: unknown): string {
+    return scrubError(err, this.secretsOf.get(c.id) ?? []);
   }
 
   async test(tenantId: string, id: string): Promise<{ ok: boolean; ms: number; version?: string; readOnly?: boolean; detail: string; health: ConnectionRow['health'] }> {
@@ -304,7 +323,7 @@ export class ConnectionService {
       await this.db('data_connections').where({ id }).update({ health, health_detail: r.detail.slice(0, 300), checked_at: Date.now() });
       return { ok: true, ms, version: r.version, readOnly: r.readOnly, detail: r.detail, health };
     } catch (err) {
-      const detail = (err as Error).message.slice(0, 300);
+      const detail = this.scrub(c, err).slice(0, 300);
       await this.db('data_connections').where({ id }).update({ health: 'unreachable', health_detail: detail, checked_at: Date.now() });
       return { ok: false, ms: Date.now() - t, detail, health: 'unreachable' };
     }
@@ -316,7 +335,7 @@ export class ConnectionService {
     try {
       schema = await (await this.driver(c)).introspect(c.timeout_s * 1000);
     } catch (err) {
-      throw new HttpProblem(502, 'Introspection failed', `${c.name} could not be read: ${(err as Error).message}`.slice(0, 500));
+      throw new HttpProblem(502, 'Introspection failed', `${c.name} could not be read: ${this.scrub(c, err)}`.slice(0, 500));
     }
     await this.db('data_connections').where({ id }).update({ schema: JSON.stringify(schema), schema_at: Date.now() });
     const ok = schema.filter((o) => allowed(c, o.name)).length;
@@ -398,8 +417,9 @@ export class ConnectionService {
     try {
       r = await (await this.driver(c)).query(cl, text, { limit: c.row_limit, timeoutMs: c.timeout_s * 1000 });
     } catch (err) {
-      await record('connection.query.failed', { error: (err as Error).message.slice(0, 300) });
-      throw new HttpProblem(502, 'Query failed', `${c.name}: ${(err as Error).message}`.slice(0, 500), { extensions: { kind: 'failed' } });
+      const message = this.scrub(c, err);
+      await record('connection.query.failed', { error: message.slice(0, 300) });
+      throw new HttpProblem(502, 'Query failed', `${c.name}: ${message}`.slice(0, 500), { extensions: { kind: 'failed' } });
     }
     const ms = Date.now() - t;
     const m = this.mask(c, cl.objects, r);
@@ -420,13 +440,53 @@ export class ConnectionService {
     return { file, csv, rows: r.rows.length, label: c.label };
   }
 
-  /** Rows of an allow-listed object for a knowledge source, masked the same way. */
-  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string }> {
+  /**
+   * Rows of an allow-listed object for a knowledge source, masked the same way. `rawColumn` (a row-level access
+   * column, B-1002) is also returned unmasked beside the rows, as it decides who may retrieve each row.
+   */
+  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; rawColumn?: string | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string; raw?: unknown[] }> {
     const c = await this.get(tenantId, id);
-    if (c.engine !== 'postgres') throw conflict('Only PostgreSQL tables and views can be a knowledge source.');
+    if (c.engine !== 'postgres' && c.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views can be a knowledge source.');
     if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
-    const r = await (await this.driver(c)).rows(object, { ...opts, timeoutMs: c.timeout_s * 1000 });
+    const r = await (await this.driver(c)).rows(object, { watermarkColumn: opts.watermarkColumn, after: opts.after, limit: opts.limit, timeoutMs: c.timeout_s * 1000 });
+    const at = opts.rawColumn ? r.columns.indexOf(opts.rawColumn) : -1;
+    const raw = at >= 0 ? r.rows.map((row) => row[at]) : undefined;
     const m = this.mask(c, [object], r);
-    return { columns: r.columns, rows: m.rows, capped: r.capped, label: c.label, name: c.name };
+    return { columns: r.columns, rows: m.rows, capped: r.capped, label: c.label, name: c.name, ...(raw ? { raw } : {}) };
+  }
+
+  /**
+   * A logical replication stream of one allow-listed PostgreSQL table (B-1003). Changes to other relations are
+   * dropped; values are masked as in every other read, with `rawColumn` kept unmasked beside them (`raw`).
+   */
+  async replicate(tenantId: string, id: string, object: string, opts: Omit<ReplicationOptions, 'table' | 'timeoutMs'> & { rawColumn?: string | null }): Promise<MaskedReplicationStream> {
+    const c = await this.get(tenantId, id);
+    if (c.engine !== 'postgres') throw conflict('Logical replication is for PostgreSQL connections.');
+    if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
+    const d = await this.driver(c);
+    if (!d.replicate) throw conflict(`The ${c.engine} driver cannot replicate.`);
+    const inner = await d.replicate({ slot: opts.slot, publication: opts.publication, startLsn: opts.startLsn, table: object, timeoutMs: c.timeout_s * 1000 });
+    const same = (rel: string) => rel.toLowerCase() === object.toLowerCase() || `public.${rel}`.toLowerCase() === object.toLowerCase() || rel.toLowerCase() === `public.${object}`.toLowerCase();
+    const maskOne = (columns: string[], row: unknown[] | null) => (row ? this.mask(c, [object], { columns, rows: [row], capped: false, estimate: null }).rows[0]! : null);
+    return {
+      stop: () => inner.stop(),
+      run: (onBatch, onReady) =>
+        inner.run(async (b) => {
+          const changes = b.changes
+            .filter((ch) => same(ch.relation))
+            .map((ch) => {
+              const at = opts.rawColumn ? ch.columns.indexOf(opts.rawColumn) : -1;
+              return { ...ch, raw: at >= 0 && ch.values ? ch.values[at] : undefined, values: maskOne(ch.columns, ch.values), old: maskOne(ch.columns, ch.old) };
+            });
+          await onBatch({ lsn: b.lsn, changes });
+        }, onReady)
+    };
+  }
+
+  /** Drops a knowledge source's replication slot on its connection (when the source is removed). */
+  async dropReplicationSlot(tenantId: string, id: string, slot: string): Promise<boolean> {
+    const c = await this.get(tenantId, id);
+    const d = await this.driver(c);
+    return d.dropReplicationSlot ? d.dropReplicationSlot(slot, c.timeout_s * 1000) : false;
   }
 }
