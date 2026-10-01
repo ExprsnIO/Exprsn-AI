@@ -129,11 +129,13 @@
         if (st.loading) return;
         st.loading = true;
         App.get('/api/admin/zones')
-          .then((data) => { Object.assign(st, { data, loaded: true, loadError: null }); live.last = Date.now(); })
+          .then((data) => { Object.assign(st, { data, loaded: true, loadError: null }); live.last = Date.now(); loadCluster(); })
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; refresh(); });
       };
-      const quiet = () => { live.last = Date.now(); return App.get('/api/admin/zones').then((data) => { st.data = data; refresh(); }).catch((err) => App.fail(err, 'Could not refresh zones')); };
+      const quiet = () => { live.last = Date.now(); loadCluster(); return App.get('/api/admin/zones').then((data) => { st.data = data; refresh(); }).catch((err) => App.fail(err, 'Could not refresh zones')); };
+      // Sprint 22 (B-1405): the zones' NetworkPolicies as applied in the cluster, when ZONES_APPLY=kubernetes.
+      function loadCluster() { App.get('/api/admin/zones-cluster').then((c) => { st.cluster = c; refresh(); }).catch(() => { st.cluster = null; }); }
       live.refresh = quiet;
       attach();
       if (!st.loaded && !st.loadError) load();
@@ -263,12 +265,23 @@
         + misplacedPanel()
         + (data.lastChange ? UI.notice('Last zone change ' + esc(when(data.lastChange.ts)) + ': ' + esc(data.lastChange.action.replace(/^zone\./, '').replace(/\./g, ' ')) + ' ' + esc([data.lastChange.target.zone, data.lastChange.target.version ? 'v' + data.lastChange.target.version : ''].concat(data.lastChange.target.zones || []).filter(Boolean).join(' ')) + '.', 'ok', UI.btn('Audit event', { size: 'sm', kind: 'ghost', attrs: 'data-audit="' + esc(data.lastChange.id) + '"' })) : '');
 
+      function clusterPanel() {
+        const c = st.cluster;
+        if (!c || c.mode !== 'kubernetes') return '';
+        const tone = { applied: 'ok', drift: 'danger', missing: 'danger', error: 'warn', pending: 'info' };
+        const rows = c.objects.map((o) => ['<b>' + esc(o.zone) + '</b> v' + o.version, '<span class="mono">' + esc(o.namespace + '/' + o.name) + '</span>', UI.pill(o.state, tone[o.state] || ''), esc(o.detail || ''), o.checkedAt ? esc(when(o.checkedAt)) : 'not checked']);
+        return (c.drift ? UI.notice('<b>' + c.drift + (c.drift === 1 ? ' zone policy differs' : ' zone policies differ') + ' from what was applied.</b> Someone changed or deleted it in the cluster. Apply again to put it back, or propose the change here.', 'danger') : '')
+          + UI.panel('Applied in the cluster', '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Server-side apply as ' + esc(c.fieldManager) + ' after every zone change; drift is checked ' + (c.driftMinutes ? 'every ' + c.driftMinutes + ' minutes' : 'on request') + '.</span>' + UI.btn('Check for drift', { size: 'sm', attrs: 'data-cluster-check' }) + UI.btn('Apply now', { size: 'sm', kind: 'primary', attrs: 'data-cluster-apply' }) + '</div>'
+            + UI.table(['Zone', 'NetworkPolicy', 'State', 'Detail', 'Checked'], rows, { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'Nothing applied yet', emptyText: 'Policies are applied when a zone changes, or with Apply now.' }));
+      }
+
       root.innerHTML = style
         + '<div class="page">' + head(UI.btn('Download', { icon: 'download', attrs: 'data-download' }) + UI.btn('View rendered diff', { attrs: 'data-diff' }) + UI.btn('Propose change', { kind: 'primary', attrs: 'data-propose' }))
         + UI.panel(null, svg, { cls: 'pad0', attrs: 'style="padding:8px"' })
         + '<div class="hstack wrap">' + UI.search('Search zones', 'data-q', st.q) + '<span class="muted" style="font-size:12px">Every pool, tool egress rule and external provider belongs to exactly one zone.</span>' + (data.defaults.length && data.defaults.length < 8 ? UI.btn('Add missing default zones', { size: 'sm', kind: 'ghost', attrs: 'data-seed' }) : '') + '</div>'
         + table
         + notices
+        + clusterPanel()
         + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
         + '<aside class="inspector w360">' + insp + '</aside>';
 
@@ -419,6 +432,11 @@
         });
       });
       ctx.on('click', '[data-copy]', () => { const text = yaml(zone.id, zone.version || zone.draft.version, spec, !zone.spec); (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(() => ctx.toast('NetworkZone ' + esc(zone.id) + ' copied.', 'ok'), () => ctx.toast('The clipboard is not available here.', 'warn')); });
+      ctx.on('click', '[data-cluster-check]', async () => { try { const r = await App.post('/api/admin/zones-cluster/check', {}); ctx.toast(r.checked + ' policies checked: ' + (r.drift + r.missing ? (r.drift + r.missing) + ' drifted.' : 'no drift.'), r.drift + r.missing ? 'warn' : 'ok'); loadCluster(); } catch (err) { App.fail(err); } });
+      ctx.on('click', '[data-cluster-apply]', () => ctx.confirm({ title: 'Apply zone policies', tone: 'info', body: '<p class="fg2" style="margin:0">Every zone\'s current NetworkPolicy is applied to the cluster. Changes made there by hand are replaced.</p>', ok: 'Apply' }).then(async (ok) => {
+        if (!ok) return;
+        try { const r = await App.post('/api/admin/zones-cluster/apply', {}); ctx.toast(r.applied + ' applied' + (r.failed ? ', ' + r.failed + ' failed' : '') + '.', r.failed ? 'warn' : 'ok'); loadCluster(); } catch (err) { App.fail(err); }
+      }));
       ctx.on('click', '[data-diff]', diffModal);
       ctx.on('click', '[data-propose]', proposeModal);
       ctx.on('click', '[data-download]', downloadModal);
