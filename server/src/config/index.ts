@@ -380,7 +380,9 @@ const base = z.object({
     SIGNER_TOKEN: z.string().min(32).optional(),
     SIGNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5000),
     /** Sprint 20 (B-1203): the clock skew allowed for `created` in RFC 9421 signatures on `/v1` requests. */
-    HTTP_SIGNATURE_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300)
+    HTTP_SIGNATURE_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+    /** Sprint 21 (B-1306): how often due agent schedules are looked for (a schedule fires at most this late). */
+    AGENT_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(10).max(3600).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

@@ -47,6 +47,8 @@ interface RunRow {
   job_id: string | null;
   replay_of: string | null;
   replay_from: number | null;
+  /** Sprint 21: the schedule that started the run (B-1306). */
+  schedule_id?: string | null;
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
@@ -209,6 +211,7 @@ export class AgentService {
       usage: json<RunUsage>(r.usage, EMPTY_USAGE),
       replayOf: r.replay_of,
       replayFrom: r.replay_from,
+      scheduleId: r.schedule_id ?? null,
       createdAt: Number(r.created_at),
       startedAt: r.started_at == null ? null : Number(r.started_at),
       finishedAt: r.finished_at == null ? null : Number(r.finished_at)
@@ -276,7 +279,8 @@ export class AgentService {
     return e;
   }
 
-  async start(p: Principal, input: { agent: string; input: string; label?: Label; budgets?: Partial<AgentBudgets> }) {
+  /** The checks a run starts with: the agent, the label against clearance and ceilings, and the agent's profile. */
+  private async prepare(p: Principal, input: { agent: string; label?: Label }) {
     const e = await this.resolveAgent(p, input.agent);
     const def = e.definition as unknown as AgentDefinition;
     const label = input.label ?? 'internal';
@@ -285,12 +289,23 @@ export class AgentService {
     const ws = p.workspaceId ? ((await this.db('workspaces').where({ id: p.workspaceId }).first('label_ceiling', 'name')) as { label_ceiling: Label; name: string } | undefined) : undefined;
     if (ws && labelRank(label) > labelRank(ws.label_ceiling)) throw forbidden(`This workspace's ceiling is ${ws.label_ceiling}.`, { step: 'zone' });
     await this.resolveProfile(p, def.profile, label);
+    return { e, def, label, ws };
+  }
+
+  /** Whether `p` could start this run now (Sprint 21: a schedule is checked when it is saved). */
+  async checkStart(p: Principal, input: { agent: string; label?: Label }): Promise<{ agent: string; version: string; label: Label }> {
+    const { e, label } = await this.prepare(p, input);
+    return { agent: e.name, version: e.version, label };
+  }
+
+  async start(p: Principal, input: { agent: string; input: string; label?: Label; budgets?: Partial<AgentBudgets> }, opts: { scheduleId?: string } = {}) {
+    const { e, def, label, ws } = await this.prepare(p, input);
     await this.quotas.admit(p.tenantId, p.workspaceId ?? null, { ...(ws ? { workspaceName: ws.name } : {}) });
     const budgets = this.budgets(def.budgets, input.budgets);
     const id = ulid();
     const t = Date.now();
     const row: RunRow = { id, tenant_id: p.tenantId, workspace_id: p.workspaceId ?? null, user_id: p.userId, agent_id: e.id, agent_name: e.name, agent_version: e.version, profile: def.profile, state: 'queued', label, input: await this.seal(p.tenantId, `agent-run-input:${id}`, input.input), output: null, error: null, budgets: JSON.stringify(budgets), usage: JSON.stringify(EMPTY_USAGE), job_id: null, replay_of: null, replay_from: null, created_at: t, started_at: null, finished_at: null, updated_at: t };
-    await this.db('agent_runs').insert(row);
+    await this.db('agent_runs').insert({ ...row, ...(opts.scheduleId ? { schedule_id: opts.scheduleId } : {}) });
     await this.checkpoint(row, 0, { messages: await this.initialMessages(p, e, label, input.input), pending: [] }, EMPTY_USAGE);
     await this.enqueue(row);
     return this.summary(row, p.displayName);

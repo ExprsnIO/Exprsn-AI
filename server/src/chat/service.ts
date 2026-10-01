@@ -524,23 +524,28 @@ export class ChatService {
     const resolved: ResolvedProfile[] = [];
     for (const name of input.profiles) resolved.push(await this.resolveFor(p, name, label));
     await this.admit(p, p.workspaceId ?? null);
-    const { text: prompt } = await this.guardInput(p, p.workspaceId ?? null, input.prompt, label, null, false);
+    // B-1301: a `require-approval` rule holds the prompt for review, and every column waits for the decision.
+    const { text: prompt, hold } = await this.guardInput(p, p.workspaceId ?? null, input.prompt, label, null, true);
     const c = await this.createConversation(p, { title: prompt.replace(/\s+/g, ' ').trim().slice(0, 80), label, kind: 'compare' });
     const t = Date.now();
-    const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: prompt, label, created_at: t });
+    const user = await this.insertMessage(c, { parent_id: null, role: 'user', content: prompt, label, created_at: t, ...(hold ? { state: 'held' as const } : {}) });
     const columns = [];
     for (const [i, r] of resolved.entries()) {
       const think = this.thinkLevel(r.profile, input.think);
-      const m = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label, profile: r, think, compare_slot: i, created_at: t + 1 + i });
-      columns.push({ slot: i, messageId: m.id, profile: r.profile.name, model: r.model.name, think, canary: r.canary });
-      this.start(p, c, m, r, think, 'compare');
+      const m = await this.insertMessage(c, { parent_id: user.id, role: 'assistant', content: '', label, profile: r, think, compare_slot: i, created_at: t + 1 + i, ...(hold ? { state: 'awaiting' as const } : {}) });
+      columns.push({ slot: i, messageId: m.id, profile: r.profile.name, model: r.model.name, think, canary: r.canary, ...(hold ? { state: 'awaiting' as const } : {}) });
+      if (!hold) this.start(p, c, m, r, think, 'compare');
     }
     await this.db('conversations').where({ id: c.id }).update({ head_id: columns[0]!.messageId });
+    if (hold) {
+      await this.fileHeldPrompt(p, c, user, prompt, hold);
+      return { conversationId: c.id, userMessageId: user.id, columns, state: 'awaiting' as const, reason: hold.reason ?? 'Held for review.' };
+    }
     return { conversationId: c.id, userMessageId: user.id, columns };
   }
 
-  private async insertMessage(c: ConversationRow, m: { parent_id: string | null; role: 'user' | 'assistant'; content: string; label: Label; attachments?: string[]; profile?: ResolvedProfile; think?: ThinkLevel; compare_slot?: number | null; created_at: number; state?: MessageState }): Promise<MessageRow> {
-    const id = ulid();
+  private async insertMessage(c: ConversationRow, m: { id?: string; parent_id: string | null; role: 'user' | 'assistant'; content: string; label: Label; attachments?: string[]; profile?: ResolvedProfile; think?: ThinkLevel; compare_slot?: number | null; created_at: number; state?: MessageState }): Promise<MessageRow> {
+    const id = m.id ?? ulid();
     const row: MessageRow = {
       id,
       conversation_id: c.id,
@@ -758,13 +763,15 @@ export class ChatService {
    * the question and its answer are withdrawn, and the answer says so. The owner is told either way.
    */
   private async resolvePromptHold(reviewer: Principal, c: ConversationRow, m: MessageRow, decision: 'approved' | 'rejected'): Promise<{ conversationId: string; state: MessageState; label: Label }> {
-    const a = (await this.db('messages').where({ conversation_id: c.id, parent_id: m.id, state: 'awaiting' }).orderBy('created_at', 'desc').first()) as MessageRow | undefined;
+    // One answer for a chat; one per column for a comparison (B-1301), started together on approval.
+    const waiting = (await this.db('messages').where({ conversation_id: c.id, parent_id: m.id, state: 'awaiting' }).orderBy([{ column: 'created_at', order: 'desc' }, { column: 'id', order: 'desc' }])) as MessageRow[];
+    const answers = c.kind === 'compare' ? waiting : waiting.slice(0, 1);
     const guard = JSON.stringify({ review: { decision, by: reviewer.displayName, at: Date.now(), checkpoint: 'user-input' } });
     const n = await this.db('messages').where({ id: m.id, state: 'held' }).update({ state: decision === 'approved' ? 'complete' : 'withdrawn', guard });
     if (!n) throw conflict('Another reviewer decided on this question first.');
     const notify = (title: string, body: string) => this.opts.notifications?.notify({ tenantId: c.tenant_id, userIds: [c.user_id], kind: 'chat', title, body, route: `chat?id=${c.id}`, label: m.label });
     if (decision === 'rejected') {
-      if (a) {
+      for (const a of answers) {
         await this.db('messages').where({ id: a.id }).update({ state: 'withdrawn', content: await this.seal(a.tenant_id, a.id, 'content', 'Your question was not sent to the model: a reviewer rejected it.'), completed_at: Date.now(), seq: Number(a.seq) + 1, guard });
         this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.released', data: { conversationId: c.id, messageId: a.id, state: 'withdrawn', seq: Number(a.seq) + 1 } });
       }
@@ -772,29 +779,33 @@ export class ChatService {
       return { conversationId: c.id, state: 'withdrawn', label: m.label };
     }
     await notify('A question held for review was approved', 'A reviewer approved it; the answer is being generated.');
-    if (!a) return { conversationId: c.id, state: 'complete', label: m.label };
-    const fail = async (error: string) => {
+    if (!answers.length) return { conversationId: c.id, state: 'complete', label: m.label };
+    const fail = async (a: MessageRow, error: string) => {
       await this.db('messages').where({ id: a.id }).update({ state: 'failed', error: error.slice(0, 500), completed_at: Date.now() });
       this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.done', data: { conversationId: c.id, messageId: a.id, state: 'failed', seq: Number(a.seq), error } });
     };
     const owner = this.opts.principalFor ? await this.opts.principalFor(c.tenant_id, c.user_id, c.workspace_id) : null;
     if (!owner) {
-      await fail('The owner of this conversation can no longer use chat.');
+      for (const a of answers) await fail(a, 'The owner of this conversation can no longer use chat.');
       return { conversationId: c.id, state: 'failed', label: m.label };
     }
-    let r: ResolvedProfile;
-    try {
-      r = await this.resolveFor(owner, a.profile_id ?? a.profile_name ?? '', c.label);
-      await this.admit(owner, c.workspace_id);
-    } catch (err) {
-      await fail(err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message);
-      return { conversationId: c.id, state: 'failed', label: m.label };
+    let started = 0;
+    for (const a of answers.slice().reverse()) {
+      let r: ResolvedProfile;
+      try {
+        r = await this.resolveFor(owner, a.profile_id ?? a.profile_name ?? '', c.label);
+        await this.admit(owner, c.workspace_id);
+      } catch (err) {
+        await fail(a, err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message);
+        continue;
+      }
+      const claimed = await this.db('messages').where({ id: a.id, state: 'awaiting' }).update({ state: 'queued', generator: this.instance, heartbeat_at: Date.now(), profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, canary: r.canary });
+      if (!claimed) continue;
+      started++;
+      this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.released', data: { conversationId: c.id, messageId: m.id, answerId: a.id, state: 'queued', seq: Number(a.seq) } });
+      this.start(owner, c, { ...a, state: 'queued' }, r, a.think ?? 'off', c.kind);
     }
-    const claimed = await this.db('messages').where({ id: a.id, state: 'awaiting' }).update({ state: 'queued', generator: this.instance, heartbeat_at: Date.now(), profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, canary: r.canary });
-    if (!claimed) return { conversationId: c.id, state: 'complete', label: m.label };
-    this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.released', data: { conversationId: c.id, messageId: m.id, answerId: a.id, state: 'queued', seq: Number(a.seq) } });
-    this.start(owner, c, { ...a, state: 'queued' }, r, a.think ?? 'off', 'chat');
-    return { conversationId: c.id, state: 'complete', label: m.label };
+    return { conversationId: c.id, state: started || answers.length === 0 ? 'complete' : 'failed', label: m.label };
   }
 
   /** The held answer's text for a reviewer cleared for it (the flag detail shows it in full). */
@@ -963,11 +974,15 @@ export class ChatService {
 
   /** The path from the root to a message, opened, as Ollama chat messages (failed, held and withdrawn answers left out). */
   private async history(c: ConversationRow, parentId: string, vision: boolean): Promise<ChatMessage[]> {
+    return (await this.historyRows(c, parentId, vision)).map((x) => x.message);
+  }
+
+  private async historyRows(c: ConversationRow, parentId: string, vision: boolean): Promise<{ row: MessageRow; message: ChatMessage }[]> {
     const rows = (await this.db('messages').where({ conversation_id: c.id })) as MessageRow[];
     const byId = new Map(rows.map((x) => [x.id, x]));
     const path: MessageRow[] = [];
     for (let cur = byId.get(parentId); cur; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) path.unshift(cur);
-    const out: ChatMessage[] = [];
+    const out: { row: MessageRow; message: ChatMessage }[] = [];
     for (const m of path) {
       if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn', 'awaiting'].includes(m.state)) continue;
       if (m.role === 'user' && (m.state === 'held' || m.state === 'withdrawn')) continue;
@@ -984,9 +999,101 @@ export class ChatService {
           content += `\n\n<attachment name="${a.name.replace(/"/g, "'")}" label="${a.label}">\n${text.slice(0, ATTACHMENT_TEXT_LIMIT)}${text.length > ATTACHMENT_TEXT_LIMIT ? '\n[truncated]' : ''}\n</attachment>`;
         }
       }
-      out.push({ role: m.role, content, ...(images.length ? { images } : {}) });
+      out.push({ row: m, message: { role: m.role, content, ...(images.length ? { images } : {}) } });
     }
     return out;
+  }
+
+  // ---------- stored API responses (B-1302) ----------
+
+  /** A finished answer of the caller's own, with its conversation: what `previous_response_id` and retrieval name. */
+  private async ownAnswer(p: Principal, messageId: string): Promise<{ c: ConversationRow; m: MessageRow }> {
+    const m = (await this.db('messages').where({ tenant_id: p.tenantId, id: messageId }).first()) as MessageRow | undefined;
+    if (!m || m.role !== 'assistant') throw notFound('Response');
+    const c = await this.conversation(p, m.conversation_id).catch(() => null);
+    if (!c || c.kind !== 'chat') throw notFound('Response');
+    if (!clears(p.clearance, c.label)) throw notFound('Response');
+    if (m.state !== 'complete' && m.state !== 'stopped') throw conflict(`That response is ${m.state}; only a finished response can be continued.`);
+    return { c, m };
+  }
+
+  /**
+   * The conversation up to an answer, for a `/v1/responses` request that continues it: user and assistant turns in the
+   * OpenAI message shape, with the function calls an answer returned to its caller (so a following function result
+   * matches its call). Attachments are included as text, as chat gives them to the model.
+   */
+  async apiThread(p: Principal, messageId: string): Promise<{ conversationId: string; label: Label; messages: { role: 'user' | 'assistant'; content: string; tool_calls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[] }[] }> {
+    const { c, m } = await this.ownAnswer(p, messageId);
+    const out = [];
+    for (const { row, message } of await this.historyRows(c, m.id, false)) {
+      if (row.role === 'user') {
+        out.push({ role: 'user' as const, content: message.content });
+        continue;
+      }
+      const tools = json<NonNullable<Chunk['tool']>[]>(await this.open(row.tenant_id, row.id, 'tools', row.tools), []);
+      const calls = tools.flatMap((t) => {
+        const o = t.output as { callId?: unknown; returnedToCaller?: unknown } | undefined;
+        return o?.returnedToCaller && typeof o.callId === 'string' ? [{ id: o.callId, type: 'function' as const, function: { name: t.name, arguments: t.expression } }] : [];
+      });
+      out.push({ role: 'assistant' as const, content: message.content, ...(calls.length ? { tool_calls: calls } : {}) });
+    }
+    return { conversationId: c.id, label: c.label, messages: out };
+  }
+
+  /**
+   * Stores a `/v1/responses` exchange as a conversation turn (B-1302): a new conversation, or the next turn under the
+   * answer `previous_response_id` named. The answer is stored as it passed the output checkpoint, with the function
+   * calls returned to the caller, and the conversation shows in Chat like any other. Usage was metered by the API.
+   */
+  async recordApiExchange(p: Principal, input: { id: string; previousId: string | null; label: Label; question: string; answer: string; calls: { id: string; name: string; arguments: string }[]; profileId: string; profileName: string; model: string; usage: { promptTokens: number; outputTokens: number; gpuMs: number }; guard: Record<string, unknown> | null }): Promise<{ conversationId: string; messageId: string }> {
+    let c: ConversationRow;
+    let parentId: string | null = null;
+    const label = input.label;
+    if (input.previousId) {
+      const prev = await this.ownAnswer(p, input.previousId);
+      c = prev.c;
+      parentId = prev.m.id;
+      const raised = highest(c.label, label);
+      await this.assertWorkspaceCeiling(c.workspace_id, raised);
+      if (raised !== c.label) {
+        await this.db('conversations').where({ id: c.id }).update({ label: raised });
+        this.bus.publish(TOPICS.shareAccess, { tenantId: c.tenant_id, conversationId: c.id, label: raised });
+        c = { ...c, label: raised };
+      }
+    } else {
+      c = await this.createConversation(p, { title: input.question.replace(/\s+/g, ' ').trim().slice(0, 80) || 'API response', label });
+    }
+    const t = Date.now();
+    const user = await this.insertMessage(c, { parent_id: parentId, role: 'user', content: input.question, label: c.label, created_at: t });
+    const a = await this.insertMessage(c, { id: input.id, parent_id: user.id, role: 'assistant', content: input.answer, label: c.label, created_at: t + 1, state: 'complete' });
+    const tools = input.calls.map((x) => ({ name: x.name, expression: x.arguments, output: { callId: x.id, returnedToCaller: true } }));
+    await this.db('messages')
+      .where({ id: a.id })
+      .update({ profile_id: input.profileId, profile_name: input.profileName, model: input.model, completed_at: t + 1, seq: 1, prompt_tokens: input.usage.promptTokens, output_tokens: input.usage.outputTokens, thinking_tokens: 0, calc_calls: 0, gpu_ms: input.usage.gpuMs, generator: null, heartbeat_at: null, ...(tools.length ? { tools: await this.seal(c.tenant_id, a.id, 'tools', JSON.stringify(tools)) } : {}), ...(input.guard ? { guard: JSON.stringify(input.guard) } : {}) });
+    await this.db('conversations').where({ id: c.id }).update({ head_id: a.id, profile_id: input.profileId, updated_at: Date.now() });
+    return { conversationId: c.id, messageId: a.id };
+  }
+
+  /** A stored response for its owner (`GET /v1/responses/:id`). */
+  async apiStored(p: Principal, messageId: string) {
+    const { c, m } = await this.ownAnswer(p, messageId);
+    const user = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('parent_id')) as { parent_id: string | null } | undefined) : undefined;
+    const tools = json<NonNullable<Chunk['tool']>[]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
+    return {
+      conversationId: c.id,
+      previousId: user?.parent_id ?? null,
+      content: (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '',
+      calls: tools.flatMap((t) => {
+        const o = t.output as { callId?: unknown; returnedToCaller?: unknown } | undefined;
+        return o?.returnedToCaller && typeof o.callId === 'string' ? [{ id: o.callId, name: t.name, arguments: t.expression }] : [];
+      }),
+      model: m.model,
+      profile: m.profile_name,
+      label: m.label,
+      createdAt: Number(m.created_at),
+      usage: { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0) },
+      state: m.state
+    };
   }
 
   /**
@@ -1282,7 +1389,7 @@ export class ChatService {
     }
     // A screen that stopped the thinking must withhold the answer even when no answer text was produced.
     const screened = !!(st.guard?.halted || st.thinkGuard?.halted || st.held);
-    const guard = (st.state === 'complete' || st.state === 'stopped') && (st.content || screened) ? await this.guardOutput(p, c, m, r, st) : null;
+    const guard = (st.state === 'complete' || st.state === 'stopped') && (st.content || st.thinking || screened) ? await this.guardOutput(p, c, m, r, st, !!(st.content || screened)) : null;
     if (guard?.held) st.state = 'held';
     if (st.deferred && !guard?.replaced && !guard?.held && (st.state === 'complete' || st.state === 'stopped')) {
       if (st.thinking) this.push(st, { thinking: st.thinking });
@@ -1417,17 +1524,40 @@ export class ChatService {
    * when there is no review queue); a redaction replaces the flagged spans. What the streaming screen already
    * stopped stays stopped. The stored answer is what the user sees from then on.
    */
-  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream): Promise<{ summary: Record<string, unknown>; replaced: boolean; held: boolean; decision: GuardDecision } | null> {
-    let d: GuardDecision;
-    try {
-      const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
-      const prompt = q?.content ? await this.open(c.tenant_id, m.parent_id!, 'content', q.content) : null;
-      const tools = r.profile.tools.includes('calculate') && r.model.capabilities.includes('tools');
-      d = await this.guardrails.check({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', text: st.content, label: c.label, principal: p, source: { kind: 'message', id: m.id }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, tools, via: 'chat', ...(prompt ? { prompt } : {}) } });
-    } catch (err) {
-      this.log.error({ err, message: m.id }, 'model-output guardrail failed');
-      d = { action: 'block', text: st.content, findings: [], reason: 'The guardrail check could not run, so the answer is withheld.' };
+  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream, answer = true): Promise<{ summary: Record<string, unknown>; replaced: boolean; held: boolean; decision: GuardDecision } | null> {
+    let d: GuardDecision = { action: 'allow', text: st.content, findings: [] };
+    const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
+    const prompt = q?.content ? await this.open(c.tenant_id, m.parent_id!, 'content', q.content) : null;
+    const tools = r.profile.tools.includes('calculate') && r.model.capabilities.includes('tools');
+    const check = (text: string, part: 'answer' | 'thinking') => this.guardrails.check({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', text, label: c.label, principal: p, source: { kind: 'message', id: m.id }, meta: { conversationId: c.id, profile: r.profile.name, model: r.model.name, tools, via: 'chat', ...(part === 'thinking' ? { part } : {}), ...(prompt ? { prompt } : {}) } });
+    if (answer) {
+      try {
+        d = await check(st.content, 'answer');
+      } catch (err) {
+        this.log.error({ err, message: m.id }, 'model-output guardrail failed');
+        d = { action: 'block', text: st.content, findings: [], reason: 'The guardrail check could not run, so the answer is withheld.' };
+      }
     }
+    // B-1304: the thinking passes the full check too (guard model and classifiers included). What it blocks or holds
+    // is withheld, a redaction replaces its spans; the answer itself is decided by its own check above.
+    let thought: GuardDecision | null = null;
+    if (st.thinking) {
+      try {
+        thought = await check(st.thinking, 'thinking');
+      } catch (err) {
+        this.log.error({ err, message: m.id }, 'model-output guardrail failed on thinking');
+        thought = { action: 'block', text: st.thinking, findings: [], reason: 'The guardrail check could not run, so the thinking is withheld.' };
+      }
+    }
+    let thinkingReplaced = false;
+    if (thought && (thought.action === 'block' || thought.action === 'require-approval')) {
+      st.thinking = '';
+      thinkingReplaced = true;
+    } else if (thought?.action === 'redact' && thought.text !== st.thinking) {
+      st.thinking = thought.text;
+      thinkingReplaced = true;
+    }
+    const thinkingSummary = thought && thought.action !== 'allow' && thought.action !== 'flag' ? { thinking: { action: thought.action === 'require-approval' ? 'block' : thought.action, ...(thought.reason ? { reason: thought.reason } : {}), rules: [...new Set(thought.findings.filter((f) => f.stage === 'enforce').map((f) => f.ruleName))] } } : {};
     const halt = st.guard?.halted ?? st.thinkGuard?.halted ?? null;
     const hold = st.held ? (st.guard?.held ?? st.thinkGuard?.held ?? { action: 'require-approval' as const, text: st.content, findings: [], reason: 'Held for review while streaming.' }) : null;
     if (halt && d.action !== 'block') d = { ...d, action: 'block', reason: halt.reason ?? d.reason ?? 'Blocked by a guardrail.', findings: [...d.findings, ...halt.findings] };
@@ -1436,9 +1566,9 @@ export class ChatService {
       d = { ...d, action: 'require-approval', ...(reason ? { reason } : {}), findings: [...d.findings, ...hold.findings] };
     }
     const enforced = d.findings.filter((f) => f.stage === 'enforce');
-    if (!enforced.length && d.action === 'allow') return null;
-    const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))] };
-    let replaced = false;
+    if (!enforced.length && d.action === 'allow' && !thinkingReplaced) return null;
+    const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))], ...thinkingSummary };
+    let replaced = thinkingReplaced;
     let held = false;
     if (d.action === 'require-approval' && this.opts.flags) held = true;
     else if (d.action === 'block' || d.action === 'require-approval') {

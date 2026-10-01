@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { clears } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import type { ShareAccessEvent } from '../chat/sharing.js';
-import { TOPICS } from '../platform/bus.js';
+import { TOPICS, type MembershipEvent } from '../platform/bus.js';
 import type { JobProgressEvent } from '../platform/jobs.js';
 import type { Services } from '../services.js';
 
@@ -17,6 +17,8 @@ export interface SocketData {
   token: string;
   /** Sprint 16: shared conversations this socket watches, with the share that let it in. */
   watching?: Map<string, string>;
+  /** Sprint 21 (B-1305): the workspace of each watch that came through a workspace share. */
+  watchingVia?: Map<string, string>;
 }
 
 export type Realtime = Server<Record<string, never>, Record<string, never>, Record<string, never>, SocketData>;
@@ -113,6 +115,9 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
         d.watching ??= new Map();
         if (!d.watching.has(c.id) && d.watching.size >= MAX_WATCHED) return reply({ ok: false, error: 'Watching too many shared conversations at once.' });
         d.watching.set(c.id, via.id);
+        d.watchingVia ??= new Map();
+        if (via.kind === 'workspace' && via.workspace_id) d.watchingVia.set(c.id, via.workspace_id);
+        else d.watchingVia.delete(c.id);
         await socket.join(rooms.shared(c.tenant_id, c.id));
         reply({ ok: true, label: c.label });
       } catch {
@@ -123,6 +128,7 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
       const id = (msg as { conversationId?: unknown } | null)?.conversationId;
       if (typeof id !== 'string' || !d.watching?.has(id)) return;
       d.watching.delete(id);
+      d.watchingVia?.delete(id);
       void socket.leave(rooms.shared(d.principal.tenantId, id));
     }) as never);
   });
@@ -144,14 +150,48 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
       if (!affected) continue;
       void socket.leave(room);
       d.watching?.delete(e.conversationId);
+      d.watchingVia?.delete(e.conversationId);
       void s.sharing
         .readable(d.principal, e.conversationId)
         .then(async ({ via: again }) => {
           if (again === 'owner' || !socket.connected) return;
           d.watching?.set(e.conversationId, again.id);
+          if (again.kind === 'workspace' && again.workspace_id) d.watchingVia?.set(e.conversationId, again.workspace_id);
           await socket.join(room);
         })
         .catch(() => (socket as unknown as Socket).emit('shared.revoked', { conversationId: e.conversationId }));
+    }
+  };
+
+  /**
+   * Sprint 21 (B-1305): a user left workspaces. Their watches through a share to one of those workspaces end at once
+   * (the room is left before any further chunk is relayed); one still allowed another way (a direct share, another
+   * workspace) is let back in after a fresh check, as for a revoked share.
+   */
+  const membership = (e: MembershipEvent) => {
+    const ids = io.of('/').adapter.rooms.get(rooms.user(e.userId));
+    if (!ids) return;
+    const lost = new Set(e.workspaceIds);
+    for (const sid of [...ids]) {
+      const socket = io.of('/').sockets.get(sid);
+      const d = socket?.data as SocketData | undefined;
+      if (!socket || !d?.watchingVia || d.principal.tenantId !== e.tenantId) continue;
+      for (const [conversationId, ws] of [...d.watchingVia]) {
+        if (!lost.has(ws)) continue;
+        const room = rooms.shared(e.tenantId, conversationId);
+        void socket.leave(room);
+        d.watching?.delete(conversationId);
+        d.watchingVia.delete(conversationId);
+        void s.sharing
+          .readable(d.principal, conversationId)
+          .then(async ({ via: again }) => {
+            if (again === 'owner' || !socket.connected) return;
+            d.watching?.set(conversationId, again.id);
+            if (again.kind === 'workspace' && again.workspace_id) d.watchingVia?.set(conversationId, again.workspace_id);
+            await socket.join(room);
+          })
+          .catch(() => (socket as unknown as Socket).emit('shared.revoked', { conversationId }));
+      }
     }
   };
 
@@ -179,6 +219,7 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
       }
     }),
     s.bus.on<ShareAccessEvent>(TOPICS.shareAccess, (e) => recheck(e)),
+    s.bus.on<MembershipEvent>(TOPICS.workspaceMembership, (e) => membership(e)),
     s.bus.on<{ tenantId: string | null; perm: string; event: string; data: unknown }>(TOPICS.poolState, (e) => {
       io.local.to(e.tenantId ? rooms.perm(e.tenantId, e.perm) : rooms.platformPerm(e.perm)).emit(e.event as never, e.data as never);
     }),

@@ -8,6 +8,7 @@ import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../../ht
 import { THINK_LEVELS, type ModelRow, type ProfileRow, type ThinkLevel } from '../../gateway/repo.js';
 import type { Services } from '../../services.js';
 import { checkServiceUrl, servicePolicy, ServiceUrlRefused } from '../../platform/egress.js';
+import { evalRoutes } from './evals.js';
 
 const PICKLE = /\.(bin|pt|pth|pkl|pickle|ckpt)(\?|$)/i;
 const secretPath = z.string().regex(/^\/[^\0]+$/, 'An absolute path on the server').max(500);
@@ -537,6 +538,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const next: ProfileRow = { ...before, ...patch, version: before.version + 1, updated_by: p.userId, updated_at: Date.now() };
     await validate(p.tenantId, next, next.status === 'published');
+    // Sprint 21 (B-1303): a version whose gated evaluations have not passed for its settings is not published.
+    await s.evals.gate(p.tenantId, before, next);
     await g.repo.updateProfile(p.tenantId, before.id, { ...patch, version: next.version, updated_by: p.userId });
     await g.repo.snapshot(next, note, p.userId);
     return next;
@@ -632,5 +635,7 @@ export function gatewayAdminRoutes(s: Services): Router {
     res.status(204).end();
   });
 
+  // Sprint 21 (B-1303): evaluations of a profile.
+  r.use(evalRoutes(s));
   return r;
 }

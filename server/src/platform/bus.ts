@@ -90,8 +90,17 @@ export const TOPICS = {
    */
   integrationEvent: 'integration.event',
   /** Sprint 16: access to a shared conversation may have ended (a share revoked, a label raised): `ShareAccessEvent`. */
-  shareAccess: 'share.access'
+  shareAccess: 'share.access',
+  /** Sprint 21 (B-1305): a user left workspaces (removed, or a mapping or directory change): `MembershipEvent`. */
+  workspaceMembership: 'workspace.membership'
 } as const;
+
+/** Sprint 21: workspaces a user is no longer a member of; live shared watches through them end at once. */
+export interface MembershipEvent {
+  tenantId: string;
+  userId: string;
+  workspaceIds: string[];
+}
 
 export interface IntegrationEvent {
   tenantId: string;

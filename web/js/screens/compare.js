@@ -62,6 +62,8 @@
       'chat.status': (d) => dispatch('status', d),
       'chat.chunk': (d) => dispatch('chunk', d),
       'chat.done': (d) => dispatch('done', d),
+      // A prompt held for review (B-1301): every column waits; approval starts them, rejection withdraws them.
+      'chat.released': (d) => released(d),
       connect: () => activeCols(S()).forEach((c) => catchUp(c))
     };
     Object.keys(handlers).forEach((ev) => sock.on(ev, handlers[ev]));
@@ -85,6 +87,15 @@
     const now = Date.now();
     orphans = orphans.filter((o) => now - o.t < 60000).slice(-2000);
     orphans.push({ t: now, kind, d });
+  }
+  function released(d) {
+    const st = S();
+    if (!d || !st.run) return;
+    const col = findCol(st, d.answerId || d.messageId);
+    if (!col) return;
+    if (d.state === 'queued') { col.state = 'queued'; col.phase = 'queued'; col.sentAt = Date.now(); col.lastAt = Date.now(); adopt(col); }
+    else if (d.state === 'withdrawn') { col.state = 'withdrawn'; col.phase = null; col.seq = d.seq || col.seq; catchUp(col); }
+    schedule(col);
   }
   function adopt(col) {
     const mine = orphans.filter((o) => o.d.messageId === col.messageId);
@@ -211,6 +222,8 @@
     if (col.phase === 'fallback') return UI.pill('fallback', 'warn');
     if (col.phase === 'loading' && !col.firstAt) return UI.pill('loading model', 'info');
     if (ACTIVE[col.state]) return UI.pill('streaming', 'info');
+    if (col.state === 'awaiting') return UI.pill('held for review', 'warn');
+    if (col.state === 'withdrawn') return UI.pill('withdrawn', 'danger');
     if (col.state === 'complete') return UI.pill('complete', 'ok');
     if (col.state === 'stopped') return UI.pill('stopped', 'warn');
     return UI.pill('failed', 'danger');
@@ -260,10 +273,13 @@
     const cursor = ACTIVE[col.state] ? '<span class="blink">▍</span>' : '';
     if (col.content || ACTIVE[col.state]) body += '<div class="cp-answer serif">' + esc(col.content) + cursor + (!col.content && ACTIVE[col.state] && !col.thinking ? '<span class="muted">' + (col.state === 'queued' ? 'Waiting for a slot.' : 'Waiting for the first token.') + '</span>' : '') + '</div>';
     else if (col.state === 'complete') body += '<div class="cp-answer serif muted">The model returned an empty answer.</div>';
+    if (col.state === 'withdrawn' && !col.content) body += '<div class="cp-answer serif muted">A reviewer rejected the prompt; it was not sent to the model.</div>';
+    if (col.state === 'awaiting') body += UI.notice('A guardrail held the prompt for review. Every column starts when a reviewer approves it; you are told either way.', 'warn');
     if (col.state === 'stopped') body += UI.notice('Stopped. What was produced is kept and metered. Other columns are unaffected.', 'warn');
     if (col.state === 'failed') body += UI.notice(esc(col.error || 'The answer failed.'), 'danger');
 
     let acts = '';
+    if (col.state === 'awaiting' || col.state === 'withdrawn') return head + metricsHtml(col) + body;
     if (ACTIVE[col.state]) acts += UI.btn('Stop', { size: 'sm', icon: 'stop', attrs: 'data-stop="' + esc(name) + '"' });
     else acts += UI.btn('Regenerate', { size: 'sm', icon: 'refresh', attrs: 'data-regen="' + esc(name) + '"', disabled: !!u, title: u ? 'This profile cannot take this conversation' : 'A new answer from ' + col.profile + ' in this column' });
     const label = 'Continue with ' + col.profile;
@@ -355,7 +371,8 @@
       const body = { prompt, profiles: names, label: st.label };
       if (st.think) body.think = st.think;
       const r = await App.post('/api/compare', body);
-      st.run = { conversationId: r.conversationId, prompt, label: st.label, columns: r.columns.map((c) => freshCol({ slot: c.slot, messageId: c.messageId, requested: names[c.slot], profile: c.profile, model: c.model, think: c.think, canary: !!c.canary })), retired: [] };
+      st.run = { conversationId: r.conversationId, prompt, label: st.label, columns: r.columns.map((c) => freshCol(Object.assign({ slot: c.slot, messageId: c.messageId, requested: names[c.slot], profile: c.profile, model: c.model, think: c.think, canary: !!c.canary }, c.state === 'awaiting' ? { state: 'awaiting', phase: null } : {}))), retired: [] };
+      if (r.state === 'awaiting') ctx.toast('Held for review: ' + esc(r.reason || 'a guardrail held the prompt') + ' The columns start when a reviewer approves it.', 'warn', 8000);
       st.run.columns.forEach(adopt);
       st.history = [{ id: r.conversationId, title: prompt.replace(/\s+/g, ' ').slice(0, 80), label: st.label, updatedAt: Date.now() }].concat((st.history || []).filter((h) => h.id !== r.conversationId));
     } catch (err) {

@@ -9,6 +9,7 @@ import { ip, loadPrincipal, noStore, parseBody, principalOf, requireAuth, requir
 import { badRequest, conflict, forbidden, notFound } from '../../http/problem.js';
 import type { Tenant, Workspace } from '../../repos/tenants.js';
 import type { Services } from '../../services.js';
+import { TOPICS, type MembershipEvent } from '../../platform/bus.js';
 
 const limit = z.number().int().min(0).max(1e15).nullable();
 const quotaSchema = z.object({ tokensPerDay: limit.optional(), gpuSecondsPerMonth: limit.optional(), trainingGpuHoursPerMonth: limit.optional() }).strict();
@@ -353,6 +354,8 @@ export function tenantAdminRoutes(s: Services): Router {
     const w = await loadWorkspace(req);
     const n = await s.tenants.removeMember(w.id, String(req.params.uid));
     if (!n) throw notFound('Direct membership');
+    // Sprint 21 (B-1305): unless a mapping keeps them in, the user's live watches through this workspace end now.
+    if (!(await s.db('workspace_members').where({ workspace_id: w.id, user_id: String(req.params.uid) }).first('user_id'))) s.bus.publish(TOPICS.workspaceMembership, { tenantId: t.id, userId: String(req.params.uid), workspaceIds: [w.id] } satisfies MembershipEvent);
     await audit(req, t.id, 'workspace.member.removed', { workspace: w.id, user: String(req.params.uid) }, { note: 'Memberships from group mappings stay until the mapping or the directory changes.' });
     res.status(204).end();
   });

@@ -8,7 +8,9 @@ import { authenticate, principalOf, requireAuth, requirePermission } from '../ht
 import { HttpProblem } from '../http/problem.js';
 import type { Services } from '../services.js';
 import { checkContentDigest, ed25519PublicKey, verifyMessage } from '../crypto/httpsig.js';
-import { apiProblem, chatBody, embeddingsBody, type CompletionResult, type Extensions } from './service.js';
+import { HeldRequest } from './holds.js';
+import { responsesBody } from './responses.js';
+import { apiProblem, chatBody, completionObject, embeddingsBody, type CompletionResult, type Extensions } from './service.js';
 
 /*
  * `/v1`: the OpenAI-compatible API. Bearer credentials only (an API key or an OAuth access token); the session cookie
@@ -78,16 +80,7 @@ const extensionsOf = (req: Request): Extensions => {
   return out;
 };
 
-const completion = (r: CompletionResult) => ({
-  id: r.id,
-  object: 'chat.completion',
-  created: r.created,
-  model: r.model,
-  system_fingerprint: null,
-  choices: [{ index: 0, message: { role: 'assistant', content: r.toolCalls.length && !r.content ? null : r.content, ...(r.toolCalls.length ? { tool_calls: r.toolCalls } : {}), refusal: null }, logprobs: null, finish_reason: r.finishReason }],
-  usage: r.usage,
-  ...(r.exprsn ? { exprsn: r.exprsn } : {})
-});
+const completion = (r: CompletionResult) => completionObject(r);
 
 export function openAiRoutes(s: Services): Router {
   const r = Router();
@@ -147,8 +140,10 @@ export function openAiRoutes(s: Services): Router {
     res.on('close', () => {
       if (!res.writableFinished) ac.abort(new Error('client went away'));
     });
+    // B-1301: with an API key, a prompt a `require-approval` rule stops is held for review (202, then GET /v1/held/:id).
+    const input = s.openai.holds.mode(p, 'chat.completions', body, ext, label);
     if (!body.stream) {
-      res.json(completion(await s.openai.chat(p, body, label, ac.signal, { ext })));
+      res.json(completion(await s.openai.chat(p, body, label, ac.signal, { ext, input })));
       return;
     }
     await stream(res, s, async (send) => {
@@ -164,6 +159,7 @@ export function openAiRoutes(s: Services): Router {
       const result = await s.openai.chat(p, body, label, ac.signal, {
         id,
         ext,
+        input,
         onDelta: (text) => {
           open();
           send({ ...base, id, created, choices: [{ index: 0, delta: { content: text }, logprobs: null, finish_reason: null }] });
@@ -187,6 +183,46 @@ export function openAiRoutes(s: Services): Router {
       if (!res.writableFinished) ac.abort(new Error('client went away'));
     });
     res.json(await s.openai.embeddings(principalOf(req), body, labelOf(req), ac.signal));
+  });
+
+  // ---------- Sprint 21: the Responses API subset (B-1302) and held requests (B-1301) ----------
+
+  r.post('/responses', invoke, async (req, res) => {
+    const p = principalOf(req);
+    const body = responsesBody.parse(req.body);
+    const label = labelOf(req);
+    const ext = extensionsOf(req);
+    for (const [on, action, header] of [[!!ext.knowledge?.length, 'knowledge:read', 'X-Exprsn-Knowledge'], [!!ext.memory, 'memory:write', 'X-Exprsn-Memory'], [!!ext.serverTools, 'tools:invoke', 'X-Exprsn-Tools']] as const) {
+      if (!on) continue;
+      const d = authorize(p, action);
+      if (!d.allow) throw new HttpProblem(403, 'Forbidden', `${header} needs ${action}: ${d.reason}`, { extensions: { code: `denied_${d.step}`, param: header, step: d.step, action } });
+    }
+    const ac = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) ac.abort(new Error('client went away'));
+    });
+    if (!body.stream) {
+      res.json(await s.openai.responses.create(p, body, label, ac.signal, { ext }));
+      return;
+    }
+    await stream(res, s, async (_send, event) => {
+      await s.openai.responses.create(p, body, label, ac.signal, { ext, onEvent: (type, data) => event(type, data) });
+    }, { done: false });
+  });
+
+  r.get('/responses/:id', invoke, async (req, res) => {
+    res.json(await s.openai.responses.retrieve(principalOf(req), String(req.params.id)));
+  });
+
+  r.get('/held/:id', invoke, async (req, res) => {
+    const id = String(req.params.id);
+    if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) throw apiProblem(404, 'No such held request.', 'held_request_not_found');
+    try {
+      res.json(await s.openai.holds.get(principalOf(req), id));
+    } catch (err) {
+      if (err instanceof HttpProblem && err.status === 404) throw apiProblem(404, 'No such held request.', 'held_request_not_found');
+      throw err;
+    }
   });
 
   r.use(() => {
@@ -220,8 +256,13 @@ async function verifySignedRequest(s: Services, req: Request, keyId: string, pre
   if (!v.ok) refuse(`This API key requires signed requests (RFC 9421): ${v.reason}`);
 }
 
-/** Server-sent events: `data: <json>` per chunk, comments as keep-alives while nothing is sent, `data: [DONE]` last. */
-async function stream(res: Response, s: Services, body: (send: (o: unknown) => void) => Promise<void>): Promise<void> {
+/**
+ * Server-sent events: `data: <json>` per chunk, comments as keep-alives while nothing is sent, `data: [DONE]` last.
+ * Named events (`event: <type>`) are for the Responses API, which ends without `[DONE]` and reports errors as an
+ * `error` event.
+ */
+async function stream(res: Response, s: Services, body: (send: (o: unknown) => void, event: (type: string, o: unknown) => void) => Promise<void>, opts: { done?: boolean } = {}): Promise<void> {
+  const done = opts.done !== false;
   let started = false;
   const start = () => {
     if (started) return;
@@ -241,14 +282,17 @@ async function stream(res: Response, s: Services, body: (send: (o: unknown) => v
   // is still an ordinary HTTP error; a comment every 10 s keeps proxies from timing out while the answer is checked.
   const keepAlive = setInterval(() => write(': keep-alive\n\n'), 10_000);
   try {
-    await body((o) => write(`data: ${JSON.stringify(o)}\n\n`));
-    write('data: [DONE]\n\n');
+    await body(
+      (o) => write(`data: ${JSON.stringify(o)}\n\n`),
+      (type, o) => write(`event: ${type}\ndata: ${JSON.stringify(o)}\n\n`)
+    );
+    if (done) write('data: [DONE]\n\n');
   } catch (err) {
     clearInterval(keepAlive);
     if (!started) throw err;
     const e = openAiError(err);
     if (e.status >= 500) s.log.error({ err }, 'openai stream failed');
-    if (!res.writableEnded) write(`data: ${JSON.stringify(e.body)}\n\n`);
+    if (!res.writableEnded) write(done ? `data: ${JSON.stringify(e.body)}\n\n` : `event: error\ndata: ${JSON.stringify({ type: 'error', code: e.body.error.code, message: e.body.error.message, param: e.body.error.param })}\n\n`);
   } finally {
     clearInterval(keepAlive);
     if (started && !res.writableEnded) res.end();
@@ -257,6 +301,12 @@ async function stream(res: Response, s: Services, body: (send: (o: unknown) => v
 
 export function openAiErrorHandler(s: Pick<Services, 'log'>): ErrorRequestHandler {
   return (err, req, res, _next) => {
+    if (err instanceof HeldRequest && !res.headersSent) {
+      // B-1301: held for review. The client polls the held request for the answer.
+      res.setHeader('Location', err.view.poll);
+      res.status(202).json(err.view);
+      return;
+    }
     const e = openAiError(err);
     if (e.status >= 500) s.log.error({ err, trace_id: req.traceId }, 'openai api error');
     if (res.headersSent) {

@@ -21,6 +21,7 @@ import * as m019 from './019_identity3.js';
 import * as m020 from './020_platform3.js';
 import * as m021 from './021_integrations2.js';
 import * as m022 from './022_keys.js';
+import * as m023 from './023_ai.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -50,7 +51,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '019_identity3': m019,
   '020_platform3': m020,
   '021_integrations2': m021,
-  '022_keys': m022
+  '022_keys': m022,
+  '023_ai': m023
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

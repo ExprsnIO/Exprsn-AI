@@ -45,7 +45,9 @@ export class UserRepo {
 
   /** The same repository inside a transaction, so several writes commit or roll back together. */
   within(trx: Db): UserRepo {
-    return new UserRepo(trx);
+    const r = new UserRepo(trx);
+    r.onMembershipsLost = this.onMembershipsLost;
+    return r;
   }
 
   async get(tenantId: string, id: string): Promise<UserRow | undefined> {
@@ -169,13 +171,22 @@ export class UserRepo {
 
   // ---- workspace membership ----
 
+  /** Told about workspaces a user is no longer a member of at all (Sprint 21, B-1305: live shared watches end). */
+  onMembershipsLost: ((userId: string, workspaceIds: string[]) => void) | null = null;
+
   async setWorkspaceMemberships(userId: string, source: 'mapping' | 'direct', workspaceIds: string[]): Promise<void> {
+    const before = this.onMembershipsLost ? await this.workspaceIds(userId) : [];
     await this.db.transaction(async (trx) => {
       await trx('workspace_members').where({ user_id: userId, source }).delete();
       const t = Date.now();
       const unique = [...new Set(workspaceIds)];
       if (unique.length) await trx('workspace_members').insert(unique.map((workspace_id) => ({ workspace_id, user_id: userId, source, created_at: t })));
     });
+    if (this.onMembershipsLost && before.length) {
+      const after = new Set(await this.workspaceIds(userId));
+      const lost = before.filter((w) => !after.has(w));
+      if (lost.length) this.onMembershipsLost(userId, lost);
+    }
   }
 
   async workspaceIds(userId: string): Promise<string[]> {
