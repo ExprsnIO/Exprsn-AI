@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fetch, type Dispatcher } from 'undici';
+import { errorKind, runInSpan, SpanKind, startChild, withSpan } from '../observability/tracing.js';
 import { literalProblem, serviceAgent, servicePolicy, type ServicePolicy } from '../platform/egress.js';
 
 export interface InstanceTls {
@@ -139,7 +140,23 @@ export class OllamaClient {
     }
   }
 
-  private async req(method: string, path: string, body?: unknown, opts: { timeoutMs?: number | null; signal?: AbortSignal } = {}) {
+  /** B-1401: each call is a client span (method, API path, instance host, model), and carries the W3C traceparent. */
+  private req(method: string, path: string, body?: unknown, opts: { timeoutMs?: number | null; signal?: AbortSignal } = {}) {
+    const model = body && typeof (body as { model?: unknown }).model === 'string' ? (body as { model: string }).model : null;
+    let host: string | null = null;
+    try {
+      host = new URL(this.base).hostname;
+    } catch {
+      /* the config error reports it */
+    }
+    return withSpan(`ollama ${method} ${path}`, SpanKind.CLIENT, { 'http.request.method': method, 'url.path': path, ...(host ? { 'server.address': host } : {}), 'gen_ai.operation.name': path.replace(/^\/api\//, ''), ...(model ? { 'gen_ai.request.model': model } : {}) }, async (span) => {
+      const res = await this.send(method, path, body, opts, span?.traceparent);
+      span?.setAttribute('http.response.status_code', res.status);
+      return res;
+    });
+  }
+
+  private async send(method: string, path: string, body: unknown, opts: { timeoutMs?: number | null; signal?: AbortSignal }, traceparent: string | undefined) {
     if (this.configError) throw this.configError;
     const signals: AbortSignal[] = [];
     if (opts.timeoutMs !== null) signals.push(AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs));
@@ -148,7 +165,7 @@ export class OllamaClient {
     try {
       res = await fetch(this.base + path, {
         method,
-        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(traceparent ? { traceparent } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: signals.length ? AbortSignal.any(signals) : undefined,
         ...(this.dispatcher ? { dispatcher: this.dispatcher } : {})
@@ -213,16 +230,26 @@ export class OllamaClient {
   async *chat(request: ChatRequest, signal: AbortSignal, headerTimeoutMs = 5 * 60_000): AsyncGenerator<ChatChunk> {
     const headers = new AbortController();
     const timer = setTimeout(() => headers.abort(new Error('timed out waiting for the instance')), headerTimeoutMs);
+    // B-1401: the whole stream is one span (the call itself, up to the response headers, is a child of it).
+    const span = startChild('gateway chat stream', SpanKind.CLIENT, { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': request.model });
     let res;
     try {
-      res = await this.req('POST', '/api/chat', { ...request, stream: true }, { timeoutMs: null, signal: AbortSignal.any([signal, headers.signal]) });
+      try {
+        res = await runInSpan(span, () => this.req('POST', '/api/chat', { ...request, stream: true }, { timeoutMs: null, signal: AbortSignal.any([signal, headers.signal]) }));
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!res.body) return;
+      for await (const chunk of ndjson<ChatChunk>(res.body)) {
+        if (chunk.error) throw new OllamaError(chunk.error, 500);
+        yield chunk;
+      }
+      span?.ok();
+    } catch (err) {
+      span?.fail(errorKind(err));
+      throw err;
     } finally {
-      clearTimeout(timer);
-    }
-    if (!res.body) return;
-    for await (const chunk of ndjson<ChatChunk>(res.body)) {
-      if (chunk.error) throw new OllamaError(chunk.error, 500);
-      yield chunk;
+      span?.end();
     }
   }
 

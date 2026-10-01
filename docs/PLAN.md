@@ -47,3 +47,22 @@ The boards name a large platform. We keep their behaviour and voice, with compon
 
 The sprint table, what each sprint delivered or will deliver, and current status are in
 [Sprints.md](../Sprints.md).
+
+## Migrations: expand and contract (1.3.0)
+
+Rolling upgrades run two releases against one database for a while: the new release migrates (the Helm init
+container or hook Job), the old pods keep serving until they are replaced. So a migration's `up` only **expands**: new
+tables, new nullable columns or columns with defaults, new indexes. A **contract** step (dropping or renaming a column
+or table, changing a column's type) waits for a later release, once no running build reads the old shape, and its line
+(or the line above it) carries the marker `// contract: <why it is safe now>`.
+
+- `server/test/sprint22-ops.test.ts` lints every migration's `up` for `dropColumn`, `renameColumn`, `dropTable`,
+  `renameTable`, `DROP COLUMN`, `RENAME`, `ALTER COLUMN … TYPE` and friends without the marker, and fails the build.
+- `exprsn-ai migrate --check` lists pending migrations and their destructive steps without applying anything (exit 2:
+  pending, 3: pending with contract steps, 4: the database is newer than this build). A contract step means every
+  instance of the previous release must be stopped before `migrate` runs.
+- The schema version handshake (`server/src/db/schema.ts`): each build knows its migrations; when the database has one
+  applied that the build does not know, the instance is older than the schema. It refuses to start, and a running one
+  stops claiming jobs and reports not ready (`/readyz` `checks.schema`) with the reason, so only up-to-date instances
+  do work. It recovers by itself when the database matches again.
+- `down` may drop what its `up` added; it runs only in development and rollback drills.

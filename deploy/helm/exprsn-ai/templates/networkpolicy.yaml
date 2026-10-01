@@ -62,6 +62,7 @@ spec:
   (list "sandbox" "zone sandbox: MCP servers, tool and script runners, ClamAV, media workers, egress proxy")
   (list "notifications" "mail relay")
   (list "siem" "SIEM collector")
+  (list "kubernetesApi" "the Kubernetes API server (zones applied in-cluster)")
 }}
 {{- range $groups }}
 {{- $key := index . 0 }}

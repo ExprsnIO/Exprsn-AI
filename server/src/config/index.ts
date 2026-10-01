@@ -278,7 +278,7 @@ const base = z.object({
     /** Media previews and downloads from a separate origin through signed, short-lived URLs. */
     MEDIA_ORIGIN: z.url().optional(),
     MEDIA_URL_TTL_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
-    /** SNTP server (host or host:port) for the clock-skew check; unset: the database server only. */
+    /** SNTP servers (host or host:port, comma-separated; Sprint 22: several give a median and outliers) for the clock-skew check; unset: the database server only. */
     NTP_SERVER: z.string().optional(),
     NTP_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
     /** OpenBao database secrets engine mount for dynamic data-connection credentials. */
@@ -327,6 +327,35 @@ const base = z.object({
     /** An OCI runtime for script containers (runsc for gVisor); the runner passes --runtime and checks it exists. */
     SCRIPT_RUNTIME: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,62}$/).optional(),
     // --- end Sprint 19 ---
+
+    // --- Sprint 22: operations, second part ---
+    /** B-1401: OTLP/HTTP collector base URL (spans go to <url>/v1/traces); unset: no tracing. */
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
+    /** The full traces URL, when the collector does not use /v1/traces under the base. */
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: z.url().optional(),
+    /** Extra collector request headers: name=value,name2=value2 (values percent-encoded), e.g. an API key. */
+    OTEL_EXPORTER_OTLP_HEADERS: z.string().optional(),
+    OTEL_EXPORTER_OTLP_TIMEOUT: z.coerce.number().int().min(100).max(120_000).default(10_000),
+    OTEL_SERVICE_NAME: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/).default('exprsn-ai'),
+    /** Fraction of new traces recorded; a caller's sampled flag in traceparent wins. */
+    OTEL_TRACES_SAMPLE_RATIO: z.coerce.number().min(0).max(1).default(1),
+    OTEL_BSP_MAX_QUEUE_SIZE: z.coerce.number().int().min(16).max(1_000_000).default(2048),
+    OTEL_BSP_SCHEDULE_DELAY: z.coerce.number().int().min(10).max(600_000).default(5000),
+    /** B-1403: how often each instance compares its migrations with the database's (0: only at start). */
+    SCHEMA_CHECK_SECONDS: z.coerce.number().int().min(0).max(3600).default(30),
+    /** B-1405: apply rendered zone NetworkPolicies through the Kubernetes API (server-side apply), and report drift. */
+    ZONES_APPLY: z.enum(['off', 'kubernetes']).default('off'),
+    /** The API server; defaults to https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT inside a pod. */
+    ZONES_APPLY_API_URL: z.url().optional(),
+    ZONES_APPLY_TOKEN_FILE: z.string().default('/var/run/secrets/kubernetes.io/serviceaccount/token'),
+    ZONES_APPLY_CA_FILE: z.string().default('/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'),
+    ZONES_APPLY_FIELD_MANAGER: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,127}$/).default('exprsn-ai'),
+    ZONES_APPLY_DRIFT_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /** B-1406: SNTP servers that disagree with the median of the others by more than this are reported as outliers. */
+    NTP_OUTLIER_MS: z.coerce.number().int().min(10).max(3_600_000).default(1000),
+    /** B-1407: how often the shared rate-limit counters check that Redis answers. */
+    RATELIMIT_PROBE_SECONDS: z.coerce.number().int().min(1).max(600).default(15),
+    // --- end Sprint 22 ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */

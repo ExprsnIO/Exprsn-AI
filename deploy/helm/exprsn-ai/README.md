@@ -196,3 +196,20 @@ CI runs both for every file in `ci/`.
 - Backup and restore: [docs/runbooks/backup-restore.md](../../../docs/runbooks/backup-restore.md)
 - Incidents: [docs/runbooks/incident-response.md](../../../docs/runbooks/incident-response.md)
 - Upgrades and rollback: [docs/runbooks/upgrade.md](../../../docs/runbooks/upgrade.md)
+
+## Zones applied in-cluster (1.3.0)
+
+```yaml
+zonesApply:
+  enabled: true
+  namespaces: [edge, app, data, directory, inference, sandbox, training]   # must exist
+networkPolicy:
+  egress:
+    kubernetesApi:
+      to: [{ ipBlock: { cidr: 10.96.0.1/32 } }]   # kubectl get endpoints kubernetes -n default
+```
+
+The server then applies each zone's rendered NetworkPolicy through the Kubernetes API (server-side apply) after every
+approved zone change and reports drift on the Zones screen. Each listed namespace gets a Role allowing get, list,
+create and patch on networkpolicies only, bound to the server's service account, whose token is mounted in the pod
+(it is not otherwise). Dashboards and alert rules for the ServiceMonitor's metrics are in `deploy/observability/`.

@@ -106,6 +106,30 @@ encryption to protect their content, but their names and sizes are visible.
   `<OPENBAO_KEY_PREFIX>audit-checkpoints` in the `OPENBAO_TRANSIT_MOUNT` engine. They are created with
   `deletion_allowed`, so the token given to the server must be the only one allowed to delete them, and snapshots are
   the only way back from an accidental deletion.
+- **Key escrow (1.3.0).** Instead of one copy of `DATA_KEY` in a safe, split it among custodians so that no single
+  person holds it and losing one share loses nothing:
+
+  ```sh
+  exprsn-ai kms:escrow --shares 5 --threshold 3
+  ```
+
+  It prints a key check value and five shares (`exprsn-share:v1:<escrow>:3of5:<n>:<hex>:<check>`), each once and never
+  stored; the database keeps only the escrow id, 3-of-5 and the key check value (shown under Platform > Secrets health).
+  Run it on a terminal (not in a logged job), give each share to a different custodian on paper or in their own
+  password manager, and keep the key check value with this runbook. Make a new escrow, and destroy the old shares,
+  after every change of `DATA_KEY` (`kms:rewrap`). With OpenBao use its own recovery-key shares instead.
+
+  To rebuild the key, three custodians enter their shares on one machine:
+
+  ```sh
+  exprsn-ai kms:recover --out /run/secrets/data_key --check <key check value>   # shares one per line on stdin
+  exprsn-ai kms:recover --out ./data_key --share 'exprsn-share:v1:…' --share '…' --share '…'
+  ```
+
+  A mistyped share fails its own check; shares from different escrows, too few shares, or a result that does not match
+  the key check value are refused, and nothing is written. Without `--check` the value is read from the database's
+  escrow record (when the configuration and database are available). The key is written to a new file with mode
+  0600; point `DATA_KEY_FILE` at it and continue with the restore below.
 - **`SESSION_SECRET`.** Back it up with `DATA_KEY`. Restoring without it works but signs everyone out and invalidates
   API keys and recovery codes.
 
@@ -116,7 +140,8 @@ key) starts, but sealed content fails to open.
 
 1. **Stop the servers** (and job workers), so nothing writes during the restore:
    `docker compose stop app`, `systemctl stop exprsn-ai`, or `kubectl scale deploy/exprsn-ai --replicas=0`.
-2. **Keys first.** Put the original `DATA_KEY` back in its secret file or Kubernetes Secret, or restore the OpenBao
+2. **Keys first.** Put the original `DATA_KEY` back in its secret file or Kubernetes Secret (rebuilt from escrow
+   shares with `kms:recover` if no copy survived), or restore the OpenBao
    snapshot (`bao operator raft snapshot restore -force <file>`) and unseal. Restore `SESSION_SECRET` too if you have
    it. Do not generate new ones: new keys cannot open the restored data.
 3. **Database.** Restore into an empty database of the same dialect:

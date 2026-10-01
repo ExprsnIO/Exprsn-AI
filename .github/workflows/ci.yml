@@ -297,6 +297,26 @@ jobs:
             fi
           done
 
+  observability:
+    name: Alert rules and dashboards
+    runs-on: ubuntu-latest
+    env:
+      # prom/prometheus v3.5.0 (LTS), pinned by digest; update the tag and the digest together.
+      PROMETHEUS_IMAGE: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Runs only when the rules exist (deploy/observability/prometheus); promtool comes from the official image.
+      - name: promtool check rules and rule unit tests
+        if: hashFiles('deploy/observability/prometheus/*.rules.yml') != ''
+        run: |
+          docker run --rm --network none -v "$PWD/deploy/observability/prometheus:/rules:ro" -w /rules \
+            --entrypoint /bin/promtool "$PROMETHEUS_IMAGE" check rules exprsn-ai.rules.yml
+          docker run --rm --network none -v "$PWD/deploy/observability/prometheus:/rules:ro" -w /rules \
+            --entrypoint /bin/promtool "$PROMETHEUS_IMAGE" test rules exprsn-ai.rules.test.yml
+      - name: Dashboards are valid JSON
+        if: hashFiles('deploy/observability/grafana/*.json') != ''
+        run: for f in deploy/observability/grafana/*.json; do jq -e '.uid and .title and (.panels | length > 0)' "$f" >/dev/null || { echo "$f"; exit 1; }; done
+
   loadtest:
     name: Streaming load test (in-process)
     runs-on: ubuntu-latest

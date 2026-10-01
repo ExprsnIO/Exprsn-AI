@@ -21,7 +21,16 @@ and how to go back. Upgrading the Ollama nodes is a separate, console-driven pro
    ```
 
    The new release's migrations are listed in `server/src/db/migrations/index.ts`. Any name not yet in the table will
-   be applied.
+   be applied. Since 1.3.0 the new release's CLI tells you directly, without applying anything:
+
+   ```sh
+   exprsn-ai migrate --check    # run with the NEW release's image or files
+   ```
+
+   Exit 0: nothing to apply. Exit 2: pending migrations, all expand-only (a rolling upgrade is safe). Exit 3: at least
+   one pending migration has a contract step (it drops, renames or retypes something); the steps are printed, and
+   every instance of the old release must be stopped before migrating. Exit 4: the database is already newer than
+   that build.
 
 ## How migrations run
 
@@ -41,8 +50,13 @@ safe when the new migrations are additive (new tables, new nullable columns or c
 rename nothing the previous release reads. When a release's migrations are not additive, or its notes say so, stop
 every instance, migrate, and start the new release instead of rolling.
 
-An older release refuses to start against a database migrated by a newer one (Knex reports migrations it does not
-know). That is deliberate: it prevents old code from writing to a schema it does not understand.
+An older release refuses to start against a database migrated by a newer one. That is deliberate: it prevents old
+code from writing to a schema it does not understand. Since 1.3.0 the same check runs while an instance is up (the
+schema handshake, every `SCHEMA_CHECK_SECONDS`, and on every `/readyz`): once the new release has migrated, each old
+instance stops claiming jobs and answers 503 on `/readyz` with `checks.schema` explaining why, so the load balancer
+drains it and only new instances run jobs. Its log says "This instance is older than the database schema", the
+`exprsn_schema_behind` metric is 1 and the `ExprsnSchemaBehind` alert fires if the rollout stalls. The rule that keeps
+this safe (expand now, contract a release later) is in [PLAN.md](../PLAN.md#migrations-expand-and-contract-130).
 
 ## Rolling upgrade
 

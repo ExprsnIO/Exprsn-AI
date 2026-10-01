@@ -1660,3 +1660,35 @@ that label is skipped (recorded in the history and audited). Runs carry `schedul
 
 Audit actions: `agent.schedule.created`, `agent.schedule.updated`, `agent.schedule.deleted`, `agent.schedule.started`,
 `agent.schedule.skipped`, `agent.schedule.failed`.
+
+## Sprint 22: Operations, second part
+
+No new permissions. Tracing (B-1401) adds no routes: every request, job, gateway call, guardrail check and database
+query is a span of the request's W3C trace when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (a caller's `traceparent` is
+honoured, and `X-Trace-Id` is its trace id); Ollama calls carry a `traceparent` header.
+
+### Health
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /readyz` | Adds `checks.schema`: `ok`, or `behind: <reason>` when the database has a migration this build does not know (B-1403). Such an instance answers 503 and claims no jobs until the database matches its build again |
+
+### Zones applied in-cluster (`zones:manage`, B-1405)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/zones-cluster` | `{mode: off\|kubernetes, driftMinutes, fieldManager, drift, objects: [{zone, version, namespace, kind, name, state: pending\|applied\|drift\|missing\|error, detail, appliedAt, checkedAt}]}` |
+| `POST /admin/zones-cluster/apply` `{}` | Applies every zone's current NetworkPolicy now with server-side apply (`PATCH … application/apply-patch+yaml`, the field manager, `force=true`): `{applied, failed, objects}`. Also how drift is put right. `409` while `ZONES_APPLY` is off; `502` when the API cannot be reached at all. Audited as `zone.cluster.applied` |
+| `POST /admin/zones-cluster/check` `{}` | Compares each live policy with what was applied: `{checked, drift, missing, errors, objects}`. A policy that differs (the first differing field is named) or was deleted is drift; newly found drift is audited as `zone.cluster.drift` and system admins are notified |
+
+Zone changes (approve, seed) queue the job `zones.cluster.apply` on their own when `ZONES_APPLY=kubernetes`; the job
+`zones.cluster.drift` runs every `ZONES_APPLY_DRIFT_MINUTES`.
+
+### Platform (`platform:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /admin/platform/summary` | Adds `rateLimitHealth {degraded, since, detail, fallbacks}` (B-1407: Redis configured but not answering, so limits count per instance), `schema {code, database, pending, unknown, state: current\|pending\|behind, reason}` (B-1403), `escrow {id, threshold, shares, keyCheck, createdAt, verifiedAt} \| null` (B-1404), `tracing {enabled, exported, dropped, failed}` and `zonesApply`. `clock.ntp` (B-1406) adds `servers [{server, offsetMs, delayMs, stratum, error, outlier}]`, `outliers`, `quorum` and `warning`; with several `NTP_SERVER`s, `offsetMs` and `skewMs` are the median of the servers that agree and `server` lists them all |
+
+CLI (no routes): `migrate --check`, `kms:escrow --shares <n> --threshold <k>`, `kms:recover --out <file>
+[--share …] [--check <value>]`. Audit actions: `zone.cluster.applied`, `zone.cluster.drift`, `kms.escrow.created`.

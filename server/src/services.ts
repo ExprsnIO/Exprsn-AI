@@ -76,6 +76,10 @@ import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
 import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
+import { instrumentKnex, parseOtlpHeaders, SpanKind, Tracer, tracesUrl, withSpan } from './observability/tracing.js';
+import { registerOpsMetrics } from './observability/ops-metrics.js';
+import { SchemaGuard } from './db/schema.js';
+import { ZoneCluster } from './zones/cluster.js';
 
 export interface Services {
   cfg: Config;
@@ -163,6 +167,12 @@ export interface Services {
   evals: EvalService;
   /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
   counters: CounterStore;
+  /** Sprint 22 (B-1401): spans exported over OTLP/HTTP; a no-op without OTEL_EXPORTER_OTLP_ENDPOINT. */
+  tracer: Tracer;
+  /** Sprint 22 (B-1403): the schema version handshake; an instance older than the database takes no jobs. */
+  schema: SchemaGuard;
+  /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
+  zoneCluster: ZoneCluster;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -189,6 +199,9 @@ export interface ServiceOverrides {
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
+  // Sprint 22 (B-1401): tracing, and spans for database queries made inside a trace.
+  const tracer = new Tracer({ url: tracesUrl(cfg), serviceName: cfg.OTEL_SERVICE_NAME, serviceVersion: process.env.npm_package_version ?? '', headers: parseOtlpHeaders(cfg.OTEL_EXPORTER_OTLP_HEADERS), ratio: cfg.OTEL_TRACES_SAMPLE_RATIO, maxQueue: cfg.OTEL_BSP_MAX_QUEUE_SIZE, delayMs: cfg.OTEL_BSP_SCHEDULE_DELAY, timeoutMs: cfg.OTEL_EXPORTER_OTLP_TIMEOUT }, log);
+  if (tracer.enabled) instrumentKnex(db, cfg.DB_CLIENT === 'pg' ? 'postgresql' : cfg.DB_CLIENT);
   const bus = new Bus(log, cfg.REDIS_URL);
   // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
   const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
@@ -360,7 +373,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     agentSchedules: new AgentSchedules(() => s),
     evals: new EvalService(() => s),
     counters,
+    tracer,
+    schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
+    zoneCluster: new ZoneCluster(() => s),
     close: async () => {
+      s.schema.stop();
       scheduler.stop();
       s.webhooks.close();
       await denials.flushAll().catch(() => undefined);
@@ -378,9 +395,24 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await connections.close().catch(() => undefined);
       // Sprint 20: the signer connection, when the KMS is the signer.
       (kms as { client?: { close(): void } }).client?.close();
+      await tracer.close();
     }
   };
   registerPlatformJobs(s);
+  // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
+  // checkpoints are spans (checkpoint and outcome only, never the text).
+  jobs.tracer = tracer.enabled ? tracer : null;
+  jobs.gate = () => s.schema.refusal();
+  if (tracer.enabled) {
+    const check = guard.engine.check.bind(guard.engine);
+    guard.engine.check = (input) => withSpan('guardrails check', SpanKind.INTERNAL, { 'exprsn.guardrails.checkpoint': input.checkpoint, 'exprsn.label': input.label }, async (span) => {
+      const d = await check(input);
+      span?.setAttributes({ 'exprsn.guardrails.action': d.action, 'exprsn.guardrails.findings': d.findings.length });
+      return d;
+    });
+  }
+  s.zoneCluster.registerJobs();
+  registerOpsMetrics(s);
   scripts.registerJobs();
   agents.registerJobs();
   s.training.registerJobs();
@@ -439,6 +471,7 @@ export function startSchedules(s: Services): void {
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
   s.federation.schedule(s.scheduler, activeTenants);
+  s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
   s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
 }

@@ -7,6 +7,8 @@ import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { ZodError } from 'zod';
 import { redactRequest, traceIdFrom } from '../observability/index.js';
+import { SpanKind } from '../observability/tracing.js';
+import { zoneClusterRoutes } from '../routes/admin/zones-cluster.js';
 import { authRoutes } from '../routes/auth.js';
 import { meRoutes } from '../routes/me.js';
 import { healthRoutes } from '../routes/health.js';
@@ -64,6 +66,24 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
     const end = s.metrics.httpDuration.startTimer({ method: req.method });
     res.on('finish', () => end({ route: req.route?.path ? req.baseUrl + String(req.route.path) : 'unmatched', status: String(res.statusCode) }));
     next();
+  });
+
+  // Sprint 22 (B-1401): a server span per request, in the request's W3C trace. The route template names it (the
+  // URL, which can carry identifiers and query strings, is not recorded).
+  app.use((req, res, next) => {
+    const span = s.tracer.startRoot(`${req.method}`, SpanKind.SERVER, { traceparent: req.header('traceparent') ?? null, traceId: req.traceId, attributes: { 'http.request.method': req.method, 'url.scheme': req.protocol } });
+    if (!span) return next();
+    const done = () => {
+      const route = req.route?.path ? req.baseUrl + String(req.route.path) : null;
+      span.name = route ? `${req.method} ${route}` : req.method;
+      span.setAttributes({ 'http.route': route, 'http.response.status_code': res.statusCode });
+      if (res.statusCode >= 500) span.fail('HttpServerError');
+      else span.ok();
+      span.end();
+    };
+    res.once('finish', done);
+    res.once('close', done);
+    s.tracer.run(span, next);
   });
 
   app.use(
@@ -171,6 +191,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(promptRoutes(s));
   api.use('/admin', integrationAdminRoutes(s));
   api.use('/admin', billingAdminRoutes(s));
+  // Sprint 22 (B-1405): zone NetworkPolicies applied in-cluster.
+  api.use('/admin', zoneClusterRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

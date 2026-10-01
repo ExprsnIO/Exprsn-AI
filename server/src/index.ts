@@ -6,11 +6,17 @@ import { createLogger } from './observability/index.js';
 import { attachRealtime } from './realtime/socket.js';
 import { createServices, startSchedules } from './services.js';
 import { bootstrap } from './bootstrap.js';
+import { schemaStatus } from './db/schema.js';
+import { startOpsWatch } from './ops/watch.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = createLogger(cfg.LOG_LEVEL, cfg.NODE_ENV === 'development' && process.stdout.isTTY);
   const db = createDb(cfg);
+
+  // Sprint 22 (B-1403): a build older than the database refuses to start rather than run against a schema it does not know.
+  const schema = await schemaStatus(db);
+  if (schema.state === 'behind') throw new Error(schema.reason ?? 'The database schema is newer than this build');
 
   if (cfg.DB_MIGRATE_ON_START) {
     const applied = await migrate(db);
@@ -34,6 +40,7 @@ async function main(): Promise<void> {
     startSchedules(services);
   }
   services.gateway.start();
+  const stopWatch = startOpsWatch(services); // Sprint 22: schema handshake, Redis probe, NTP measurement
 
   const housekeeping = setInterval(() => {
     void Promise.all([services.sessions.purge(), services.throttle.purge(), services.account.purge()]).catch((err) => log.warn({ err }, 'housekeeping failed'));
@@ -55,6 +62,7 @@ async function main(): Promise<void> {
     }, 25_000);
     force.unref();
     clearInterval(housekeeping);
+    stopWatch();
     server.closeIdleConnections();
     await realtime.close(); // also stops the HTTP server accepting new connections
     await services.close();
