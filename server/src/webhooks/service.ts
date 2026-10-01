@@ -1,4 +1,5 @@
-import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto';
+import { hostname } from 'node:os';
 import { ulid } from 'ulid';
 import { fetch } from 'undici';
 import { hmac, randomToken, safeEqual } from '../crypto/index.js';
@@ -20,6 +21,10 @@ import type { Services } from '../services.js';
  * dispatcher that only dials allowed addresses, and on failure schedules the next attempt with exponential backoff.
  * Consecutive failures open the endpoint's circuit breaker: deliveries then wait for the cool-down, and the first
  * one after it is the trial that closes or reopens it.
+ *
+ * Ordered webhooks (B-1004, and B-1504 across instances): each delivery takes the next position from the endpoint's
+ * counter row (`webhook_order`) in the transaction that inserts it, only the head (the lowest pending position) is
+ * scheduled, and it is sent only by the instance holding the endpoint's lease in the same row.
  */
 
 export const WEBHOOK_EVENT_GROUPS: { pattern: string; description: string }[] = [
@@ -184,6 +189,8 @@ export class WebhookService {
   private readonly offs: (() => void)[] = [];
   /** Emits per tenant, one after another, so deliveries are queued in the order events happened on this instance. */
   private readonly lanes = new Map<string, Promise<unknown>>();
+  /** This instance, as the holder of ordered endpoints' delivery leases (B-1504). */
+  readonly instance = `${hostname().slice(0, 30)}:${process.pid}:${randomBytes(4).toString('hex')}`;
 
   constructor(private readonly s: () => Services, readonly o: WebhookOptions) {
     this.operatorAllow = parseAllowList(o.allowedHosts);
@@ -284,24 +291,66 @@ export class WebhookService {
       created_at: t,
       delivered_at: null
     };
-    if (w.ordered) {
-      // The next position in the webhook's order (queued one at a time through the tenant's lane).
-      const max = (await s.db('webhook_deliveries').where({ webhook_id: w.id }).max({ m: 'seq' }).first()) as { m: number | string | null } | undefined;
-      row.seq = Number(max?.m ?? 0) + 1;
-    }
     try {
-      await s.db('webhook_deliveries').insert(row);
+      if (w.ordered) {
+        // B-1504: the position comes from the endpoint's counter in the database and the row is inserted in the
+        // same transaction, which holds the counter's row lock until it commits. Every instance therefore takes
+        // positions in turn, and a position is never visible before the ones below it. Later deliveries wait for
+        // their turn (next_attempt_at null).
+        await this.ensureOrder(w);
+        await s.db.transaction(async (trx) => {
+          await trx('webhook_order').where({ webhook_id: w.id }).increment('next_seq', 1);
+          const o = (await trx('webhook_order').where({ webhook_id: w.id }).first('next_seq')) as { next_seq: number | string };
+          row.seq = Number(o.next_seq) - 1;
+          await trx('webhook_deliveries').insert({ ...row, next_attempt_at: null });
+        });
+        row.next_attempt_at = null;
+      } else await s.db('webhook_deliveries').insert(row);
     } catch (err) {
       // Another instance (or an earlier call) already queued this event for this subscription.
       if (isUniqueViolation(err)) return null;
       throw err;
     }
-    // An ordered webhook sends only its head: later deliveries wait for their turn (next_attempt_at null).
-    if (w.ordered) {
-      await s.db('webhook_deliveries').where({ id: row.id }).update({ next_attempt_at: null });
-      await this.kick(w.id, w.tenant_id);
-    } else await this.schedule(row, t);
+    if (w.ordered) await this.kick(w.id, w.tenant_id);
+    else await this.schedule(row, t);
     return row;
+  }
+
+  /**
+   * The order row of an ordered webhook (B-1504), created on first use with the next position after any delivery
+   * already numbered (deliveries ordered before the row existed keep their place).
+   */
+  private async ensureOrder(w: Pick<WebhookRow, 'id' | 'tenant_id'>): Promise<void> {
+    const db = this.s().db;
+    if (await db('webhook_order').where({ webhook_id: w.id }).first('webhook_id')) return;
+    const max = (await db('webhook_deliveries').where({ webhook_id: w.id }).max({ m: 'seq' }).first()) as { m: number | string | null } | undefined;
+    try {
+      await db('webhook_order').insert({ webhook_id: w.id, tenant_id: w.tenant_id, next_seq: Number(max?.m ?? 0) + 1, holder: null, delivery_id: null, lease_until: null, updated_at: Date.now() });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err; // another instance created it
+    }
+  }
+
+  /**
+   * Takes the endpoint's delivery lease for one delivery (B-1504): only the holder sends, so two instances never
+   * have deliveries of one ordered endpoint in flight at once. A lease outlives a crashed holder by the delivery
+   * timeout plus a margin. Returns the time the current holder's lease ends when it is taken elsewhere.
+   */
+  private async takeLease(w: WebhookRow, d: DeliveryRow): Promise<{ ok: true } | { ok: false; until: number }> {
+    const db = this.s().db;
+    await this.ensureOrder(w);
+    const now = Date.now();
+    const n = await db('webhook_order')
+      .where({ webhook_id: w.id })
+      .andWhere((q) => q.whereNull('holder').orWhere('lease_until', '<', now).orWhere({ holder: this.instance, delivery_id: d.id }))
+      .update({ holder: this.instance, delivery_id: d.id, lease_until: now + this.o.timeoutMs + 30_000, updated_at: now });
+    if (n === 1) return { ok: true };
+    const o = (await db('webhook_order').where({ webhook_id: w.id }).first('lease_until')) as { lease_until: number | string | null } | undefined;
+    return { ok: false, until: Number(o?.lease_until ?? now) };
+  }
+
+  private async releaseLease(webhookId: string, deliveryId: string): Promise<void> {
+    await this.s().db('webhook_order').where({ webhook_id: webhookId, holder: this.instance, delivery_id: deliveryId }).update({ holder: null, delivery_id: null, lease_until: null, updated_at: Date.now() });
   }
 
   /** The oldest pending delivery of an ordered webhook: the only one that may be sent. */
@@ -364,6 +413,29 @@ export class WebhookService {
       return { deferred: 'circuit open' };
     }
 
+    if (w.ordered && d.seq != null) {
+      const lease = await this.takeLease(w, d);
+      if (!lease.ok) {
+        // Another instance is sending this endpoint's head: look again shortly (or when its lease runs out).
+        await this.schedule(d, Math.min(lease.until, now + 1000) + Math.floor(Math.random() * 100));
+        return { deferred: 'lease held by another instance' };
+      }
+      try {
+        // Another job for the same delivery may have sent it while this one waited for the lease.
+        const fresh = await s.db('webhook_deliveries').where({ id: d.id }).first();
+        if (!fresh || fresh.state !== 'pending') return { skipped: 'delivery already handled' };
+        return await this.attempt(w, deliveryFromRow(fresh));
+      } finally {
+        await this.releaseLease(w.id, d.id);
+        await this.kick(w.id, w.tenant_id);
+      }
+    }
+    return this.attempt(w, d);
+  }
+
+  /** One attempt at a delivery, its outcome recorded and the next attempt scheduled. */
+  private async attempt(w: WebhookRow, d: DeliveryRow): Promise<unknown> {
+    const s = this.s();
     const body = await s.keys.open(d.tenant_id, d.payload, `webhook-delivery:${d.id}`);
     const secret = await s.keys.open(w.tenant_id, w.secret_sealed, `webhook:${w.id}`);
     const tenantAllow = await s.integrations.allowList(w.tenant_id);
@@ -418,7 +490,7 @@ export class WebhookService {
       await s.db('webhooks').where({ id: w.id }).update({ failures: 0, breaker: 'closed', opened_at: null, last_delivery_at: t, last_status: String(status) });
       if (w.breaker === 'open') await this.breakerAudit(w, 'webhook.breaker.closed', { after: w.failures });
       this.forget(w.tenant_id);
-      if (w.ordered) await this.kick(w.id, w.tenant_id);
+      if (w.ordered && d.seq == null) await this.kick(w.id, w.tenant_id);
       return { delivered: status, attempt };
     }
 
@@ -432,8 +504,9 @@ export class WebhookService {
     const next = retry ? t + this.backoff(attempt) : null;
     await s.db('webhook_deliveries').where({ id: d.id }).update({ state: retry ? 'pending' : 'failed', attempts: attempt, status_code: status, error: (error ?? '').slice(0, 1000), next_attempt_at: next, duration_ms: duration });
     if (retry) await this.schedule({ ...d, attempts: attempt }, next!);
-    // An ordered webhook moves on once the head has given up (it keeps its place while it retries).
-    else if (w.ordered) await this.kick(w.id, w.tenant_id);
+    // An ordered webhook moves on once the head has given up (it keeps its place while it retries); the caller
+    // kicks after releasing the lease.
+    else if (w.ordered && d.seq == null) await this.kick(w.id, w.tenant_id);
     return { failed: error, attempt, retryAt: next };
   }
 
@@ -561,6 +634,7 @@ export class WebhookService {
   async remove(tenantId: string, id: string): Promise<WebhookRow> {
     const w = await this.get(tenantId, id);
     await this.s().db('webhook_deliveries').where({ tenant_id: tenantId, webhook_id: w.id }).delete();
+    await this.s().db('webhook_order').where({ webhook_id: w.id }).delete();
     await this.s().db('webhooks').where({ id: w.id }).delete();
     this.forget(tenantId);
     return w;
