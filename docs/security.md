@@ -119,11 +119,17 @@ filter, private `/tmp`, only the state directory writable.
   `CHAT_GUARD_HOLDBACK_SENTENCES` ≥ 1 (the default) a sentence is shown only after a clean verdict covers it; with 0
   it is shown at once and a verdict can only stop what follows, so text the guard model would block can be shown and
   is replaced afterwards. A background check that cannot run stops release; the rest is shown after the full check.
-  Thinking is screened like the answer, but the full check on the finished answer covers the answer text only. A
-  phrase that spans a sentence boundary is blocked when its second half arrives, but the first half may have been
-  shown. Tool results shown in chat pass the same screen (the model still receives them, checked at `context`). A
-  `require-approval` on the prompt (`user-input`) holds it for a reviewer in chat; a hold that comes from a check that
-  could not run still refuses the turn, and compare and `/v1` still refuse a held prompt.
+  Thinking is screened like the answer, and since 1.3.0 the full check on the finished answer covers the thinking as
+  well: thinking it blocks or holds is withheld (the answer itself is decided by its own check), and thinking already
+  shown while streaming is replaced when the client reloads the answer. A phrase that spans a sentence boundary is
+  blocked when its second half arrives, but the first half may have been shown. Tool results shown in chat pass the
+  same screen (the model still receives them, checked at `context`). A `require-approval` on the prompt (`user-input`)
+  holds it for a reviewer in chat and compare (every column waits), and holds a `/v1` request sent with an API key
+  (`202`, then `GET /v1/held/:id`); a hold that comes from a check that could not run still refuses the turn, and a
+  `/v1` request sent with an OAuth access token is still refused rather than held (the token could expire or be revoked
+  while a reviewer decides). An approved `/v1` request runs as its sender with the key's scopes at approval time; a
+  revoked or expired key, or a disabled owner, fails it. The request and its answer are kept sealed in `api_holds`;
+  there is no retention period for held API requests yet.
 - The trained classifier is a hashed-word linear head: its precision and recall are only as good as each tenant's
   labelled cases (the console warns below 200 per label).
 - Knowledge: row-level access for database sources comes from an access column the curator names (groups or users per
@@ -286,12 +292,26 @@ filter, private `/tmp`, only the state directory writable.
   whose private half is sealed with the tenant key and held in memory while signing (not in the KMS). Endpoint names are resolved again when dialled; every address is checked in the dispatcher's lookup
   against the operator's rules and the tenant's list, as for MCP servers.
 - Conversation sharing: readers of a user or workspace share can watch an answer stream (Sprint 16), answer text only
-  (no thinking); a revocation or a label rising above them ends it at once, but a reader removed from a shared
-  workspace keeps a watch already open until they reload or reconnect. Signed-in link shares open the transcript but
+  (no thinking); a revocation, a label rising above them, or (since 1.3.0) leaving the shared workspace (removed by an
+  admin, or through a group mapping or the directory) ends it at once on every instance. Signed-in link shares open the transcript but
   do not stream. Anonymous links are off by default per tenant, open only conversations labelled `public` at that
   moment, expire within the tenant's limit (72 hours by default), are rate-limited per client address
   (`SHARE_ANONYMOUS_PER_MINUTE`, shared through Redis when set) and are audited with the address; anyone holding the
   link can read the conversation until then, and the address is only as reliable as the proxy settings.
+- Stored API responses (1.3.0): `POST /v1/responses` with `store: true` saves the exchange as a chat conversation of
+  the caller (in the key's workspace, `X-Workspace`), subject to chat retention; `previous_response_id` continues only
+  the caller's own stored responses. Function calls returned to the caller are stored with the answer so a following
+  function result matches them; function results and images in a stored turn are kept as text in the question.
+  `store` defaults to false, unlike OpenAI's API.
+- Evaluations (1.3.0): eval cases and results are sealed with the tenant key. A run answers each case with the saved
+  profile through the gateway and the `model-output` checkpoint and is metered as `api` usage of whoever started it.
+  The publish gate keys runs to a hash of the settings that shape an answer (model, pool, context, temperature,
+  thinking, system prompt, tools, label), not to the canary model: a canary is not evaluated. A judge profile is an
+  LLM: its verdict is only as reliable as the model, and an unreadable verdict scores 0. Overrides need a second
+  profile admin.
+- Scheduled agent runs (1.3.0): a schedule runs as its owner with the roles, clearance and workspace memberships they
+  hold at its due time, never more; a due time missed while no instance was running fires once at the next tick, not
+  once per missed time. Cron expressions are UTC.
 - Billing: there is no currency conversion or proration; a tenant with a currency is priced only from books in it.
   Taxes are flat percentages of the priced subtotal, without tax registration numbers, exemptions or jurisdictions.
   The Stripe webhook reconciles paid, failed and voided invoices by the Stripe-Signature HMAC with a timestamp

@@ -1518,3 +1518,110 @@ Audit actions: `auth.login.new_context`, `auth.step_up.started`, `password.enrol
 `federation.proposal.rejected`, `federation.proposal.withdrawn`, `federation.metadata.refreshed`,
 `federation.metadata.failed`, `federation.metadata.source_set`, `federation.metadata.source_removed`,
 `federation.saml_sp.metadata_applied`, `identity.provider.metadata_applied`.
+
+## Sprint 21: AI
+
+### Held `/v1` requests (`require-approval` at `user-input`)
+
+A `/v1` request sent with an API key whose prompt a `require-approval` rule stops is held for review instead of refused
+(`POST /v1/chat/completions` and `POST /v1/responses`, streaming or not). It is filed in the Flags queue as a `hold`
+flag with source `api-request`; approving it (`POST /api/flags/:ref/decide {decision: approved}`, not by the sender)
+runs the request as a job (`openai.held`) as the sender with the key's scopes as they are then; rejecting it ends it.
+A request sent with an OAuth access token is refused as before (`400 content_filter`).
+
+| Method and path | What it does |
+| --- | --- |
+| (any `/v1` request that is held) | `202` with `Location: /v1/held/<id>` and `{id, object: "exprsn.held_request", api (chat.completions\|responses), status: "held", created, poll, message}` |
+| `GET /v1/held/:id` (`inference:invoke`, the sender only) | `200 {id, object, api, status (held\|running\|completed\|failed\|rejected), created, poll, message?, error?, response?}`. When `completed`, `response` is the `chat.completion` or `response` object the request would have returned (never streamed). Another caller gets `404 held_request_not_found` |
+
+Compare (`POST /api/compare`) holds the prompt the same way chat does: `202 {conversationId, userMessageId, columns:
+[{…, state: "awaiting"}], state: "awaiting", reason}`; nothing is generated until a reviewer approves, then every
+column starts (`chat.released` with `answerId` per column); a rejection withdraws every column.
+
+Audit actions: `api.request.held`, `api.hold.approved`, `api.hold.rejected`.
+
+### `POST /v1/responses`: the Responses API subset (`inference:invoke`)
+
+A documented subset of OpenAI's Responses API, translated onto the chat completions path: the same profile
+resolution, clearance, quotas, `user-input` and `model-output` checkpoints, metering (`api`) and `X-Data-Label`,
+`X-Workspace` and `X-Exprsn-*` headers.
+
+| Field | Supported |
+| --- | --- |
+| `model` | A profile or alias, as for chat completions |
+| `input` | A string (one user message), or an array of items: messages `{type?: "message", role: user\|assistant\|system\|developer, content: string \| [{type: input_text\|output_text, text} \| {type: input_image, image_url: "data:…"}]}`, `{type: "function_call", call_id, name, arguments}` and `{type: "function_call_output", call_id, output}` |
+| `instructions` | A system message before everything else; not stored and not carried over by `previous_response_id` |
+| `tools`, `tool_choice` | Function tools only `{type: "function", name, description?, parameters?}`; calls come back as `function_call` output items for the caller to run (never run on the server), and their results go in the next request as `function_call_output` items. `tool_choice`: `none`, `auto`, `required` or `{type: "function", name}` |
+| `temperature`, `top_p`, `max_output_tokens`, `reasoning.effort`, `metadata`, `user` | As in OpenAI's API (`max_output_tokens` caps the answer; the thinking ceiling of the profile still applies) |
+| `store` | Default **false** (OpenAI's default is true). With `true` (needs `chat:write` as well) the exchange is saved as a chat conversation of the caller in the request's workspace: it appears in Chat and can be continued there. The response id is then `resp_<message id>` |
+| `previous_response_id` | A stored response of the caller: its conversation up to that answer comes first (function calls it returned included), and with `store: true` the new turn is saved under it. Anything else is `404 response_not_found` |
+| `stream` | Server-sent events with an `event:` line: `response.created` (`{type, sequence_number, response}` with `status: in_progress`, sent just before the first text), `response.output_text.delta` (`{type, sequence_number, item_id, output_index: 0, content_index: 0, delta}`), `response.completed` (`{type, sequence_number, response}`). No `[DONE]`. With `OPENAI_STREAM_MODE=checked` (default) the text arrives after the output check in one delta. An error after the stream started is an `error` event `{type: "error", code, message, param}` |
+
+The response object: `{id, object: "response", created_at, status (completed\|incomplete), incomplete_details
+({reason: max_output_tokens\|content_filter} or null), error: null, model, instructions, previous_response_id, store,
+output: [{type: "message", id, status, role: "assistant", content: [{type: "output_text", text, annotations: []}]},
+{type: "function_call", id, call_id, name, arguments, status}], tools, tool_choice, temperature, top_p,
+max_output_tokens, metadata, usage: {input_tokens, output_tokens, total_tokens, input_tokens_details, output_tokens_details},
+exprsn?}`.
+
+Not supported: built-in tools (web search, file search, code interpreter, computer use), `background`, `include`,
+`conversation` objects, `truncation`, `parallel_tool_calls`, audio, file inputs, and deleting or cancelling responses.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /v1/responses` | As above |
+| `GET /v1/responses/:id` | A stored response of the caller (`resp_<message id>`); `404 response_not_found` otherwise |
+
+### Evaluations (`profiles:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/profiles/:id/evaluations` | `{profile {id, name, version, status, configHash}, sets, runs (newest first, the score history), overrides, gate {configHash, gated, failing [{setId, set, reason, score, threshold}], overridden, open}}`; sets above the caller's clearance are left out |
+| `POST /api/admin/profiles/:id/eval-sets` `{name, description?, label?, threshold (0–1), gate (default true), judgeProfile?, cases: [{id?, name?, prompt, checks: [...]}]}` | Checks: `{kind: contains\|not-contains, value, caseSensitive?}`, `{kind: regex, pattern}` (RE2), `{kind: json-schema, schema}` (the answer, or its fenced JSON block, must validate), `{kind: judge, rubric, minScore? (0.5)}` (needs `judgeProfile`, a published profile cleared for the set's label). The label defaults to the profile's and may not exceed it or the caller's clearance. Cases are sealed |
+| `PATCH /api/admin/profiles/:id/eval-sets/:sid` | Any of the fields; changing cases, threshold or judge (or turning the gate on) starts a new revision |
+| `DELETE /api/admin/profiles/:id/eval-sets/:sid` | With its runs |
+| `POST /api/admin/profiles/:id/evaluations/run` `{setId?, trigger?}` | `202` with one queued run per set (job `evals.run`) on the profile as saved now: `{id, setId, profileVersion, configHash, setRevision, state, …}` |
+| `GET /api/admin/profiles/:id/evaluations/runs/:rid` | The run with `results: [{caseId, name, passed, checks [{kind, passed, detail}], output, judge, ms}]` |
+| `POST /api/admin/profiles/:id/evaluations/overrides` `{reason}` | Asks to let the saved settings be published without passing evaluations |
+| `POST /api/admin/profiles/:id/evaluations/overrides/:oid/decide` `{decision: approve\|reject}` | Someone other than the requester (`403` with `step: dual-control` otherwise) |
+
+The publish gate: `POST /api/admin/profiles/:id/publish {status: published}`, and any change to a published profile
+(edit, rollback, canary promotion) that changes its settings hash, is refused with `409 {code: eval_gate, failing,
+configHash}` unless, for that hash, the latest run of every gated set at its current revision passed, or an approved
+override exists. Runs are scored on what users would see (each answer passes `model-output`) and metered as `api`.
+
+Audit actions: `profile.eval.set.created`, `profile.eval.set.updated`, `profile.eval.set.deleted`,
+`profile.eval.started`, `profile.eval.passed`, `profile.eval.failed`, `profile.eval.error`,
+`profile.eval.override.requested`, `profile.eval.override.approved`, `profile.eval.override.rejected`.
+
+### Thinking at the full output check
+
+The `model-output` check on a finished chat answer also runs on its thinking (`meta.part: thinking`). Thinking it
+blocks or holds is withheld, a redaction replaces its spans; the message's `guard` gains `thinking {action, reason,
+rules}`, and `chat.done` carries a higher `seq` so clients read the answer again.
+
+### Live watches and workspace membership (socket)
+
+A reader watching a conversation through a workspace share (`shared.watch`) gets `shared.revoked` and leaves the room
+as soon as they stop being a member of that workspace: removed by an admin, or by a group mapping or the directory
+(bus topic `workspace.membership`). A reader still entitled another way (a direct share, another workspace) is let
+back in after a fresh check.
+
+### Scheduled agent runs (`agents:run`; `agents:manage` sees every schedule)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/agent-schedules[?all=true]` | Your schedules (all in the tenant for agent admins with `all`), within your clearance: `{id, name, agent, cron, cronText, label, budgets, enabled, nextRunAt, lastRunAt, lastRunId, lastResult, ownerId, owner, mine, workspaceId, input, createdAt, updatedAt}` |
+| `POST /api/agent-schedules` `{name, agent, cron, input, label?, budgets?, enabled?}` | A five-field UTC cron expression. You must be able to start this run now (the agent, its label against your clearance and ceilings, its profile). The request is sealed. The schedule belongs to your current workspace |
+| `GET /api/agent-schedules/:id` | One schedule |
+| `PATCH /api/agent-schedules/:id` `{agent?, cron?, input?, label?, budgets?, enabled?}` | The owner changes it; an agent admin may only pause or resume someone else's |
+| `DELETE /api/agent-schedules/:id` | The owner or an agent admin |
+| `GET /api/agent-schedules/:id/history[?limit=]` | Each due time: `{dueAt, at, outcome (started\|skipped\|failed), reason, runId, runState}` |
+
+Due schedules are fired by the `agents.schedules` job every `AGENT_SCHEDULE_TICK_SECONDS`; each due time is claimed
+once across instances. The run starts as the owner with the roles, clearance and workspace memberships they hold then;
+a disabled owner, one without `agents:run`, one who left the schedule's workspace or can no longer run the agent at
+that label is skipped (recorded in the history and audited). Runs carry `scheduleId`.
+
+Audit actions: `agent.schedule.created`, `agent.schedule.updated`, `agent.schedule.deleted`, `agent.schedule.started`,
+`agent.schedule.skipped`, `agent.schedule.failed`.
