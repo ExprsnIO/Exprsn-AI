@@ -131,6 +131,21 @@ describe('chat', () => {
     expect((await h.s.db('conversations').where({ id: sent.body.conversationId }).first()).label).toBe('internal');
   });
 
+  it('starts conversations in a public workspace as public instead of refusing them', async () => {
+    await seed(h, ollama);
+    const ws = await h.s.tenants.createWorkspace(h.tenantId, 'Open side', 'public', { visibility: 'tenant' });
+    const m = await member('dana', 'internal');
+    await m.agent.put('/api/me/workspace').set('x-csrf-token', m.csrf).send({ workspaceId: ws.id }).expect(200);
+    // No label is sent, as the console does: the default follows the workspace's ceiling, not a fixed internal.
+    const sent = await m.post('/api/chat', { content: 'Hello', profile: 'general' }).expect(202);
+    await m.done(sent.body.messageId);
+    expect((await h.s.db('conversations').where({ id: sent.body.conversationId }).first()).label).toBe('public');
+    expect((await m.post('/api/conversations', {}).expect(201)).body.label).toBe('public');
+    // Raising one above the ceiling is still refused, and the problem says the workspace is why.
+    const r = await m.post(`/api/conversations/${sent.body.conversationId}/messages`, { content: 'More', profile: 'general', label: 'internal' }).expect(403);
+    expect(r.body).toMatchObject({ step: 'zone', ceiling: 'workspace', detail: expect.stringMatching(/workspace's ceiling is public/) });
+  });
+
   it('never replays another user\'s stream through one of your own conversations', async () => {
     await seed(h, ollama);
     const a = await member('alice');

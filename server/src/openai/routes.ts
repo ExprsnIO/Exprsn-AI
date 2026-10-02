@@ -47,9 +47,10 @@ export function openAiError(err: unknown): { status: number; body: { error: { me
   return { status: 500, headers: {}, body: { error: { message: 'Something went wrong on our side. Quote the X-Trace-Id header if you report it.', type: 'api_error', code: 'internal_error', param: null } } };
 }
 
-const labelOf = (req: Request): Label => {
+/** The request's data label: X-Data-Label, or the caller's default (internal, or a lower workspace ceiling). */
+const labelOf = async (s: Services, req: Request): Promise<Label> => {
   const h = req.header('x-data-label');
-  if (h == null || h === '') return 'internal';
+  if (h == null || h === '') return s.chat.defaultLabel(principalOf(req));
   if (!isLabel(h)) throw apiProblem(400, `X-Data-Label must be one of ${LABELS.join(', ')}.`, 'invalid_label', 'X-Data-Label');
   return h;
 };
@@ -128,7 +129,7 @@ export function openAiRoutes(s: Services): Router {
   r.post('/chat/completions', invoke, async (req, res) => {
     const p = principalOf(req);
     const body = chatBody.parse(req.body);
-    const label = labelOf(req);
+    const label = await labelOf(s, req);
     const ext = extensionsOf(req);
     // Each extension reads more than inference does: it needs its own permission (and scope, for a key or token).
     for (const [on, action, header] of [[!!ext.knowledge?.length, 'knowledge:read', 'X-Exprsn-Knowledge'], [!!ext.memory, 'memory:write', 'X-Exprsn-Memory'], [!!ext.serverTools, 'tools:invoke', 'X-Exprsn-Tools']] as const) {
@@ -182,7 +183,7 @@ export function openAiRoutes(s: Services): Router {
     res.on('close', () => {
       if (!res.writableFinished) ac.abort(new Error('client went away'));
     });
-    res.json(await s.openai.embeddings(principalOf(req), body, labelOf(req), ac.signal));
+    res.json(await s.openai.embeddings(principalOf(req), body, await labelOf(s, req), ac.signal));
   });
 
   // ---------- Sprint 21: the Responses API subset (B-1302) and held requests (B-1301) ----------
@@ -190,7 +191,7 @@ export function openAiRoutes(s: Services): Router {
   r.post('/responses', invoke, async (req, res) => {
     const p = principalOf(req);
     const body = responsesBody.parse(req.body);
-    const label = labelOf(req);
+    const label = await labelOf(s, req);
     const ext = extensionsOf(req);
     for (const [on, action, header] of [[!!ext.knowledge?.length, 'knowledge:read', 'X-Exprsn-Knowledge'], [!!ext.memory, 'memory:write', 'X-Exprsn-Memory'], [!!ext.serverTools, 'tools:invoke', 'X-Exprsn-Tools']] as const) {
       if (!on) continue;
