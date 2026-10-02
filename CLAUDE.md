@@ -34,6 +34,9 @@ to 23 (`Backlog-1.3.0.md`: the signer process, KMS-held webhook keys, HTTP Messa
 held `/v1` requests, the Responses API, evaluations and scheduled agents; tracing, dashboards and alerts, safe upgrades,
 key escrow, zones applied in-cluster and an NTP quorum; S3 and web-crawl knowledge sources, PostgreSQL row security,
 webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow) are done in version `1.3.0`.
+Sprints 24 to 28 (`Backlog-1.4.0.md`: exprsn-platform's server features, including a certificate authority with
+AT-Protocol DIDs, labeler and sign-in, a secrets vault, moderation appeals, plugins and new domains) are planned for
+`1.4.0`.
 Every console screen is live. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
 
 ## Commands
