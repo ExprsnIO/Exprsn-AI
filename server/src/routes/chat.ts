@@ -78,7 +78,7 @@ export function chatRoutes(s: Services): Router {
   r.post('/chat', write, invoke, async (req, res) => {
     const p = principalOf(req);
     const body = parseBody(sendSchema.omit({ parentId: true }), req.body);
-    const c = await chat.createConversation(p, { label: body.label ?? 'internal' });
+    const c = await chat.createConversation(p, { label: body.label ?? (await chat.defaultLabel(p)) });
     const out = await wrap(() => chat.send(p, c.id, body))(req).catch(async (err) => {
       await chat.deleteConversation(p, c.id).catch(() => undefined);
       throw err;

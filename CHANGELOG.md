@@ -9,6 +9,17 @@
   unknown dialect is reported as a schema problem.
 - `OLLAMA_LOAD_TIMEOUT_MS` (default 5 minutes, as before) sets how long chat and embedding requests wait for Ollama's
   first response, which includes a cold model load. Raise it for large models on slow storage.
+## Unreleased
+
+### Fixes
+
+- A workspace whose ceiling is `public` could not start a conversation: when no label was given, a new conversation
+  (and compare, and `/v1` without `X-Data-Label`) was always `internal`, which is above that ceiling, so every message
+  was refused with "Label above this profile ... Pick a profile cleared for this label", which no profile could fix.
+  The default is now `internal`, or the workspace's ceiling when that is lower. When the workspace ceiling is what
+  refuses a message, the problem carries `ceiling: workspace` and the console says so. Test in `chat.test.ts` (fails
+  on the old code with the same 403).
+
 ## 1.3.2
 
 Follow-ups from reviewing 1.3.1 and its CI run.
