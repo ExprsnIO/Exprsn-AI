@@ -9,6 +9,21 @@
   unknown dialect is reported as a schema problem.
 - `OLLAMA_LOAD_TIMEOUT_MS` (default 5 minutes, as before) sets how long chat and embedding requests wait for Ollama's
   first response, which includes a cold model load. Raise it for large models on slow storage.
+## 1.3.2
+
+Follow-ups from reviewing 1.3.1 and its CI run.
+
+### Fixes
+
+- Shared rate limits: 1.3.1 made a hit wait up to 250 ms for Redis's first connection, but only "until Redis has
+  answered once", so with Redis unreachable from the start every API request would have waited 250 ms for as long as
+  it stayed down. The wait now applies only in the first five seconds after start; after that a hit falls back to
+  memory at once, as during any outage. Test: `ratelimit-connect.test.ts` (fails without the fix: five hits took
+  1.25 s).
+- Console suite: the dialog and drawer reflow check (B-1507) gave up on a screen whose controls had not rendered yet
+  and then reported it as "no dialog opened" (Platform, on a loaded CI runner). It now waits up to five seconds for a
+  screen's controls before concluding it has none.
+
 ## 1.3.1
 
 CI on `main` had been red since the pre-1.0 review fixes: the integration and load-test jobs failed on every run. The
