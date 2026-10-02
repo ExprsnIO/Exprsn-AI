@@ -100,10 +100,34 @@ export class RedisCounterStore implements CounterStore {
   ) {
     this.redis = typeof redis === 'string' ? new Redis(redis, { lazyConnect: false, maxRetriesPerRequest: 1, enableOfflineQueue: false }) : redis;
     this.redis.on('error', () => undefined);
+    this.redis.on('ready', () => void (this.everReady = true));
+    if (this.redis.status === 'ready') this.everReady = true;
     this.redis.defineCommand('hitCounter', { numberOfKeys: 1, lua: HIT_SCRIPT });
   }
 
+  /** Whether Redis has answered once. Until then a hit waits briefly for the first connection (see firstConnect). */
+  private everReady = false;
+
+  /**
+   * The offline queue is off so that an outage falls back to memory at once instead of queueing hits. That also
+   * refused every hit sent before the first connection was ready, so each instance counted its first requests (and
+   * a new store all of them) in memory. Before Redis has answered once, a hit waits up to `ms` for it.
+   */
+  private firstConnect(ms = 250): Promise<void> {
+    if (this.everReady || this.redis.status === 'ready' || this.redis.status === 'end') return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.redis.off('ready', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.redis.once('ready', done);
+    });
+  }
+
   async hit(key: string, windowMs: number, cost = 1): Promise<CounterState> {
+    await this.firstConnect();
     try {
       const [count, ttl] = await (this.redis as unknown as ScriptRedis).hitCounter(this.prefix + key, Math.max(1, Math.round(windowMs)), cost);
       this.recovered();
