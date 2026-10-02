@@ -33,6 +33,11 @@ from prototype data to live only when every control on it is backed by the serve
 | 21 | AI: held `/v1` requests and compare prompts, the Responses API, evaluations, thinking at the full output check, membership changes ending watches, scheduled agents (1.3.0) | Compare, Flags, Profiles, Runs | **Done** |
 | 22 | Operations: tracing, dashboards and alerts, safe upgrades, key escrow, zones applied in-cluster, NTP quorum, rate-limit health (1.3.0) | Platform, Zones | **Done** |
 | 23 | Knowledge, integrations and accessibility: S3 and web-crawl sources, PostgreSQL row security, webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow (1.3.0) | Knowledge, Usage and audit; accessibility in Profiles, Workflows and the header | **Done** |
+| 24 | Trust foundations: CA issuance and OCSP, tenant secrets, the event catalogue and plugin manifests, core (1.4.0) | — (server only) | Planned |
+| 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | Planned |
+| 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | Planned |
+| 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | Planned |
+| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -45,7 +50,9 @@ suite against PostgreSQL, MySQL, OpenLDAP and Redis; 57 Playwright tests across 
 in-page accessibility checker and the reflow checks for screens, dialogs and drawers; a Helm chart with an optional
 signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a streaming load test. The version is
 `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
-[1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md).
+[1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
+planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
+identity work.
 
 ---
 
