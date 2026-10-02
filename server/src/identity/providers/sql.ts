@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { connect as netConnect, isIP, Socket } from 'node:net';
+import { isIP, Socket, type TcpSocketConnectOpts } from 'node:net';
 import path from 'node:path';
 import knexFactory, { type Knex } from 'knex';
 import { checkHost, parseAllowList, type AllowList } from '../../mcp/hosts.js';
@@ -70,45 +70,51 @@ export class SqlProvider implements IdentityProvider {
   }
 
   /**
-   * The driver settings for one new pool connection. The host is resolved and checked for every connection, and the
-   * driver dials exactly the checked address through its `stream` option, so a name that re-resolves somewhere else
-   * after the check (DNS rebinding) is never dialled. TLS still verifies the configured name.
+   * The driver settings for the pool. The host is checked once here (so a refused host fails "Test a login" with its
+   * own step), and again for every new connection inside the stream the driver asks for: that stream dials exactly the
+   * address its own check returned, so a name that re-resolves somewhere else after a check (DNS rebinding) is never
+   * dialled (B-809). TLS still verifies the configured name. Knex's `expirationChecker` is not used for this: with it
+   * the pool re-resolved the settings on every acquire and never handed out a connection.
    */
   private async settings(conn: string, steps?: Step[]): Promise<Record<string, unknown>> {
-    const target = await timed(steps, 'Check the database host', () => this.checkTarget(conn));
-    const t = target!;
-    const address = t.addresses[0]!;
-    // Refresh the settings (and so re-check the host) for every new connection.
-    const expirationChecker = () => true;
+    const t = (await timed(steps, 'Check the database host', () => this.checkTarget(conn)))!;
+    const dialChecked = (sock: Socket, port: number): Socket => {
+      this.checkTarget(conn).then(
+        (again) => void (Socket.prototype.connect as (this: Socket, o: TcpSocketConnectOpts) => Socket).call(sock, { port, host: again!.addresses[0]!, family: isIP(again!.addresses[0]!) }),
+        (err: Error) => sock.destroy(err)
+      );
+      return sock;
+    };
     if (this.cfg.dialect === 'pg') {
+      // node-postgres calls connect(port, host) with the configured name; the checked address is dialled instead.
       const stream = () => {
         const sock = new Socket();
-        const dial = sock.connect.bind(sock) as (port: number, host: string) => Socket;
-        // node-postgres calls connect(port, host) with the configured name; dial the checked address instead.
-        (sock as unknown as { connect: (port: number) => Socket }).connect = (port: number) => dial(port, address);
+        (sock as unknown as { connect: (port: number) => Socket }).connect = (port: number) => dialChecked(sock, port);
         return sock;
       };
-      return { connectionString: conn, statement_timeout: this.cfg.timeoutMs, stream, expirationChecker };
+      return { connectionString: conn, statement_timeout: this.cfg.timeoutMs, stream };
     }
-    // mysql2 takes a connected stream; its TLS upgrade verifies the configured host name.
-    const stream = () => netConnect({ host: address, port: t.port, family: isIP(address) });
-    return { uri: conn, connectTimeout: this.cfg.timeoutMs, stream, expirationChecker };
+    // mysql2 takes the stream as given and waits for it to connect; its TLS upgrade verifies the configured host name.
+    const stream = () => dialChecked(new Socket(), t.port);
+    return { uri: conn, connectTimeout: this.cfg.timeoutMs, stream };
   }
 
   private async db(steps?: Step[]): Promise<Knex> {
     if (this.knex) return this.knex;
     const conn = resolveSecret(this.cfg.connection);
+    // The first check runs now, so a refused host fails the test with its own step before any pool exists; every
+    // connection after that is checked again inside its stream (see settings).
+    let network: Record<string, unknown> | null = null;
     if (this.cfg.dialect === 'sqlite') await timed(steps, 'Check the database file', () => this.checkTarget(conn));
-    // The first check runs now, so a refused host fails the test with its own step before any pool exists.
-    else await this.settings(conn, steps);
+    else network = await this.settings(conn, steps);
     if (this.knex) return this.knex;
     const pool = { min: 0, max: 4, acquireTimeoutMillis: this.cfg.timeoutMs };
     switch (this.cfg.dialect) {
       case 'pg':
-        this.knex = knexFactory({ client: 'pg', connection: (() => this.settings(conn)) as unknown as Knex.StaticConnectionConfig, pool });
+        this.knex = knexFactory({ client: 'pg', connection: network as Knex.StaticConnectionConfig, pool });
         break;
       case 'mysql':
-        this.knex = knexFactory({ client: 'mysql2', connection: (() => this.settings(conn)) as unknown as Knex.StaticConnectionConfig, pool });
+        this.knex = knexFactory({ client: 'mysql2', connection: network as Knex.StaticConnectionConfig, pool });
         break;
       case 'sqlite':
         this.knex = knexFactory({ client: 'better-sqlite3', connection: { filename: conn, options: { readonly: true, fileMustExist: true } } as Knex.Sqlite3ConnectionConfig, useNullAsDefault: true, pool: { min: 1, max: 1 } });

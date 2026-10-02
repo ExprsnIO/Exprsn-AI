@@ -15,6 +15,7 @@ import { createLogger, Metrics } from '../../src/observability/index.js';
 import { createServices, type Services } from '../../src/services.js';
 import { bootstrap } from '../../src/bootstrap.js';
 import { LdapProvider } from '../../src/identity/providers/ldap.js';
+import { configureSecretPolicy, secretPolicy } from '../../src/identity/secrets.js';
 import { SqlProvider } from '../../src/identity/providers/sql.js';
 import { ldapConfigSchema, sqlConfigSchema } from '../../src/identity/providers/types.js';
 import { provision } from '../../src/identity/provisioning.js';
@@ -92,6 +93,10 @@ for (const d of dialects) {
 }
 
 describe.skipIf(!process.env.TEST_LDAP_URL)('OpenLDAP', () => {
+  // These tests build the provider directly, without services, so they set the secret-reference policy themselves:
+  // only the bind password variable may be referenced (the server refuses every reference until a policy exists).
+  beforeAll(() => configureSecretPolicy(secretPolicy({ envAllow: 'TEST_LDAP_BIND_PW', dirs: '', serverEnvNames: new Set(), serverSecretFiles: [] })));
+
   // Matches deploy/docker/ldap/seed.ldif
   const cfg = () =>
     ldapConfigSchema.parse({
