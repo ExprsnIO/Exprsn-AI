@@ -90,7 +90,13 @@ async function candidates(page: Page): Promise<string[]> {
 
 /** The controls' indexes are stamped on the current render; after a reset the screen renders again and re-stamps. */
 async function clickCandidate(page: Page, i: number): Promise<boolean> {
-  const list = await candidates(page);
+  let list = await candidates(page);
+  // A screen still rendering its data has no controls yet (seen on a loaded CI runner on Platform): wait for them
+  // rather than conclude it has none.
+  for (let tries = 0; i === 0 && !list.length && tries < 20; tries++) {
+    await page.waitForTimeout(250);
+    list = await candidates(page);
+  }
   const sel = list[i];
   if (!sel) return false;
   await page.locator(sel).first().click({ timeout: 3000 }).catch(() => undefined);

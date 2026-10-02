@@ -107,14 +107,17 @@ export class RedisCounterStore implements CounterStore {
 
   /** Whether Redis has answered once. Until then a hit waits briefly for the first connection (see firstConnect). */
   private everReady = false;
+  /** Hits wait for the first connection only this soon after start, so a Redis that is down from the start costs nothing later. */
+  private readonly waitUntil = Date.now() + 5_000;
 
   /**
    * The offline queue is off so that an outage falls back to memory at once instead of queueing hits. That also
    * refused every hit sent before the first connection was ready, so each instance counted its first requests (and
-   * a new store all of them) in memory. Before Redis has answered once, a hit waits up to `ms` for it.
+   * a new store all of them) in memory. In the first seconds after start, before Redis has answered once, a hit
+   * waits up to `ms` for it; after that, or once Redis has answered, hits never wait.
    */
   private firstConnect(ms = 250): Promise<void> {
-    if (this.everReady || this.redis.status === 'ready' || this.redis.status === 'end') return Promise.resolve();
+    if (this.everReady || Date.now() > this.waitUntil || this.redis.status === 'ready' || this.redis.status === 'end') return Promise.resolve();
     return new Promise((resolve) => {
       const done = () => {
         clearTimeout(timer);
