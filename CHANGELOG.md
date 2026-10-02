@@ -9,6 +9,27 @@
   unknown dialect is reported as a schema problem.
 - `OLLAMA_LOAD_TIMEOUT_MS` (default 5 minutes, as before) sets how long chat and embedding requests wait for Ollama's
   first response, which includes a cold model load. Raise it for large models on slow storage.
+## 1.3.1
+
+CI on `main` had been red since the pre-1.0 review fixes: the integration and load-test jobs failed on every run. The
+unit suite and the console suite were green throughout, which is why it went unnoticed.
+
+### Fixes
+
+- SQL user stores (PostgreSQL, MySQL) could not connect at all since 1.2.0. The per-connection host check of B-809 used
+  Knex's `expirationChecker`, which made the pool re-resolve its settings on every acquire and never hand out a
+  connection. The check now runs inside the stream the driver asks for, once for each new connection, and dials the
+  address that check returned, so the DNS-rebinding protection of B-809 is unchanged.
+- Shared rate limits (B-406) never shared anything for a fresh connection: the Redis client refuses commands until it
+  is connected (its offline queue is off so that an outage falls back at once), so each instance counted its first
+  requests, and a new counter store all of them, in memory. Until Redis has answered once, a hit now waits up to
+  250 ms for it; outages still fall back to memory at once.
+- The OpenLDAP integration tests set their own secret-reference policy (`SECRET_REF_ENV` from the pre-1.0 review
+  refuses every reference until one exists).
+- The CI load test's fake answers now end a sentence every 12 words. Since 1.1.0 output is screened a sentence at a
+  time, and fake answers with no sentence end were only released at the 240-character fallback, so the job measured
+  the fake text rather than the platform (p95 time to first token 465 ms without sentence ends, 120 ms with, measured
+  in-process with the CI settings; the 500 ms budget is unchanged).
 
 ## 1.3.0
 

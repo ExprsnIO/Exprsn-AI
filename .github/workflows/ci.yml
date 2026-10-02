@@ -329,12 +329,14 @@ jobs:
         working-directory: server
         run: npx eslint loadtest
       # 50 users on 64 fake slots; the thresholds are looser than the 1.0 targets in docs/loadtest.md because shared
-      # runners vary. The summary is kept as an artifact for comparison between runs.
+      # runners vary. The summary is kept as an artifact for comparison between runs. The fake answers end a sentence
+      # every 12 words: since 1.1.0 output is screened a sentence at a time, and an answer with no sentence ends is only
+      # released at the 240-character fallback, which measured the fake text's shape rather than the platform.
       - name: Run
         working-directory: server
         shell: bash # -eo pipefail: the load test's exit code survives the tee
         run: |
-          npx tsx loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instances 4 \
+          npx tsx loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instances 4 --sentence-words 12 \
             --max-error-rate 0 --max-p95-ttft-ms 500 --max-p99-ttft-ms 1000 --json | tee loadtest-summary.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
