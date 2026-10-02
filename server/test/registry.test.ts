@@ -23,6 +23,18 @@ const skillBody = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('registry checks', () => {
+  it('accepts tool schemas in the dialect they declare (MCP servers send 2020-12) and reports unknown ones', () => {
+    // As Context7's tools declare it: draft 2020-12 with prefixItems, which draft-07 does not know.
+    const s2020 = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: { libraryName: { type: 'string' }, pair: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }] } }, required: ['libraryName'] };
+    expect(schemaProblems(s2020, 'input')).toEqual([]);
+    expect(validateAgainst(s2020, { libraryName: 'react', pair: ['a', 1] })).toEqual([]);
+    expect(validateAgainst(s2020, { libraryName: 'react', pair: [1, 'a'] }).length).toBeGreaterThan(0);
+    expect(schemaProblems({ $schema: 'https://json-schema.org/draft/2019-09/schema', type: 'object', properties: {} }, 'input')).toEqual([]);
+    expect(schemaProblems({ $schema: 'http://json-schema.org/draft-07/schema#', type: 'object', properties: {} }, 'input')).toEqual([]);
+    expect(schemaProblems({ $schema: 'https://example.com/my-dialect', type: 'object' }, 'input')[0]).toMatch(/Unsupported JSON Schema dialect/);
+    expect(validateAgainst({ $schema: 'https://example.com/my-dialect', type: 'object' }, {})[0]).toMatch(/does not compile/);
+  });
+
   it('validates schemas, descriptions, side effects and scans for secrets', () => {
     expect(schemaProblems({ type: 'object', properties: { q: { type: 'string' } }, required: ['q'] }, 'input')).toEqual([]);
     expect(schemaProblems({ type: 'string' }, 'input')[0]).toMatch(/must describe an object/);
