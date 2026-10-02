@@ -90,6 +90,8 @@ const base = z.object({
     OLLAMA_MAX_INFLIGHT: z.coerce.number().int().min(1).max(256).default(4),
     OLLAMA_MAX_LOADS_PER_10_MIN: z.coerce.number().int().min(1).max(1000).default(6),
     OLLAMA_QUEUE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(3_600_000).default(120_000),
+    /** How long chat and embedding requests wait for Ollama's first response, which includes a cold model load. */
+    OLLAMA_LOAD_TIMEOUT_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(300_000),
 
     /** Chat. */
     ATTACHMENT_MAX_BYTES: z.coerce.number().int().min(1024).max(512 * 1024 * 1024).default(10 * 1024 * 1024),

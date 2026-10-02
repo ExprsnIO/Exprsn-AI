@@ -1,4 +1,6 @@
 import { Ajv, type ValidateFunction } from 'ajv';
+import { Ajv2019 } from 'ajv/dist/2019.js';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { canonicalJson, sha256 } from '../crypto/index.js';
 
 /**
@@ -6,16 +8,31 @@ import { canonicalJson, sha256 } from '../crypto/index.js';
  * result validation at call time, and the hash approvals record. One Ajv instance; compiled validators are cached by
  * the schema's canonical form, so a changed schema is compiled afresh.
  */
-const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
+const opts = { strict: false, allErrors: true, validateFormats: false } as const;
+const draft07 = new Ajv(opts);
+const draft2019 = new Ajv2019(opts);
+const draft2020 = new Ajv2020(opts);
 const cache = new Map<string, ValidateFunction>();
 
 export type JsonSchema = Record<string, unknown>;
+
+/**
+ * The engine for the dialect a schema declares with `$schema` (MCP servers commonly send draft 2020-12); draft-07 when
+ * it declares none. An unknown dialect is reported as a schema problem rather than thrown.
+ */
+function engineFor(schema: JsonSchema): Ajv | Ajv2019 | Ajv2020 {
+  const d = typeof schema.$schema === 'string' ? schema.$schema : '';
+  if (!d || /draft-0[4-7]\/schema#?$/.test(d)) return draft07;
+  if (d.includes('2019-09')) return draft2019;
+  if (d.includes('2020-12')) return draft2020;
+  throw new Error(`Unsupported JSON Schema dialect ${d}; use draft-07, 2019-09 or 2020-12.`);
+}
 
 function compile(schema: JsonSchema): ValidateFunction {
   const key = canonicalJson(schema);
   let v = cache.get(key);
   if (!v) {
-    v = ajv.compile(schema);
+    v = engineFor(schema).compile(schema);
     if (cache.size > 500) cache.clear();
     cache.set(key, v);
   }
@@ -36,7 +53,13 @@ export function schemaProblems(schema: unknown, root: 'input' | 'output'): strin
       for (const r of s.required as string[]) if (!props.includes(r)) out.push(`"${r}" is required but not described in the ${root} schema's properties.`);
     }
   }
-  if (!ajv.validateSchema(s)) out.push(...(ajv.errors ?? []).map((e) => `${root} schema${e.instancePath || ''}: ${e.message ?? 'invalid'}`));
+  let engine: Ajv | Ajv2019 | Ajv2020;
+  try {
+    engine = engineFor(s);
+  } catch (err) {
+    return [...out, `The ${root} schema: ${(err as Error).message}`];
+  }
+  if (!engine.validateSchema(s)) out.push(...(engine.errors ?? []).map((e) => `${root} schema${e.instancePath || ''}: ${e.message ?? 'invalid'}`));
   else {
     try {
       compile(s);

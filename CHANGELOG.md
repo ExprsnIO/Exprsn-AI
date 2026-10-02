@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Registry tool schemas are checked and validated in the JSON Schema dialect they declare with `$schema`: draft-07
+  (the default), 2019-09 or 2020-12. MCP servers such as Context7 send 2020-12 schemas, which failed before. An
+  unknown dialect is reported as a schema problem.
+- `OLLAMA_LOAD_TIMEOUT_MS` (default 5 minutes, as before) sets how long chat and embedding requests wait for Ollama's
+  first response, which includes a cold model load. Raise it for large models on slow storage.
+
 ## 1.3.0
 
 Sprints 20 to 23: the [1.3.0 backlog](Backlog-1.3.0.md), which keeps key material out of the application, adds the

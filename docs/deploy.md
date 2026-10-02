@@ -36,6 +36,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `OLLAMA_POLL_MS`, `OLLAMA_TIMEOUT_MS` | `5000`, `4000` | Instance polling (`/api/version`, `/api/ps`, `/api/tags`) |
 | `OLLAMA_MAX_INFLIGHT`, `OLLAMA_QUEUE_TIMEOUT_MS` | `4`, `120000` | Default parallel requests per instance (instances may set their own) and how long a request waits for a slot |
 | `OLLAMA_MAX_LOADS_PER_10_MIN` | `6` | Anti-thrash limit per instance |
+| `OLLAMA_LOAD_TIMEOUT_MS` | `300000` | How long chat and embeddings wait for Ollama's first response, including a cold model load; raise it for large models on slow storage |
 | `ATTACHMENT_MAX_BYTES` | `10485760` | Largest chat attachment |
 | `CLAMD_HOST`, `CLAMD_PORT` | —, `3310` | ClamAV daemon for attachment scanning; without it attachments get the type check and classifier only |
 | `MCP_ALLOWED_HOSTS` | — | MCP servers must resolve to internal addresses; this comma-separated list of hostnames (`*.example.com`) and CIDR networks allows others |

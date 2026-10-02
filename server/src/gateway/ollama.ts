@@ -115,7 +115,9 @@ export class OllamaClient {
     tls: InstanceTls | null,
     private readonly timeoutMs: number,
     /** B-901: the addresses this client may dial; checked again in every connection's DNS lookup. */
-    policy: ServicePolicy = servicePolicy()
+    policy: ServicePolicy = servicePolicy(),
+    /** First-response limit for chat and embeddings, which covers a cold model load. */
+    private readonly loadTimeoutMs = 5 * 60_000
   ) {
     this.base = url.replace(/\/+$/, '');
     const literal = literalProblem(this.base, policy);
@@ -227,7 +229,7 @@ export class OllamaClient {
    * Response headers must arrive within `headerTimeoutMs` (a cold load can take minutes); the stream itself has no
    * time limit.
    */
-  async *chat(request: ChatRequest, signal: AbortSignal, headerTimeoutMs = 5 * 60_000): AsyncGenerator<ChatChunk> {
+  async *chat(request: ChatRequest, signal: AbortSignal, headerTimeoutMs = this.loadTimeoutMs): AsyncGenerator<ChatChunk> {
     const headers = new AbortController();
     const timer = setTimeout(() => headers.abort(new Error('timed out waiting for the instance')), headerTimeoutMs);
     // B-1401: the whole stream is one span (the call itself, up to the response headers, is a child of it).
@@ -255,7 +257,7 @@ export class OllamaClient {
 
   /** Embeddings for a batch of inputs (`/api/embed`), truncated to the model's context. */
   async embed(model: string, input: string[], signal?: AbortSignal): Promise<EmbedResult> {
-    return (await (await this.req('POST', '/api/embed', { model, input, truncate: true }, { timeoutMs: 5 * 60_000, ...(signal ? { signal } : {}) })).json()) as EmbedResult;
+    return (await (await this.req('POST', '/api/embed', { model, input, truncate: true }, { timeoutMs: this.loadTimeoutMs, ...(signal ? { signal } : {}) })).json()) as EmbedResult;
   }
 
   async close(): Promise<void> {
