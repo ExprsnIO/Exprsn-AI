@@ -2129,3 +2129,77 @@ run every `ATPROTO_LABEL_PULL_MINUTES` per active labeler.
 | `WS /xrpc/com.atproto.label.subscribeLabels[?cursor]`, `WS /atproto/:key/xrpc/com.atproto.label.subscribeLabels` | An AT-Protocol event stream over a plain WebSocket: binary frames, each a DAG-CBOR header and body. `{op: 1, t: "#labels"}` `{seq, labels: [label]}`, one label per message in seq order; `{op: -1}` `{error: FutureCursor \| ConsumerTooSlow \| InvalidRequest \| InternalError, message}` then close. With a cursor, every label after it and then live; without, live only. New labels reach subscribers on every instance over the bus. At most `ATPROTO_SUBSCRIBERS_MAX` streams per instance (`503`), `429` past the rate limit |
 
 Audit actions are in the event catalogue's `atproto.*` group.
+
+## Sprint 25a (1.4.0): ACME server, certificate export, renewal and the pki CLI (B-1605 to B-1607)
+
+Each tenant can open an RFC 8555 ACME directory at `/pki/acme/<tenant slug>/directory`. Its orders are issued by the
+tenant's active intermediate under one server profile: the profile's allowed names are the upper bound of what may be
+ordered, and each name must also be proven by http-01 or dns-01 before it is issued (domain-control validation;
+`docs/pki.md` explains the mapping). Certificates issued here also have export, renewal and expiry notices.
+
+### Admin (`pki:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/pki/acme` | `{enabled, profileId, eabRequired, challenges: [http-01, dns-01], directoryUrl, updatedAt}` for the session's tenant |
+| `PUT /api/pki/acme` `{enabled?, profileId?, eabRequired?, challenges?}` | B-1605. Opens or closes the tenant's directory, names the server profile its orders are issued under (`422` for a client or code-signing profile, or when opening without one), requires external account binding, and chooses the challenge types offered (wildcards need `dns-01`). Audited `pki.acme.settings.updated` |
+| `GET /api/pki/acme/eab-keys` | `{keys: [{id, name, state: active\|bound\|revoked, accountId, createdAt, boundAt}]}` (never the MAC key) |
+| `POST /api/pki/acme/eab-keys` `{name}` | An external account binding key (RFC 8555 7.3.4). `201 {id, kid, hmacKey, …}`: `hmacKey` (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited `pki.acme.eab.created` |
+| `POST /api/pki/acme/eab-keys/:id/revoke` | The key can no longer bind an account (an account it bound stays). Audited `pki.acme.eab.revoked` |
+| `GET /api/pki/acme/accounts` | `{accounts: [{id, thumbprint, keyType: EC\|RSA\|OKP, contact, status: valid\|deactivated\|revoked, eabKeyId, createdAt, updatedAt}]}` |
+| `POST /api/pki/acme/accounts/:id/revoke` | The account is `revoked` (RFC 8555: by the server); its pending and ready orders become invalid. Audited `pki.acme.account.revoked` |
+| `GET /api/pki/acme/orders[?accountId&status&limit]` | `{orders: [{id, accountId, status, identifiers, profileId, expiresAt, error, certificateId, createdAt, updatedAt}]}` |
+| `POST /api/pki/issuers/:id/issue` `{profileId, generateKey: {keyType?: ec-p256\|ec-p384\|rsa-2048\|rsa-3072\|rsa-4096, password}, sans?, commonName?, days?}` | B-1606. Instead of a `csr`: the key is made here, put with the certificate and its chain into a PKCS#12 file under `password` (8 to 200 characters), returned once as `pkcs12` (base64) and never stored. Audited `pki.certificate.issued` with `keyGenerated: true` |
+| `GET /api/pki/certificates/:id/export?format=pem\|der\|chain` | B-1606. The certificate as PEM (`application/x-pem-file`), DER (`application/pkix-cert`), or with its chain up to the root (`application/pem-certificate-chain`), as an attachment |
+| `POST /api/pki/certificates/:id/pkcs12` `{password}` | The certificate and its chain as PKCS#12 (`application/x-pkcs12`): PBES2 with PBKDF2-HMAC-SHA256 (100,000 iterations) and AES-256-CBC, HMAC-SHA256 integrity. No private key (the CA never had it) |
+| `POST /api/pki/certificates/:id/renew` `{csr?, days?, revokeOld?}` | B-1606. A new certificate for the same names under the same profile, from the tenant's active intermediate, for the CSR's key or (without one) the old certificate's key; `renewedFrom` names the old one, which is revoked as `superseded` with `revokeOld`. `409` for a revoked certificate. Audited `pki.certificate.renewed`. `201` |
+
+Certificates now also carry `renewedFrom` and `acmeAccountId`. Audit actions: `pki.acme.settings.updated`,
+`pki.acme.eab.created`, `pki.acme.eab.revoked`, `pki.acme.eab.refused`, `pki.acme.account.created`,
+`pki.acme.account.updated`, `pki.acme.account.deactivated`, `pki.acme.account.key-changed`, `pki.acme.account.revoked`,
+`pki.acme.order.created`, `pki.acme.order.refused`, `pki.acme.authz.deactivated`, `pki.acme.challenge.valid`,
+`pki.acme.challenge.invalid`, `pki.acme.order.finalized`, `pki.acme.certificate.revoked`, `pki.certificate.renewed`,
+`pki.certificate.expiry.notified` (ACME actions are recorded as actor `{service: acme, name: account <id>}`). Jobs:
+`pki.acme.validate` (one per challenge response) and `pki.expiry` (every `PKI_EXPIRY_SWEEP_MINUTES`: expiry notices
+and ACME housekeeping).
+
+Expiry notices (B-1606): each valid certificate `PKI_EXPIRY_NOTICE_DAYS` (30 and 7) days from expiry notifies its owner
+once per threshold (notification kind `pki.certificate.expiring`, also by email when SMTP is set): the user who
+requested it, or for certificates without one (ACME, CLI) the tenant's holders of `pki:manage`. A certificate that has
+a valid renewal is skipped.
+
+### ACME (public; no session; `PKI_PUBLIC_RATE_PER_MINUTE` per address, and `PKI_ACME_RATE_PER_MINUTE` for writes)
+
+All under `/pki/acme/<tenant slug>/`. A closed or unknown directory answers `404` with an ACME problem. Every answer
+carries a fresh `Replay-Nonce`, `Link: <directory>;rel="index"` and `Cache-Control: no-store`; errors are
+`application/problem+json` with `type: urn:ietf:params:acme:error:<type>`. POST bodies are flattened JWS
+(`application/jose+json`, at most 64 KiB, `415` otherwise) signed with ES256, ES384, RS256 (2048 to 8192 bits) or
+EdDSA (Ed25519); the protected header's `url` must be the URL posted to (`unauthorized`), the nonce must be fresh and
+unused on any instance (`badNonce`, nonces last `PKI_ACME_NONCE_MINUTES`), and `kid` must be an account of this
+directory (`accountDoesNotExist`). Every object is looked up by tenant and owning account: another account's (or
+tenant's) order, authorization, challenge or certificate is `404`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /pki/acme/:tenant/directory` | `{newNonce, newAccount, newOrder, revokeCert, keyChange, meta: {externalAccountRequired, website}}` |
+| `HEAD /pki/acme/:tenant/new-nonce`, `GET /pki/acme/:tenant/new-nonce` | `200` (HEAD) or `204` with a `Replay-Nonce` |
+| `POST /pki/acme/:tenant/new-account` (jwk) | `{contact?: [mailto:…] (at most 5), termsOfServiceAgreed?, onlyReturnExisting?, externalAccountBinding?}`. `201` with `Location` (the `kid`); the key's existing account is `200`. `externalAccountRequired` when the tenant requires a binding; the binding is an HS256 JWS over the account JWK with this directory's newAccount URL and a key from `POST /api/pki/acme/eab-keys` (`unauthorized` for a bad MAC, audited, or a used or revoked key) |
+| `POST /pki/acme/:tenant/acct/:id` | POST-as-GET: `{status, contact, orders, createdAt}`; `{contact}` updates it; `{status: deactivated}` ends it (its open orders become invalid) |
+| `POST /pki/acme/:tenant/acct/:id/orders` | `{orders: [order URLs]}`: the account's unexpired orders that are not invalid |
+| `POST /pki/acme/:tenant/key-change` | RFC 8555 7.3.5: the payload is a JWS signed by the new key (jwk, no nonce, the same url) with `{account, oldKey}`. `409` with `Location` when another account uses the new key |
+| `POST /pki/acme/:tenant/new-order` | `{identifiers: [{type: dns, value}]}` (1 to 100; `notBefore` and `notAfter` are refused, the profile sets the lifetime). Each name must be allowed by the directory's profile (`rejectedIdentifier` with a subproblem per name; IP and other types `unsupportedIdentifier`); a wildcard needs `allowWildcard` and dns-01. At most 300 open orders per account (`rateLimited`). `201` with `Location`: `{status: pending, expires, identifiers, authorizations, finalize}`; orders last `PKI_ACME_ORDER_HOURS` |
+| `POST /pki/acme/:tenant/order/:id` | POST-as-GET: the order; `certificate` once valid, `error` when invalid |
+| `POST /pki/acme/:tenant/authz/:id` | POST-as-GET: `{identifier, status, expires, challenges, wildcard?}`; `{status: deactivated}` deactivates it (and invalidates its order) |
+| `POST /pki/acme/:tenant/chall/:id` | `{}` starts validation (a `pki.acme.validate` job) and answers `processing` with `Link: <authz>;rel="up"`; POST-as-GET reads it. http-01 fetches `http://<name>:PKI_ACME_HTTP_PORT/.well-known/acme-challenge/<token>` (up to three redirects, to http on that port or https on 443; 8 KiB; trailing whitespace ignored) through the service address checks; dns-01 looks up TXT at `_acme-challenge.<name>` (PKI_ACME_DNS_SERVERS or the system resolver) for base64url(SHA-256(key authorization)). A failure (`incorrectResponse`, `connection`, `dns`, `unauthorized`) makes the challenge, the authorization and the order invalid |
+| `POST /pki/acme/:tenant/order/:id/finalize` | `{csr}` (base64url DER). The order must be `ready` (`orderNotReady`); the CSR must name exactly the order's names (subjectAltName and CN) with a key type the profile accepts, not the account key (`badCSR`). Issued at once by the tenant's active intermediate; the order is `valid` with `certificate`, or `invalid` with the reason |
+| `POST /pki/acme/:tenant/cert/:id` | POST-as-GET by the ordering account: `application/pem-certificate-chain`, the certificate and the intermediate (the root comes from trust stores) |
+| `POST /pki/acme/:tenant/revoke-cert` | `{certificate (base64url DER), reason?: 0\|1\|3\|4\|5\|9}` signed by the ordering account, by an account holding valid authorizations for all its names, or by the certificate's key (jwk). `badRevocationReason`, `alreadyRevoked`; `404` for a certificate this directory did not issue |
+
+### CLI
+
+`exprsn-ai pki issuers | list | issue | revoke | crl` for `--tenant <slug>` (default `DEFAULT_TENANT`), through the same
+service as the routes and audited with actor `service: cli`: `issue --csr <file> --profile <name|id> [--san
+dns:<name>]… [--days] [--out <file>]` (from the tenant's active intermediate), `revoke <id | serial> [--reason]`
+(queues the next CRL), `list [--state] [--issuer] [--limit] [--json]`, `crl [--issuer <id>] [--out <file>] [--der]`
+(signs the next CRL now). Exit codes: 0 done, 1 refused or failed, 3 conflict (already revoked, no active
+intermediate), 64 usage. See `docs/pki.md`.

@@ -939,6 +939,144 @@
             "minimum": 0
           }
         }
+      },
+      "PkiAcmeSettings": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "profileId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eabRequired": {
+            "type": "boolean"
+          },
+          "challenges": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "http-01",
+                "dns-01"
+              ]
+            }
+          },
+          "directoryUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "PkiAcmeEabKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "bound",
+              "revoked"
+            ]
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "boundAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "PkiAcmeAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "thumbprint": {
+            "type": "string"
+          },
+          "keyType": {
+            "enum": [
+              "EC",
+              "RSA",
+              "OKP"
+            ]
+          },
+          "contact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "enum": [
+              "valid",
+              "deactivated",
+              "revoked"
+            ]
+          },
+          "eabKeyId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "AcmeJws": {
+        "type": "object",
+        "properties": {
+          "protected": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "protected",
+          "payload",
+          "signature"
+        ],
+        "description": "A flattened JWS (RFC 7515) signed with ES256, ES384, RS256 or EdDSA"
       }
     },
     "responses": {
@@ -11048,6 +11186,426 @@
         }
       }
     },
+    "/api/pki/acme": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{enabled, profileId, eabRequired, challenges: [http-01, dns-01], directoryUrl, updatedAt} for the session's tenant",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "put": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "B-1605. Opens or closes the tenant's directory, names the server profile its orders are issued under (422 for a client or code-signing profile, or when opening without one), requires external account binding, and chooses the challenge types",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "profileId": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A server profile of the tenant"
+                  },
+                  "eabRequired": {
+                    "type": "boolean"
+                  },
+                  "challenges": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "items": {
+                      "enum": [
+                        "http-01",
+                        "dns-01"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/accounts": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{accounts: [{id, thumbprint, keyType: EC\\|RSA\\|OKP, contact, status: valid\\|deactivated\\|revoked, eabKeyId, createdAt, updatedAt}]}",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PkiAcmeAccount"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
+    "/api/pki/acme/accounts/{id}/revoke": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The account is revoked (RFC 8555: by the server); its pending and ready orders become invalid. Audited pki.acme.account.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The ACME account id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/eab-keys": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{keys: [{id, name, state: active\\|bound\\|revoked, accountId, createdAt, boundAt}]} (never the MAC key)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PkiAcmeEabKey"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, …}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
+        "responses": {
+          "201": {
+            "description": "Created; hmacKey is shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PkiAcmeEabKey"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kid": {
+                          "type": "string",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                        },
+                        "hmacKey": {
+                          "type": "string",
+                          "description": "base64url, 32 bytes"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/eab-keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The key can no longer bind an account (an account it bound stays). Audited pki.acme.eab.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeEabKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/orders": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The tenant's ACME orders, newest first: {orders: [{id, accountId, status, identifiers, profileId, expiresAt, error, certificateId, createdAt, updatedAt}]}",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "accountId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "ready",
+                              "processing",
+                              "valid",
+                              "invalid"
+                            ]
+                          },
+                          "identifiers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "profileId": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "type": [
+                              "object",
+                              "null"
+                            ]
+                          },
+                          "certificateId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          },
+                          "updatedAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "ready",
+                "processing",
+                "valid",
+                "invalid"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ]
+      }
+    },
     "/api/pki/certificates": {
       "get": {
         "tags": [
@@ -11080,6 +11638,206 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/pki/certificates/{id}/export": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "B-1606. The certificate as PEM (application/x-pem-file), DER (application/pkix-cert), or with its chain up to the root (application/pem-certificate-chain), as an attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The certificate id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pem",
+                "der",
+                "chain"
+              ],
+              "default": "pem"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The certificate",
+            "content": {
+              "application/x-pem-file": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/pkix-cert": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/pem-certificate-chain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/pki/certificates/{id}/pkcs12": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The certificate and its chain as PKCS#12 (application/x-pkcs12): PBES2 with PBKDF2-HMAC-SHA256 (100,000 iterations) and AES-256-CBC, HMAC-SHA256 integrity. No private key (the CA never had it)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The certificate id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PKCS#12",
+            "content": {
+              "application/x-pkcs12": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 200
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "password"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/certificates/{id}/renew": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "B-1606. A new certificate for the same names under the same profile, from the tenant's active intermediate, for the CSR's key or (without one) the old certificate's key; renewedFrom names the old one, which is revoked as superseded with rev",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The certificate to renew",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "renewedFrom": {
+                      "type": "string"
+                    },
+                    "certificatePem": {
+                      "type": "string"
+                    },
+                    "chainPem": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "clamped": {
+                      "type": "boolean"
+                    },
+                    "revokedOld": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csr": {
+                    "type": "string",
+                    "description": "PEM PKCS#10; without it the old certificate's key is kept"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1185
+                  },
+                  "revokeOld": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         }
       }
@@ -14131,6 +14889,223 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/pki/acme/{tenant}/directory": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{newNonce, newAccount, newOrder, revokeCert, keyChange, meta: {externalAccountRequired, website}}",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "newNonce": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "newAccount": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "newOrder": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "revokeCert": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "keyChange": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "meta": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "security": []
+      }
+    },
+    "/pki/acme/{tenant}/new-nonce": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "A fresh Replay-Nonce: 200 for HEAD, 204 for GET",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "A nonce in Replay-Nonce",
+            "headers": {
+              "Replay-Nonce": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      },
+      "head": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "A fresh Replay-Nonce: 200 for HEAD, 204 for GET",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A nonce in Replay-Nonce",
+            "headers": {
+              "Replay-Nonce": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/pki/acme/{tenant}/{rest}": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The RFC 8555 resources, each a JWS POST: new-account, acct/{id}, acct/{id}/orders, key-change, new-order, order/{id}, order/{id}/finalize, authz/{id}, chall/{id}, cert/{id}, revoke-cert (docs/api.md)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          },
+          {
+            "name": "rest",
+            "in": "path",
+            "required": true,
+            "description": "The resource path below the directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resource (JSON), or a certificate chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/pem-certificate-chain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created, with Location"
+          },
+          "default": {
+            "description": "An RFC 8555 problem document",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "subproblems": {
+                      "type": "array"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/jose+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcmeJws"
+              }
+            }
           }
         }
       }
