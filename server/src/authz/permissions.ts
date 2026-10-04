@@ -20,7 +20,9 @@ export const PERMISSIONS = [
   // Sprint 24 (B-17): the secrets vault. Path policies decide which secrets and keys each holder reaches.
   'secrets:read', 'secrets:write', 'secrets:admin',
   // Sprint 24: the certificate authority (issuers, profiles, issuance, revocation)
-  'pki:manage'
+  'pki:manage',
+  // 1.4.0 (Sprint 24c): plugins
+  'plugins:manage'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -48,7 +50,7 @@ const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review'], requiresMfa: true, grantableBy: ADMINS },

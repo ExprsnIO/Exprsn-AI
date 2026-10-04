@@ -6,13 +6,14 @@ import { hmac, randomToken, safeEqual } from '../crypto/index.js';
 import { contentDigest, signMessage } from '../crypto/httpsig.js';
 import { json } from '../db/knex.js';
 import { labelRank, type Label } from '../authz/labels.js';
-import { isUniqueViolation, type AuditEvent } from '../audit/chain.js';
+import { isUniqueViolation, rowToEvent, type AuditEvent } from '../audit/chain.js';
 import { conflict, forbidden, notFound } from '../http/problem.js';
 import { checkUrl, guardedAgent, HostRefused, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import { tenantHostProblem } from '../integrations/hosts.js';
 import { TOPICS, type IntegrationEvent } from '../platform/bus.js';
 import type { JobProgressEvent } from '../platform/jobs.js';
 import type { Services } from '../services.js';
+import { EVENT_GROUPS } from '../events/catalogue.js';
 
 /*
  * Outbound webhooks (B-302). A tenant subscribes an endpoint to event types: audit actions (every append to the
@@ -28,21 +29,8 @@ import type { Services } from '../services.js';
  * scheduled, and it is sent only by the instance holding the endpoint's lease in the same row.
  */
 
-export const WEBHOOK_EVENT_GROUPS: { pattern: string; description: string }[] = [
-  { pattern: '*', description: 'Every event below' },
-  { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
-  { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, escalated, reassigned, breached' },
-  { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
-  { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
-  { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
-  { pattern: 'user.*', description: 'Accounts created, synced and disabled (audit actions)' },
-  { pattern: 'auth.*', description: 'Sign-ins and second factors (audit actions)' },
-  { pattern: 'authz.*', description: 'Authorisation denials (audit actions)' },
-  { pattern: 'chat.*', description: 'Chat failures and shares (audit actions)' },
-  { pattern: 'conversation.*', description: 'Conversation shares, exports and deletions (audit actions)' },
-  { pattern: 'billing.*', description: 'Statements and price books (audit actions)' },
-  { pattern: 'webhook.*', description: 'Changes to webhooks themselves (audit actions)' }
-];
+/** The groups a webhook subscribes to; since 1.4.0 the event catalogue's groups (B-2001, `events/catalogue.ts`). */
+export const WEBHOOK_EVENT_GROUPS: { pattern: string; description: string }[] = EVENT_GROUPS;
 
 const PATTERN = /^(\*|[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*(\.\*)?)$/;
 export const isEventPattern = (p: string): boolean => PATTERN.test(p);
@@ -190,6 +178,32 @@ export const deliveryView = (d: DeliveryRow) => ({
   deliveredAt: d.delivered_at
 });
 
+/** The data of an audit-action event: the audit entry, as the catalogue's audit schema describes it (B-2001). */
+export const auditData = (e: AuditEvent): Record<string, unknown> => ({
+  seq: e.seq,
+  action: e.action,
+  kind: e.kind,
+  actor: { user: e.actor.user ?? null, username: e.actor.username ?? null, service: e.actor.service ?? null },
+  target: e.target,
+  detail: e.detail,
+  decision: e.decision,
+  traceId: e.trace_id,
+  hash: e.hash
+});
+
+export interface ReplayFilter {
+  /** Events at or after this time (ms). */
+  since?: number;
+  /** Events before this time (ms). */
+  until?: number;
+  /** Event patterns (a name, a prefix ending in `.*`, or `*`); the webhook's own subscription still applies. */
+  types?: string[];
+  /** Deliveries only: replay those in this state. */
+  state?: 'pending' | 'succeeded' | 'failed';
+  limit?: number;
+  dryRun?: boolean;
+}
+
 export class WebhookService {
   private readonly operatorAllow: AllowList;
   /** Active subscriptions per tenant, for a few seconds, so an audit append does not always query the table. */
@@ -223,17 +237,7 @@ export class WebhookService {
   }
 
   private async fromAudit(e: AuditEvent): Promise<void> {
-    await this.emit(e.tenant_id, e.action, e.label, `audit:${e.id}`, {
-      seq: e.seq,
-      action: e.action,
-      kind: e.kind,
-      actor: { user: e.actor.user ?? null, username: e.actor.username ?? null, service: e.actor.service ?? null },
-      target: e.target,
-      detail: e.detail,
-      decision: e.decision,
-      traceId: e.trace_id,
-      hash: e.hash
-    });
+    await this.emit(e.tenant_id, e.action, e.label, `audit:${e.id}`, auditData(e));
   }
 
   private async fromJob(e: JobProgressEvent): Promise<void> {
@@ -260,6 +264,8 @@ export class WebhookService {
     if (tenantId === 'platform') return Promise.resolve(0);
     // The lane is taken when emit is called (listeners are called in event order), not after the first await.
     const prev = this.lanes.get(tenantId) ?? Promise.resolve();
+    // B-2001: every event is checked against its catalogue schema (counted and logged, never dropped).
+    this.s().events.check({ id: eventId, type, tenant: tenantId, label, createdAt: new Date().toISOString(), data });
     const run = prev.catch(() => undefined).then(async () => {
       const hooks = (await this.active(tenantId)).filter((w) => matchesEvent(w.events, type) && labelRank(label) <= labelRank(w.max_label));
       let n = 0;
@@ -749,6 +755,51 @@ export class WebhookService {
     const body = await this.s().keys.open(tenantId, d.payload, `webhook-delivery:${d.id}`);
     const row = await this.queue(w, d.event, d.label, d.event_id, {}, d.id, body);
     return row!;
+  }
+
+  /**
+   * B-2103 (`exprsn-ai events replay`): sends past deliveries of a webhook again, oldest first, each as a new delivery
+   * of its exact body (as the console's replay does one at a time). Replays of replays are not replayed again.
+   */
+  async replayDeliveries(tenantId: string, webhookId: string, f: ReplayFilter): Promise<{ matched: number; queued: number; events: string[] }> {
+    const w = await this.get(tenantId, webhookId);
+    const q = this.s().db('webhook_deliveries').where({ tenant_id: tenantId, webhook_id: w.id }).whereNull('replay_of');
+    if (f.since != null) q.andWhere('created_at', '>=', f.since);
+    if (f.until != null) q.andWhere('created_at', '<', f.until);
+    if (f.state) q.andWhere({ state: f.state });
+    const rows = (((await q.orderBy('created_at', 'asc').orderBy('id', 'asc').limit(Math.min(f.limit ?? 1000, 10_000))) as Record<string, unknown>[]).map(deliveryFromRow)).filter((d) => !f.types?.length || matchesEvent(f.types, d.event));
+    let queued = 0;
+    if (!f.dryRun) {
+      for (const d of rows) {
+        const body = await this.s().keys.open(tenantId, d.payload, `webhook-delivery:${d.id}`);
+        if (await this.queue(w, d.event, d.label, d.event_id, {}, d.id, body)) queued++;
+      }
+    }
+    return { matched: rows.length, queued, events: rows.map((d) => d.event_id) };
+  }
+
+  /**
+   * B-2103: backfills audit-action events from the tenant's audit chain that this webhook never received (one it
+   * subscribed to later, or that was disabled), oldest first, within its event list and label. An event it already
+   * has a delivery for is skipped (replay those from the delivery log instead).
+   */
+  async backfillAudit(tenantId: string, webhookId: string, f: ReplayFilter): Promise<{ matched: number; queued: number; skipped: number }> {
+    const w = await this.get(tenantId, webhookId);
+    const q = this.s().db('audit_events').where({ tenant_id: tenantId });
+    if (f.since != null) q.andWhere('ts', '>=', f.since);
+    if (f.until != null) q.andWhere('ts', '<', f.until);
+    const events = ((await q.orderBy('seq', 'asc').limit(Math.min(f.limit ?? 1000, 10_000))) as Record<string, unknown>[])
+      .map(rowToEvent)
+      .filter((e) => matchesEvent(w.events, e.action) && labelRank(e.label) <= labelRank(w.max_label) && (!f.types?.length || matchesEvent(f.types, e.action)));
+    let queued = 0;
+    let skipped = 0;
+    if (!f.dryRun) {
+      for (const e of events) {
+        if (await this.queue(w, e.action, e.label, `audit:${e.id}`, auditData(e), null)) queued++;
+        else skipped++;
+      }
+    }
+    return { matched: events.length, queued, skipped };
   }
 
   /** A `webhook.ping` delivery to one subscription, whatever its event list. */

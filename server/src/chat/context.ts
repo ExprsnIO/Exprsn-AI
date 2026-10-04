@@ -4,8 +4,9 @@ import type { ProfileRow } from '../gateway/repo.js';
 
 /**
  * Context providers add retrieved material to a chat turn (knowledge chunks, memories). The chat service asks each
- * provider once per answer, after a slot is leased, with the highest label the turn may carry (the lowest of the
- * user's clearance, the profile's label, the pool's ceiling and the workspace's ceiling). It formats every item as a
+ * provider once per answer, before it leases a slot (retrieval needs slots of its own for embeddings and reranking),
+ * with the highest label the turn may carry (the lowest of the user's clearance, the profile's label and the
+ * workspace's ceiling); items above the leased pool's ceiling are dropped afterwards. It formats every item as a
  * delimited, labelled block, numbers it for citation, raises the conversation's label to the highest item used, and
  * records the citations on the answer.
  */

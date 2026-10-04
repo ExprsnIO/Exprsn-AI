@@ -7,6 +7,6 @@ export default defineConfig({
     environment: 'node',
     pool: 'forks',
     testTimeout: 20000,
-    setupFiles: ['test/setup-loopback.ts']
+    setupFiles: ['test/setup-loopback.ts', 'test/setup-events.ts']
   }
 });

@@ -92,7 +92,15 @@ export const TOPICS = {
   /** Sprint 16: access to a shared conversation may have ended (a share revoked, a label raised): `ShareAccessEvent`. */
   shareAccess: 'share.access',
   /** Sprint 21 (B-1305): a user left workspaces (removed, or a mapping or directory change): `MembershipEvent`. */
-  workspaceMembership: 'workspace.membership'
+  workspaceMembership: 'workspace.membership',
+  /** 1.4.0 (B-2102): a cached entry or namespace changed: `CacheInvalidation` (platform/cache.ts). */
+  cacheInvalidate: 'cache.invalidate',
+  /** 1.4.0 (B-2101): access to a realtime room may have ended: `RoomAccessEvent` (realtime/rooms.ts). */
+  roomAccess: 'room.access',
+  /** 1.4.0 (B-2101): an event for the sockets in a domain room: `RoomEvent` (realtime/rooms.ts). */
+  roomEvent: 'room.event',
+  /** 1.4.0 (B-2002): a tenant's plugin installs changed: `{ tenantId, pluginId }`. */
+  pluginChanged: 'plugin.changed'
 } as const;
 
 /** Sprint 21: workspaces a user is no longer a member of; live shared watches through them end at once. */
