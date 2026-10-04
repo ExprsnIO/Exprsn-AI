@@ -42,10 +42,12 @@ export interface IdentityProvider {
   close(): Promise<void>;
 }
 
-export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml'] as const;
+export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml', 'atproto'] as const;
 /** Upstream identity providers: sign-in is redirected to them; they take no passwords and have no directory to sync. */
 export const FEDERATED_KINDS = ['oidc', 'saml'] as const;
 export const isFederatedKind = (k: string): k is 'oidc' | 'saml' => k === 'oidc' || k === 'saml';
+/** Sprint 26 (B-1808): stores that sign in by redirect and have no directory: upstream OIDC and SAML, and AT-Protocol. */
+export const signsInByRedirect = (k: string): boolean => isFederatedKind(k) || k === 'atproto';
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 /**
@@ -158,13 +160,32 @@ export const samlConfigSchema = z
   })
   .strict();
 
+/**
+ * Sprint 26 (B-1808): AT-Protocol accounts (we are an OAuth client of each account's own authorization server). A DID
+ * bound to a user (B-1807) signs in as that user; any other account is provisioned with its DID as its only group, so
+ * group mappings name DIDs. `boundOnly` admits bound DIDs only; `authServers` (origins) limits which authorization
+ * servers are accepted, for a tenant whose people all live on its own PDS. Empty: any.
+ */
+export const atprotoConfigSchema = z
+  .object({
+    ...common,
+    boundOnly: z.boolean().default(false),
+    authServers: z
+      .array(z.url().refine((u) => /^https?:\/\/[^/]+\/?$/.test(u), 'An origin, such as https://pds.example.com'))
+      .max(20)
+      .default([])
+      .transform((list) => list.map((u) => new URL(u).origin))
+  })
+  .strict();
+
+export type AtprotoConfig = z.infer<typeof atprotoConfigSchema>;
 export type LocalConfig = z.infer<typeof localConfigSchema>;
 export type OidcUpstreamConfig = z.infer<typeof oidcConfigSchema>;
 export type SamlUpstreamConfig = z.infer<typeof samlConfigSchema>;
 export type LdapConfig = z.infer<typeof ldapConfigSchema>;
 export type SqlConfig = z.infer<typeof sqlConfigSchema>;
 
-export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig {
+export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig | AtprotoConfig {
   switch (kind) {
     case 'local':
       return localConfigSchema.parse(config ?? {});
@@ -176,6 +197,8 @@ export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalC
       return oidcConfigSchema.parse(config);
     case 'saml':
       return samlConfigSchema.parse(config);
+    case 'atproto':
+      return atprotoConfigSchema.parse(config ?? {});
   }
 }
 

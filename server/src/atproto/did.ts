@@ -128,14 +128,18 @@ export class GuardedFetch {
     return (this.agent ??= serviceAgent(this.policy(), {}, { headersTimeout: this.timeoutMs, bodyTimeout: this.timeoutMs }));
   }
 
-  async request(url: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<{ status: number; json: unknown; text: string }> {
+  /**
+   * Sprint 26 (B-1808): `form` posts application/x-www-form-urlencoded instead of JSON, `headers` adds request headers
+   * (DPoP, authorization), and the response headers come back (a DPoP-Nonce, WWW-Authenticate).
+   */
+  async request(url: string, init: { method?: 'GET' | 'POST'; body?: unknown; form?: Record<string, string>; headers?: Record<string, string> } = {}): Promise<{ status: number; json: unknown; text: string; headers: Headers }> {
     const refused = literalProblem(url, this.policy());
     if (refused) throw new ServiceUrlRefused(refused);
     if (!/^https?:\/\//.test(url)) throw new ServiceUrlRefused('Only http and https addresses are fetched.');
     const res = await undiciFetch(url, {
       method: init.method ?? 'GET',
-      headers: { accept: 'application/json', ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      headers: { accept: 'application/json', ...(init.form ? { 'content-type': 'application/x-www-form-urlencoded' } : init.body !== undefined ? { 'content-type': 'application/json' } : {}), ...init.headers },
+      body: init.form ? new URLSearchParams(init.form).toString() : init.body !== undefined ? JSON.stringify(init.body) : undefined,
       redirect: 'error',
       signal: AbortSignal.timeout(this.timeoutMs),
       dispatcher: this.dispatcher()
@@ -156,7 +160,7 @@ export class GuardedFetch {
     } catch {
       json = null;
     }
-    return { status: res.status, json, text };
+    return { status: res.status, json, text, headers: res.headers as unknown as Headers };
   }
 
   async close(): Promise<void> {

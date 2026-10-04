@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { LoginThrottle } from '../identity/lockout.js';
 import { provision } from '../identity/provisioning.js';
-import { isFederatedKind } from '../identity/providers/types.js';
+import { signsInByRedirect } from '../identity/providers/types.js';
 import type { SessionRow } from '../identity/sessions.js';
 import { rolesRequireMfa } from '../authz/permissions.js';
 import { effectivePermissions } from '../authz/policy.js';
@@ -317,7 +317,8 @@ export function authRoutes(s: Services): Router {
     const t = await s.federation.tenantBySlug(slug);
     if (!t) return void res.json({ upstream: [], kerberos: false });
     const base = slug === s.cfg.DEFAULT_TENANT ? '' : `/t/${slug}`;
-    const rows = (await s.providers.list(t.id)).filter((p) => p.enabled && isFederatedKind(p.kind));
+    // Sprint 26 (B-1808): AT-Protocol stores too; their start page asks for the handle.
+    const rows = (await s.providers.list(t.id)).filter((p) => p.enabled && signsInByRedirect(p.kind));
     const settings = await s.federation.settings(t.id);
     const kerberos = settings.kerberos.enabled && (await s.kerberos.status()).available;
     res.json({

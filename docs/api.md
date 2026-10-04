@@ -2203,3 +2203,53 @@ dns:<name>]… [--days] [--out <file>]` (from the tenant's active intermediate),
 (queues the next CRL), `list [--state] [--issuer] [--limit] [--json]`, `crl [--issuer <id>] [--out <file>] [--der]`
 (signs the next CRL now). Exit codes: 0 done, 1 refused or failed, 3 conflict (already revoked, no active
 intermediate), 64 usage. See `docs/pki.md`.
+
+## Sprint 26b (1.4.0): AT-Protocol accounts (B-1807, B-1808)
+
+A user binds their own AT-Protocol DID (`did:plc` or `did:web`), and a tenant may sign people in with their
+AT-Protocol accounts. Handles are resolved by the DNS TXT record `_atproto.<handle>` (`did=<did>`) and then
+`https://<handle>/.well-known/atproto-did`; DID documents through `ATPROTO_PLC_URL` or over https. Every fetch goes
+through the service URL checks (B-901): the address dialled is the address checked, so a handle, PDS or authorization
+server that resolves to a link-local or cloud metadata address is refused (`422`, `step: handle`, `reason: refused`)
+and never fetched. A handle counts for a DID only when the DID document names it back (`alsoKnownAs: at://<handle>`).
+Errors are problem details with `step` (`handle`, `did`, `did_document`, `pds`, `challenge`, `proof`,
+`authorization_server`, `par`, `provider`) and, for handles, `reason` (`syntax`, `refused`, `not_found`, `conflict`,
+`mismatch`).
+
+### The signed-in user's DID (`atproto:link`, a browser session)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/atproto` | `{binding: {id, did, verified, proof: profile \| oauth \| null, handle, handleCheckedAt, pds, challengePending, challengeExpiresAt, verifiedAt, createdAt, updatedAt} \| null}` |
+| `POST /api/me/atproto/claim` `{account}` | Recent sign-in. `account` is a handle or a DID. Resolves it (handle → DID → document → PDS) and issues a challenge `exprsn-ai-verify-<32 hex>`, valid 24 hours, shown once and stored as a SHA-256. Replaces the user's earlier claim. `409` when the DID is bound to another user of the tenant. Audited `atproto.did.claimed`. `201 {binding, challenge: {token, expiresAt, instructions}}` |
+| `POST /api/me/atproto/verify` `{}` | Reads the account's `app.bsky.actor.profile` record (`rkey: self`) from its own PDS (`com.atproto.repo.getRecord`); its description must contain the challenge. On success the DID is bound (`proof: profile`), the challenge is used up and the handle the document names is checked both ways. `409` without an open challenge or when the token is not there (audited `atproto.did.verify_failed`). Audited `atproto.did.verified` |
+| `POST /api/me/atproto/link` `{account}` | Recent sign-in. Starts the AT-Protocol OAuth flow below in "link" mode and sets the federation cookie; `{url}` is where the console sends the browser. The callback binds the DID to this user (`proof: oauth`) if the session that started it is still signed in, then redirects to `/#/settings?atproto=linked`. Audited `atproto.did.link_started`, then `atproto.did.verified` |
+| `PUT /api/me/atproto/handle` `{handle}` | The handle shown for the bound DID: it must resolve to that DID and be named by its document (`422`, `reason: mismatch`). Audited `atproto.handle.set` |
+| `DELETE /api/me/atproto` | Removes the claim or binding. Audited `atproto.did.removed`. `204` |
+
+### Identity admins (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/atproto/accounts[?verified=true\|false&limit&offset]` | The tenant's claims and bindings with `userId` and `username` |
+| `POST /api/admin/atproto/accounts/check` `{account}` | Resolves a handle or DID step by step (account, then its PDS's authorization server and that server's metadata): `{ok, steps: [{title, ok, ms, detail}], did?, handle?, pds?, issuer?}`. Audited `atproto.account.checked` |
+| `DELETE /api/admin/atproto/accounts/:id` | Removes a user's binding. Audited `atproto.did.removed`. `204` |
+
+### The `atproto` user store (B-1808)
+
+A user store of kind `atproto` (`POST /api/admin/identity-providers`, config `{defaultRoles?, defaultClearance?,
+boundOnly?: false, authServers?: [origin]}`) adds AT-Protocol sign-in to the tenant's chain. It takes no passwords
+and has no directory. A DID bound to a user (above) signs in as that user, with the roles they have; any other account
+is provisioned (just in time) with the verified handle as its username (or the DID with `:` made `-` when it has no
+valid handle) and its DID as its only group, so group mappings name DIDs. `boundOnly` refuses unbound DIDs
+(`auth.login.refused`, `reason: not_bound`); `authServers` limits the authorization servers accepted. Admin roles still
+need their second factor. "Test connection" checks the client metadata address and the client assertion key.
+`GET /api/auth/sign-in-options` lists the store with `protocol: atproto`.
+
+### Public (no session; sign-in pages throttled per address like the other federation pages)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /federation/atproto/client-metadata.json` | The OAuth client metadata document; its URL is the `client_id`. `{client_id, client_name, client_uri, application_type: web, grant_types: [authorization_code, refresh_token], response_types: [code], redirect_uris: [<issuer>/federation/atproto/callback], scope: atproto, token_endpoint_auth_method: private_key_jwt, token_endpoint_auth_signing_alg: ES256, jwks_uri: <issuer>/.well-known/jwks.json, dpop_bound_access_tokens: true}` |
+| `GET /federation/atproto/start?provider=<store id>[&handle=<handle or DID>][&return]` | Without `handle`, a page asking for it. With it: resolves the account, reads the PDS's protected-resource metadata (exactly one authorization server) and that server's metadata (issuer, PAR, S256, ES256 DPoP, `iss` response parameter, `private_key_jwt`, the `atproto` scope), sends a pushed authorization request with PKCE S256, `login_hint` and a DPoP proof from a P-256 key made for this sign-in (retried once with the server's `DPoP-Nonce` after `use_dpop_nonce`), client-authenticated by a JWT the tenant's ES256 OIDC key signs, and redirects to the authorization endpoint with only `client_id` and `request_uri`. The state is bound to the browser by the federation cookie |
+| `GET /federation/atproto/callback?code&state&iss` | `iss` must be the authorization server the request went to; the code is exchanged with PKCE and DPoP (nonce retry as above). The token must be `token_type: DPoP` with the `atproto` scope and a DID `sub` equal to the account asked for; that DID's own PDS must name the same authorization server, and `com.atproto.server.getSession` at the PDS with the token (DPoP proof with `ath` and the resource server's nonce) must answer for the same DID. The tokens are then revoked (best effort) and never stored. Sign-in continues as for upstream OIDC (JIT provisioning, second factor for admin roles, sign-in notices, `auth.login` with `kind: atproto`). Other tenants' paths are under `/t/<slug>/` |

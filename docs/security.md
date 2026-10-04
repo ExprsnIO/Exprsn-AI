@@ -498,3 +498,17 @@ filter, private `/tmp`, only the state directory writable.
   record (`app.bsky.labeler.service`) needs a PDS, which Exprsn-AI does not host, so clients only act on the global
   values (`!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`) unless they read this labeler's values some
   other way.
+- AT-Protocol accounts (1.4.0, Sprint 26, B-1807, B-1808): the OAuth client (PAR, PKCE, DPoP with server nonces,
+  `private_key_jwt`, the issuer check through the account's own PDS) has only been run against the local PDS double in
+  `server/test/sprint26b-fakes.ts`, never against bsky.social or another real PDS; treat interoperability as unproven.
+  Real authorization servers require an https `client_id`, so AT-Protocol sign-in needs `FEDERATION_ISSUER` (or
+  `PUBLIC_URL`) on https and reachable from the internet, and outbound https to PDSes, which `SERVICE_INTERNAL_ONLY`
+  blocks unless their hosts are allow-listed. Plain http to loopback addresses is accepted outside production only.
+  Client assertions are signed with the tenant's OIDC signing key (published at its jwks_uri), not a key of their own.
+  Tokens are revoked and discarded after sign-in, so nothing can act on the account's repository; the `atproto` scope
+  only. A DID bound to a user signs in as that user without that user's password: binding needs a recent sign-in, and
+  an admin role still needs its second factor, but an AT-Protocol user without a local factor cannot step up for
+  actions that need a recent sign-in (upstream step-up covers OIDC and SAML only). The profile challenge reads the
+  `app.bsky.actor.profile` record, which accounts outside Bluesky may not have (they can link by signing in instead);
+  whoever runs the account's PDS can also write that record. The handle stored with a binding is checked when it is set,
+  not again later (sign-in checks the handle it uses each time). Handles under `.test` are accepted outside production.

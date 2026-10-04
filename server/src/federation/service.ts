@@ -170,7 +170,8 @@ export class FederationService {
   /** Registers this area's job handlers on `s.jobs`, and the upstream checks on the identity chain. */
   registerJobs(): void {
     const s = this.s();
-    s.chain.useFederatedTester((row, steps) => this.upstream.test(row, steps));
+    // Sprint 26 (B-1808): AT-Protocol stores are checked by the AT-Protocol accounts service.
+    s.chain.useFederatedTester((row, steps) => (row.kind === 'atproto' ? s.atprotoAccounts.test(row, steps) : this.upstream.test(row, steps)));
     s.jobs.register('federation.keys', async (p, ctx) => this.keys.scheduled(String(p.tenantId ?? ctx.job.tenant_id)));
     s.jobs.register('federation.purge', async () => ({ deleted: await this.oidc.purge() }));
     // Sprint 17 (B-807): fetched SAML metadata, refreshed on a schedule; changes wait for approval.

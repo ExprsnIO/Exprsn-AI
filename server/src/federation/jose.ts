@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, sign as cryptoSign, verify as cryptoVerify, type KeyObject, type webcrypto } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, sign as cryptoSign, verify as cryptoVerify, type KeyObject, type webcrypto } from 'node:crypto';
 
 // @types/node 26 keeps the JWK type under webcrypto only.
 type JsonWebKey = webcrypto.JsonWebKey;
@@ -178,4 +178,21 @@ export function verifyDpopProof(proof: string, opts: { method: string; url: stri
   if (typeof claims.iat !== 'number' || claims.iat > now + 5 || claims.iat < now - opts.maxAgeS) throw new JwtError('The DPoP proof is too old or from the future.');
   if (opts.accessToken !== undefined && claims.ath !== athOf(opts.accessToken)) throw new JwtError('The DPoP proof does not match the access token.');
   return { jkt: thumbprint(jwk), jti: claims.jti, iat: claims.iat, nonce: typeof claims.nonce === 'string' && claims.nonce.length <= 200 ? claims.nonce : null };
+}
+
+/**
+ * Sprint 26 (B-1808): a DPoP proof made by this server as an OAuth client (RFC 9449 4.2), the counterpart of
+ * `verifyDpopProof`: ES256 over a P-256 key, the public JWK in the header, `htu` without query or fragment, the
+ * server's nonce when it gave one, and `ath` when presented with an access token.
+ */
+export function signDpopProof(key: KeyObject, jwk: Jwk, o: { htm: string; htu: string; nonce?: string | null; accessToken?: string; now?: number }): string {
+  const u = new URL(o.htu);
+  const pub = { kty: 'EC', crv: jwk.crv, x: jwk.x, y: jwk.y };
+  const header = b64u(JSON.stringify({ typ: 'dpop+jwt', alg: 'ES256', jwk: pub }));
+  const claims: Claims = { jti: b64u(randomBytes(16)), htm: o.htm.toUpperCase(), htu: `${u.protocol}//${u.host}${u.pathname}`, iat: Math.floor((o.now ?? Date.now()) / 1000) };
+  if (o.nonce) claims.nonce = o.nonce;
+  if (o.accessToken !== undefined) claims.ath = athOf(o.accessToken);
+  const payload = b64u(JSON.stringify(claims));
+  const sig = cryptoSign('sha256', Buffer.from(`${header}.${payload}`), { key, dsaEncoding: 'ieee-p1363' });
+  return `${header}.${payload}.${b64u(sig)}`;
 }

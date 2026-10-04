@@ -91,6 +91,7 @@ import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
 import { RotationNotices } from './vault/rotation.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
+import { AtprotoAccounts } from './atproto/accounts.js';
 
 export interface Services {
   cfg: Config;
@@ -204,6 +205,8 @@ export interface Services {
   rotation: RotationNotices;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
+  /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
+  atprotoAccounts: AtprotoAccounts;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -424,6 +427,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     atproto: new AtprotoService(() => s),
+    atprotoAccounts: new AtprotoAccounts(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();

@@ -24,7 +24,9 @@ export const PERMISSIONS = [
   // 1.4.0 (Sprint 24c): plugins
   'plugins:manage',
   // 1.4.0 (Sprint 25, B-1610, B-1611): publish and withdraw signed AT-Protocol labels, and trust external labelers
-  'labels:manage'
+  'labels:manage',
+  // 1.4.0 (Sprint 26, B-1807, B-1808): bind one's own AT-Protocol DID and handle
+  'atproto:link'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -45,7 +47,9 @@ const MEMBER: readonly Permission[] = [
   'chat:read', 'chat:write', 'inference:invoke', 'context:read', 'context:write', 'images:generate',
   'tools:invoke', 'agents:run', 'memory:write', 'knowledge:read', 'models:read',
   // Sprint 24: only the vault paths a policy grants them (none by default).
-  'secrets:read'
+  'secrets:read',
+  // Sprint 26 (B-1807): one's own AT-Protocol DID
+  'atproto:link'
 ];
 
 const ADMINS = ['system-admin', 'tenant-admin'] as const;
