@@ -280,16 +280,36 @@ filter, private `/tmp`, only the state directory writable.
 - Certificate authority (Sprint 24): issuer and OCSP responder keys are made and used only in the signer or OpenBao
   transit; with neither the CA refuses to make keys. Creating, rotating or re-issuing the root needs `platform:manage`
   and a recent sign-in, not a second admin (no dual control yet). Tenant intermediates carry no name constraints: a
-  tenant admin with `pki:manage` sets their own profiles, so the CA checks names against policy but not domain
-  control (there is no ACME-style validation before B-1605), and anyone who trusts the platform root trusts every
-  tenant's issuance; trust a tenant's intermediate rather than the root where that matters. CRLs are full CRLs only
+  tenant admin with `pki:manage` sets their own profiles, so administrator issuance (the API and `exprsn-ai pki`)
+  checks names against policy but not domain control; only ACME orders (Sprint 25) also prove control of each name
+  (see the ACME paragraph below and `docs/pki.md`). Anyone who trusts the platform root trusts every tenant's
+  issuance; trust a tenant's intermediate rather than the root where that matters. CRLs are full CRLs only
   (no delta, indirect or partitioned CRLs; no `certificateHold`), and a CRL's to-be-signed list is capped by the
   signer at 512 KiB (roughly 10,000 entries; expired certificates drop off). OCSP request signatures are ignored
   (no requestor is trusted), responder certificates carry `ocsp-nocheck` and are short-lived (`PKI_OCSP_SIGNER_DAYS`)
   instead of being checked, and answers are cached per instance: a revocation clears them on every instance through
   the bus, which needs `REDIS_URL` across instances. Issued certificates have a CN-only subject; other CSR attributes
-  and extensions besides subjectAltName are ignored. Export formats, renewal and expiry notices (B-1606) and the CLI
-  (B-1607) are not built yet.
+  and extensions besides subjectAltName are ignored.
+- ACME server (Sprint 25, B-1605): each tenant's directory is unauthenticated by design (the JWS signatures and the
+  challenges are the authentication), rate-limited per address and closed until a tenant admin opens it. Orders are
+  bounded by the directory's server profile and every name is proven by http-01 or dns-01; every object is stored
+  and looked up by tenant and owning account. Limits: dns identifiers only (no IP identifiers, RFC 8738), no
+  `notBefore`/`notAfter`, no authorization reuse across orders (each order validates its names again), no
+  pre-authorization (`newAuthz`), no ACME Renewal Information (RFC 9773), and one validation attempt per challenge
+  from one vantage point (no multi-perspective validation): an attacker who controls the path between Exprsn-AI and a
+  name's server or resolver can obtain a certificate for that name, within what the profile allows. http-01 follows
+  redirects to https without checking the certificate (as RFC 8555 permits). With `PKI_ACME_INTERNAL_ONLY` off (the
+  default) http-01 may connect to public addresses; it never connects to cloud metadata or other link-local addresses
+  and only fetches the fixed challenge path, but anyone can make the server connect to port `PKI_ACME_HTTP_PORT` of a
+  name the profile allows. External account binding is optional per tenant; its MAC keys are sealed with the tenant
+  key. Account deactivation and administrator revocation do not revoke certificates already issued.
+- Certificate export and lifecycle (Sprint 25, B-1606): PKCS#12 files use PBES2/AES-256-CBC with an HMAC-SHA256 MAC,
+  which readers older than OpenSSL 1.1.1 may not open (no legacy RC2/3DES variant is offered). A key made with
+  `generateKey` exists in the app process while it is wrapped into the PKCS#12 file and is only as safe as the
+  password the caller chose and the channel the response travels over; it is never stored. Renewal without a CSR
+  keeps the old key, which is the wrong choice after a key compromise (send a new CSR and revoke the old
+  certificate). Expiry notices go to the requesting user or to the tenant's `pki:manage` holders; ACME account
+  contacts are not emailed.
 - HTTP Message Signatures (RFC 9421, Sprint 20): a subset (`@method`, `@target-uri`, `@authority`, `@path`,
   `@query`, header fields; no component parameters; `ed25519` and `hmac-sha256`). A signed `/v1` request is accepted
   within `HTTP_SIGNATURE_MAX_AGE_SECONDS` of its `created` time and nonces are not remembered, so a captured request
@@ -412,13 +432,24 @@ filter, private `/tmp`, only the state directory writable.
   own `min_decryption_version`) is not built. Vault paths and transit names are lower case only, so they compare the
   same way on every database. A grant to a directory group follows the groups the user's stores reported at the last
   sign-in or sync. Encrypt and verify calls are not audited (they reveal nothing); decrypt, rewrap, sign and every
-  read of a secret are. `vault:path#key` references in other features (B-1705), rotation schedules (B-1706) and
-  dynamic database leases (B-1704) follow in Sprint 25.
-- Plugins (1.4.0, Sprint 24c): manifests, grants and the lifecycle are enforced, but nothing runs a plugin yet:
-  enabling one only marks it enabled. Declarative actions (each checked against its granted capability) and script
-  handlers in the sandbox arrive later in 1.4.0; until then a script plugin is stored and cannot be enabled, and a
-  manifest's `webhook.url` is not checked against the outbound host rules (it will be when plugin deliveries use the
-  webhook path).
+  read of a secret are.
+- Plugins (1.4.0, Sprints 24c and 25): a plugin is data; its declarative actions run through the existing services and
+  its script handler in the script sandbox (no network, never in the server process), each gated by a granted
+  capability, and every webhook endpoint it names is checked against the outbound host rules at install, at enable
+  and at each delivery. Loop rule: whatever a plugin's work causes carries the chain of plugins behind it (in process
+  while the invocation runs, in the invocation row across the job queue, and in the trigger of a workflow run a plugin
+  started); an event is never delivered to a plugin already in its chain, and not at all once the chain is
+  `PLUGIN_MAX_DEPTH` long; the plugin and webhook deliveries' own job states are never events for plugins. What leaves
+  the platform is not traced: a webhook receiver (or a workflow's HTTP step) that calls the API back starts a fresh
+  chain, so such a loop is bounded only by `PLUGIN_RATE_PER_MINUTE`. The in-process part of the chain rides an
+  AsyncLocalStorage: work an action's callee defers to its own timers or connections opened during the action would
+  carry it too, which only ever suppresses deliveries. A script handler holds its invocation's token (shown to it
+  once, stored hashed, revoked when it ends); with the default sandbox it cannot use it except over its own stdin and
+  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. The
+  `records`, `files`, `groups` and `posts` calls answer `501` until their domains ship. The test suite runs handlers
+  as local processes (`server/test/sprint25d-fakes.ts`); the container path is the scripts' and is not exercised in CI.
+  Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
+  retention yet).
 - Event catalogue (1.4.0): an emitted event that does not match its schema is still delivered (counted and logged),
   so a receiver must still validate what it gets. The `record`, `file`, `group`, `message` and `post` types are
   reserved, not emitted.
@@ -428,3 +459,42 @@ filter, private `/tmp`, only the state directory writable.
   most its tier's TTL.
 - Realtime rooms (1.4.0): the generic mechanism is in place, but no domain registers an authoriser yet, so every
   `room.join` is refused until messaging, groups, feeds or channels ship.
+- Database leases (1.4.0, B-1704): the built-in engines hold an admin login to each target database (sealed, or a
+  `vault:` reference read as the user who registered the engine), so whoever can act as that user's vault policy can
+  make accounts there; registration needs `connections:manage` and a zone whose ceiling covers the engine. Only
+  PostgreSQL accounts carry their expiry (`VALID UNTIL`); MySQL accounts live until the sweeper drops them, so a
+  stopped sweeper (or `VAULT_LEASE_SWEEP_SECONDS=0`) leaves MySQL leases usable past their expiry. Ending a lease's
+  open sessions needs `pg_signal_backend` (PostgreSQL) or `CONNECTION_ADMIN` (MySQL) on the admin login; without them
+  a session opened before the drop runs on until it disconnects. When the admin login is a vault reference whose
+  owner loses read on it, leases can be neither issued nor dropped until it is restored (the sweeper keeps retrying
+  and the admins are told). Objects an account created itself (possible on PostgreSQL before 15 through `PUBLIC`'s
+  `CREATE` on `public`) are dropped with it.
+- Vault references (1.4.0, B-1705): a reference resolves as the user who saved the object (for workflow HTTP steps,
+  as the user who started the run), every time it is used; changing that user's policy or disabling them stops the
+  reference at its next use, except where a driver already holds an open pool: a SQL user store keeps its database
+  pool until the store is saved again or the server restarts (LDAP binds, connections, MCP calls, engines and workflow
+  steps read the reference every time). Stores defined in the configuration file have no owner and
+  cannot use `vault:` references. Only KV secrets can be referenced, not transit keys or leases.
+- Rotation schedules (1.4.0, B-1706): KV secrets cannot be rotated by the server (it does not know how to make the
+  next value), so their schedules only notify; transit keys can rotate themselves (`autoRotate`). Notices are checked
+  every `VAULT_ROTATION_CHECK_MINUTES`, so one can arrive up to that late.
+- AT-Protocol trust (1.4.0, Sprint 25): DAG-CBOR, CIDs, did:key, did:plc and low-S ECDSA are implemented here and
+  pinned by known-answer tests from the reference libraries, but have not been run against the live PLC directory,
+  Bluesky's AppView or Ozone; treat interoperability as unproven until the interop tests of the Risks table run.
+  secp256k1 keys need the signer (OpenBao transit has no secp256k1 key type); under OpenBao only P-256 is offered.
+  Making or rotating the platform identity needs `platform:manage` and a recent sign-in, not a second admin. A
+  `did:plc` key rotation is applied here only after the directory accepts it; if the directory accepts and this
+  server then fails to record it, the identity must be repaired by hand from the directory's log (no reconciliation
+  job yet), and a rotation that the directory refuses leaves an unused key in the signer's or OpenBao's custody.
+  Labels signed by a retired key are re-signed when next served, so a consumer that cached an old label sees two
+  signatures over the same label. Path-form tenant labelers (`<base>/atproto/<slug>`) have a path in their service
+  endpoint, which some AT-Protocol clients drop; a tenant that needs broad interoperability should use its own host.
+  The `did:web` path is the tenant slug at creation; renaming the tenant does not move it. Tenants that fall back to
+  the platform identity share its labels: a value one tenant put on a subject is in force for all of them, and only
+  that tenant can withdraw it. Inbound labels are read
+  from `subscribeLabels` only (no push), from cursor 0 for a new labeler (a large labeler's history takes several
+  pulls of 5,000 messages); a labeler's negation is stored but does not close the flag its earlier label raised.
+  The verdict-to-label mapping uses a fixed keyword table over rule names and details. The labeler declaration
+  record (`app.bsky.labeler.service`) needs a PDS, which Exprsn-AI does not host, so clients only act on the global
+  values (`!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`) unless they read this labeler's values some
+  other way.

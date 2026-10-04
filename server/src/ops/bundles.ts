@@ -74,7 +74,7 @@ export interface Finding {
 
 export interface BundleReport {
   files?: number;
-  byMirror?: Partial<Record<MirrorKind, number>>;
+  byMirror?: Partial<Record<BundleKind, number>>;
   components?: number;
   scanner?: string | null;
   findings?: Finding[];
@@ -100,6 +100,16 @@ export interface SignerKeyRow {
   revoke_reason: string | null;
 }
 
+/**
+ * What a bundle's file is for: a mirror's artefact, or (1.4.0, B-2005) a plugin manifest for the plugin catalogue,
+ * which tenants install from once the bundle is promoted.
+ */
+export const BUNDLE_KINDS = [...MIRROR_KINDS, 'plugins'] as const;
+export type BundleKind = (typeof BUNDLE_KINDS)[number];
+const BUNDLE_NOUN: Record<BundleKind, [string, string]> = { ...KIND_NOUN, plugins: ['plugin', 'plugins'] };
+/** The largest plugin manifest a bundle may carry. */
+export const MAX_PLUGIN_FILE_BYTES = 1024 * 1024;
+
 /** A CycloneDX SBOM as carried in the manifest; only the fields the checks use are typed. */
 const component = z.looseObject({
   name: z.string().max(400),
@@ -114,7 +124,7 @@ export const manifestSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/),
   created: z.string().max(40).optional(),
   contents: z.string().max(500).optional(),
-  files: z.array(z.object({ path: z.string().min(1).max(400), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.number().int().min(0), mirror: z.enum(MIRROR_KINDS) }).strict()).max(200_000),
+  files: z.array(z.object({ path: z.string().min(1).max(400), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.number().int().min(0), mirror: z.enum(BUNDLE_KINDS) }).strict()).max(200_000),
   sbom: z.looseObject({ bomFormat: z.literal('CycloneDX'), specVersion: z.string().max(10), components: z.array(component).max(200_000).default([]) })
 });
 export type BundleManifest = z.infer<typeof manifestSchema>;
@@ -232,11 +242,11 @@ export function licenceAllowed(expr: string, allow: Set<string>): boolean {
 export const componentLicences = (c: SbomComponent): string[] => (c.licenses ?? []).map((l) => l.expression ?? l.license?.id ?? l.license?.name ?? '').filter(Boolean);
 
 export function summarizeContents(files: BundleManifest['files']): string {
-  const counts = new Map<MirrorKind, number>();
+  const counts = new Map<BundleKind, number>();
   for (const f of files) counts.set(f.mirror, (counts.get(f.mirror) ?? 0) + 1);
-  return MIRROR_KINDS.filter((k) => counts.has(k)).map((k) => {
+  return BUNDLE_KINDS.filter((k) => counts.has(k)).map((k) => {
     const n = counts.get(k)!;
-    return k === 'trivy' ? 'Trivy DB' : `${n} ${KIND_NOUN[k][n === 1 ? 0 : 1]}`;
+    return k === 'trivy' ? 'Trivy DB' : `${n} ${BUNDLE_NOUN[k][n === 1 ? 0 : 1]}`;
   }).join(', ') || 'empty';
 }
 
@@ -534,7 +544,7 @@ export class BundleService {
       if (second.digest() !== digest) throw new StepFailure('The stored transfer changed while it was being verified.');
       for (const p of expected.keys()) if (!seen.has(p)) problems.push(`${p} is missing`);
       if (problems.length) throw new StepFailure(`${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}: ${problems.slice(0, 5).join('; ')}${problems.length > 5 ? '; …' : ''}`);
-      const byMirror: Partial<Record<MirrorKind, number>> = {};
+      const byMirror: Partial<Record<BundleKind, number>> = {};
       for (const f of manifest.files) byMirror[f.mirror] = (byMirror[f.mirror] ?? 0) + 1;
       Object.assign(report, { files: manifest.files.length, byMirror });
       pass(2, `${manifest.files.length} files matched`);
@@ -642,7 +652,7 @@ export class BundleService {
       await this.checkSignature(parts.manifest, parts.sig);
       const manifest = manifestSchema.parse(JSON.parse(parts.manifest.toString('utf8')));
       const byPath = new Map(manifest.files.map((f) => [f.path, f]));
-      const index = new Map<MirrorKind, { path: string; sha256: string; size: number }[]>();
+      const index = new Map<BundleKind, { path: string; sha256: string; size: number }[]>();
       let n = 0;
       for await (const e of parts.rest) {
         const f = byPath.get(e.path.slice('files/'.length));
@@ -670,6 +680,11 @@ export class BundleService {
       const without: MirrorKind[] = [];
       for (const [kind, files] of index) {
         await s.blobs.put(`mirrors/${kind}/index/${b.name}.json`, Buffer.from(JSON.stringify({ bundle: b.name, digest: b.digest, promotedAt: at, files }, null, 2)), 'application/json');
+        // B-2005: plugin manifests go to the plugin catalogue (tenants install them from there), not to a mirror.
+        if (kind === 'plugins') {
+          promotedTo.push('plugin catalogue');
+          continue;
+        }
         const names = await s.ops.mirrors.promoted(kind, b.name, at);
         if (names.length) promotedTo.push(...names);
         else without.push(kind);
@@ -685,6 +700,58 @@ export class BundleService {
       steps[6] = { state: 'failed', detail: reason, at: Date.now() };
       await this.patch(bundleId, { state: 'ready to promote', steps, error: reason });
       await audit(s, by, 'platform.bundle.promote.failed', { bundle: bundleId, name: b.name }, { reason });
+      throw err;
+    }
+  }
+
+  // ---------- plugin manifests (1.4.0, B-2005) ----------
+
+  /** Promoted bundles that carry plugins, with the plugin files each lists (from its promotion index). */
+  async pluginBundles(): Promise<{ bundle: BundleRow; files: { path: string; sha256: string; size: number }[] }[]> {
+    const rows = ((await this.s().db('platform_bundles').where({ state: 'in production' }).orderBy('promoted_at', 'desc').limit(500)) as Record<string, unknown>[]).map(fromRow).filter((b) => (b.report?.byMirror?.plugins ?? 0) > 0);
+    const out: { bundle: BundleRow; files: { path: string; sha256: string; size: number }[] }[] = [];
+    for (const b of rows) {
+      const idx = await this.s().blobs.get(`mirrors/plugins/index/${b.name}.json`);
+      if (!idx) continue;
+      try {
+        out.push({ bundle: b, files: (JSON.parse(idx.toString('utf8')) as { files: { path: string; sha256: string; size: number }[] }).files });
+      } catch {
+        // an unreadable index lists nothing; installing still reads the signed transfer
+      }
+    }
+    return out;
+  }
+
+  /**
+   * B-2005: one plugin manifest from a promoted bundle, read again from the stored transfer: the transfer's digest,
+   * the signature against the signer keys registered now (a key revoked since promotion fails it), and the file's
+   * sha256 and size against the signed manifest. Only then are its bytes returned. An unsigned or badly signed bundle
+   * never got this far (it was rejected at verification), and a stored transfer changed since cannot pass.
+   */
+  async signedPluginFile(ref: string, path: string): Promise<{ bytes: Buffer; sha256: string; bundle: BundleRow; signer: SignerKeyRow }> {
+    const r = await this.s().db('platform_bundles').where({ id: ref }).orWhere({ name: ref }).first();
+    if (!r) throw notFound('Bundle');
+    const b = fromRow(r);
+    if (b.state !== 'in production') throw conflict(`The bundle ${b.name} is ${b.state}. Plugins are installed only from a bundle that passed verification (signature, digests, SBOM and licences) and was promoted.`);
+    try {
+      const src = await this.open(b);
+      const parts = await this.manifestParts(src.source);
+      const sig = await this.checkSignature(parts.manifest, parts.sig);
+      const manifest = manifestSchema.parse(JSON.parse(parts.manifest.toString('utf8')));
+      const f = manifest.files.find((x) => x.path === path);
+      if (!f || f.mirror !== 'plugins') throw notFound('Plugin file in that bundle');
+      if (f.size > MAX_PLUGIN_FILE_BYTES) throw new StepFailure(`${path} is larger than ${MAX_PLUGIN_FILE_BYTES} bytes.`);
+      let bytes: Buffer | null = null;
+      for await (const e of parts.rest) {
+        if (e.path === `files/${path}`) bytes = await e.buffer(MAX_PLUGIN_FILE_BYTES); // other entries are skipped
+      }
+      if (src.digest() !== b.digest) throw new StepFailure('The stored transfer changed after verification.');
+      if (!bytes) throw new StepFailure(`${path} is missing from the transfer.`);
+      const h = createHash('sha256').update(bytes).digest('hex');
+      if (h !== f.sha256 || bytes.length !== f.size) throw new StepFailure(`${path} does not match the signed manifest.`);
+      return { bytes, sha256: h, bundle: b, signer: sig.key };
+    } catch (err) {
+      if (err instanceof StepFailure || err instanceof TarError) throw new HttpProblem(409, 'Bundle refused', `${b.name}: ${err.message}`, { extensions: { bundle: b.id } });
       throw err;
     }
   }

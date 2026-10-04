@@ -30,6 +30,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "An API key (exai_k1_...) or an OAuth access token"
+      },
+      "pluginToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A plugin handler run's scoped token (xpt_…), B-2004"
       }
     },
     "schemas": {
@@ -190,6 +195,36 @@
           },
           "updatedAt": {
             "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "inline",
+              "bundle"
+            ],
+            "description": "Since Sprint 25 (B-2005): where the plugin was installed from"
+          },
+          "bundle": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The signed import bundle a plugin was installed from",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "signer": {
+                "type": "string",
+                "description": "sha256 fingerprint of the signer key"
+              }
+            }
           }
         }
       },
@@ -350,6 +385,698 @@
             "type": "integer"
           }
         }
+      },
+      "PluginInvocation": {
+        "type": "object",
+        "required": [
+          "id",
+          "event",
+          "eventId",
+          "label",
+          "state",
+          "chain"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "label": {
+            "$ref": "#/components/schemas/Label"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "chain": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The plugins (ids) the event was caused by"
+          },
+          "outcome": {
+            "description": "{actions: [{type, ok, status?, error?}]} for actions; {calls: [{api, status}], exitCode, timedOut, durationMs, returned} for a handler"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "AtKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "purpose",
+          "curve",
+          "custody",
+          "didKey",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "label",
+              "rotation"
+            ]
+          },
+          "curve": {
+            "type": "string",
+            "enum": [
+              "secp256k1",
+              "p256"
+            ]
+          },
+          "custody": {
+            "enum": [
+              "signer",
+              "openbao"
+            ]
+          },
+          "didKey": {
+            "type": "string",
+            "pattern": "^did:key:z"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "retired"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retiredAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "DidDocument": {
+        "type": "object",
+        "required": [
+          "@context",
+          "id",
+          "verificationMethod",
+          "service"
+        ],
+        "properties": {
+          "@context": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "alsoKnownAs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verificationMethod": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "controller": {
+                  "type": "string"
+                },
+                "publicKeyMultibase": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "service": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "serviceEndpoint": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AtIdentity": {
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "method",
+          "did",
+          "endpoint",
+          "keys"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "boolean"
+          },
+          "method": {
+            "enum": [
+              "web",
+              "plc"
+            ]
+          },
+          "did": {
+            "type": "string"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "plcCid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "deactivated"
+            ]
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AtKey"
+            }
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DidDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AtLabel": {
+        "type": "object",
+        "description": "An AT-Protocol label in XRPC JSON form",
+        "required": [
+          "ver",
+          "src",
+          "uri",
+          "val",
+          "neg",
+          "cts"
+        ],
+        "properties": {
+          "ver": {
+            "const": 1
+          },
+          "src": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "cid": {
+            "type": "string"
+          },
+          "val": {
+            "type": "string",
+            "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+          },
+          "neg": {
+            "type": "boolean"
+          },
+          "cts": {
+            "type": "string"
+          },
+          "exp": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "object",
+            "required": [
+              "$bytes"
+            ],
+            "properties": {
+              "$bytes": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AtLabelRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "seq",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "label": {
+            "$ref": "#/components/schemas/AtLabel"
+          }
+        }
+      },
+      "AtLabeler": {
+        "type": "object",
+        "required": [
+          "id",
+          "did",
+          "name",
+          "vals",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "didKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vals": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+            }
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ]
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastPullAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "received": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AtInboundLabel": {
+        "type": "object",
+        "required": [
+          "id",
+          "uri",
+          "val",
+          "neg",
+          "cts"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "type": "string"
+          },
+          "cid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "val": {
+            "type": "string",
+            "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+          },
+          "neg": {
+            "type": "boolean"
+          },
+          "cts": {
+            "type": "string"
+          },
+          "exp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "PkiAcmeSettings": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "profileId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eabRequired": {
+            "type": "boolean"
+          },
+          "challenges": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "http-01",
+                "dns-01"
+              ]
+            }
+          },
+          "directoryUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "PkiAcmeEabKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "bound",
+              "revoked"
+            ]
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "boundAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "PkiAcmeAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "thumbprint": {
+            "type": "string"
+          },
+          "keyType": {
+            "enum": [
+              "EC",
+              "RSA",
+              "OKP"
+            ]
+          },
+          "contact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "enum": [
+              "valid",
+              "deactivated",
+              "revoked"
+            ]
+          },
+          "eabKeyId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "AcmeJws": {
+        "type": "object",
+        "properties": {
+          "protected": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "protected",
+          "payload",
+          "signature"
+        ],
+        "description": "A flattened JWS (RFC 7515) signed with ES256, ES384, RS256 or EdDSA"
       }
     },
     "responses": {
@@ -383,6 +1110,54 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/atproto-did": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "The DID whose handle is the request's host (AT-Protocol handle resolution). 404 otherwise",
+        "responses": {
+          "200": {
+            "description": "The DID",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/did.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "The did:web DID document of the identity for the request's Host: a tenant's own host, or the platform's on the base host (ATPROTO_PUBLIC_URL or PUBLIC_URL). Public, rate-limited",
+        "responses": {
+          "200": {
+            "description": "DID document",
+            "content": {
+              "application/did+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DidDocument"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -3915,6 +4690,110 @@
         }
       }
     },
+    "/api/admin/plugins/available": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2005: the plugin files of promoted, signed import bundles, with what each manifest says it is (problem when it does not validate)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "bundle": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "digest": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "signer": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "promotedAt": {
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer"
+                          },
+                          "manifest": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "capabilities": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "problem": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/plugins/capabilities": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -3964,6 +4843,74 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/plugins/import": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2005: installs a plugin from a promoted import bundle, reading the file again from the stored transfer with its signature (against the signer keys registered now) and digests checked. 409 for a bundle not promoted (an unsigned one is rejected at verification) or failing the checks; otherwise as POST /api/admin/plugins. Audited plugin.installed with the bundle and signer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "bundle",
+                  "path"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "bundle": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Bundle id or name"
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "grants": {
+                    "type": "array",
+                    "maxItems": 30,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 60
+                    }
+                  },
+                  "maxLabel": {
+                    "$ref": "#/components/schemas/Label"
+                  },
+                  "config": {
+                    "type": "object"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plugin"
                 }
               }
             }
@@ -4174,7 +5121,7 @@
         "tags": [
           "admin/plugins"
         ],
-        "summary": "installed or disabled to enabled. 409 when a required capability is not granted (missing lists them), for a script plugin (stored, not run, until script handlers ship), or from another state. Audited plugin.enabled",
+        "summary": "installed or disabled to enabled. 409 when a required capability is not granted (missing lists them), from another state, and (since Sprint 25) for a script plugin not from a signed bundle under PLUGINS_REQUIRE_SIGNED or without a sandbox; 422 when a webhook endpoint it names is refused by the outbound host rules. Audited plugin.enabled",
         "parameters": [
           {
             "name": "id",
@@ -4276,6 +5223,162 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Plugin"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/plugins/{id}/invocations": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2003, B-2004: the events delivered to the plugin and what came of each, newest first",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The plugin id or key",
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 63
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invocations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PluginInvocation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/plugins/{id}/logs": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2003, B-2004: the plugin's own log (log actions, a handler's output and return value), newest first; sealed at rest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The plugin id or key",
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 63
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "invocation",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 26,
+              "maxLength": 26
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "invocationId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "level": {
+                            "type": "string",
+                            "enum": [
+                              "info",
+                              "warn",
+                              "error"
+                            ]
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -6571,6 +7674,813 @@
         ],
         "summary": "Published agents the caller may run here: {id, name, version, description, label, profile, tools, budgets, deprecated, replacement}",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage or labels:manage. Key custody, the curves it holds, the PLC directory, and the tenant's identity or the platform identity it falls back to",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "custody",
+                    "curves"
+                  ],
+                  "properties": {
+                    "custody": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "signer",
+                            "openbao"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "curves": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "secp256k1",
+                          "p256"
+                        ]
+                      }
+                    },
+                    "defaultCurve": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "secp256k1",
+                            "p256"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "plcUrl": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "identity": {
+                      "anyOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "fallback": {
+                      "anyOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/identity": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage. The tenant's identity (the platform's with ?platform=true and platform:manage), its keys and DID document",
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtIdentity"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage (platform: platform:manage and a recent sign-in). Makes a did:web or did:plc with its label key (and rotation key) in the signer or OpenBao; a did:plc genesis operation must be accepted by the PLC directory. Audited atproto.identity.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "boolean"
+                  },
+                  "method": {
+                    "enum": [
+                      "web",
+                      "plc"
+                    ]
+                  },
+                  "handle": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 253
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "host": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 259
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "curve": {
+                    "type": "string",
+                    "enum": [
+                      "secp256k1",
+                      "p256"
+                    ]
+                  },
+                  "rotationCurve": {
+                    "type": "string",
+                    "enum": [
+                      "secp256k1",
+                      "p256"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtIdentity"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/identity/rotate": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage. Rotates the label or (did:plc) rotation key; did:web documents change at once, did:plc through an operation signed by the rotation key in force. Audited atproto.key.rotated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "purpose"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "boolean"
+                  },
+                  "purpose": {
+                    "enum": [
+                      "label",
+                      "rotation"
+                    ]
+                  },
+                  "curve": {
+                    "type": "string",
+                    "enum": [
+                      "secp256k1",
+                      "p256"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "identity",
+                    "key",
+                    "retired"
+                  ],
+                  "properties": {
+                    "identity": {
+                      "$ref": "#/components/schemas/AtIdentity"
+                    },
+                    "key": {
+                      "$ref": "#/components/schemas/AtKey"
+                    },
+                    "retired": {
+                      "$ref": "#/components/schemas/AtKey"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. The tenant's trusted external labelers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labelers"
+                  ],
+                  "properties": {
+                    "labelers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabeler"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Trusts a labeler: resolves its DID through the service URL checks and records its #atproto_label key and endpoint. Audited atproto.labeler.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "did",
+                  "name"
+                ],
+                "properties": {
+                  "did": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtLabeler"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Stops trusting a labeler. Audited atproto.labeler.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Renames, moves, pauses or changes the values that become flags. Audited atproto.labeler.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                    }
+                  },
+                  "state": {
+                    "enum": [
+                      "active",
+                      "paused"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtLabeler"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers/{id}/labels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Verified labels received from the labeler, newest first",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtInboundLabel"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers/{id}/pull": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Queues an atproto.labels.pull job: reads the labeler's subscribeLabels from its cursor, verifies each label (bad ones dropped and audited) and raises flags. Audited atproto.labeler.pulled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "job"
+                  ],
+                  "properties": {
+                    "job": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. The tenant's signed labels, newest first",
+        "parameters": [
+          {
+            "name": "uri",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabelRow"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Signs labels on a subject from explicit values or a flag's verdict (!hide, !warn, categories), each with the identity's next seq. Audited atproto.label.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uri"
+                ],
+                "properties": {
+                  "uri": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 2048
+                  },
+                  "cid": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "flag": {
+                    "type": "string",
+                    "pattern": "^F-\\d+$"
+                  },
+                  "exp": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Labels made (200 when every value was already in force)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabelRow"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labels/negate": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Negates a label in force with a new signed label (neg: true). Audited atproto.label.negated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uri",
+                  "val"
+                ],
+                "properties": {
+                  "uri": {
+                    "type": "string"
+                  },
+                  "val": {
+                    "type": "string",
+                    "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Negated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtLabelRow"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -9276,6 +11186,426 @@
         }
       }
     },
+    "/api/pki/acme": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{enabled, profileId, eabRequired, challenges: [http-01, dns-01], directoryUrl, updatedAt} for the session's tenant",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "put": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "B-1605. Opens or closes the tenant's directory, names the server profile its orders are issued under (422 for a client or code-signing profile, or when opening without one), requires external account binding, and chooses the challenge types",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "profileId": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A server profile of the tenant"
+                  },
+                  "eabRequired": {
+                    "type": "boolean"
+                  },
+                  "challenges": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "items": {
+                      "enum": [
+                        "http-01",
+                        "dns-01"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/accounts": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{accounts: [{id, thumbprint, keyType: EC\\|RSA\\|OKP, contact, status: valid\\|deactivated\\|revoked, eabKeyId, createdAt, updatedAt}]}",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PkiAcmeAccount"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
+    "/api/pki/acme/accounts/{id}/revoke": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The account is revoked (RFC 8555: by the server); its pending and ready orders become invalid. Audited pki.acme.account.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The ACME account id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/eab-keys": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{keys: [{id, name, state: active\\|bound\\|revoked, accountId, createdAt, boundAt}]} (never the MAC key)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PkiAcmeEabKey"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, …}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
+        "responses": {
+          "201": {
+            "description": "Created; hmacKey is shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PkiAcmeEabKey"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kid": {
+                          "type": "string",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                        },
+                        "hmacKey": {
+                          "type": "string",
+                          "description": "base64url, 32 bytes"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/eab-keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The key can no longer bind an account (an account it bound stays). Audited pki.acme.eab.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PkiAcmeEabKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/acme/orders": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The tenant's ACME orders, newest first: {orders: [{id, accountId, status, identifiers, profileId, expiresAt, error, certificateId, createdAt, updatedAt}]}",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "accountId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "ready",
+                              "processing",
+                              "valid",
+                              "invalid"
+                            ]
+                          },
+                          "identifiers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "profileId": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "type": [
+                              "object",
+                              "null"
+                            ]
+                          },
+                          "certificateId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          },
+                          "updatedAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "ready",
+                "processing",
+                "valid",
+                "invalid"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ]
+      }
+    },
     "/api/pki/certificates": {
       "get": {
         "tags": [
@@ -9308,6 +11638,206 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/pki/certificates/{id}/export": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "B-1606. The certificate as PEM (application/x-pem-file), DER (application/pkix-cert), or with its chain up to the root (application/pem-certificate-chain), as an attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The certificate id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pem",
+                "der",
+                "chain"
+              ],
+              "default": "pem"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The certificate",
+            "content": {
+              "application/x-pem-file": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/pkix-cert": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/pem-certificate-chain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/pki/certificates/{id}/pkcs12": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The certificate and its chain as PKCS#12 (application/x-pkcs12): PBES2 with PBKDF2-HMAC-SHA256 (100,000 iterations) and AES-256-CBC, HMAC-SHA256 integrity. No private key (the CA never had it)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The certificate id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PKCS#12",
+            "content": {
+              "application/x-pkcs12": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 200
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "password"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pki/certificates/{id}/renew": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "B-1606. A new certificate for the same names under the same profile, from the tenant's active intermediate, for the CSR's key or (without one) the old certificate's key; renewedFrom names the old one, which is revoked as superseded with rev",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The certificate to renew",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "renewedFrom": {
+                      "type": "string"
+                    },
+                    "certificatePem": {
+                      "type": "string"
+                    },
+                    "chainPem": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "clamped": {
+                      "type": "boolean"
+                    },
+                    "revokedOld": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csr": {
+                    "type": "string",
+                    "description": "PEM PKCS#10; without it the old certificate's key is kept"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1185
+                  },
+                  "revokeOld": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         }
       }
@@ -10705,6 +13235,332 @@
         }
       }
     },
+    "/api/vault/database/creds/{engine}/{role}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Issue a database lease",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read and vault policy read on database/<engine>/<role>. 201 with the username and password; the password is returned only here and is not stored. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "List database lease engines",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Engines within the caller's clearance, with their roles and live lease counts. Never the admin password. See docs/api.md, Sprint 25c."
+      },
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Register a database lease engine",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage, in a zone whose ceiling covers the engine label. The admin password is sealed, or adminPasswordRef names a vault:path#key the caller may read. With check (default) the admin login is tested first. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines/{name}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Remove a database lease engine",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Drops every live lease account first; 409 while any drop fails. See docs/api.md, Sprint 25c."
+      },
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Read a database lease engine",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. See docs/api.md, Sprint 25c."
+      },
+      "patch": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Change a database lease engine",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Zone and label changes pass the zone checks again; state disabled stops issuing. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines/{name}/roles/{role}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Remove a lease role",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. 409 while the role has live leases. See docs/api.md, Sprint 25c."
+      },
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Create or replace a lease role",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. privileges read or readwrite on named schemas (PostgreSQL) or databases (MySQL), with optional TTLs. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines/{name}/test": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Test an engine admin login",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Logs in and reports whether the admin can create accounts. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "List leases",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: the caller's leases; all=1 needs connections:manage or secrets:admin. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases/{id}": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Read a lease",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: the holder, or connections:manage / secrets:admin. Never the password. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases/{id}/renew": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Renew a lease",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: moves the expiry by incrementSeconds (default the role TTL), never past maxExpiresAt. 410 once ended. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases/{id}/revoke": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Revoke a lease",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: drops the account at once; 502 if the database refuses (the sweeper retries). See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/roles": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Roles the caller may take a lease for",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read and the vault policy (list or read on database/<engine>/<role>). See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/sweep": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Run the lease expiry sweeper now",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. 202 with the job id. See docs/api.md, Sprint 25c."
+      }
+    },
     "/api/vault/kv": {
       "get": {
         "tags": [
@@ -11572,6 +14428,134 @@
         }
       }
     },
+    "/atproto/{key}/did.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "A tenant's path-form did:web document (did:web:<base host>:atproto:<key>)",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DID document",
+            "content": {
+              "application/did+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DidDocument"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/atproto/{key}/xrpc/com.atproto.label.queryLabels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "com.atproto.label.queryLabels for a tenant's path-form labeler",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,63}$"
+            }
+          },
+          {
+            "name": "uriPatterns",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 250,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Labels in seq order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabel"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/auth/negotiate": {
       "get": {
         "tags": [
@@ -11909,6 +14893,223 @@
         }
       }
     },
+    "/pki/acme/{tenant}/directory": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "{newNonce, newAccount, newOrder, revokeCert, keyChange, meta: {externalAccountRequired, website}}",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "newNonce": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "newAccount": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "newOrder": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "revokeCert": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "keyChange": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "meta": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "security": []
+      }
+    },
+    "/pki/acme/{tenant}/new-nonce": {
+      "get": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "A fresh Replay-Nonce: 200 for HEAD, 204 for GET",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "A nonce in Replay-Nonce",
+            "headers": {
+              "Replay-Nonce": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      },
+      "head": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "A fresh Replay-Nonce: 200 for HEAD, 204 for GET",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A nonce in Replay-Nonce",
+            "headers": {
+              "Replay-Nonce": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/pki/acme/{tenant}/{rest}": {
+      "post": {
+        "tags": [
+          "pki"
+        ],
+        "summary": "The RFC 8555 resources, each a JWS POST: new-account, acct/{id}, acct/{id}/orders, key-change, new-order, order/{id}, order/{id}/finalize, authz/{id}, chall/{id}, cert/{id}, revoke-cert (docs/api.md)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "description": "The tenant slug",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            }
+          },
+          {
+            "name": "rest",
+            "in": "path",
+            "required": true,
+            "description": "The resource path below the directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resource (JSON), or a certificate chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/pem-certificate-chain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created, with Location"
+          },
+          "default": {
+            "description": "An RFC 8555 problem document",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "subproblems": {
+                      "type": "array"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/jose+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcmeJws"
+              }
+            }
+          }
+        }
+      }
+    },
     "/pki/ca/{file}": {
       "get": {
         "tags": [
@@ -11985,6 +15186,68 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/plugin-broker/v1/calls/{api}": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "plugin-broker"
+        ],
+        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS; 501 for a domain not shipped",
+        "security": [
+          {
+            "pluginToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "api",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "log",
+                "audit",
+                "notify",
+                "flag",
+                "webhook",
+                "workflow",
+                "records.read",
+                "records.write",
+                "files.read",
+                "groups.read",
+                "posts.write"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The call's arguments (as the declarative action's with; webhook also takes data)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -12962,6 +16225,90 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/xrpc/com.atproto.label.queryLabels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (…*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
+        "parameters": [
+          {
+            "name": "uriPatterns",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 250,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Labels in seq order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabel"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }

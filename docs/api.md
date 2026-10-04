@@ -1861,8 +1861,9 @@ Every event the webhook fan-out sees is checked against the catalogue; a mismatc
 
 ### Plugins (`plugins:manage`)
 
-A plugin is data: a manifest and the capabilities granted to it, per tenant. Nothing in a manifest is loaded or run
-by the server (declarative actions and script handlers come later). Tenant admins hold `plugins:manage`.
+A plugin is data: a manifest and the capabilities granted to it, per tenant. Nothing in a manifest is loaded into the
+server; declarative actions and script handlers (in the sandbox) run from Sprint 25 (below). Tenant admins hold
+`plugins:manage`.
 
 | Route | Notes |
 | --- | --- |
@@ -1871,7 +1872,7 @@ by the server (declarative actions and script handlers come later). Tenant admin
 | `GET /admin/plugins?removed=true` | `{plugins: [{id, key, name, version, kind, description, publisher, state: installed \| enabled \| disabled \| removed, events, capabilities, optionalCapabilities, granted, missing, maxLabel, configured, manifestHash, installedBy, stateChangedAt, createdAt, updatedAt}]}`; plugins above the caller's clearance are left out. `missing` lists required capabilities not granted |
 | `POST /admin/plugins` `{manifest, grants?, maxLabel?: internal, config?, reason?}` | Installs, or reinstalls a removed plugin (same id, new manifest). `grants` default to the low-risk capabilities the manifest asks for; high-risk ones only when named; anything not in the manifest is `400`. `config` is checked against `config.schema` (`422`) and sealed with the tenant key. `409` when installed and not removed; `403` when `maxLabel` is above the caller's clearance. Audited `plugin.installed` or `plugin.reinstalled` |
 | `GET /admin/plugins/:id` | `:id` is the id or the key. The plugin, its `manifest` (a script's source as `{entry, bytes}`) and `transitions` |
-| `POST /admin/plugins/:id/enable` `{reason?}` | installed or disabled to enabled. `409` with `missing` when a required capability is not granted, for a script plugin (stored, not run, in this release) and from any other state. Audited `plugin.enabled` |
+| `POST /admin/plugins/:id/enable` `{reason?}` | installed or disabled to enabled. `409` with `missing` when a required capability is not granted, and from any other state; since Sprint 25 also `409` for a script plugin not from a signed bundle (`PLUGINS_REQUIRE_SIGNED`) or without a sandbox, and `422` when a webhook endpoint it names is now refused. Audited `plugin.enabled` |
 | `POST /admin/plugins/:id/disable` `{reason?}` | installed or enabled to disabled. Audited `plugin.disabled` |
 | `DELETE /admin/plugins/:id?reason=` | installed, enabled or disabled to removed (`204`). Audited `plugin.removed` |
 | `PUT /admin/plugins/:id/grants` `{grants, reason?}` | Replaces the grants; an enabled plugin that loses a required one is disabled. Audited `plugin.grants.updated` (`before`, `after`, `added`, `removed`, `highRisk`) |
@@ -1898,3 +1899,307 @@ routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 f
 [--limit] [--dry-run]`: `deliveries` sends past deliveries again, each its exact body as a new delivery; `audit`
 backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
 Audited `webhook.replayed`.
+
+## Sprint 25d (1.4.0): plugins that run (B-2003 to B-2005)
+
+Events reach enabled plugins as jobs. Every event the webhook fan-out sees (audit actions, `job.*` except the plugin
+and webhook deliveries' own, `flag.*`, `approval.requested`) is offered to the tenant's enabled plugins that subscribe
+to it at or below their `maxLabel` (a declarative plugin only when one of its actions is `on` it); each delivery is a
+`plugin_invocations` row with the event sealed and a `plugin.invoke` job. An event reaches a plugin once. Bounds:
+`PLUGIN_RATE_PER_MINUTE` invocations a minute per plugin (past it the event is dropped, counted in
+`exprsn_plugin_dropped_total{reason="rate"}` and audited once a window as `plugin.throttled`), `PLUGIN_CONCURRENCY`
+running at once per plugin across instances (the rest wait as queued jobs). The loop rule: an event caused by a
+plugin's work carries the chain of plugins behind it and is never delivered to a plugin in that chain, nor at all once
+the chain is `PLUGIN_MAX_DEPTH` long (`exprsn_plugin_dropped_total{reason="loop" | "depth"}`); see
+`docs/security.md`. Metrics: `exprsn_plugin_invocations_total{result}`, `exprsn_plugin_calls_total{api,status}`.
+
+### Declarative actions (B-2003)
+
+Each action names its capability and is checked against the plugin's grants when it runs: an action whose capability
+is not granted (an optional one, or one withdrawn since) is refused and audited `plugin.action.refused` (actor
+`service: plugin:<key>`, detail `{action, capability, granted, event}`); the other actions still run. Strings in `with`
+may use `{{event.type}}`, `{{event.data.<field>}}`, `{{config.<field>}}`, `{{plugin.key}}`.
+
+| Action | Capability | `with` | Effect |
+| --- | --- | --- | --- |
+| `log` | `emit:log` | `message?`, `level?: info \| warn \| error` | A line in the plugin's own log (sealed) |
+| `audit` | `emit:audit` | `message?`, `detail?` (flat values) | `plugin.audited` in the tenant's audit chain, attributed to the plugin |
+| `notify` | `emit:notification` | `title?`, `body?`, `roles?` (default `tenant-admin`), `users?` | In-app notifications (kind `plugin`) to active users cleared for the event's label |
+| `flag` | `emit:flag` | `reason?`, `severity?: low \| medium \| high` | A `report` flag at checkpoint `plugin` for human review (it never acts on its own) |
+| `webhook` | `call:webhook` | `url?` (else the install's `config.webhookUrl`; a `webhook` plugin's `webhook.url`) | One delivery through the webhook path: a webhook named `plugin:<key>:<hash>` per endpoint (subscribed to nothing, Ed25519-signed, so receivers verify with the tenant's JWKS), its retries and breaker, and the outbound host checks at install, at enable and at every attempt (`422` when refused). The body is the triggering event. Removing the plugin removes its webhooks |
+| `workflow` | `call:workflow` | `workflow` (name or id), `input?`, `includeEvent?` | Starts the tenant-wide published workflow as the user who installed the plugin (still active, with `agents:run`), at no more than the plugin's `maxLabel`; trigger `plugin:<chain>`; audited `workflow.run.started` |
+
+A manifest's `with` is checked per action at install (`422` naming each problem).
+
+### Script plugins (B-2004)
+
+A script plugin names `script: {entry, source, language?: javascript | python}`; `entry` is a function the source
+declares, called as `entry(event, platform)`. The source passes the scripts' checks (no network or process modules, no
+credentials). Its handler runs per invocation in the script sandbox (`SCRIPT_RUNNER`: a disposable docker or podman
+container with no network, optionally under gVisor), never in the server, within `PLUGIN_SCRIPT_TIMEOUT_SECONDS` and
+`PLUGIN_SCRIPT_MEMORY_MB`. It reaches the platform only through the broker: `platform.call(api, args)` (and
+`platform.log(message)`) sends the call over the container's stdout with the invocation's scoped token, and the answer
+comes back on stdin. The token (`xpt_…`, stored as sha256) is made per invocation, lives for the time limit, carries the
+grants at that moment, allows `PLUGIN_MAX_CALLS` calls and is revoked when the handler ends. Every call is checked
+against the token's grants and the plugin's grants now: an ungranted call answers `403` (the handler sees an error
+with `status` 403) and is audited `plugin.call.refused`. Calls: `log`, `audit`, `notify`, `flag`, `webhook`
+(`args.data` as the body), `workflow` (as the actions above), and `records.read`, `records.write`, `files.read`,
+`groups.read`, `posts.write` (`501` until their domains ship). The handler's output and return value go to the
+plugin's log.
+
+| Route | Notes |
+| --- | --- |
+| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `501` |
+
+### Plugins from signed import bundles (B-2005)
+
+A signed import bundle (`/admin/platform/bundles`) may carry plugin manifests: files with `mirror: "plugins"`, each a
+JSON manifest. They go through the same verification (signature against the signer keys under dual control, digests,
+SBOM scan, licence allow-list, staging) and promotion, which puts them in the plugin catalogue. With
+`PLUGINS_REQUIRE_SIGNED=scripts` (default) script plugins are installed only this way; `all` makes it the only way for
+every plugin; `none` allows inline installs of all kinds.
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/plugins/available` | `{plugins: [{bundle: {id, name, digest, signer, promotedAt}, path, sha256, size, manifest: {key, name, version, kind, capabilities} \| null, problem}]}`: plugin files of promoted bundles |
+| `POST /admin/plugins/import` `{bundle (id or name), path, grants?, maxLabel?, config?, reason?}` | Installs from a promoted bundle, reading the file again from the stored transfer: the transfer's digest, the signature against the signer keys registered now (a key revoked since fails it) and the file's sha256 against the signed manifest. `409` for a bundle not promoted (an unsigned or badly signed one is rejected at verification) or one that fails these checks (`title: Bundle refused`); otherwise as `POST /admin/plugins`. The plugin records `source: bundle` and `bundle: {id, digest, path, signer}`; audited `plugin.installed` with them |
+| `GET /admin/plugins/:id/invocations?limit=&state=` | `{invocations: [{id, event, eventId, label, state: queued \| running \| succeeded \| failed \| cancelled, attempts, chain, outcome, error, jobId, createdAt, startedAt, finishedAt}]}`, newest first. `outcome` is `{actions: [{type, ok, status?, error?}]}` or, for a handler, `{calls: [{api, status}], exitCode, timedOut, durationMs, returned}` |
+| `GET /admin/plugins/:id/logs?limit=&invocation=` | `{logs: [{id, invocationId, level, message, at}]}`, newest first (opened from the sealed log) |
+
+`GET /admin/plugins/capabilities` also lists `calls` (each brokered call and its capability). Plugin views carry
+`source` and `bundle`.
+
+## Sprint 25c (1.4.0): database leases, vault references, rotation (B-1704 to B-1706)
+
+### Database leases (B-1704)
+
+Built-in PostgreSQL and MySQL engines make short-lived accounts on a tenant's own database server (OpenBao's database
+engine for data connections stays as in Sprint 15, B-416). Vault policy paths gain a third namespace,
+`database/<engine>/<role>`: `read` takes a lease, `list` shows the role. All routes answer `Cache-Control: no-store`.
+
+Engines and roles need `connections:manage`. An engine is registered in a zone whose ceiling covers its label (the
+B-415 checks: `422` for an undefined zone, `403` with `step: zone` and `zoneCeiling` above the ceiling; both audited as
+`vault.database.engine.refused`) and within the caller's clearance. Its admin login is a password (sealed with the
+tenant data key, never shown again) or `adminPasswordRef: vault:path#key` (B-1705: refused at save unless the caller
+may read it, then read as that user every time the engine logs in). With `check` (default) the server logs in first
+and refuses (`422`) an admin that cannot create accounts. The admin needs `CREATEROLE` (PostgreSQL) or `CREATE USER`
+(MySQL), and grant options on what its roles hand out.
+
+| Route | Notes |
+| --- | --- |
+| `GET /vault/database/engines` | `{engines: [{name, dialect, endpoint, database, tls, zone, label, adminUsername, adminPasswordFrom: sealed\|vault, adminPasswordRef, userHost, defaultTtlSeconds, maxTtlSeconds, state, activeLeases, roles, createdBy, createdAt, updatedAt}]}` (engines above the caller's clearance are left out) |
+| `POST /vault/database/engines` `{name, dialect: postgres\|mysql, endpoint, database?, tls?, zone?, label?, adminUsername, adminPassword \| adminPasswordRef, userHost?, defaultTtlSeconds?, maxTtlSeconds?, check?}` | `201` with the engine (and `check {version, canCreate, detail}`); `409` if the name exists. TTLs default to `VAULT_LEASE_DEFAULT_TTL_SECONDS`, at most `VAULT_LEASE_MAX_TTL_SECONDS`. MySQL needs `database`; `userHost` (default `%`) is the host part of generated MySQL accounts |
+| `GET /vault/database/engines/:name` | The engine |
+| `PATCH /vault/database/engines/:name` `{endpoint?, database?, tls?, zone?, label?, adminUsername?, adminPassword?, adminPasswordRef?, userHost?, defaultTtlSeconds?, maxTtlSeconds?, state?: active\|disabled}` | Zone and label changes pass the same checks; a new password or reference makes the caller the login's owner. A disabled engine issues no leases (live ones keep running) |
+| `DELETE /vault/database/engines/:name` | Drops every live lease's account first; `409` while any could not be dropped (they are retried). `204` |
+| `POST /vault/database/engines/:name/test` | `{ok, version, canCreate, detail, ms}`; audited |
+| `PUT /vault/database/engines/:name/roles/:role` `{privileges: read\|readwrite, schemas?, defaultTtlSeconds?, maxTtlSeconds?}` | Creates or replaces a role (`[a-z][a-z0-9_]{0,31}`). `schemas`: PostgreSQL schemas (default `public`) or MySQL databases (default the engine's), letters, digits, `_`, `$`, `-`. `read` grants `SELECT` on all tables in them; `readwrite` adds `INSERT, UPDATE, DELETE` (and sequence use on PostgreSQL). A role's maximum TTL cannot pass the engine's |
+| `DELETE /vault/database/engines/:name/roles/:role` | `409` while the role has live leases |
+| `POST /vault/database/sweep` | Runs the expiry sweeper for the tenant now (`202 {jobId}`); it also runs every `VAULT_LEASE_SWEEP_SECONDS` for tenants with a lease due |
+
+Leases need `secrets:read` and the vault policy:
+
+| Route | Notes |
+| --- | --- |
+| `GET /vault/database/roles` | The roles the caller's policy lists or lets them take, within their clearance: `{roles: [{engine, dialect, endpoint, database, label, name, privileges, schemas, defaultTtlSeconds, maxTtlSeconds, policyPath, canIssue}]}` |
+| `POST /vault/database/creds/:engine/:role` `{ttlSeconds?}` | `read` on `database/<engine>/<role>` (else `403`, `step: vault-policy`, audited as `vault.denied`). Creates the account, then answers `201 {id, engine, role, username, label, state, issuedTo, issuedAt, expiresAt, maxExpiresAt, renewals, leaseDurationSeconds, renewable, password, connection {dialect, endpoint, database, tls}}`. **The password is in this response only**; it is not stored. The TTL is cut to the role's maximum; the lease can never outlive `maxExpiresAt` |
+| `GET /vault/database/leases?all=&engine=&state=&limit=` | The caller's leases; `all=1` (every lease in the tenant) needs `connections:manage` or `secrets:admin` |
+| `GET /vault/database/leases/:id` | One lease (the holder's, or any for those admins); never the password |
+| `POST /vault/database/leases/:id/renew` `{incrementSeconds?}` | Moves the expiry by the increment (default the role's TTL), never past `maxExpiresAt` (`capped: true` when it reached it). The renewing caller's policy must still allow `read`. `410` once the lease ended |
+| `POST /vault/database/leases/:id/revoke` | Drops the account at once: `{…, state: revoked}`. If the database refuses, `502` and the lease waits in `revoking` for the sweeper |
+
+Generated names are `exai_<role>_<12 hex>` (at most 32 characters) and passwords are random; statements come from a
+fixed set (`CREATE ROLE … LOGIN … VALID UNTIL`, `GRANT CONNECT/USAGE/SELECT…`, `ALTER ROLE … VALID UNTIL`, `REVOKE`,
+`DROP ROLE`; `CREATE USER`, `GRANT … ON \`db\`.*`, `DROP USER`) with every identifier and literal quoted for the
+dialect. PostgreSQL accounts carry `VALID UNTIL` the lease's expiry, so the login stops working at expiry even before
+the sweeper runs; MySQL has no equivalent and relies on the sweeper. The sweeper (job `vault.leases.sweep`) claims each
+lease past its expiry, ends its sessions where the admin may, revokes its grants and drops it; a drop the database
+refuses leaves the lease `revoking` with `lastError` and `attempts`, retried with back-off (30 s doubling to an hour),
+and the tenant's connection and tenant admins (and the engine's owner) are notified on the first failure.
+
+Audit actions: `vault.database.engine.registered`, `.updated`, `.removed`, `.tested`, `.refused`,
+`vault.database.role.saved`, `vault.database.role.removed`, `vault.database.lease.issued`, `.renewed`, `.revoked`,
+`.expired`, `.revoke-failed`, `.failed`. None carries a password.
+
+### `vault:` references (B-1705)
+
+A `vault:<path>#<key>` reference names one key of the current version of a KV secret. It is accepted, beside the
+existing `env:` and `file:` references, in:
+
+- user stores: the LDAP bind password, the SQL store connection and the upstream OIDC client secret
+  (`POST`/`PATCH /admin/identity-providers`, `POST /admin/federation/upstream`);
+- data connections: the password (`POST /admin/connections`, `PUT /admin/connections/:id/credential`); the view
+  shows `passwordFromVault: true`;
+- MCP servers: the service token (`POST /admin/mcp-servers`, `PUT /admin/mcp-servers/:id/credential`);
+- workflow HTTP steps: a header value that is a reference, optionally after `Bearer `, `Basic ` or `Token `. HTTP steps
+  now also take an `Authorization` header, which must be a reference: a literal credential is refused at save (`400`);
+- database engines: `adminPasswordRef` (above).
+
+**At save**, the saving principal must hold `secrets:read`, their vault policy must allow `read` on `kv/<path>`, and
+their clearance must reach the secret's label if it exists; otherwise `403` (`step: role`, `vault-policy` or
+`clearance`), and a policy denial is audited as `vault.denied`. The saver becomes the object's reference owner.
+**At use**, the reference is read as that owner (for workflow steps: as the run's principal) under their current
+state, roles, policy and clearance, and audited as `vault.secret.read` with `actor.via` naming the object
+(`identity-provider:<id>`, `connection:<id>`, `mcp-server:<id>`, `workflow:<id>`, `database-engine:<id>`). A reference
+the owner can no longer read fails that use: a store reports an error and the chain moves on, a connection query is
+`403` and audited as `connection.query.refused`, an MCP handshake fails, a workflow step fails without calling out.
+Stores defined in the configuration file have no owner, so their `vault:` references do not resolve. Values never
+appear in the audit chain, logs, graphs or step output.
+
+### Rotation schedules (B-1706)
+
+| Route | Notes |
+| --- | --- |
+| `PATCH /vault/kv/metadata/*path` `{…, rotationPeriodDays?: number\|null, owner?: userId\|null}` | A rotation schedule for the secret (null clears it); `owner` receives the notices (default the creator). The metadata view adds `rotationPeriodDays, rotatedAt, rotationDueAt, owner` |
+| `PATCH /vault/transit/keys/:name` `{…, rotationPeriodDays?, autoRotate?, owner?}` | The same for a transit key; with `autoRotate` the key is rotated when it falls due. The key view adds `rotationPeriodDays, rotatedAt, rotationDueAt, owner, autoRotate` |
+
+The job `vault.rotation.check` runs every `VAULT_ROTATION_CHECK_MINUTES` for tenants with schedules. A secret or key
+whose current version falls due within `VAULT_ROTATION_NOTICE_DAYS` gets a `due` notice, and one past its period an
+`overdue` notice: each once per version, as a notification (`kind: vault`, also by email when SMTP is set) to the
+owner, or to the tenant admins when the owner is no longer active. Writing a new version or rotating the key starts
+the schedule again. A key with `autoRotate` is rotated by the job instead (`vault.transit.key.rotated` with
+`actor.service: vault.rotation` and `scheduled: true`) and the owner is told. Audit actions: `vault.rotation.due`,
+`vault.rotation.overdue`.
+
+## Sprint 25 (1.4.0): AT-Protocol trust (B-1608 to B-1611)
+
+Each tenant may have its own service DID (`did:web` or `did:plc`); a tenant without one labels under the platform's,
+the fallback. Keys are secp256k1 or P-256, made and used in the signer (`SIGNER_SOCKET`, both curves) or OpenBao
+transit (`KMS_PROVIDER=openbao`, P-256 only: transit has no secp256k1 key type); without either, identity routes
+answer `409` (`step: custody`). Rows hold the public key and the signer's wrapped blob or the transit key name, never
+a private key. Signatures are ECDSA over SHA-256, compact r||s, folded to low-S. Errors are problem details; `step`
+is `custody`, `identity` (no identity to sign with), `plc` (the directory refused or was unreachable, `502`),
+`resolve` (`502`) or `document` (`422`).
+
+A platform `did:web` is `did:web:<host of ATPROTO_PUBLIC_URL or PUBLIC_URL>`; a tenant's is `did:web:<its own host>`
+when it names one, else `did:web:<base host>:atproto:<tenant slug>` with the labeler endpoint
+`<base>/atproto/<slug>`. A `did:plc` is made by a genesis operation (DAG-CBOR, signed by its rotation key) submitted
+to `ATPROTO_PLC_URL`; every key rotation is a further operation chained by `prev` (CIDv1 dag-cbor sha2-256) and signed
+by the rotation key in force.
+
+### Identities and keys (`pki:manage`; the platform's identity also `platform:manage` and a recent sign-in)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto` | `pki:manage` or `labels:manage`. `{custody: signer \| openbao \| null, curves, defaultCurve, plcUrl, base, identity, fallback}`: the tenant's own identity summary, or the platform's it falls back to |
+| `GET /api/atproto/identity[?platform=true]` | `{id, platform, method, did, handle, host, endpoint, plcCid, state, keys: [{id, purpose: label \| rotation, curve, custody, didKey, state: active \| retired, createdAt, retiredAt}], document, createdAt, updatedAt}`. `document` is the DID document (`#atproto_label` Multikey, `#atproto_labeler` service). `404` without one |
+| `POST /api/atproto/identity` `{platform?, method: web \| plc, handle?, host?, curve?: secp256k1 \| p256, rotationCurve?}` | B-1609. Makes the label key (and for `plc` the rotation key) in custody, then the DID. The handle defaults to the host (platform: the base host) when it is a valid domain; `host` is for tenants with their own name (`did:web:<host>`, served for requests with that `Host`). `curve` defaults to secp256k1 with the signer, P-256 with OpenBao; secp256k1 under OpenBao is `409`. For `plc`, the directory must accept the genesis operation (`502` otherwise, nothing stored). `409` when the tenant (or platform) has one, or the handle, host or path is taken. Audited `atproto.identity.created`. `201` |
+| `POST /api/atproto/identity/rotate` `{platform?, purpose: label \| rotation, curve?}` | B-1608. A new key in custody; the old one is `retired`. A `did:web` document changes at once; a `did:plc` changes when the directory accepts the operation signed by the rotation key in force (a rotation key is replaced by an operation the old one signs). `rotation` on a `did:web` is `400`. Labels signed with a retired label key are signed again with the current one the next time they are served. Audited `atproto.key.rotated` (`plcCid`) |
+
+### Labels (`labels:manage`)
+
+A label is `{ver: 1, src, uri, cid?, val, neg, cts, exp?, sig}` signed over its DAG-CBOR without `sig` by the
+identity's `#atproto_label` key, numbered with the identity's next `seq`. Values are lower-case letters, digits and
+hyphens, optionally behind `!` (`!hide`, `!warn`). Guardrail decisions map as: `block` and `require-approval` to
+`!hide`; `warn`, `flag` and `redact` to `!warn`; and each enforced finding's rule name and detail to categories
+(`porn`, `sexual`, `nudity`, `graphic-media`, `spam`, `self-harm`, `hate`, `harassment`, `pii`, `secrets`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/labels[?uri&limit&before]` | The tenant's labels, newest first: `{labels: [{id, seq, flagId, createdAt, label}]}` (`label` in XRPC JSON form, `sig` as `{$bytes}`) |
+| `POST /api/atproto/labels` `{uri, cid?, vals?: [val] \| flag?: "F-12", exp?}` | B-1610. Either explicit values or a flag's verdict (its rule action and name; a dismissed or approved flag is `409`; a flag above the caller's clearance is `404`). The subject is an `at://` URI, a DID or an https URL. Values already in force on the subject are not repeated. Audited `atproto.label.created` (subject as `subjectHash`). `201 {labels}` (`200` with none) |
+| `POST /api/atproto/labels/negate` `{uri, val, reason?}` | A negation (`neg: true`, its own seq) of a label in force; `409` when none is. Audited `atproto.label.negated`. Dismissing or approving a flag negates the labels made from it (the hook an upheld appeal, B-1903, will call: `negateForFlag`) |
+
+### Trusted external labelers (`labels:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/labelers` | `{labelers: [{id, did, name, endpoint, didKey, workspaceId, vals, state: active \| paused, cursor, lastPullAt, lastError, received, rejected, createdAt, updatedAt}]}` |
+| `POST /api/atproto/labelers` `{did, name, workspaceId?, vals?}` | B-1611. Resolves the DID (did:plc through `ATPROTO_PLC_URL`, did:web over https) through the service URL checks (B-901: metadata addresses always refused, link-local unless allowed), and records its `#atproto_label` key and `#atproto_labeler` endpoint (`422` without them). `vals` are the label values that become flags (default `!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`, `spam`). Audited `atproto.labeler.created`. `201` |
+| `PATCH /api/atproto/labelers/:id` `{name?, workspaceId?, vals?, state?}`, `DELETE /api/atproto/labelers/:id` | Audited `atproto.labeler.updated`, `atproto.labeler.deleted`; `204` on delete |
+| `GET /api/atproto/labelers/:id/labels[?limit]` | Verified labels received: `{labels: [{id, seq, uri, cid, val, neg, cts, exp, flagId, createdAt}]}` |
+| `POST /api/atproto/labelers/:id/pull` | Queues an `atproto.labels.pull` job now. `202 {job}`. Audited `atproto.labeler.pulled` |
+
+The pull job reads the labeler's `subscribeLabels` from its stored cursor (0 at first) until the stream is quiet,
+verifies each label (`src` must be the labeler; the signature against its key, fetching the document again once when
+it fails, for a rotated key), stores verified labels once, and raises a `report` flag (checkpoint `atproto-label`,
+severity high for `!hide`, medium for `!warn`, else low) in the chosen workspace for each new one whose value is in
+`vals`. A label that fails is dropped and audited `atproto.label.rejected` (`reason: signature | source | unsigned |
+malformed`; at most 20 a pull, then one summary). Each pull with results is audited `atproto.labels.ingested`. Jobs
+run every `ATPROTO_LABEL_PULL_MINUTES` per active labeler.
+
+### Public (no session; `ATPROTO_PUBLIC_RATE_PER_MINUTE` per address, then `429`; `Access-Control-Allow-Origin: *`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/did.json` | The `did:web` document of the identity for the request's `Host` (a tenant's own host, or the platform's on the base host), `application/did+json` |
+| `GET /.well-known/atproto-did` | The DID whose handle is the request's host, `text/plain`; `404` otherwise |
+| `GET /atproto/:key/did.json` | A tenant's path-form `did:web` document |
+| `GET /xrpc/com.atproto.label.queryLabels`, `GET /atproto/:key/xrpc/com.atproto.label.queryLabels` `?uriPatterns=…&sources=…&limit=1-250 (50)&cursor` | The labels of the identity for the host (or path), in seq order: `{cursor?, labels}`. A pattern ending in `*` is a prefix; `*` alone matches everything. `sources` without this labeler's DID gives none. Errors are XRPC `{error: InvalidRequest \| NotFound, message}` |
+| `WS /xrpc/com.atproto.label.subscribeLabels[?cursor]`, `WS /atproto/:key/xrpc/com.atproto.label.subscribeLabels` | An AT-Protocol event stream over a plain WebSocket: binary frames, each a DAG-CBOR header and body. `{op: 1, t: "#labels"}` `{seq, labels: [label]}`, one label per message in seq order; `{op: -1}` `{error: FutureCursor \| ConsumerTooSlow \| InvalidRequest \| InternalError, message}` then close. With a cursor, every label after it and then live; without, live only. New labels reach subscribers on every instance over the bus. At most `ATPROTO_SUBSCRIBERS_MAX` streams per instance (`503`), `429` past the rate limit |
+
+Audit actions are in the event catalogue's `atproto.*` group.
+
+## Sprint 25a (1.4.0): ACME server, certificate export, renewal and the pki CLI (B-1605 to B-1607)
+
+Each tenant can open an RFC 8555 ACME directory at `/pki/acme/<tenant slug>/directory`. Its orders are issued by the
+tenant's active intermediate under one server profile: the profile's allowed names are the upper bound of what may be
+ordered, and each name must also be proven by http-01 or dns-01 before it is issued (domain-control validation;
+`docs/pki.md` explains the mapping). Certificates issued here also have export, renewal and expiry notices.
+
+### Admin (`pki:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/pki/acme` | `{enabled, profileId, eabRequired, challenges: [http-01, dns-01], directoryUrl, updatedAt}` for the session's tenant |
+| `PUT /api/pki/acme` `{enabled?, profileId?, eabRequired?, challenges?}` | B-1605. Opens or closes the tenant's directory, names the server profile its orders are issued under (`422` for a client or code-signing profile, or when opening without one), requires external account binding, and chooses the challenge types offered (wildcards need `dns-01`). Audited `pki.acme.settings.updated` |
+| `GET /api/pki/acme/eab-keys` | `{keys: [{id, name, state: active\|bound\|revoked, accountId, createdAt, boundAt}]}` (never the MAC key) |
+| `POST /api/pki/acme/eab-keys` `{name}` | An external account binding key (RFC 8555 7.3.4). `201 {id, kid, hmacKey, …}`: `hmacKey` (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited `pki.acme.eab.created` |
+| `POST /api/pki/acme/eab-keys/:id/revoke` | The key can no longer bind an account (an account it bound stays). Audited `pki.acme.eab.revoked` |
+| `GET /api/pki/acme/accounts` | `{accounts: [{id, thumbprint, keyType: EC\|RSA\|OKP, contact, status: valid\|deactivated\|revoked, eabKeyId, createdAt, updatedAt}]}` |
+| `POST /api/pki/acme/accounts/:id/revoke` | The account is `revoked` (RFC 8555: by the server); its pending and ready orders become invalid. Audited `pki.acme.account.revoked` |
+| `GET /api/pki/acme/orders[?accountId&status&limit]` | `{orders: [{id, accountId, status, identifiers, profileId, expiresAt, error, certificateId, createdAt, updatedAt}]}` |
+| `POST /api/pki/issuers/:id/issue` `{profileId, generateKey: {keyType?: ec-p256\|ec-p384\|rsa-2048\|rsa-3072\|rsa-4096, password}, sans?, commonName?, days?}` | B-1606. Instead of a `csr`: the key is made here, put with the certificate and its chain into a PKCS#12 file under `password` (8 to 200 characters), returned once as `pkcs12` (base64) and never stored. Audited `pki.certificate.issued` with `keyGenerated: true` |
+| `GET /api/pki/certificates/:id/export?format=pem\|der\|chain` | B-1606. The certificate as PEM (`application/x-pem-file`), DER (`application/pkix-cert`), or with its chain up to the root (`application/pem-certificate-chain`), as an attachment |
+| `POST /api/pki/certificates/:id/pkcs12` `{password}` | The certificate and its chain as PKCS#12 (`application/x-pkcs12`): PBES2 with PBKDF2-HMAC-SHA256 (100,000 iterations) and AES-256-CBC, HMAC-SHA256 integrity. No private key (the CA never had it) |
+| `POST /api/pki/certificates/:id/renew` `{csr?, days?, revokeOld?}` | B-1606. A new certificate for the same names under the same profile, from the tenant's active intermediate, for the CSR's key or (without one) the old certificate's key; `renewedFrom` names the old one, which is revoked as `superseded` with `revokeOld`. `409` for a revoked certificate. Audited `pki.certificate.renewed`. `201` |
+
+Certificates now also carry `renewedFrom` and `acmeAccountId`. Audit actions: `pki.acme.settings.updated`,
+`pki.acme.eab.created`, `pki.acme.eab.revoked`, `pki.acme.eab.refused`, `pki.acme.account.created`,
+`pki.acme.account.updated`, `pki.acme.account.deactivated`, `pki.acme.account.key-changed`, `pki.acme.account.revoked`,
+`pki.acme.order.created`, `pki.acme.order.refused`, `pki.acme.authz.deactivated`, `pki.acme.challenge.valid`,
+`pki.acme.challenge.invalid`, `pki.acme.order.finalized`, `pki.acme.certificate.revoked`, `pki.certificate.renewed`,
+`pki.certificate.expiry.notified` (ACME actions are recorded as actor `{service: acme, name: account <id>}`). Jobs:
+`pki.acme.validate` (one per challenge response) and `pki.expiry` (every `PKI_EXPIRY_SWEEP_MINUTES`: expiry notices
+and ACME housekeeping).
+
+Expiry notices (B-1606): each valid certificate `PKI_EXPIRY_NOTICE_DAYS` (30 and 7) days from expiry notifies its owner
+once per threshold (notification kind `pki.certificate.expiring`, also by email when SMTP is set): the user who
+requested it, or for certificates without one (ACME, CLI) the tenant's holders of `pki:manage`. A certificate that has
+a valid renewal is skipped.
+
+### ACME (public; no session; `PKI_PUBLIC_RATE_PER_MINUTE` per address, and `PKI_ACME_RATE_PER_MINUTE` for writes)
+
+All under `/pki/acme/<tenant slug>/`. A closed or unknown directory answers `404` with an ACME problem. Every answer
+carries a fresh `Replay-Nonce`, `Link: <directory>;rel="index"` and `Cache-Control: no-store`; errors are
+`application/problem+json` with `type: urn:ietf:params:acme:error:<type>`. POST bodies are flattened JWS
+(`application/jose+json`, at most 64 KiB, `415` otherwise) signed with ES256, ES384, RS256 (2048 to 8192 bits) or
+EdDSA (Ed25519); the protected header's `url` must be the URL posted to (`unauthorized`), the nonce must be fresh and
+unused on any instance (`badNonce`, nonces last `PKI_ACME_NONCE_MINUTES`), and `kid` must be an account of this
+directory (`accountDoesNotExist`). Every object is looked up by tenant and owning account: another account's (or
+tenant's) order, authorization, challenge or certificate is `404`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /pki/acme/:tenant/directory` | `{newNonce, newAccount, newOrder, revokeCert, keyChange, meta: {externalAccountRequired, website}}` |
+| `HEAD /pki/acme/:tenant/new-nonce`, `GET /pki/acme/:tenant/new-nonce` | `200` (HEAD) or `204` with a `Replay-Nonce` |
+| `POST /pki/acme/:tenant/new-account` (jwk) | `{contact?: [mailto:…] (at most 5), termsOfServiceAgreed?, onlyReturnExisting?, externalAccountBinding?}`. `201` with `Location` (the `kid`); the key's existing account is `200`. `externalAccountRequired` when the tenant requires a binding; the binding is an HS256 JWS over the account JWK with this directory's newAccount URL and a key from `POST /api/pki/acme/eab-keys` (`unauthorized` for a bad MAC, audited, or a used or revoked key) |
+| `POST /pki/acme/:tenant/acct/:id` | POST-as-GET: `{status, contact, orders, createdAt}`; `{contact}` updates it; `{status: deactivated}` ends it (its open orders become invalid) |
+| `POST /pki/acme/:tenant/acct/:id/orders` | `{orders: [order URLs]}`: the account's unexpired orders that are not invalid |
+| `POST /pki/acme/:tenant/key-change` | RFC 8555 7.3.5: the payload is a JWS signed by the new key (jwk, no nonce, the same url) with `{account, oldKey}`. `409` with `Location` when another account uses the new key |
+| `POST /pki/acme/:tenant/new-order` | `{identifiers: [{type: dns, value}]}` (1 to 100; `notBefore` and `notAfter` are refused, the profile sets the lifetime). Each name must be allowed by the directory's profile (`rejectedIdentifier` with a subproblem per name; IP and other types `unsupportedIdentifier`); a wildcard needs `allowWildcard` and dns-01. At most 300 open orders per account (`rateLimited`). `201` with `Location`: `{status: pending, expires, identifiers, authorizations, finalize}`; orders last `PKI_ACME_ORDER_HOURS` |
+| `POST /pki/acme/:tenant/order/:id` | POST-as-GET: the order; `certificate` once valid, `error` when invalid |
+| `POST /pki/acme/:tenant/authz/:id` | POST-as-GET: `{identifier, status, expires, challenges, wildcard?}`; `{status: deactivated}` deactivates it (and invalidates its order) |
+| `POST /pki/acme/:tenant/chall/:id` | `{}` starts validation (a `pki.acme.validate` job) and answers `processing` with `Link: <authz>;rel="up"`; POST-as-GET reads it. http-01 fetches `http://<name>:PKI_ACME_HTTP_PORT/.well-known/acme-challenge/<token>` (up to three redirects, to http on that port or https on 443; 8 KiB; trailing whitespace ignored) through the service address checks; dns-01 looks up TXT at `_acme-challenge.<name>` (PKI_ACME_DNS_SERVERS or the system resolver) for base64url(SHA-256(key authorization)). A failure (`incorrectResponse`, `connection`, `dns`, `unauthorized`) makes the challenge, the authorization and the order invalid |
+| `POST /pki/acme/:tenant/order/:id/finalize` | `{csr}` (base64url DER). The order must be `ready` (`orderNotReady`); the CSR must name exactly the order's names (subjectAltName and CN) with a key type the profile accepts, not the account key (`badCSR`). Issued at once by the tenant's active intermediate; the order is `valid` with `certificate`, or `invalid` with the reason |
+| `POST /pki/acme/:tenant/cert/:id` | POST-as-GET by the ordering account: `application/pem-certificate-chain`, the certificate and the intermediate (the root comes from trust stores) |
+| `POST /pki/acme/:tenant/revoke-cert` | `{certificate (base64url DER), reason?: 0\|1\|3\|4\|5\|9}` signed by the ordering account, by an account holding valid authorizations for all its names, or by the certificate's key (jwk). `badRevocationReason`, `alreadyRevoked`; `404` for a certificate this directory did not issue |
+
+### CLI
+
+`exprsn-ai pki issuers | list | issue | revoke | crl` for `--tenant <slug>` (default `DEFAULT_TENANT`), through the same
+service as the routes and audited with actor `service: cli`: `issue --csr <file> --profile <name|id> [--san
+dns:<name>]… [--days] [--out <file>]` (from the tenant's active intermediate), `revoke <id | serial> [--reason]`
+(queues the next CRL), `list [--state] [--issuer] [--limit] [--json]`, `crl [--issuer <id>] [--out <file>] [--der]`
+(signs the next CRL now). Exit codes: 0 done, 1 refused or failed, 3 conflict (already revoked, no active
+intermediate), 64 usage. See `docs/pki.md`.

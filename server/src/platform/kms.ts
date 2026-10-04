@@ -35,8 +35,12 @@ export interface Kms {
   heldKeys?: HeldKeys;
 }
 
-/** ed25519: Sprint 20 (B-1202), webhook signing keys in transit. rsa-3072: Sprint 24 (B-1601), CA issuer keys. */
-export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048' | 'ed25519' | 'rsa-3072';
+/**
+ * ed25519: Sprint 20 (B-1202), webhook signing keys in transit. rsa-3072: Sprint 24 (B-1601), CA issuer keys.
+ * ecdsa-secp256k1: Sprint 25 (B-1608), AT-Protocol label and rotation keys; the signer holds them, OpenBao transit
+ * has no secp256k1 key type, so the OpenBao adapter refuses it.
+ */
+export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048' | 'ed25519' | 'rsa-3072' | 'ecdsa-secp256k1';
 
 /** Key types the signer holds: the signing types, and an RSA key that only decrypts (RSA-OAEP), for SAML SP keys. */
 export type HeldKeyType = SigningKeyType | 'rsa-oaep-2048';
@@ -47,7 +51,7 @@ export interface HeldKeys {
    * `certificate` asks for a self-signed X.509 certificate made with the new key (RSA types), signed in the signer.
    */
   create(name: string, type: HeldKeyType, certificate?: { commonName: string; organization: string; days: number }): Promise<{ publicKey: string; wrapped: string; certificate: string | null }>;
-  /** ES256 as raw r||s, RS256 (2048 or 3072) as PKCS#1 v1.5 over SHA-256, Ed25519 as the 64-byte signature. */
+  /** ES256 and ES256K as raw r||s, RS256 (2048 or 3072) as PKCS#1 v1.5 over SHA-256, Ed25519 as the 64-byte signature. */
   sign(name: string, type: SigningKeyType, wrapped: string, data: Buffer): Promise<Buffer>;
   /** RSA-OAEP decryption with an `rsa-oaep-2048` key (the digest is used for MGF1 too). */
   decrypt(name: string, wrapped: string, ciphertext: Buffer, oaepHash: 'sha1' | 'sha256'): Promise<Buffer>;
@@ -92,6 +96,9 @@ export class LocalKms implements Kms {
     return { ok: true, detail: 'local key-encryption key from DATA_KEY' };
   }
 }
+
+/** OpenBao (and Vault) transit has no secp256k1 key type: such keys need the signer (Sprint 25, B-1608). */
+export const SECP256K1_NOT_IN_TRANSIT = 'OpenBao transit has no secp256k1 keys; run the signer (SIGNER_SOCKET) to hold them, or use P-256.';
 
 type BaoFetch = (url: string, init: { method: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; dispatcher?: Dispatcher }) => Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
 
@@ -170,6 +177,7 @@ export class OpenBaoKms implements Kms {
   }
 
   async createSigningKey(name: string, type: SigningKeyType): Promise<string> {
+    if (type === 'ecdsa-secp256k1') throw new Error(SECP256K1_NOT_IN_TRANSIT);
     // Not exportable and never deletable: a signing key's public half stays published for its overlap window.
     await this.call('POST', `keys/${encodeURIComponent(name)}`, { type, exportable: false });
     const r = await this.call<{ data: { latest_version?: number; keys: Record<string, { public_key?: string }> } }>('GET', `keys/${encodeURIComponent(name)}`);
@@ -182,6 +190,7 @@ export class OpenBaoKms implements Kms {
   }
 
   async sign(name: string, type: SigningKeyType, data: Buffer): Promise<Buffer> {
+    if (type === 'ecdsa-secp256k1') throw new Error(SECP256K1_NOT_IN_TRANSIT);
     // Ed25519 signs the message itself, so its path names no hash.
     const path = type === 'ed25519' ? `sign/${encodeURIComponent(name)}` : `sign/${encodeURIComponent(name)}/sha2-256`;
     const body = type === 'ecdsa-p256' ? { input: data.toString('base64'), marshaling_algorithm: 'jws' } : type === 'ed25519' ? { input: data.toString('base64') } : { input: data.toString('base64'), signature_algorithm: 'pkcs1v15' };

@@ -83,7 +83,41 @@ export type WfGraph = z.infer<typeof graphSchema>;
 
 const THINK = z.enum(['off', 'low', 'medium', 'high']);
 const METHODS = ['GET', 'POST', 'PUT'] as const;
-const HEADER = /^(content-type|accept|x-[a-z0-9-]{1,60})$/i;
+const HEADER = /^(content-type|accept|authorization|x-[a-z0-9-]{1,60})$/i;
+
+/**
+ * Sprint 25 (B-1705): a header value that is a vault reference, optionally after an authorization scheme
+ * (`vault:apps/crm#token`, `Bearer vault:apps/crm#token`). It is resolved when the step runs, as the run's principal,
+ * under the vault policies; the value never enters the graph, the step's output or its detail.
+ */
+export function headerVaultRef(value: string): { prefix: string; ref: string } | null {
+  const m = /^((?:Bearer|Basic|Token) )?(vault:\S+)$/.exec(value);
+  return m ? { prefix: m[1] ?? '', ref: m[2]! } : null;
+}
+
+/** An HTTP step that would store a credential in the graph: Authorization must be a vault reference (checked at save). */
+export function literalAuthorization(g: { nodes: { kind: string; title?: string; config: unknown }[] }): string | null {
+  for (const n of g.nodes) {
+    if (n.kind !== 'http') continue;
+    const headers = ((n.config ?? {}) as { headers?: Record<string, unknown> }).headers ?? {};
+    for (const [k, v] of Object.entries(headers)) if (k.toLowerCase() === 'authorization' && !(typeof v === 'string' && headerVaultRef(v))) return `${n.title ?? 'An HTTP step'}: Authorization takes a vault reference (vault:path#key, optionally after Bearer, Basic or Token), never a literal credential.`;
+  }
+  return null;
+}
+
+/** Every vault reference in a graph's HTTP steps. */
+export function graphVaultRefs(g: { nodes: { kind: string; config: unknown }[] }): string[] {
+  const out: string[] = [];
+  for (const n of g.nodes) {
+    if (n.kind !== 'http') continue;
+    const headers = ((n.config ?? {}) as { headers?: Record<string, unknown> }).headers ?? {};
+    for (const v of Object.values(headers)) {
+      const r = typeof v === 'string' ? headerVaultRef(v) : null;
+      if (r) out.push(r.ref);
+    }
+  }
+  return out;
+}
 
 export const CONFIGS = {
   trigger: z.object({ source: z.enum(['manual', 'api']).default('manual') }).strict(),
@@ -97,7 +131,11 @@ export const CONFIGS = {
       method: z.enum(METHODS).default('GET'),
       url: z.string().min(1).max(2000),
       body: template.optional(),
-      headers: z.record(z.string().regex(HEADER, 'Only Content-Type, Accept and X- headers'), z.string().max(1000)).default({})
+      headers: z
+        .record(z.string().regex(HEADER, 'Only Content-Type, Accept, Authorization and X- headers'), z.string().max(1000))
+        .default({})
+        // Credentials never sit in a graph: Authorization only takes a vault reference.
+        .refine((h) => Object.entries(h).every(([k, v]) => k.toLowerCase() !== 'authorization' || !!headerVaultRef(v)), 'Authorization takes a vault reference: vault:path#key, optionally after Bearer, Basic or Token')
     })
     .strict(),
   calc: z.object({ expression: template.min(1).max(2000) }).strict(),

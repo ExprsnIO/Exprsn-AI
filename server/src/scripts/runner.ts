@@ -42,9 +42,121 @@ export interface ScriptRunner {
   readonly ociRuntime?: string | null;
   available(): Promise<boolean>;
   run(req: RunRequest, signal?: AbortSignal): Promise<RunResult>;
+  /**
+   * 1.4.0 (B-2004): a run that talks back. stdin stays open after `req.stdin`; every stdout line that starts with
+   * `BROKER_MARK` is a JSON message handed to `onMessage`, and its answer (when not null) is written to stdin as one
+   * JSON line. Other output is captured as stdout. This is how a plugin handler in the sandbox, which has no
+   * network, reaches the platform: through the host, one brokered call at a time.
+   */
+  session?(req: RunRequest, onMessage: MessageHandler, signal?: AbortSignal): Promise<RunResult>;
 }
 
+/** Marks a protocol line on a session's stdout (a record separator, then a fixed word). */
+export const BROKER_MARK = '\u001eexprsn-broker ';
+/** The longest protocol line accepted from a sandbox (a call and its arguments). */
+export const MAX_MESSAGE_BYTES = 1024 * 1024;
+
+export type MessageHandler = (message: unknown) => Promise<unknown>;
+
 export class RunnerUnavailable extends Error {}
+
+/**
+ * Spawns a process for a run and collects its output: the shared core of the container adapter's `run` and
+ * `session`, and of the tests' process runner. With `onMessage`, stdout is read line by line and protocol lines are
+ * answered on stdin (in order, one at a time); without it stdin is closed after `req.stdin`.
+ */
+export function spawnRun(bin: string, args: string[], req: RunRequest, o: { kill: () => void; signal?: AbortSignal | undefined; onMessage?: MessageHandler | undefined; env?: NodeJS.ProcessEnv }): Promise<RunResult> {
+  const started = Date.now();
+  const cap = req.limits.outputKb * 1024;
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], ...(o.env ? { env: o.env } : {}) });
+    const err = capture(child.stderr, cap);
+    let out: () => { text: string; truncated: boolean };
+    let failure: string | null = null;
+    let timedOut = false;
+    let settled: () => Promise<void> = () => Promise.resolve();
+    const kill = () => {
+      o.kill();
+      child.kill('SIGKILL');
+    };
+    if (o.onMessage) {
+      const handler = o.onMessage;
+      const kept: string[] = [];
+      let size = 0;
+      let truncated = false;
+      let pending = '';
+      let chain: Promise<void> = Promise.resolve();
+      const keep = (line: string) => {
+        if (size >= cap) {
+          truncated = true;
+          return;
+        }
+        const take = line.slice(0, cap - size);
+        if (take.length < line.length) truncated = true;
+        kept.push(take);
+        size += Buffer.byteLength(take);
+      };
+      const onLine = (line: string) => {
+        if (!line.startsWith(BROKER_MARK)) return keep(`${line}\n`);
+        let msg: unknown;
+        try {
+          msg = JSON.parse(line.slice(BROKER_MARK.length));
+        } catch {
+          return keep('[a malformed broker message was dropped]\n');
+        }
+        chain = chain.then(async () => {
+          const reply = await handler(msg);
+          if (reply != null && child.stdin.writable) child.stdin.write(`${JSON.stringify(reply)}\n`);
+        }).catch((e: unknown) => {
+          failure = `The broker failed: ${(e as Error).message}`;
+          kill();
+        });
+      };
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (c: string) => {
+        pending += c;
+        let i: number;
+        while ((i = pending.indexOf('\n')) >= 0) {
+          onLine(pending.slice(0, i));
+          pending = pending.slice(i + 1);
+        }
+        if (pending.length > MAX_MESSAGE_BYTES) {
+          failure = `A line of output passed ${MAX_MESSAGE_BYTES} bytes.`;
+          pending = '';
+          kill();
+        }
+      });
+      out = () => {
+        if (pending) keep(pending);
+        return { text: kept.join(''), truncated };
+      };
+      // The last messages (a handler's result) are handled before the run is reported.
+      settled = () => chain;
+    } else out = capture(child.stdout, cap);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, req.limits.timeoutSeconds * 1000 + 2000); // container start-up gets a little grace
+    const onAbort = () => kill();
+    o.signal?.addEventListener('abort', onAbort, { once: true });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new RunnerUnavailable(`${bin} could not start: ${e.message}`));
+    });
+    child.on('close', (code) => void settled().then(() => {
+      clearTimeout(timer);
+      o.signal?.removeEventListener('abort', onAbort);
+      const so = out();
+      const se = err();
+      if (o.signal?.aborted) return reject(o.signal.reason as Error);
+      const stderr = failure ? `${se.text}${se.text && !se.text.endsWith('\n') ? '\n' : ''}${failure}\n` : se.text;
+      resolve({ stdout: so.text, stderr, exitCode: timedOut ? null : failure ? 1 : code, timedOut, truncated: so.truncated || se.truncated, durationMs: Date.now() - started });
+    }));
+    child.stdin.on('error', () => undefined);
+    if (o.onMessage) child.stdin.write(`${req.stdin ?? ''}\n`);
+    else child.stdin.end(req.stdin ?? '');
+  });
+}
 
 /** Runs the engine's CLI for a check (version, info); a missing binary answers code null. */
 export type Probe = (bin: string, args: string[]) => Promise<{ code: number | null; stdout: string }>;
@@ -182,38 +294,23 @@ export class ContainerRunner implements ScriptRunner {
     return this.exec(req, signal);
   }
 
-  private exec(req: RunRequest, signal?: AbortSignal): Promise<RunResult> {
-    const started = Date.now();
-    const cap = req.limits.outputKb * 1024;
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.bin, this.args(req), { stdio: ['pipe', 'pipe', 'pipe'] });
-      const out = capture(child.stdout, cap);
-      const err = capture(child.stderr, cap);
-      let timedOut = false;
-      const kill = () => {
-        spawn(this.bin, ['kill', `exai-script-${req.id.toLowerCase()}`], { stdio: 'ignore' }).on('error', () => undefined);
-        child.kill('SIGKILL');
-      };
-      const timer = setTimeout(() => {
-        timedOut = true;
-        kill();
-      }, req.limits.timeoutSeconds * 1000 + 2000); // container start-up gets a little grace
-      const onAbort = () => kill();
-      signal?.addEventListener('abort', onAbort, { once: true });
-      child.on('error', (e) => {
-        clearTimeout(timer);
-        reject(new RunnerUnavailable(`${this.bin} could not start: ${e.message}`));
-      });
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', onAbort);
-        const o = out();
-        const e = err();
-        if (signal?.aborted) return reject(signal.reason as Error);
-        resolve({ stdout: o.text, stderr: e.text, exitCode: timedOut ? null : code, timedOut, truncated: o.truncated || e.truncated, durationMs: Date.now() - started });
-      });
-      child.stdin.on('error', () => undefined);
-      child.stdin.end(req.stdin ?? '');
+  /** B-2004: a run that talks back to the host (see `ScriptRunner.session`), under the same limits and checks. */
+  async session(req: RunRequest, onMessage: MessageHandler, signal?: AbortSignal): Promise<RunResult> {
+    if (this.runtime) {
+      this.runtimeChecked ??= this.available();
+      if (!(await this.runtimeChecked)) {
+        this.runtimeChecked = null;
+        throw new RunnerUnavailable(this.runtimeProblem ?? `${this.bin} is not available.`);
+      }
+    }
+    return this.exec(req, signal, onMessage);
+  }
+
+  private exec(req: RunRequest, signal?: AbortSignal, onMessage?: MessageHandler): Promise<RunResult> {
+    return spawnRun(this.bin, this.args(req), req, {
+      signal,
+      onMessage,
+      kill: () => void spawn(this.bin, ['kill', `exai-script-${req.id.toLowerCase()}`], { stdio: 'ignore' }).on('error', () => undefined)
     });
   }
 }
@@ -262,6 +359,12 @@ export class AutoRunner implements ScriptRunner {
 
   async run(req: RunRequest, signal?: AbortSignal): Promise<RunResult> {
     return (await this.pick()).run(req, signal);
+  }
+
+  async session(req: RunRequest, onMessage: MessageHandler, signal?: AbortSignal): Promise<RunResult> {
+    const r = await this.pick();
+    if (!r.session) throw new RunnerUnavailable('No script sandbox is configured on this server (SCRIPT_RUNNER=none, or neither docker nor podman is installed).');
+    return r.session(req, onMessage, signal);
   }
 }
 

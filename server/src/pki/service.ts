@@ -1,5 +1,5 @@
 import { BlockList, isIP } from 'node:net';
-import { createHash, createPublicKey, X509Certificate } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, X509Certificate } from 'node:crypto';
 import { ulid } from 'ulid';
 import { z } from 'zod';
 import type { AuditActor } from '../audit/chain.js';
@@ -7,10 +7,13 @@ import { json } from '../db/knex.js';
 import { platformTenant } from '../ops/common.js';
 import type { Scheduler } from '../platform/jobs.js';
 import type { Services } from '../services.js';
+import { ROLES } from '../authz/permissions.js';
+import { AcmeServer } from './acme.js';
 import { fromPem, pem } from './asn1.js';
+import { buildPkcs12 } from './pkcs12.js';
 import { CUSTODY_MESSAGE, PkiKeys, type KeyRef } from './keys.js';
 import { MAX_OCSP_REQUESTS, OCSP_STATUS, ocspError, ocspResponse, OcspRequestError, parseOcspRequest, tbsResponseData, type SingleResponse, type SingleStatus } from './ocsp.js';
-import { buildCertificate, certificateParts, CSR_KEY_TYPES, distinguishedName, KU, newSerial, OIDS, parseCsr, REASONS, reasonName, signed, spkiKeyBits, spkiOf, tbsCrl, type CsrKeyType, type IssuerKeyType, type San } from './x509.js';
+import { buildCertificate, certificateParts, classify, CSR_KEY_TYPES, distinguishedName, KU, newSerial, OIDS, parseCsr, REASONS, reasonName, signed, spkiKeyBits, spkiOf, tbsCrl, type CsrKeyType, type IssuerKeyType, type San } from './x509.js';
 
 /*
  * The certificate authority (B-1601 to B-1604).
@@ -136,6 +139,9 @@ export interface CertRow {
   invalidity_date: number | null;
   revoked_by: string | null;
   requested_by: string | null;
+  /** Sprint 25: the certificate this one renewed, and the ACME account that ordered it. */
+  renewed_from?: string | null;
+  acme_account_id?: string | null;
   created_at: number;
 }
 
@@ -237,6 +243,8 @@ export function nameRefusal(kind: ProfileKind, policy: ProfilePolicy, n: San): s
 
 export class PkiService {
   readonly keys: PkiKeys;
+  /** Sprint 25 (B-1605): the ACME server for every tenant's directory. */
+  readonly acme: AcmeServer;
   /** OCSP answers for requests without a nonce, by request key. */
   private readonly ocspCache = new Map<string, { issuerId: string; der: Buffer; expires: number; maxAge: number }>();
   private index: { at: number; entries: IndexEntry[] } | null = null;
@@ -245,6 +253,7 @@ export class PkiService {
 
   constructor(private readonly s: () => Services) {
     this.keys = new PkiKeys(() => this.s().kms, () => this.s().cfg.OPENBAO_KEY_PREFIX);
+    this.acme = new AcmeServer(s);
   }
 
   private get db() {
@@ -496,22 +505,41 @@ export class PkiService {
   // ---------- issuance (B-1602) ----------
 
   async issue(by: PkiActor, issuer: IssuerRow, o: { csrPem: string; profileId: string; days?: number | undefined; sans?: San[] | undefined }): Promise<{ cert: CertRow; chain: string[]; clamped: boolean }> {
-    if (issuer.kind !== 'intermediate' || issuer.tenant_id !== by.tenantId) throw new PkiError(404, 'Issuer not found.');
-    if (issuer.state !== 'active') throw new PkiError(409, `This issuer is ${issuer.state}; certificates come from the tenant's active intermediate.`);
-    if (issuer.not_after <= Date.now()) throw new PkiError(409, 'This issuer has expired; rotate it.');
-    const profile = await this.profile(by.tenantId, o.profileId);
-    if (!profile) throw new PkiError(404, 'Profile not found.');
-    if (profile.state !== 'active') throw new PkiError(409, 'This profile is disabled.');
-
+    const profile = await this.issuableProfile(by, issuer, o.profileId);
     let csr;
     try {
       csr = parseCsr(fromPem(o.csrPem, 'CERTIFICATE REQUEST', 'NEW CERTIFICATE REQUEST'));
     } catch (err) {
       throw new PkiError(400, (err as Error).message, { step: 'csr' });
     }
-    if (!profile.policy.keyTypes.includes(csr.keyType)) throw new PkiError(422, `This profile does not accept ${csr.keyType} keys.`, { step: 'key' });
+    const sans = o.sans ?? (csr.sans.length ? csr.sans : profile.kind === 'server' && csr.commonName ? [{ type: 'dns' as const, value: csr.commonName }] : []);
+    return this.issueKey(by, issuer, profile, { spki: csr.spki, keyType: csr.keyType, commonName: csr.commonName, sans, days: o.days });
+  }
 
-    const sans = dedupe(o.sans ?? (csr.sans.length ? csr.sans : profile.kind === 'server' && csr.commonName ? [{ type: 'dns', value: csr.commonName }] : []));
+  /** The issuer and profile checks every issuance path shares. */
+  async issuableProfile(by: PkiActor, issuer: IssuerRow, profileId: string): Promise<ProfileRow> {
+    if (issuer.kind !== 'intermediate' || issuer.tenant_id !== by.tenantId) throw new PkiError(404, 'Issuer not found.');
+    if (issuer.state !== 'active') throw new PkiError(409, `This issuer is ${issuer.state}; certificates come from the tenant's active intermediate.`);
+    if (issuer.not_after <= Date.now()) throw new PkiError(409, 'This issuer has expired; rotate it.');
+    const profile = await this.profile(by.tenantId, profileId);
+    if (!profile) throw new PkiError(404, 'Profile not found.');
+    if (profile.state !== 'active') throw new PkiError(409, 'This profile is disabled.');
+    return profile;
+  }
+
+  /**
+   * Issues for a public key whose possession was proven elsewhere (a CSR's self-signature, an ACME finalize, or the
+   * certificate a renewal replaces), under the profile's name, key and lifetime policy.
+   */
+  async issueKey(
+    by: PkiActor,
+    issuer: IssuerRow,
+    profile: ProfileRow,
+    o: { spki: Buffer; keyType: CsrKeyType; commonName: string | null; sans: San[]; days?: number | undefined; renewedFrom?: string | null; acmeAccountId?: string | null; keyGenerated?: boolean }
+  ): Promise<{ cert: CertRow; chain: string[]; clamped: boolean }> {
+    if (!profile.policy.keyTypes.includes(o.keyType)) throw new PkiError(422, `This profile does not accept ${o.keyType} keys.`, { step: 'key' });
+
+    const sans = dedupe(o.sans);
     if (profile.kind === 'server' && !sans.length) throw new PkiError(422, 'A server certificate needs at least one host name or address.', { step: 'names' });
     if (sans.length > 100) throw new PkiError(422, 'At most 100 names.', { step: 'names' });
     for (const n of sans) {
@@ -521,7 +549,7 @@ export class PkiService {
         throw new PkiError(422, why, { step: 'names', name: n });
       }
     }
-    let commonName = csr.commonName;
+    let commonName = o.commonName;
     if (profile.kind === 'server') {
       if (commonName && !sans.some((n) => n.value.toLowerCase() === commonName!.toLowerCase())) throw new PkiError(422, `The common name ${commonName} is not among the certificate's names.`, { step: 'names' });
       commonName = commonName ?? sans[0]!.value;
@@ -536,14 +564,14 @@ export class PkiService {
     const wanted = notBefore + BACKDATE_MS + days * DAY;
     const notAfter = Math.min(wanted, issuer.not_after);
 
-    const rsa = csr.keyType.startsWith('rsa-');
+    const rsa = o.keyType.startsWith('rsa-');
     const serial = newSerial();
     const der = await buildCertificate(
       {
         serial,
         issuerName: Buffer.from(issuer.subject_der, 'base64'),
         subjectName: commonName ? distinguishedName(commonName) : Buffer.from([0x30, 0x00]),
-        spki: csr.spki,
+        spki: o.spki,
         issuerSpki: spkiFromPem(issuer.public_key_pem),
         notBefore,
         notAfter,
@@ -567,7 +595,7 @@ export class PkiService {
       serial: serial.toString('hex'),
       common_name: commonName,
       sans: JSON.stringify(sans),
-      key_type: csr.keyType,
+      key_type: o.keyType,
       not_before: notBefore,
       not_after: notAfter,
       certificate_pem: pem(der, 'CERTIFICATE'),
@@ -578,10 +606,12 @@ export class PkiService {
       invalidity_date: null,
       revoked_by: null,
       requested_by: by.userId,
+      renewed_from: o.renewedFrom ?? null,
+      acme_account_id: o.acmeAccountId ?? null,
       created_at: t
     };
     await this.db('pki_certificates').insert(row);
-    await this.audit(by, 'pki.certificate.issued', { certificate: row.id, issuer: issuer.id, profile: profile.id }, { serial: row.serial, commonName, sans, keyType: csr.keyType, notAfter, fingerprint: row.fingerprint });
+    await this.audit(by, 'pki.certificate.issued', { certificate: row.id, issuer: issuer.id, profile: profile.id }, { serial: row.serial, commonName, sans, keyType: o.keyType, notAfter, fingerprint: row.fingerprint, ...(o.renewedFrom ? { renewedFrom: o.renewedFrom } : {}), ...(o.acmeAccountId ? { acmeAccount: o.acmeAccountId } : {}), ...(o.keyGenerated ? { keyGenerated: true } : {}) });
     const chain = (await this.chain(issuer)).map((i) => i.certificate_pem);
     return { cert: certFrom(row), chain, clamped: notAfter < wanted };
   }
@@ -694,6 +724,9 @@ export class PkiService {
       }
       return crl ? { issuer: issuerId, number: crl.number, entries: crl.entries } : { issuer: issuerId, skipped: 'expired or revoked' };
     });
+    // Sprint 25 (B-1605, B-1606): ACME challenge validation, and the expiry sweep (notices plus ACME housekeeping).
+    this.acme.registerJobs();
+    this.s().jobs.register('pki.expiry', async () => ({ ...(await this.expirySweep()), ...(await this.acme.housekeeping()) }));
     this.listen();
   }
 
@@ -702,6 +735,11 @@ export class PkiService {
       const rows = ((await this.db('pki_issuers').whereIn('state', ['active', 'retired']).andWhere('not_after', '>', Date.now())) as Record<string, unknown>[]).map(issuerFrom);
       const platform = await platformTenant(this.s());
       return rows.filter((r) => r.tenant_id ?? platform).map((r) => ({ tenantId: (r.tenant_id ?? platform)!, payload: { issuerId: r.id }, key: r.id }));
+    });
+    // Sprint 25 (B-1606): one sweep for every tenant, recorded in the platform tenant.
+    scheduler.every('pki.expiry', this.cfg.PKI_EXPIRY_SWEEP_MINUTES * 60_000, async () => {
+      const platform = await platformTenant(this.s());
+      return platform ? [{ tenantId: platform }] : [];
     });
   }
 
@@ -812,6 +850,114 @@ export class PkiService {
   /** How many OCSP answers this instance holds (tests and status). */
   get ocspCacheSize(): number {
     return this.ocspCache.size;
+  }
+
+  // ---------- export, renewal and expiry notices (Sprint 25, B-1606) ----------
+
+  /** The certificate followed by its issuers up to the root (PEM). */
+  async chainOf(cert: CertRow): Promise<string[]> {
+    const issuer = await this.issuer(cert.issuer_id);
+    return [cert.certificate_pem, ...(issuer ? (await this.chain(issuer)).map((i) => i.certificate_pem) : [])];
+  }
+
+  /** PKCS#12 of the certificate and its chain (no private key: the CA never had it), protected by `password`. */
+  async pkcs12(cert: CertRow, password: string): Promise<Buffer> {
+    const ders = (await this.chainOf(cert)).map((p) => fromPem(p, 'CERTIFICATE'));
+    return buildPkcs12({ certificates: ders, password, friendlyName: cert.common_name ?? cert.serial });
+  }
+
+  /**
+   * Issues with a key made here for the subscriber (clients without a CSR tool). The key is returned once inside a
+   * PKCS#12 file protected by the caller's password and is never stored.
+   */
+  async issueGenerated(by: PkiActor, issuer: IssuerRow, o: { profileId: string; keyType: CsrKeyType; sans: San[]; commonName?: string | null | undefined; days?: number | undefined; password: string }): Promise<{ cert: CertRow; chain: string[]; clamped: boolean; pkcs12: Buffer }> {
+    const profile = await this.issuableProfile(by, issuer, o.profileId);
+    if (o.keyType === 'ed25519') throw new PkiError(422, 'Generated keys are EC or RSA.', { step: 'key' });
+    const kp = o.keyType.startsWith('ec-') ? generateKeyPairSync('ec', { namedCurve: o.keyType === 'ec-p256' ? 'prime256v1' : 'secp384r1' }) : generateKeyPairSync('rsa', { modulusLength: Number(o.keyType.slice(4)) });
+    const out = await this.issueKey(by, issuer, profile, { spki: spkiOf(kp.publicKey), keyType: o.keyType, commonName: o.commonName ?? null, sans: o.sans, days: o.days, keyGenerated: true });
+    const ders = [out.cert.certificate_pem, ...out.chain].map((p) => fromPem(p, 'CERTIFICATE'));
+    return { ...out, pkcs12: buildPkcs12({ certificates: ders, privateKey: kp.privateKey, password: o.password, friendlyName: out.cert.common_name ?? out.cert.serial }) };
+  }
+
+  /**
+   * Renews a certificate: the same names under the same profile, from the tenant's active intermediate, for the key in
+   * `csrPem` or (without one) the key of the certificate being renewed. Optionally revokes the old one (superseded).
+   */
+  async renew(by: PkiActor, cert: CertRow, o: { csrPem?: string | undefined; days?: number | undefined; revokeOld?: boolean | undefined }): Promise<{ cert: CertRow; chain: string[]; clamped: boolean; revokedOld: boolean }> {
+    if (cert.state === 'revoked') throw new PkiError(409, 'A revoked certificate cannot be renewed; issue a new one.');
+    if (!cert.profile_id) throw new PkiError(409, 'This certificate has no profile to renew under.');
+    const issuer = await this.activeIntermediate(by.tenantId);
+    if (!issuer) throw new PkiError(409, 'This tenant has no active intermediate.');
+    const profile = await this.issuableProfile(by, issuer, cert.profile_id);
+    let spki: Buffer;
+    let keyType: CsrKeyType;
+    if (o.csrPem) {
+      let csr;
+      try {
+        csr = parseCsr(fromPem(o.csrPem, 'CERTIFICATE REQUEST', 'NEW CERTIFICATE REQUEST'));
+      } catch (err) {
+        throw new PkiError(400, (err as Error).message, { step: 'csr' });
+      }
+      spki = csr.spki;
+      keyType = csr.keyType;
+    } else {
+      const key = new X509Certificate(cert.certificate_pem).publicKey;
+      spki = spkiOf(key);
+      keyType = classify(key);
+    }
+    const out = await this.issueKey(by, issuer, profile, { spki, keyType, commonName: cert.common_name, sans: cert.sans, days: o.days, renewedFrom: cert.id, acmeAccountId: cert.acme_account_id ?? null });
+    await this.audit(by, 'pki.certificate.renewed', { certificate: out.cert.id, renewedFrom: cert.id }, { serial: out.cert.serial, previousSerial: cert.serial, newKey: !!o.csrPem, notAfter: out.cert.not_after });
+    let revokedOld = false;
+    if (o.revokeOld) {
+      await this.revoke(by, cert, REASONS.superseded, null);
+      revokedOld = true;
+    }
+    return { ...out, revokedOld };
+  }
+
+  /** The notice thresholds in days, largest first (PKI_EXPIRY_NOTICE_DAYS). */
+  noticeDays(): number[] {
+    return [...new Set(this.cfg.PKI_EXPIRY_NOTICE_DAYS.split(',').map((x) => Number(x.trim())).filter((x) => x > 0))].sort((a, b) => b - a);
+  }
+
+  /** Who hears about a certificate: whoever requested it, else the tenant's certificate administrators. */
+  private async owners(cert: CertRow): Promise<string[]> {
+    if (cert.requested_by) {
+      const u = (await this.db('users').where({ id: cert.requested_by, tenant_id: cert.tenant_id, state: 'active' }).first('id')) as { id: string } | undefined;
+      if (u) return [u.id];
+    }
+    const roles = ROLES.filter((r) => r.permissions.includes('pki:manage')).map((r) => r.id);
+    return this.s().notifications.usersWithRoles(cert.tenant_id, roles);
+  }
+
+  /**
+   * Notifies the owners of valid certificates that will expire within a threshold (30 and 7 days by default), once
+   * per certificate and threshold (the closest threshold only, when the sweep first sees it inside two). Certificates
+   * already renewed are skipped. Safe on several instances: the notice row is claimed before anything is sent.
+   */
+  async expirySweep(now = Date.now()): Promise<{ notified: number }> {
+    const thresholds = this.noticeDays();
+    if (!thresholds.length) return { notified: 0 };
+    const rows = ((await this.db('pki_certificates').where({ state: 'valid' }).andWhere('not_after', '>', now).andWhere('not_after', '<=', now + thresholds[0]! * DAY).orderBy('not_after').limit(5000)) as Record<string, unknown>[]).map(certFrom);
+    let notified = 0;
+    for (const cert of rows) {
+      const left = cert.not_after - now;
+      const threshold = [...thresholds].reverse().find((d) => left <= d * DAY)!;
+      const renewed = (await this.db('pki_certificates').where({ renewed_from: cert.id, state: 'valid' }).first('id')) as unknown;
+      if (renewed) continue;
+      try {
+        await this.db('pki_expiry_notices').insert({ certificate_id: cert.id, threshold, tenant_id: cert.tenant_id, sent_at: now });
+      } catch {
+        continue; // this notice was already sent (here or by another instance)
+      }
+      const days = Math.max(0, Math.ceil(left / DAY));
+      const name = cert.common_name ?? cert.sans[0]?.value ?? cert.serial;
+      const users = await this.owners(cert);
+      await this.s().notifications.notify({ tenantId: cert.tenant_id, userIds: users, kind: 'pki.certificate.expiring', title: `Certificate ${name} expires in ${days} ${days === 1 ? 'day' : 'days'}`, body: `Serial ${cert.serial}, valid until ${new Date(cert.not_after).toISOString()}. Renew it before then.`, email: true });
+      await this.audit({ tenantId: cert.tenant_id, userId: null, actor: { service: 'pki' } }, 'pki.certificate.expiry.notified', { certificate: cert.id }, { threshold, days, serial: cert.serial, notAfter: cert.not_after, recipients: users.length });
+      notified++;
+    }
+    return { notified };
   }
 
   info(): { custody: string; crlMinutes: number; crlValidityHours: number; ocspValidityMinutes: number; ocspCacheSeconds: number; responderDays: number; baseUrl: string } {

@@ -377,6 +377,21 @@ const base = z.object({
     /** Entries the memory store keeps (least recently used go first). */
     CACHE_MAX_ENTRIES: z.coerce.number().int().min(100).max(10_000_000).default(10_000),
     // --- end Sprint 24c ---
+    // --- Sprint 25d (1.4.0): plugins that run ---
+    /** B-2003: invocations a minute per plugin per tenant; events past it are dropped (counted, audited once a window). */
+    PLUGIN_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(120),
+    /** Invocations of one plugin running at once, across every instance; the rest wait their turn as queued jobs. */
+    PLUGIN_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(2),
+    /** How many plugins one chain of events may pass through (a plugin's action triggering another plugin…). */
+    PLUGIN_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    /** B-2004: limits for a script handler run in the sandbox. */
+    PLUGIN_SCRIPT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(600).default(30),
+    PLUGIN_SCRIPT_MEMORY_MB: z.coerce.number().int().min(64).max(4096).default(256),
+    /** Platform calls one handler run may make through its scoped token. */
+    PLUGIN_MAX_CALLS: z.coerce.number().int().min(1).max(10_000).default(50),
+    /** B-2005: which plugins must come from a signed import bundle: script plugins (default), all, or none. */
+    PLUGINS_REQUIRE_SIGNED: z.enum(['scripts', 'all', 'none']).default('scripts'),
+    // --- end Sprint 25d ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */
@@ -449,7 +464,55 @@ const base = z.object({
     PKI_OCSP_VALIDITY_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(60),
     PKI_OCSP_CACHE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
     PKI_OCSP_SIGNER_DAYS: z.coerce.number().int().min(1).max(365).default(30),
-    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600)
+    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600),
+
+    /**
+     * Sprint 25 (B-1704): database leases from the built-in PostgreSQL and MySQL engines. An engine's TTLs default to
+     * VAULT_LEASE_DEFAULT_TTL_SECONDS and may not pass VAULT_LEASE_MAX_TTL_SECONDS; the expiry sweeper looks for ended
+     * leases every VAULT_LEASE_SWEEP_SECONDS (0 turns it off).
+     */
+    VAULT_LEASE_DEFAULT_TTL_SECONDS: z.coerce.number().int().min(1).max(31 * 86_400).default(3600),
+    VAULT_LEASE_MAX_TTL_SECONDS: z.coerce.number().int().min(1).max(366 * 86_400).default(86_400),
+    VAULT_LEASE_SWEEP_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /** Sprint 25 (B-1706): how often rotation schedules are checked (0 turns it off), and how early a notice comes. */
+    VAULT_ROTATION_CHECK_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    VAULT_ROTATION_NOTICE_DAYS: z.coerce.number().int().min(0).max(90).default(7),
+    /**
+     * Sprint 25 (B-1608 to B-1611): AT-Protocol trust. ATPROTO_PUBLIC_URL is the base the platform's did:web and the
+     * tenants' path-form DIDs and labeler endpoints live under (default PUBLIC_URL); ATPROTO_PLC_URL is the PLC
+     * directory did:plc operations go to and are resolved from (through the service URL checks). The public DID,
+     * queryLabels and subscribeLabels routes are capped per address by ATPROTO_PUBLIC_RATE_PER_MINUTE, with at most
+     * ATPROTO_SUBSCRIBERS_MAX open label streams per instance; trusted external labelers are read every
+     * ATPROTO_LABEL_PULL_MINUTES (0: only on demand).
+     */
+    ATPROTO_PUBLIC_URL: z.url().optional(),
+    ATPROTO_PLC_URL: z.url().default('https://plc.directory'),
+    ATPROTO_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600),
+    ATPROTO_SUBSCRIBERS_MAX: z.coerce.number().int().min(1).max(100_000).default(200),
+    ATPROTO_LABEL_PULL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(5),
+    /**
+     * Sprint 25 (B-1605): the ACME server at `/pki/acme/<tenant>/directory`. Orders and their pending authorizations
+     * last PKI_ACME_ORDER_HOURS; replay nonces PKI_ACME_NONCE_MINUTES. PKI_ACME_RATE_PER_MINUTE caps new accounts,
+     * orders and challenge requests per address (on top of PKI_PUBLIC_RATE_PER_MINUTE). http-01 is fetched from
+     * port PKI_ACME_HTTP_PORT through the service address checks (cloud metadata and link-local always refused; public
+     * addresses refused with PKI_ACME_INTERNAL_ONLY unless PKI_ACME_ALLOWED_HOSTS names them); dns-01 asks
+     * PKI_ACME_DNS_SERVERS (host[:port], comma-separated) or the system resolver. PKI_ACME_URL overrides the base
+     * the directory's URLs are built on (default PKI_PUBLIC_URL, then PUBLIC_URL).
+     */
+    PKI_ACME_URL: z.url().optional(),
+    PKI_ACME_ORDER_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
+    PKI_ACME_NONCE_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(60),
+    PKI_ACME_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(120),
+    PKI_ACME_HTTP_PORT: z.coerce.number().int().min(1).max(65_535).default(80),
+    PKI_ACME_INTERNAL_ONLY: bool.default(false),
+    PKI_ACME_ALLOWED_HOSTS: z.string().default(''),
+    PKI_ACME_DNS_SERVERS: z.string().optional(),
+    /**
+     * Sprint 25 (B-1606): expiry notices. Certificates PKI_EXPIRY_NOTICE_DAYS (comma-separated) days from expiry
+     * notify their owner once per threshold; the sweep runs every PKI_EXPIRY_SWEEP_MINUTES (0 turns it off).
+     */
+    PKI_EXPIRY_NOTICE_DAYS: z.string().regex(/^\s*\d{1,3}(\s*,\s*\d{1,3})*\s*$/, 'comma-separated whole days, such as 30,7').default('30,7'),
+    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
@@ -528,6 +591,9 @@ const schema = base
       for (const p of backendTlsProblems(c)) ctx.addIssue({ code: 'custom', path: [p.path], message: p.message });
     }
     // Sprint 24: a CRL must still be valid when the next scheduled one is signed.
+    if (c.VAULT_LEASE_DEFAULT_TTL_SECONDS > c.VAULT_LEASE_MAX_TTL_SECONDS) {
+      ctx.addIssue({ code: 'custom', path: ['VAULT_LEASE_DEFAULT_TTL_SECONDS'], message: 'VAULT_LEASE_DEFAULT_TTL_SECONDS cannot be longer than VAULT_LEASE_MAX_TTL_SECONDS' });
+    }
     if (c.PKI_CRL_MINUTES > 0 && c.PKI_CRL_MINUTES >= c.PKI_CRL_VALIDITY_HOURS * 60) {
       ctx.addIssue({ code: 'custom', path: ['PKI_CRL_VALIDITY_HOURS'], message: 'PKI_CRL_VALIDITY_HOURS must be longer than PKI_CRL_MINUTES' });
     }

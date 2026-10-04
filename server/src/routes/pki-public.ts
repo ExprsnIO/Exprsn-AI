@@ -4,6 +4,7 @@ import { Limiter } from '../platform/ratelimit.js';
 import { fromPem, pem } from '../pki/asn1.js';
 import { ocspError, OCSP_STATUS } from '../pki/ocsp.js';
 import type { Services } from '../services.js';
+import { acmePublicRoutes } from './acme-public.js';
 
 /*
  * The certificate authority's public endpoints (Sprint 24), mounted at the root outside /api: no session, no CSRF,
@@ -14,6 +15,7 @@ import type { Services } from '../services.js';
  *   GET  /pki/ca/<issuer>.crt | .pem     the issuer's certificate (the caIssuers URL in issued certificates)
  *   POST /pki/ocsp                       OCSP (RFC 6960), application/ocsp-request (B-1604)
  *   GET  /pki/ocsp/<base64 request>      OCSP by GET (RFC 6960 A.1), cacheable when the request has no nonce
+ *   /pki/acme/<tenant>/...               the ACME server (Sprint 25, B-1605; `acme-public.ts`)
  */
 
 const FILE_RE = /^([0-9A-HJKMNP-TV-Z]{26})\.(crl|crt|pem)$/;
@@ -28,6 +30,8 @@ export function pkiPublicRoutes(s: Services): Router {
     next();
   };
   r.use('/pki', limit);
+  // Sprint 25 (B-1605): the ACME server, behind the same per-address limit.
+  r.use(acmePublicRoutes(s));
 
   r.get('/pki/crl/:file', async (req, res) => {
     const m = FILE_RE.exec(String(req.params.file));

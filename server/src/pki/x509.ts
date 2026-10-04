@@ -205,7 +205,7 @@ export interface ParsedCsr {
 
 export class CsrError extends Error {}
 
-function classify(key: KeyObject): CsrKeyType {
+export function classify(key: KeyObject): CsrKeyType {
   const d = key.asymmetricKeyDetails ?? {};
   if (key.asymmetricKeyType === 'ed25519') return 'ed25519';
   if (key.asymmetricKeyType === 'ec') {

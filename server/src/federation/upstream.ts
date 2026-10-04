@@ -6,7 +6,7 @@ import { json } from '../db/knex.js';
 import { checkUrl, guardedAgent, HostRefused, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import type { ProviderRow } from '../repos/providers.js';
 import type { ExternalUser, OidcUpstreamConfig, SamlUpstreamConfig, Step } from '../identity/providers/types.js';
-import { resolveSecret } from '../identity/secrets.js';
+import { resolveSecretRef } from '../identity/secrets.js';
 import type { Services } from '../services.js';
 import { ulid } from 'ulid';
 import { pkceChallenge, verifyJwt, type Jwk } from './jose.js';
@@ -78,6 +78,11 @@ export class Upstream {
   private agentCache: { spec: string; agent: Agent; allow: AllowList } | null = null;
 
   constructor(private readonly s: () => Services) {}
+
+  /** The client secret: `env:` or `file:`, or (B-1705) `vault:` read as the user who saved the provider. */
+  private clientSecret(row: ProviderRow, ref: string): Promise<string> {
+    return resolveSecretRef(ref, (r) => this.s().vault.resolveFor(row.tenant_id, row.vault_owner, r, { via: `identity-provider:${row.id}` }));
+  }
 
   private net(): { agent: Agent; allow: AllowList } {
     const spec = this.s().cfg.FEDERATION_ALLOWED_HOSTS;
@@ -203,7 +208,7 @@ export class Upstream {
       steps.push(...r.steps);
       if (cfg.clientSecret) {
         try {
-          resolveSecret(cfg.clientSecret);
+          await this.clientSecret(row, cfg.clientSecret);
           steps.push({ title: 'Client secret reference resolves', ok: true });
         } catch (err) {
           steps.push({ title: 'Client secret reference resolves', ok: false, detail: (err as Error).message });
@@ -288,7 +293,7 @@ export class Upstream {
     const doc = await this.discovery(cfg);
     const form = new URLSearchParams({ grant_type: 'authorization_code', code: query.code, redirect_uri: this.redirectUri(t), code_verifier: pending.verifier!, client_id: cfg.clientId });
     const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' };
-    if (cfg.clientSecret) headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(cfg.clientId)}:${encodeURIComponent(resolveSecret(cfg.clientSecret))}`).toString('base64')}`;
+    if (cfg.clientSecret) headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(cfg.clientId)}:${encodeURIComponent(await this.clientSecret(row, cfg.clientSecret))}`).toString('base64')}`;
     const { agent, allow } = this.net();
     await checkUrl(doc.token_endpoint, allow);
     const res = await fetch(doc.token_endpoint, { method: 'POST', headers, body: form.toString(), dispatcher: agent, redirect: 'error', signal: AbortSignal.timeout(this.s().cfg.FEDERATION_TIMEOUT_MS) });

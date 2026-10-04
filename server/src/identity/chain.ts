@@ -7,6 +7,7 @@ import { LocalProvider } from './providers/local.js';
 import { SqlProvider } from './providers/sql.js';
 import { FederatedProvider, type FederatedTester } from './providers/federated.js';
 import { burnPasswordCheck } from './passwords.js';
+import type { VaultRefResolver } from './secrets.js';
 import { parseProviderConfig, type ExternalUser, type IdentityProvider, type LdapConfig, type SqlConfig, type Step } from './providers/types.js';
 
 export type ChainResult =
@@ -30,6 +31,13 @@ export class IdentityChain {
     this.federatedTester = tester;
   }
 
+  /** Sprint 25 (B-1705): how a store resolves its `vault:` references (as the user who saved it). */
+  private vaultResolver: ((row: ProviderRow) => VaultRefResolver) | null = null;
+
+  useVaultResolver(fn: (row: ProviderRow) => VaultRefResolver): void {
+    this.vaultResolver = fn;
+  }
+
   constructor(
     private readonly db: Db,
     private readonly providers: ProviderRepo,
@@ -50,10 +58,10 @@ export class IdentityChain {
         provider = new LocalProvider(row.id, row.name, this.db, row.tenant_id);
         break;
       case 'ldap':
-        provider = new LdapProvider(row.id, row.name, cfg as LdapConfig, this.production, this.outbound.allow);
+        provider = new LdapProvider(row.id, row.name, cfg as LdapConfig, this.production, this.outbound.allow, this.vaultResolver?.(row) ?? null);
         break;
       case 'sql':
-        provider = new SqlProvider(row.id, row.name, cfg as SqlConfig, this.outbound);
+        provider = new SqlProvider(row.id, row.name, cfg as SqlConfig, this.outbound, this.vaultResolver?.(row) ?? null);
         break;
       case 'oidc':
       case 'saml':

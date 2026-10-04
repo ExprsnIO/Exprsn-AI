@@ -1,3 +1,4 @@
+import { migrationSource } from '../src/db/migrations/index.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -213,7 +214,7 @@ describe('plugins (B-2002)', () => {
     expect(await h.s.plugins.list(other.id, 'restricted')).toEqual([]);
   });
 
-  it('needs plugins:manage, keeps to the installer clearance, stores config sealed and never enables a script', async () => {
+  it('needs plugins:manage, keeps to the installer clearance, stores config sealed and takes scripts only from signed bundles', async () => {
     await localUser(h, 'm', ['member']);
     const m = await login(h, 'm');
     await m.agent.get('/api/admin/plugins').expect(403);
@@ -229,9 +230,12 @@ describe('plugins (B-2002)', () => {
     expect(raw.config_sealed).not.toContain('#ops');
 
     const script = manifest({ key: 'scripted', kind: 'script', actions: undefined, capabilities: ['read:events'], events: ['flag.*'], script: { entry: 'main', source: 'export default () => 1' } });
-    const s = (await send(admin, 'post', '/api/admin/plugins', { manifest: script }).expect(201)).body;
-    expect((await send(admin, 'post', `/api/admin/plugins/${s.id}/enable`).expect(409)).body.detail).toMatch(/script plugin/);
-    expect((await admin.agent.get(`/api/admin/plugins/${s.id}`).expect(200)).body.manifest.script).toEqual({ entry: 'main', bytes: 22 });
+    // Sprint 25 (B-2005): a script plugin is installed only from a signed import bundle (PLUGINS_REQUIRE_SIGNED=scripts)
+    expect((await send(admin, 'post', '/api/admin/plugins', { manifest: script }).expect(409)).body.detail).toMatch(/script plugin.*signed import bundle/);
+    await h.s.db('plugins').insert({ id: '01JSCRIPTPLUGIN00000000000', tenant_id: h.tenantId, plugin_key: 'scripted', name: 'scripted', version: '1.0.0', kind: 'script', manifest: JSON.stringify(validateManifest(script)), manifest_hash: 'x'.repeat(64), granted: '["read:events"]', max_label: 'internal', state: 'installed', state_changed_at: 1, created_at: 1, updated_at: 1 });
+    // one stored inline before Sprint 25 cannot be enabled either
+    expect((await send(admin, 'post', '/api/admin/plugins/scripted/enable').expect(409)).body.detail).toMatch(/signed import bundle/);
+    expect((await admin.agent.get('/api/admin/plugins/scripted').expect(200)).body.manifest.script).toEqual({ entry: 'main', bytes: 22 });
   });
 });
 
@@ -520,7 +524,10 @@ describe('migration discipline (B-2104)', () => {
     const h = await harness();
     try {
       const r = await migrateCheck(h.s.db);
-      expect(r).toMatchObject({ state: 'current', pending: [], database: '026c_core' });
+      // The newest registered migration (later sprints add theirs after 026c_core).
+      const names = await migrationSource.getMigrations([]);
+      expect(r).toMatchObject({ state: 'current', pending: [], database: names.at(-1) });
+      expect(names).toContain('026c_core');
       expect(await h.s.db.schema.hasTable('plugins')).toBe(true);
       expect(await h.s.db.schema.hasTable('plugin_transitions')).toBe(true);
     } finally {

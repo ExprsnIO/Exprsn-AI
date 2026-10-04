@@ -4,6 +4,8 @@ import { actorFrom } from '../audit/chain.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, requireRecentAuth } from '../http/middleware.js';
 import { forbidden, HttpProblem, notFound } from '../http/problem.js';
+import type { AcmeAccount, EabKeyRow } from '../pki/acme.js';
+import { fromPem } from '../pki/asn1.js';
 import { CustodyUnavailable } from '../pki/keys.js';
 import { PkiError, policySchema, PROFILE_KINDS, PROFILE_MAX_DAYS, type CertRow, type CrlRow, type IssuerRow, type PkiActor, type ProfileRow } from '../pki/service.js';
 import { REASONS, reasonName } from '../pki/x509.js';
@@ -58,6 +60,8 @@ const certView = (c: CertRow, withPem = false) => ({
   revocationReason: c.revocation_reason === null ? null : reasonName(c.revocation_reason),
   invalidityDate: c.invalidity_date,
   requestedBy: c.requested_by,
+  renewedFrom: c.renewed_from ?? null,
+  acmeAccountId: c.acme_account_id ?? null,
   createdAt: c.created_at,
   ...(withPem ? { certificatePem: c.certificate_pem } : {})
 });
@@ -171,9 +175,31 @@ export function pkiRoutes(s: Services): Router {
   // ---------- issuance (B-1602) ----------
 
   r.post('/pki/issuers/:id/issue', async (req, res) => {
-    const b = parseBody(z.object({ csr: z.string().min(100).max(20_000), profileId: id26, days: z.number().int().min(1).max(1185).optional(), sans: z.array(san).min(1).max(100).optional() }).strict(), req.body);
+    const b = parseBody(
+      z
+        .object({
+          csr: z.string().min(100).max(20_000).optional(),
+          // Sprint 25 (B-1606): no CSR; a key made here and returned once in a PKCS#12 file under this password.
+          generateKey: z.object({ keyType: z.enum(['ec-p256', 'ec-p384', 'rsa-2048', 'rsa-3072', 'rsa-4096']).default('ec-p256'), password: z.string().min(8).max(200) }).strict().optional(),
+          commonName: z.string().trim().min(1).max(64).optional(),
+          profileId: id26,
+          days: z.number().int().min(1).max(1185).optional(),
+          sans: z.array(san).min(1).max(100).optional()
+        })
+        .strict()
+        .refine((x) => !!x.csr !== !!x.generateKey, 'Send a csr, or generateKey to have the key made here.')
+        .refine((x) => !x.generateKey || x.sans || x.commonName, 'With generateKey, name the certificate with sans or commonName.')
+        .refine((x) => !x.csr || x.commonName === undefined, 'commonName comes from the CSR.'),
+      req.body
+    );
     const i = await visible(req);
-    const out = await run(() => s.pki.issue(by(req), i, { csrPem: b.csr, profileId: b.profileId, days: b.days, sans: b.sans }));
+    if (b.generateKey) {
+      const g = b.generateKey;
+      const out = await run(() => s.pki.issueGenerated(by(req), i, { profileId: b.profileId, keyType: g.keyType, sans: b.sans ?? [], commonName: b.commonName ?? null, days: b.days, password: g.password }));
+      res.status(201).json({ ...certView(out.cert, true), chainPem: out.chain, clamped: out.clamped, pkcs12: out.pkcs12.toString('base64') });
+      return;
+    }
+    const out = await run(() => s.pki.issue(by(req), i, { csrPem: b.csr!, profileId: b.profileId, days: b.days, sans: b.sans }));
     res.status(201).json({ ...certView(out.cert, true), chainPem: out.chain, clamped: out.clamped });
   });
 
@@ -215,6 +241,100 @@ export function pkiRoutes(s: Services): Router {
     if (b.invalidityDate !== undefined && b.invalidityDate > Date.now()) throw new HttpProblem(400, 'Invalid request', 'The invalidity date cannot be in the future.');
     const out = await run(() => s.pki.revoke(by(req), c, REASONS[b.reason], b.invalidityDate ?? null));
     res.json(certView(out));
+  });
+
+  // ---------- export and renewal (Sprint 25, B-1606) ----------
+
+  const certOf = async (req: Request): Promise<CertRow> => {
+    const id = id26.safeParse(req.params.id);
+    const c = id.success ? await s.pki.certificate(principalOf(req).tenantId, id.data) : undefined;
+    if (!c) throw notFound('Certificate');
+    return c;
+  };
+  const fileName = (c: CertRow) => (c.common_name ?? c.serial).replace(/^\*\./, 'wildcard.').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 100);
+
+  r.get('/pki/certificates/:id/export', async (req, res) => {
+    const q = parseBody(z.object({ format: z.enum(['pem', 'der', 'chain']).default('pem') }).strict(), req.query);
+    const c = await certOf(req);
+    if (q.format === 'der') {
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName(c)}.der"`);
+      res.type('application/pkix-cert').send(fromPem(c.certificate_pem, 'CERTIFICATE'));
+      return;
+    }
+    const body = q.format === 'chain' ? (await s.pki.chainOf(c)).join('') : c.certificate_pem;
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName(c)}${q.format === 'chain' ? '-chain' : ''}.pem"`);
+    res.type(q.format === 'chain' ? 'application/pem-certificate-chain' : 'application/x-pem-file').send(body);
+  });
+
+  r.post('/pki/certificates/:id/pkcs12', async (req, res) => {
+    const b = parseBody(z.object({ password: z.string().min(8).max(200) }).strict(), req.body);
+    const c = await certOf(req);
+    const p12 = await s.pki.pkcs12(c, b.password);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName(c)}.p12"`);
+    res.type('application/x-pkcs12').send(p12);
+  });
+
+  r.post('/pki/certificates/:id/renew', async (req, res) => {
+    const b = parseBody(z.object({ csr: z.string().min(100).max(20_000).optional(), days: z.number().int().min(1).max(1185).optional(), revokeOld: z.boolean().default(false) }).strict(), req.body ?? {});
+    const c = await certOf(req);
+    const out = await run(() => s.pki.renew(by(req), c, { csrPem: b.csr, days: b.days, revokeOld: b.revokeOld }));
+    res.status(201).json({ ...certView(out.cert, true), chainPem: out.chain, clamped: out.clamped, revokedOld: out.revokedOld });
+  });
+
+  // ---------- ACME server settings (Sprint 25, B-1605) ----------
+
+  const acmeView = async (req: Request) => {
+    const t = principalOf(req).tenantId;
+    const st = await s.pki.acme.settings(t);
+    const tenant = await s.tenants.byId(t);
+    return { enabled: st.enabled, profileId: st.profile_id, eabRequired: st.eab_required, challenges: st.challenges, directoryUrl: tenant ? s.pki.acme.urls(tenant.slug).directory : null, updatedAt: st.updated_at || null };
+  };
+
+  r.get('/pki/acme', async (req, res) => {
+    res.json(await acmeView(req));
+  });
+
+  r.put('/pki/acme', async (req, res) => {
+    const b = parseBody(z.object({ enabled: z.boolean().optional(), profileId: id26.nullable().optional(), eabRequired: z.boolean().optional(), challenges: z.array(z.enum(['http-01', 'dns-01'])).min(1).max(2).optional() }).strict(), req.body);
+    await run(() => s.pki.acme.updateSettings(by(req), { enabled: b.enabled, profileId: b.profileId, eabRequired: b.eabRequired, challenges: b.challenges ? [...new Set(b.challenges)] : undefined }));
+    res.json(await acmeView(req));
+  });
+
+  const eabView = (k: EabKeyRow) => ({ id: k.id, name: k.name, state: k.state, accountId: k.account_id, createdAt: k.created_at, boundAt: k.bound_at });
+
+  r.get('/pki/acme/eab-keys', async (req, res) => {
+    res.json({ keys: (await s.pki.acme.eabKeys(principalOf(req).tenantId)).map(eabView) });
+  });
+
+  r.post('/pki/acme/eab-keys', async (req, res) => {
+    const b = parseBody(z.object({ name: z.string().trim().min(1).max(100) }).strict(), req.body);
+    const out = await run(() => s.pki.acme.createEabKey(by(req), b.name));
+    // The MAC key is shown once; the client sends the id as its kid (RFC 8555 7.3.4).
+    res.status(201).json({ ...eabView(out.key), kid: out.key.id, hmacKey: out.hmacKey });
+  });
+
+  r.post('/pki/acme/eab-keys/:id/revoke', async (req, res) => {
+    const id = id26.safeParse(req.params.id);
+    if (!id.success) throw notFound('Key');
+    res.json(eabView(await run(() => s.pki.acme.revokeEabKey(by(req), id.data))));
+  });
+
+  const accountView = (a: AcmeAccount) => ({ id: a.id, thumbprint: a.thumbprint, keyType: String(a.jwk.kty ?? ''), contact: a.contact, status: a.status, eabKeyId: a.eab_key_id, createdAt: a.created_at, updatedAt: a.updated_at });
+
+  r.get('/pki/acme/accounts', async (req, res) => {
+    res.json({ accounts: (await s.pki.acme.accounts(principalOf(req).tenantId)).map(accountView) });
+  });
+
+  r.post('/pki/acme/accounts/:id/revoke', async (req, res) => {
+    const id = id26.safeParse(req.params.id);
+    if (!id.success) throw notFound('Account');
+    res.json(accountView(await run(() => s.pki.acme.revokeAccount(by(req), id.data))));
+  });
+
+  r.get('/pki/acme/orders', async (req, res) => {
+    const q = parseBody(z.object({ accountId: id26.optional(), status: z.enum(['pending', 'ready', 'processing', 'valid', 'invalid']).optional(), limit: z.coerce.number().int().min(1).max(500).default(100) }).strict(), req.query);
+    const rows = await s.pki.acme.orders(principalOf(req).tenantId, q);
+    res.json({ orders: rows.map((o) => ({ id: o.id, accountId: o.account_id, status: o.status, identifiers: o.identifiers.map((x) => x.value), profileId: o.profile_id, expiresAt: o.expires_at, error: o.error, certificateId: o.certificate_id, createdAt: o.created_at, updatedAt: o.updated_at })) });
   });
 
   // ---------- profiles (B-1602) ----------

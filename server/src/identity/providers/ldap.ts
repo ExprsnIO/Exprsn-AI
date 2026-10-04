@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import type { ConnectionOptions } from 'node:tls';
 import { Client, InvalidCredentialsError, type Entry } from 'ldapts';
 import { checkHost, parseAllowList, type AllowList } from '../../mcp/hosts.js';
-import { resolveSecret } from '../secrets.js';
+import { resolveSecretRef, type VaultRefResolver } from '../secrets.js';
 import { timed, type AuthResult, type ExternalUser, type IdentityProvider, type LdapConfig, type Step } from './types.js';
 
 /** RFC 4515 escaping for values placed inside a search filter. */
@@ -38,7 +38,9 @@ export class LdapProvider implements IdentityProvider {
     private readonly cfg: LdapConfig,
     private readonly production: boolean,
     /** The directory must be an internal host unless IDENTITY_ALLOWED_HOSTS names it. */
-    private readonly allow: AllowList = parseAllowList('')
+    private readonly allow: AllowList = parseAllowList(''),
+    /** Sprint 25 (B-1705): resolves a `vault:` bind password as the user who saved the store. */
+    private readonly vault: VaultRefResolver | null = null
   ) {
     if (cfg.url.startsWith('ldap://') && !cfg.startTLS && (!cfg.allowInsecure || production)) {
       throw new Error(`${name}: ldap:// without StartTLS is refused; use ldaps:// or startTLS`);
@@ -73,7 +75,7 @@ export class LdapProvider implements IdentityProvider {
   }
 
   private async serviceBind(client: Client, steps?: Step[]): Promise<void> {
-    await timed(steps, `Service bind as ${this.cfg.bindDN}`, () => client.bind(this.cfg.bindDN, resolveSecret(this.cfg.bindPassword)));
+    await timed(steps, `Service bind as ${this.cfg.bindDN}`, async () => client.bind(this.cfg.bindDN, await resolveSecretRef(this.cfg.bindPassword, this.vault)));
   }
 
   private async findUser(client: Client, username: string, steps?: Step[]): Promise<Entry | null | 'ambiguous'> {
