@@ -48,6 +48,7 @@ import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
+import { moderationRoutes } from '../routes/moderation.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -219,6 +220,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(vaultLeaseRoutes(s));
   // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.
   api.use(atprotoRoutes(s));
+  // Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues and providers.
+  api.use(moderationRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

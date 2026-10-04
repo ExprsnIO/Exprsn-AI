@@ -512,7 +512,17 @@ const base = z.object({
      * notify their owner once per threshold; the sweep runs every PKI_EXPIRY_SWEEP_MINUTES (0 turns it off).
      */
     PKI_EXPIRY_NOTICE_DAYS: z.string().regex(/^\s*\d{1,3}(\s*,\s*\d{1,3})*\s*$/, 'comma-separated whole days, such as 30,7').default('30,7'),
-    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360)
+    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360),
+    /**
+     * Sprint 26 (B-1904 to B-1906): moderation. The sweep escalates routed flags past their queue's SLA and ends
+     * sanctions past their duration every MODERATION_SWEEP_SECONDS (0 turns it off; enforcement still compares the
+     * end time). External moderation providers send content off the site, so they are off unless
+     * MODERATION_EXTERNAL_PROVIDERS is set, and then only run in zones with egress; each call waits at most
+     * MODERATION_PROVIDER_TIMEOUT_MS.
+     */
+    MODERATION_SWEEP_SECONDS: z.coerce.number().int().min(0).max(24 * 3600).default(60),
+    MODERATION_EXTERNAL_PROVIDERS: bool.default(false),
+    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

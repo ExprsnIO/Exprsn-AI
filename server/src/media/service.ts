@@ -64,7 +64,7 @@ export interface AssetRow {
   height: number | null;
   streams: { type: string; codec: string }[];
   previews: number;
-  state: 'quarantined' | 'probing' | 'ready' | 'refused';
+  state: 'quarantined' | 'probing' | 'ready' | 'refused' | 'hidden';
   label: Label;
   reason: string | null;
   blob_key: string | null;
@@ -310,7 +310,7 @@ export class MediaService {
 
   async runPreset(p: Principal, assetId: string, presetId: string, raw: Record<string, unknown>): Promise<MediaJobRow> {
     const a = await this.asset(p, assetId);
-    if (a.state !== 'ready') throw conflict(a.state === 'refused' ? `Refused at probe: ${a.reason}` : `${a.name} is still being probed.`);
+    if (a.state !== 'ready') throw conflict(a.state === 'refused' ? `Refused at probe: ${a.reason}` : a.state === 'hidden' ? `${a.name} is hidden by moderation.` : `${a.name} is still being probed.`);
     const preset = presetById(presetId);
     if (!preset) throw notFound('Preset');
     if (!preset.kinds.includes(a.kind!)) throw conflict(`${preset.id} does not apply to ${a.kind} files.`);

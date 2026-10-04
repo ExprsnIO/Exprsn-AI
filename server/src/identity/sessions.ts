@@ -51,6 +51,8 @@ const toRow = (r: Record<string, unknown>): SessionRow => ({
  */
 export class SessionService {
   private readonly touched = new Map<string, number>();
+  /** Sprint 26 (B-1904): refuses a session for a sanctioned user (installed by the moderation service); throws. */
+  admit: ((tenantId: string, userId: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly db: Db,
@@ -71,6 +73,8 @@ export class SessionService {
   }
 
   async create(input: { userId: string; tenantId: string; stage: SessionStage; method: string; providerId: string | null; ip: string | null; userAgent: string | null; mfaVerified?: boolean }): Promise<{ token: string; session: SessionRow }> {
+    // Sprint 26 (B-1904): a suspended or banned user gets no session, whichever way they signed in.
+    if (this.admit) await this.admit(input.tenantId, input.userId);
     const token = randomToken(32);
     const t = Date.now();
     const row: SessionRow = {

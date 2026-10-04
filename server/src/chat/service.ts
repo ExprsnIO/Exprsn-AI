@@ -29,9 +29,10 @@ export type { Chunk } from './streams.js';
  * `held`: waiting on a reviewer (invisible to the user); `withdrawn`: rejected by the reviewer; `interrupted`: the
  * instance generating it stopped, and the stored part can be continued. Since Sprint 16 a user message can be `held`
  * too (a `require-approval` rule at `user-input`): its answer is `awaiting` until a reviewer approves the prompt, and
- * both are `withdrawn` when the reviewer rejects it.
+ * both are `withdrawn` when the reviewer rejects it. Since Sprint 26 (B-1903) a message can be `hidden` by moderation:
+ * shown to no one (its owner included) until an upheld appeal restores its previous state.
  */
-export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted' | 'awaiting';
+export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted' | 'awaiting' | 'hidden';
 
 export interface ConversationRow {
   id: string;
@@ -353,7 +354,7 @@ export class ChatService {
    */
   private async messageView(m: MessageRow, p?: Principal) {
     const live = this.streams.get(m.id);
-    const held = m.role === 'assistant' && m.state === 'held' && !live;
+    const held = (m.role === 'assistant' && m.state === 'held' && !live) || m.state === 'hidden';
     const tools = held ? [] : live ? live.tools : json<Chunk['tool'][]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
     const citations = held ? [] : json<Record<string, unknown>[]>(await this.open(m.tenant_id, m.id, 'citations', m.citations ?? null), []).map((c) => (c.passage != null && (!p || !clears(p.clearance, c.label as Label)) ? { ...c, passage: null, span: null, restricted: true } : c));
     return {
@@ -994,8 +995,8 @@ export class ChatService {
     for (let cur = byId.get(parentId); cur; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) path.unshift(cur);
     const out: { row: MessageRow; message: ChatMessage }[] = [];
     for (const m of path) {
-      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn', 'awaiting'].includes(m.state)) continue;
-      if (m.role === 'user' && (m.state === 'held' || m.state === 'withdrawn')) continue;
+      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn', 'awaiting', 'hidden'].includes(m.state)) continue;
+      if (m.role === 'user' && (m.state === 'held' || m.state === 'withdrawn' || m.state === 'hidden')) continue;
       let content = (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '';
       const images: string[] = [];
       for (const aid of json<string[]>(m.attachments, [])) {

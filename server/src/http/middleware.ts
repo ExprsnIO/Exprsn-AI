@@ -13,6 +13,7 @@ import type { Services } from '../services.js';
 import { badRequest, forbidden, HttpProblem, tooManyRequests, unauthorized } from './problem.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { DpopNonceError } from '../federation/oidc.js';
+import { sanctionRefusal } from '../moderation/refusal.js';
 
 /** Failed bearer tokens and API keys allowed per address per minute before the address gets 429 (B-111). */
 export const BAD_BEARER_PER_MINUTE = 20;
@@ -54,6 +55,8 @@ export async function loadPrincipal(
 ): Promise<Principal | null> {
   const [user, tenant] = await Promise.all([s.users.get(tenantId, userId), s.tenants.byId(tenantId)]);
   if (!user || user.state !== 'active' || !tenant || tenant.state !== 'active') return null;
+  // Sprint 26 (B-1904): work done as a sanctioned user in the background (schedules, plugins) stops too.
+  if (!via.session && !via.apiKey && (await s.moderation.blocking(tenantId, userId))) return null;
   return {
     kind: via.apiKey ? 'api_key' : 'user',
     userId: user.id,
@@ -92,6 +95,13 @@ export function authenticate(s: Services): RequestHandler {
     if (!r.allowed) throw tooManyRequests('Too many failed credentials from this address. Wait before trying again.', r.resetMs / 1000);
     throw problem;
   };
+  // Sprint 26 (B-1904): a suspended or banned user is refused on every request, whatever the credential.
+  const sanctioned = async (req: Request): Promise<void> => {
+    const p = req.principal;
+    if (!p) return;
+    const b = await s.moderation.blocking(p.tenantId, p.userId);
+    if (b) throw sanctionRefusal(b);
+  };
   return async (req, res, next) => {
     const auth = req.headers.authorization;
     if (auth) {
@@ -117,6 +127,7 @@ export function authenticate(s: Services): RequestHandler {
         if (!p) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
         req.principal = p;
         p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+        await sanctioned(req);
         return next();
       }
       const key = await s.apiKeys.verify(m[1]);
@@ -128,6 +139,7 @@ export function authenticate(s: Services): RequestHandler {
       req.apiKey = key;
       req.principal = p;
       p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+      await sanctioned(req);
       return next();
     }
     const token = sessionTokenFrom(req.headers.cookie, s.cfg.COOKIE_SECURE);
@@ -143,6 +155,7 @@ export function authenticate(s: Services): RequestHandler {
         }
       }
     }
+    await sanctioned(req);
     next();
   };
 }

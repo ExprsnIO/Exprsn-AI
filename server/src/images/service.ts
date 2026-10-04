@@ -41,7 +41,7 @@ export interface ImageDeps {
   provenanceKey: string;
 }
 
-export type ImageState = 'queued' | 'running' | 'succeeded' | 'withheld' | 'failed' | 'cancelled';
+export type ImageState = 'queued' | 'running' | 'succeeded' | 'withheld' | 'failed' | 'cancelled' | 'hidden';
 
 interface ImageRow {
   id: string;

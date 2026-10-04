@@ -48,6 +48,9 @@ export interface FlagRow {
   reason: string | null;
   eval_set: string | null;
   created_at: number;
+  /** Sprint 26 (B-1905): the review queue the flag was routed to, and when its SLA escalated it. */
+  queue_id?: string | null;
+  escalated_at?: number | null;
 }
 
 export interface NewFlag {
@@ -74,6 +77,7 @@ export interface NewFlag {
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
+export const flagFromRow = (r: Record<string, unknown>): FlagRow => fromRow(r);
 const fromRow = (r: Record<string, unknown>): FlagRow => ({
   ...(r as unknown as FlagRow),
   number: Number(r.number),
@@ -83,7 +87,9 @@ const fromRow = (r: Record<string, unknown>): FlagRow => ({
   due_at: Number(r.due_at),
   breach_notified_at: num(r.breach_notified_at),
   decided_at: num(r.decided_at),
-  created_at: Number(r.created_at)
+  created_at: Number(r.created_at),
+  queue_id: (r.queue_id as string | null | undefined) ?? null,
+  escalated_at: num(r.escalated_at)
 });
 
 export const flagRef = (f: Pick<FlagRow, 'number'>) => `F-${f.number}`;
@@ -105,6 +111,8 @@ const WINDOW = 240;
 export class FlagService {
   /** Reads a held answer for the reviewer (installed by the chat service). */
   heldAnswer: ((tenantId: string, messageId: string, sourceKind?: string) => Promise<{ conversationId: string; state: string; content: string } | null>) | null = null;
+  /** Sprint 26 (B-1905): called with each new flag (the moderation service routes it to a review queue). */
+  readonly createdListeners: ((f: FlagRow) => Promise<void>)[] = [];
 
   constructor(
     private readonly db: Db,
@@ -166,9 +174,47 @@ export class FlagService {
         if (!isUniqueViolation(err) || attempt >= 5) throw err;
       }
     }
-    const row = fromRow((await this.db('guard_flags').where({ id }).first()) as Record<string, unknown>);
+    let row = fromRow((await this.db('guard_flags').where({ id }).first()) as Record<string, unknown>);
     await this.event(row, 'created', input.actor?.user ?? null, null);
+    if (this.createdListeners.length) {
+      for (const l of this.createdListeners) await l(row);
+      row = fromRow((await this.db('guard_flags').where({ id }).first()) as Record<string, unknown>);
+    }
     return row;
+  }
+
+  /**
+   * Sprint 26 (B-1903): an upheld appeal puts a decided flag back in the queue with a fresh timer from its severity
+   * (or its queue), recorded as a `reopened` event.
+   */
+  async reopen(f: FlagRow, actor: string | null, note: string | null, slaMinutes?: number): Promise<FlagRow> {
+    if (f.state === 'open') return f;
+    const sla = slaMinutes ?? SEVERITY_SLA_MINUTES[f.severity];
+    const due = Date.now() + sla * 60_000;
+    const patch = { state: 'open' as const, decided_by: null, decided_at: null, reason: null, assignee: null, escalated_to: null, escalated_at: null, sla_minutes: sla, due_at: due, breach_notified_at: null };
+    await this.db('guard_flags').where({ id: f.id }).update(patch);
+    const after = { ...f, ...patch };
+    await this.event(after, 'reopened', actor, note);
+    return after;
+  }
+
+  /** Sprint 26 (B-1905): a routed flag past its queue's SLA moves up a level, by the system, with a fresh timer. */
+  async escalateBySystem(f: FlagRow, to: EscalationLevel, minutes: number, note: string): Promise<FlagRow> {
+    const t = Date.now();
+    const due = t + minutes * 60_000;
+    const n = await this.db('guard_flags').where({ id: f.id, state: 'open' }).whereNull('escalated_at').update({ escalated_to: to, escalated_at: t, assignee: null, due_at: due, sla_minutes: minutes, breach_notified_at: null });
+    if (!n) return f;
+    const after = { ...f, escalated_to: to, escalated_at: t, assignee: null, due_at: due, sla_minutes: minutes };
+    await this.event(after, 'escalated', null, `${to}: ${note}`);
+    await this.notifyEscalation(after, to, null);
+    return after;
+  }
+
+  private async notifyEscalation(f: FlagRow, to: EscalationLevel, except: string | null): Promise<void> {
+    const users = to === 'platform' ? await this.withRoles(null, ['system-admin']) : await this.withRoles(f.tenant_id, ['guardrail-admin']);
+    for (const [tenantId, ids] of users) {
+      await this.notifications.notify({ tenantId, userIds: ids.filter((u) => u !== except), kind: 'flag', title: `Flag ${flagRef(f)} escalated to you`, body: `${f.severity} severity, ${f.sla_minutes} min timer`, route: `flags?id=${flagRef(f)}`, label: f.label, email: f.severity === 'high' });
+    }
   }
 
   async get(tenantId: string, ref: string): Promise<FlagRow> {
@@ -252,7 +298,7 @@ export class FlagService {
   }
 
   /** Who sees a flag in their queue: its workspace (or none), not assigned elsewhere, and escalations only to their level. */
-  private reviewable(f: FlagRow, p: Principal, workspaces: string[]): boolean {
+  reviewable(f: FlagRow, p: Principal, workspaces: string[]): boolean {
     if (f.workspace_id && !workspaces.includes(f.workspace_id)) return false;
     if (f.assignee && f.assignee !== p.userId) return false;
     if (f.escalated_to && f.assignee !== p.userId) {
@@ -351,10 +397,7 @@ export class FlagService {
     await this.db('guard_flags').where({ id: f.id }).update({ escalated_to: to, assignee: null, due_at: due, sla_minutes: 60, breach_notified_at: null });
     const after = { ...f, escalated_to: to, assignee: null, due_at: due, sla_minutes: 60 };
     await this.event(after, 'escalated', p.userId, note ? `${to}: ${note}` : to);
-    const users = to === 'platform' ? await this.withRoles(null, ['system-admin']) : await this.withRoles(f.tenant_id, ['guardrail-admin']);
-    for (const [tenantId, ids] of users) {
-      await this.notifications.notify({ tenantId, userIds: ids.filter((u) => u !== p.userId), kind: 'flag', title: `Flag ${flagRef(f)} escalated to you`, body: `${f.severity} severity, 60 min timer`, route: `flags?id=${flagRef(f)}`, label: f.label, email: f.severity === 'high' });
-    }
+    await this.notifyEscalation(after, to, p.userId);
     return after;
   }
 

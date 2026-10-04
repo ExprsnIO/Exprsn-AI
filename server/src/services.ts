@@ -91,6 +91,8 @@ import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
 import { RotationNotices } from './vault/rotation.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
+import { ModerationService } from './moderation/service.js';
+import type { ModerationProviderClient } from './moderation/providers.js';
 
 export interface Services {
   cfg: Config;
@@ -204,6 +206,8 @@ export interface Services {
   rotation: RotationNotices;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
+  /** 1.4.0, Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues, providers. */
+  moderation: ModerationService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -229,6 +233,8 @@ export interface ServiceOverrides {
   billingProvider?: BillingProvider | null;
   /** Sprint 25 (B-1704): the database engines behind leases (tests use an in-memory fake). */
   dbAdmins?: DbAdminFactory;
+  /** Sprint 26 (B-1906): external moderation providers (tests use a fake). */
+  moderationProviders?: ModerationProviderClient;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -424,6 +430,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     atproto: new AtprotoService(() => s),
+    moderation: new ModerationService(() => s, overrides.moderationProviders),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -442,6 +449,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await counters.close();
       await s.cache.close();
       await s.atproto.close().catch(() => undefined);
+      await s.moderation.close().catch(() => undefined);
       await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
       // Sprint 20: the signer connection, when the KMS is the signer.
@@ -489,6 +497,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.mcp.vaultResolver = vaultRead;
   }
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
+  s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -542,4 +551,5 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
+  s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
 }
