@@ -414,11 +414,23 @@ filter, private `/tmp`, only the state directory writable.
   sign-in or sync. Encrypt and verify calls are not audited (they reveal nothing); decrypt, rewrap, sign and every
   read of a secret are. `vault:path#key` references in other features (B-1705), rotation schedules (B-1706) and
   dynamic database leases (B-1704) follow in Sprint 25.
-- Plugins (1.4.0, Sprint 24c): manifests, grants and the lifecycle are enforced, but nothing runs a plugin yet:
-  enabling one only marks it enabled. Declarative actions (each checked against its granted capability) and script
-  handlers in the sandbox arrive later in 1.4.0; until then a script plugin is stored and cannot be enabled, and a
-  manifest's `webhook.url` is not checked against the outbound host rules (it will be when plugin deliveries use the
-  webhook path).
+- Plugins (1.4.0, Sprints 24c and 25): a plugin is data; its declarative actions run through the existing services and
+  its script handler in the script sandbox (no network, never in the server process), each gated by a granted
+  capability, and every webhook endpoint it names is checked against the outbound host rules at install, at enable
+  and at each delivery. Loop rule: whatever a plugin's work causes carries the chain of plugins behind it (in process
+  while the invocation runs, in the invocation row across the job queue, and in the trigger of a workflow run a plugin
+  started); an event is never delivered to a plugin already in its chain, and not at all once the chain is
+  `PLUGIN_MAX_DEPTH` long; the plugin and webhook deliveries' own job states are never events for plugins. What leaves
+  the platform is not traced: a webhook receiver (or a workflow's HTTP step) that calls the API back starts a fresh
+  chain, so such a loop is bounded only by `PLUGIN_RATE_PER_MINUTE`. The in-process part of the chain rides an
+  AsyncLocalStorage: work an action's callee defers to its own timers or connections opened during the action would
+  carry it too, which only ever suppresses deliveries. A script handler holds its invocation's token (shown to it
+  once, stored hashed, revoked when it ends); with the default sandbox it cannot use it except over its own stdin and
+  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. The
+  `records`, `files`, `groups` and `posts` calls answer `501` until their domains ship. The test suite runs handlers
+  as local processes (`server/test/sprint25d-fakes.ts`); the container path is the scripts' and is not exercised in CI.
+  Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
+  retention yet).
 - Event catalogue (1.4.0): an emitted event that does not match its schema is still delivered (counted and logged),
   so a receiver must still validate what it gets. The `record`, `file`, `group`, `message` and `post` types are
   reserved, not emitted.

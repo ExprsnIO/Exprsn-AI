@@ -30,6 +30,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "An API key (exai_k1_...) or an OAuth access token"
+      },
+      "pluginToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A plugin handler run's scoped token (xpt_…), B-2004"
       }
     },
     "schemas": {
@@ -190,6 +195,36 @@
           },
           "updatedAt": {
             "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "inline",
+              "bundle"
+            ],
+            "description": "Since Sprint 25 (B-2005): where the plugin was installed from"
+          },
+          "bundle": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The signed import bundle a plugin was installed from",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "signer": {
+                "type": "string",
+                "description": "sha256 fingerprint of the signer key"
+              }
+            }
           }
         }
       },
@@ -348,6 +383,81 @@
           },
           "at": {
             "type": "integer"
+          }
+        }
+      },
+      "PluginInvocation": {
+        "type": "object",
+        "required": [
+          "id",
+          "event",
+          "eventId",
+          "label",
+          "state",
+          "chain"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "label": {
+            "$ref": "#/components/schemas/Label"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "chain": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The plugins (ids) the event was caused by"
+          },
+          "outcome": {
+            "description": "{actions: [{type, ok, status?, error?}]} for actions; {calls: [{api, status}], exitCode, timedOut, durationMs, returned} for a handler"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         }
       }
@@ -3915,6 +4025,110 @@
         }
       }
     },
+    "/api/admin/plugins/available": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2005: the plugin files of promoted, signed import bundles, with what each manifest says it is (problem when it does not validate)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "bundle": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "digest": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "signer": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "promotedAt": {
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer"
+                          },
+                          "manifest": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "capabilities": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "problem": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/plugins/capabilities": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -3964,6 +4178,74 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/plugins/import": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2005: installs a plugin from a promoted import bundle, reading the file again from the stored transfer with its signature (against the signer keys registered now) and digests checked. 409 for a bundle not promoted (an unsigned one is rejected at verification) or failing the checks; otherwise as POST /api/admin/plugins. Audited plugin.installed with the bundle and signer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "bundle",
+                  "path"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "bundle": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Bundle id or name"
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "grants": {
+                    "type": "array",
+                    "maxItems": 30,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 60
+                    }
+                  },
+                  "maxLabel": {
+                    "$ref": "#/components/schemas/Label"
+                  },
+                  "config": {
+                    "type": "object"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plugin"
                 }
               }
             }
@@ -4174,7 +4456,7 @@
         "tags": [
           "admin/plugins"
         ],
-        "summary": "installed or disabled to enabled. 409 when a required capability is not granted (missing lists them), for a script plugin (stored, not run, until script handlers ship), or from another state. Audited plugin.enabled",
+        "summary": "installed or disabled to enabled. 409 when a required capability is not granted (missing lists them), from another state, and (since Sprint 25) for a script plugin not from a signed bundle under PLUGINS_REQUIRE_SIGNED or without a sandbox; 422 when a webhook endpoint it names is refused by the outbound host rules. Audited plugin.enabled",
         "parameters": [
           {
             "name": "id",
@@ -4276,6 +4558,162 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Plugin"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/plugins/{id}/invocations": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2003, B-2004: the events delivered to the plugin and what came of each, newest first",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The plugin id or key",
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 63
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invocations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PluginInvocation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/plugins/{id}/logs": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "admin/plugins"
+        ],
+        "summary": "B-2003, B-2004: the plugin's own log (log actions, a handler's output and return value), newest first; sealed at rest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The plugin id or key",
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 63
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "invocation",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 26,
+              "maxLength": 26
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "invocationId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "level": {
+                            "type": "string",
+                            "enum": [
+                              "info",
+                              "warn",
+                              "error"
+                            ]
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -11985,6 +12423,68 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/plugin-broker/v1/calls/{api}": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "plugin-broker"
+        ],
+        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS; 501 for a domain not shipped",
+        "security": [
+          {
+            "pluginToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "api",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "log",
+                "audit",
+                "notify",
+                "flag",
+                "webhook",
+                "workflow",
+                "records.read",
+                "records.write",
+                "files.read",
+                "groups.read",
+                "posts.write"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The call's arguments (as the declarative action's with; webhook also takes data)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
