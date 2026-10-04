@@ -412,8 +412,7 @@ filter, private `/tmp`, only the state directory writable.
   own `min_decryption_version`) is not built. Vault paths and transit names are lower case only, so they compare the
   same way on every database. A grant to a directory group follows the groups the user's stores reported at the last
   sign-in or sync. Encrypt and verify calls are not audited (they reveal nothing); decrypt, rewrap, sign and every
-  read of a secret are. `vault:path#key` references in other features (B-1705), rotation schedules (B-1706) and
-  dynamic database leases (B-1704) follow in Sprint 25.
+  read of a secret are.
 - Plugins (1.4.0, Sprint 24c): manifests, grants and the lifecycle are enforced, but nothing runs a plugin yet:
   enabling one only marks it enabled. Declarative actions (each checked against its granted capability) and script
   handlers in the sandbox arrive later in 1.4.0; until then a script plugin is stored and cannot be enabled, and a
@@ -428,3 +427,22 @@ filter, private `/tmp`, only the state directory writable.
   most its tier's TTL.
 - Realtime rooms (1.4.0): the generic mechanism is in place, but no domain registers an authoriser yet, so every
   `room.join` is refused until messaging, groups, feeds or channels ship.
+- Database leases (1.4.0, B-1704): the built-in engines hold an admin login to each target database (sealed, or a
+  `vault:` reference read as the user who registered the engine), so whoever can act as that user's vault policy can
+  make accounts there; registration needs `connections:manage` and a zone whose ceiling covers the engine. Only
+  PostgreSQL accounts carry their expiry (`VALID UNTIL`); MySQL accounts live until the sweeper drops them, so a
+  stopped sweeper (or `VAULT_LEASE_SWEEP_SECONDS=0`) leaves MySQL leases usable past their expiry. Ending a lease's
+  open sessions needs `pg_signal_backend` (PostgreSQL) or `CONNECTION_ADMIN` (MySQL) on the admin login; without them
+  a session opened before the drop runs on until it disconnects. When the admin login is a vault reference whose
+  owner loses read on it, leases can be neither issued nor dropped until it is restored (the sweeper keeps retrying
+  and the admins are told). Objects an account created itself (possible on PostgreSQL before 15 through `PUBLIC`'s
+  `CREATE` on `public`) are dropped with it.
+- Vault references (1.4.0, B-1705): a reference resolves as the user who saved the object (for workflow HTTP steps,
+  as the user who started the run), every time it is used; changing that user's policy or disabling them stops the
+  reference at its next use, except where a driver already holds an open pool: a SQL user store keeps its database
+  pool until the store is saved again or the server restarts (LDAP binds, connections, MCP calls, engines and workflow
+  steps read the reference every time). Stores defined in the configuration file have no owner and
+  cannot use `vault:` references. Only KV secrets can be referenced, not transit keys or leases.
+- Rotation schedules (1.4.0, B-1706): KV secrets cannot be rotated by the server (it does not know how to make the
+  next value), so their schedules only notify; transit keys can rotate themselves (`autoRotate`). Notices are checked
+  every `VAULT_ROTATION_CHECK_MINUTES`, so one can arrive up to that late.

@@ -1898,3 +1898,95 @@ routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 f
 [--limit] [--dry-run]`: `deliveries` sends past deliveries again, each its exact body as a new delivery; `audit`
 backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
 Audited `webhook.replayed`.
+
+## Sprint 25c (1.4.0): database leases, vault references, rotation (B-1704 to B-1706)
+
+### Database leases (B-1704)
+
+Built-in PostgreSQL and MySQL engines make short-lived accounts on a tenant's own database server (OpenBao's database
+engine for data connections stays as in Sprint 15, B-416). Vault policy paths gain a third namespace,
+`database/<engine>/<role>`: `read` takes a lease, `list` shows the role. All routes answer `Cache-Control: no-store`.
+
+Engines and roles need `connections:manage`. An engine is registered in a zone whose ceiling covers its label (the
+B-415 checks: `422` for an undefined zone, `403` with `step: zone` and `zoneCeiling` above the ceiling; both audited as
+`vault.database.engine.refused`) and within the caller's clearance. Its admin login is a password (sealed with the
+tenant data key, never shown again) or `adminPasswordRef: vault:path#key` (B-1705: refused at save unless the caller
+may read it, then read as that user every time the engine logs in). With `check` (default) the server logs in first
+and refuses (`422`) an admin that cannot create accounts. The admin needs `CREATEROLE` (PostgreSQL) or `CREATE USER`
+(MySQL), and grant options on what its roles hand out.
+
+| Route | Notes |
+| --- | --- |
+| `GET /vault/database/engines` | `{engines: [{name, dialect, endpoint, database, tls, zone, label, adminUsername, adminPasswordFrom: sealed\|vault, adminPasswordRef, userHost, defaultTtlSeconds, maxTtlSeconds, state, activeLeases, roles, createdBy, createdAt, updatedAt}]}` (engines above the caller's clearance are left out) |
+| `POST /vault/database/engines` `{name, dialect: postgres\|mysql, endpoint, database?, tls?, zone?, label?, adminUsername, adminPassword \| adminPasswordRef, userHost?, defaultTtlSeconds?, maxTtlSeconds?, check?}` | `201` with the engine (and `check {version, canCreate, detail}`); `409` if the name exists. TTLs default to `VAULT_LEASE_DEFAULT_TTL_SECONDS`, at most `VAULT_LEASE_MAX_TTL_SECONDS`. MySQL needs `database`; `userHost` (default `%`) is the host part of generated MySQL accounts |
+| `GET /vault/database/engines/:name` | The engine |
+| `PATCH /vault/database/engines/:name` `{endpoint?, database?, tls?, zone?, label?, adminUsername?, adminPassword?, adminPasswordRef?, userHost?, defaultTtlSeconds?, maxTtlSeconds?, state?: active\|disabled}` | Zone and label changes pass the same checks; a new password or reference makes the caller the login's owner. A disabled engine issues no leases (live ones keep running) |
+| `DELETE /vault/database/engines/:name` | Drops every live lease's account first; `409` while any could not be dropped (they are retried). `204` |
+| `POST /vault/database/engines/:name/test` | `{ok, version, canCreate, detail, ms}`; audited |
+| `PUT /vault/database/engines/:name/roles/:role` `{privileges: read\|readwrite, schemas?, defaultTtlSeconds?, maxTtlSeconds?}` | Creates or replaces a role (`[a-z][a-z0-9_]{0,31}`). `schemas`: PostgreSQL schemas (default `public`) or MySQL databases (default the engine's), letters, digits, `_`, `$`, `-`. `read` grants `SELECT` on all tables in them; `readwrite` adds `INSERT, UPDATE, DELETE` (and sequence use on PostgreSQL). A role's maximum TTL cannot pass the engine's |
+| `DELETE /vault/database/engines/:name/roles/:role` | `409` while the role has live leases |
+| `POST /vault/database/sweep` | Runs the expiry sweeper for the tenant now (`202 {jobId}`); it also runs every `VAULT_LEASE_SWEEP_SECONDS` for tenants with a lease due |
+
+Leases need `secrets:read` and the vault policy:
+
+| Route | Notes |
+| --- | --- |
+| `GET /vault/database/roles` | The roles the caller's policy lists or lets them take, within their clearance: `{roles: [{engine, dialect, endpoint, database, label, name, privileges, schemas, defaultTtlSeconds, maxTtlSeconds, policyPath, canIssue}]}` |
+| `POST /vault/database/creds/:engine/:role` `{ttlSeconds?}` | `read` on `database/<engine>/<role>` (else `403`, `step: vault-policy`, audited as `vault.denied`). Creates the account, then answers `201 {id, engine, role, username, label, state, issuedTo, issuedAt, expiresAt, maxExpiresAt, renewals, leaseDurationSeconds, renewable, password, connection {dialect, endpoint, database, tls}}`. **The password is in this response only**; it is not stored. The TTL is cut to the role's maximum; the lease can never outlive `maxExpiresAt` |
+| `GET /vault/database/leases?all=&engine=&state=&limit=` | The caller's leases; `all=1` (every lease in the tenant) needs `connections:manage` or `secrets:admin` |
+| `GET /vault/database/leases/:id` | One lease (the holder's, or any for those admins); never the password |
+| `POST /vault/database/leases/:id/renew` `{incrementSeconds?}` | Moves the expiry by the increment (default the role's TTL), never past `maxExpiresAt` (`capped: true` when it reached it). The renewing caller's policy must still allow `read`. `410` once the lease ended |
+| `POST /vault/database/leases/:id/revoke` | Drops the account at once: `{…, state: revoked}`. If the database refuses, `502` and the lease waits in `revoking` for the sweeper |
+
+Generated names are `exai_<role>_<12 hex>` (at most 32 characters) and passwords are random; statements come from a
+fixed set (`CREATE ROLE … LOGIN … VALID UNTIL`, `GRANT CONNECT/USAGE/SELECT…`, `ALTER ROLE … VALID UNTIL`, `REVOKE`,
+`DROP ROLE`; `CREATE USER`, `GRANT … ON \`db\`.*`, `DROP USER`) with every identifier and literal quoted for the
+dialect. PostgreSQL accounts carry `VALID UNTIL` the lease's expiry, so the login stops working at expiry even before
+the sweeper runs; MySQL has no equivalent and relies on the sweeper. The sweeper (job `vault.leases.sweep`) claims each
+lease past its expiry, ends its sessions where the admin may, revokes its grants and drops it; a drop the database
+refuses leaves the lease `revoking` with `lastError` and `attempts`, retried with back-off (30 s doubling to an hour),
+and the tenant's connection and tenant admins (and the engine's owner) are notified on the first failure.
+
+Audit actions: `vault.database.engine.registered`, `.updated`, `.removed`, `.tested`, `.refused`,
+`vault.database.role.saved`, `vault.database.role.removed`, `vault.database.lease.issued`, `.renewed`, `.revoked`,
+`.expired`, `.revoke-failed`, `.failed`. None carries a password.
+
+### `vault:` references (B-1705)
+
+A `vault:<path>#<key>` reference names one key of the current version of a KV secret. It is accepted, beside the
+existing `env:` and `file:` references, in:
+
+- user stores: the LDAP bind password, the SQL store connection and the upstream OIDC client secret
+  (`POST`/`PATCH /admin/identity-providers`, `POST /admin/federation/upstream`);
+- data connections: the password (`POST /admin/connections`, `PUT /admin/connections/:id/credential`); the view
+  shows `passwordFromVault: true`;
+- MCP servers: the service token (`POST /admin/mcp-servers`, `PUT /admin/mcp-servers/:id/credential`);
+- workflow HTTP steps: a header value that is a reference, optionally after `Bearer `, `Basic ` or `Token `. HTTP steps
+  now also take an `Authorization` header, which must be a reference: a literal credential is refused at save (`400`);
+- database engines: `adminPasswordRef` (above).
+
+**At save**, the saving principal must hold `secrets:read`, their vault policy must allow `read` on `kv/<path>`, and
+their clearance must reach the secret's label if it exists; otherwise `403` (`step: role`, `vault-policy` or
+`clearance`), and a policy denial is audited as `vault.denied`. The saver becomes the object's reference owner.
+**At use**, the reference is read as that owner (for workflow steps: as the run's principal) under their current
+state, roles, policy and clearance, and audited as `vault.secret.read` with `actor.via` naming the object
+(`identity-provider:<id>`, `connection:<id>`, `mcp-server:<id>`, `workflow:<id>`, `database-engine:<id>`). A reference
+the owner can no longer read fails that use: a store reports an error and the chain moves on, a connection query is
+`403` and audited as `connection.query.refused`, an MCP handshake fails, a workflow step fails without calling out.
+Stores defined in the configuration file have no owner, so their `vault:` references do not resolve. Values never
+appear in the audit chain, logs, graphs or step output.
+
+### Rotation schedules (B-1706)
+
+| Route | Notes |
+| --- | --- |
+| `PATCH /vault/kv/metadata/*path` `{…, rotationPeriodDays?: number\|null, owner?: userId\|null}` | A rotation schedule for the secret (null clears it); `owner` receives the notices (default the creator). The metadata view adds `rotationPeriodDays, rotatedAt, rotationDueAt, owner` |
+| `PATCH /vault/transit/keys/:name` `{…, rotationPeriodDays?, autoRotate?, owner?}` | The same for a transit key; with `autoRotate` the key is rotated when it falls due. The key view adds `rotationPeriodDays, rotatedAt, rotationDueAt, owner, autoRotate` |
+
+The job `vault.rotation.check` runs every `VAULT_ROTATION_CHECK_MINUTES` for tenants with schedules. A secret or key
+whose current version falls due within `VAULT_ROTATION_NOTICE_DAYS` gets a `due` notice, and one past its period an
+`overdue` notice: each once per version, as a notification (`kind: vault`, also by email when SMTP is set) to the
+owner, or to the tenant admins when the owner is no longer active. Writing a new version or rotating the key starts
+the schedule again. A key with `autoRotate` is rotated by the job instead (`vault.transit.key.rotated` with
+`actor.service: vault.rotation` and `scheduled: true`) and the owner is told. Audit actions: `vault.rotation.due`,
+`vault.rotation.overdue`.
