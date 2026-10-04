@@ -45,6 +45,8 @@ import { billingAdminRoutes } from '../routes/admin/billing.js';
 import { vaultRoutes } from '../routes/vault.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
+import { atprotoRoutes } from '../routes/atproto.js';
+import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -143,6 +145,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(trainerWorkerRoutes(s));
   // Sprint 24 (B-1603, B-1604): the CA's CRLs, issuer certificates and OCSP responder (public, rate-limited).
   app.use(pkiPublicRoutes(s));
+  // Sprint 25 (B-1609, B-1610): DID documents, handle resolution and queryLabels (public, rate-limited).
+  app.use(atprotoPublicRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -207,6 +211,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
   api.use(eventRoutes(s));
   api.use('/admin', pluginAdminRoutes(s));
+  // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.
+  api.use(atprotoRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

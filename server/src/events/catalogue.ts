@@ -55,6 +55,8 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'webhook.*', description: 'Changes to webhooks themselves (audit actions)' },
   // 1.4.0 (B-2001)
   { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants (audit actions)' },
+  // 1.4.0, Sprint 25 (B-1608 to B-1611)
+  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records: created, updated, deleted, transitioned (reserved until B-22)' },
   { pattern: 'file.*', description: 'File store: uploaded, updated, deleted, restored, shared (reserved until B-24)' },
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },

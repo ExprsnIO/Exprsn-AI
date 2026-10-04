@@ -86,6 +86,7 @@ import { SchemaGuard } from './db/schema.js';
 import { ZoneCluster } from './zones/cluster.js';
 import { VaultService } from './vault/service.js';
 import { PkiService } from './pki/service.js';
+import { AtprotoService } from './atproto/service.js';
 
 export interface Services {
   cfg: Config;
@@ -191,6 +192,8 @@ export interface Services {
   rooms: RoomRegistry;
   /** 1.4.0 (B-2002): per-tenant plugin installs (manifests and grants; data, never code). */
   plugins: PluginService;
+  /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
+  atproto: AtprotoService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -404,6 +407,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     cache: new TenantCache(createCacheStore(cfg.CACHE_STORE, cfg.REDIS_URL, cfg.CACHE_MAX_ENTRIES, log), bus, metrics.registry, { ttlSeconds: { short: cfg.CACHE_TTL_SHORT_SECONDS, medium: cfg.CACHE_TTL_MEDIUM_SECONDS, long: cfg.CACHE_TTL_LONG_SECONDS } }, log),
     rooms: new RoomRegistry(bus),
     plugins: new PluginService(() => s),
+    atproto: new AtprotoService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -420,6 +424,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await bus.close();
       await counters.close();
       await s.cache.close();
+      await s.atproto.close().catch(() => undefined);
       await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
       // Sprint 20: the signer connection, when the KMS is the signer.
@@ -455,6 +460,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
   s.evals.registerJobs(); // Sprint 21 (B-1303)
   s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
+  s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -505,4 +511,5 @@ export function startSchedules(s: Services): void {
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
   s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
   s.pki.schedule(s.scheduler); // Sprint 24 (B-1603): CRLs for every live issuer
+  s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
 }
