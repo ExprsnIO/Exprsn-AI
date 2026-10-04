@@ -8,6 +8,7 @@ import { io as ioClient, type Socket } from 'socket.io-client';
 import { Registry } from 'prom-client';
 import { eventsCommand, parseTime, pluginsCommand } from '../src/cli/core.js';
 import { migrateCheck } from '../src/db/schema.js';
+import { migrationSource } from '../src/db/migrations/index.js';
 import { catalogue, EVENT_TYPES, knownPattern, validateEvent, type EventEnvelope } from '../src/events/catalogue.js';
 import { loadPrincipal } from '../src/http/middleware.js';
 import { createLogger } from '../src/observability/index.js';
@@ -520,7 +521,8 @@ describe('migration discipline (B-2104)', () => {
     const h = await harness();
     try {
       const r = await migrateCheck(h.s.db);
-      expect(r).toMatchObject({ state: 'current', pending: [], database: '026c_core' });
+      // The newest migration (a later sprint's, once one lands after 026c_core).
+      expect(r).toMatchObject({ state: 'current', pending: [], database: (await migrationSource.getMigrations([])).at(-1) });
       expect(await h.s.db.schema.hasTable('plugins')).toBe(true);
       expect(await h.s.db.schema.hasTable('plugin_transitions')).toBe(true);
     } finally {
