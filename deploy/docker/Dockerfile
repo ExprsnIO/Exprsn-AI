@@ -25,8 +25,11 @@ ENV NODE_ENV=production \
     SQLITE_FILENAME=/var/lib/exprsn-ai/exprsn-ai.sqlite \
     BLOB_DIR=/var/lib/exprsn-ai/blobs
 WORKDIR /app
-# The server never runs npm, yarn or corepack, so they and their bundled dependencies leave the runtime image.
+# The server never runs npm, yarn or corepack, so they and their bundled dependencies leave the runtime image. The
+# base image is pinned by digest; `upgrade` takes the Debian security fixes released since (the Trivy job fails on
+# fixed HIGH and CRITICAL findings, e.g. CVE-2026-103111 in libpcre2-8-0).
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends tini ca-certificates git \
  && rm -rf /var/lib/apt/lists/* \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
