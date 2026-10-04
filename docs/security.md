@@ -280,16 +280,36 @@ filter, private `/tmp`, only the state directory writable.
 - Certificate authority (Sprint 24): issuer and OCSP responder keys are made and used only in the signer or OpenBao
   transit; with neither the CA refuses to make keys. Creating, rotating or re-issuing the root needs `platform:manage`
   and a recent sign-in, not a second admin (no dual control yet). Tenant intermediates carry no name constraints: a
-  tenant admin with `pki:manage` sets their own profiles, so the CA checks names against policy but not domain
-  control (there is no ACME-style validation before B-1605), and anyone who trusts the platform root trusts every
-  tenant's issuance; trust a tenant's intermediate rather than the root where that matters. CRLs are full CRLs only
+  tenant admin with `pki:manage` sets their own profiles, so administrator issuance (the API and `exprsn-ai pki`)
+  checks names against policy but not domain control; only ACME orders (Sprint 25) also prove control of each name
+  (see the ACME paragraph below and `docs/pki.md`). Anyone who trusts the platform root trusts every tenant's
+  issuance; trust a tenant's intermediate rather than the root where that matters. CRLs are full CRLs only
   (no delta, indirect or partitioned CRLs; no `certificateHold`), and a CRL's to-be-signed list is capped by the
   signer at 512 KiB (roughly 10,000 entries; expired certificates drop off). OCSP request signatures are ignored
   (no requestor is trusted), responder certificates carry `ocsp-nocheck` and are short-lived (`PKI_OCSP_SIGNER_DAYS`)
   instead of being checked, and answers are cached per instance: a revocation clears them on every instance through
   the bus, which needs `REDIS_URL` across instances. Issued certificates have a CN-only subject; other CSR attributes
-  and extensions besides subjectAltName are ignored. Export formats, renewal and expiry notices (B-1606) and the CLI
-  (B-1607) are not built yet.
+  and extensions besides subjectAltName are ignored.
+- ACME server (Sprint 25, B-1605): each tenant's directory is unauthenticated by design (the JWS signatures and the
+  challenges are the authentication), rate-limited per address and closed until a tenant admin opens it. Orders are
+  bounded by the directory's server profile and every name is proven by http-01 or dns-01; every object is stored
+  and looked up by tenant and owning account. Limits: dns identifiers only (no IP identifiers, RFC 8738), no
+  `notBefore`/`notAfter`, no authorization reuse across orders (each order validates its names again), no
+  pre-authorization (`newAuthz`), no ACME Renewal Information (RFC 9773), and one validation attempt per challenge
+  from one vantage point (no multi-perspective validation): an attacker who controls the path between Exprsn-AI and a
+  name's server or resolver can obtain a certificate for that name, within what the profile allows. http-01 follows
+  redirects to https without checking the certificate (as RFC 8555 permits). With `PKI_ACME_INTERNAL_ONLY` off (the
+  default) http-01 may connect to public addresses; it never connects to cloud metadata or other link-local addresses
+  and only fetches the fixed challenge path, but anyone can make the server connect to port `PKI_ACME_HTTP_PORT` of a
+  name the profile allows. External account binding is optional per tenant; its MAC keys are sealed with the tenant
+  key. Account deactivation and administrator revocation do not revoke certificates already issued.
+- Certificate export and lifecycle (Sprint 25, B-1606): PKCS#12 files use PBES2/AES-256-CBC with an HMAC-SHA256 MAC,
+  which readers older than OpenSSL 1.1.1 may not open (no legacy RC2/3DES variant is offered). A key made with
+  `generateKey` exists in the app process while it is wrapped into the PKCS#12 file and is only as safe as the
+  password the caller chose and the channel the response travels over; it is never stored. Renewal without a CSR
+  keeps the old key, which is the wrong choice after a key compromise (send a new CSR and revoke the old
+  certificate). Expiry notices go to the requesting user or to the tenant's `pki:manage` holders; ACME account
+  contacts are not emailed.
 - HTTP Message Signatures (RFC 9421, Sprint 20): a subset (`@method`, `@target-uri`, `@authority`, `@path`,
   `@query`, header fields; no component parameters; `ed25519` and `hmac-sha256`). A signed `/v1` request is accepted
   within `HTTP_SIGNATURE_MAX_AGE_SECONDS` of its `created` time and nonces are not remembered, so a captured request
