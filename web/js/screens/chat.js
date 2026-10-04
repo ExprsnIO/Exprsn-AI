@@ -14,6 +14,12 @@
   const visible = () => App.state.route === 'chat' && App.state.signedIn;
   const num = (n) => Number(n || 0).toLocaleString('en-US');
   const rank = (l) => LABELS.indexOf(l);
+  // A new conversation's label: internal, or the current workspace's ceiling when that is lower (as the server does).
+  const newLabel = () => {
+    const me = App.me || {};
+    const w = (me.workspaces || []).find((x) => x.id === me.workspace);
+    return w && rank(w.label) >= 0 && rank(w.label) < rank('internal') ? w.label : 'internal';
+  };
   const active = (m) => m && m.role === 'assistant' && (m.state === 'queued' || m.state === 'streaming');
   const ago = (ms) => {
     if (!ms) return '';
@@ -397,6 +403,7 @@
       const reset = p.resets_at ? new Date(p.resets_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
       return UI.notice('<b>Over quota: ' + esc(what) + (p.scope ? ' for this ' + esc(p.scope) : '') + '.</b> ' + (p.detail ? esc(p.detail) : (p.max != null ? 'Used ' + num(p.used) + ' of ' + num(p.max) + '.' : '') + (p.raised_by ? ' ' + esc(p.raised_by.charAt(0).toUpperCase() + p.raised_by.slice(1)) + ' can raise it.' : '')) + (reset ? ' Resets ' + esc(reset) + '.' : '') + (n.example ? ' <span class="muted">(example)</span>' : ''), 'warn', close);
     }
+    if (n.kind === 'forbidden' && p.ceiling === 'workspace') return UI.notice('<b>Above this workspace\'s ceiling.</b> ' + esc(p.detail || '') + ' Lower the label, or switch to a workspace whose ceiling allows it.', 'danger', close);
     if (n.kind === 'forbidden') return UI.notice('<b>' + (p.step === 'zone' ? 'Label above this profile' : 'Above your clearance') + '.</b> ' + esc(p.detail || '') + (p.step === 'zone' ? ' Pick a profile cleared for this label.' : ''), 'danger', close);
     return '';
   }
@@ -560,7 +567,7 @@
   }
   async function upload(files) {
     const st = S(); st.pending = st.pending || [];
-    const label = st.conv && rank(st.conv.label) > rank('internal') ? st.conv.label : 'internal';
+    const label = st.conv && rank(st.conv.label) > rank(newLabel()) ? st.conv.label : newLabel();
     for (const file of files) {
       const a = { key: 'k' + Math.random().toString(36).slice(2), name: file.name, size: file.size, state: 'uploading' };
       st.pending.push(a); paint();
@@ -861,7 +868,7 @@
     id: 'chat', title: 'Chat', live: true,
     summary: 'Conversations with branches, streamed answers, thinking, exact calculation and attachments',
     crumb: (st) => (st.sharedView ? ['Chat', 'Shared with you', st.sharedView.title || 'Untitled conversation'] : null) || ['Chat', st.conv ? (st.conv.title || 'Untitled conversation') : st.convId ? 'Conversation' : 'New conversation'],
-    label: (st) => (st.sharedView ? st.sharedView.label : st.conv ? st.conv.label : st.convId ? null : 'internal'),
+    label: (st) => (st.sharedView ? st.sharedView.label : st.conv ? st.conv.label : st.convId ? null : newLabel()),
     commands: [
       { label: 'New conversation', sub: 'Chat', run(app) { const st = app.stateFor('chat'); st.convId = null; st.conv = null; st.byId = {}; st.notice = null; st.pending = []; app.render(); setTimeout(() => { const c = document.getElementById('ch-composer'); if (c) c.focus(); }, 30); } }
     ],
@@ -941,7 +948,7 @@
           + (conv ? '<h1 class="t grow">' + esc(conv.title || 'Untitled conversation') + '</h1>' + (conv.archived ? UI.pill('archived', 'outline') : '') + UI.label(conv.label, { sm: true })
             + (App.can('chat:write') ? UI.btn('Share', { kind: 'ghost', size: 'sm', icon: 'link', attrs: 'data-share' }) : '') + UI.btn('Export', { kind: 'ghost', size: 'sm', icon: 'download', attrs: 'data-export="' + esc(conv.id) + '"' })
             + (App.can('chat:write') ? UI.iconbtn('edit', 'Rename', { cls: 'sm ghost', attrs: 'data-rename' }) + UI.btn(conv.archived ? 'Unarchive' : 'Archive', { kind: 'ghost', size: 'sm', attrs: 'data-archive' }) + UI.iconbtn('trash', 'Delete conversation', { cls: 'sm ghost', attrs: 'data-delete' }) : '')
-            : '<h1 class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</h1>' + (st.convId ? '' : UI.label('internal', { sm: true }))) + '</div>'
+            : '<h1 class="t grow">' + (st.convId ? 'Conversation' : 'New conversation') + '</h1>' + (st.convId ? '' : UI.label(newLabel(), { sm: true }))) + '</div>'
         + '<div class="ch-scroll"><div class="ch-thread" data-region="thread">' + threadHtml(st) + '</div></div>'
         + '<div class="ch-composer"><div class="ch-inner">'
         + '<div data-region="notice">' + noticeHtml(st) + '</div>'

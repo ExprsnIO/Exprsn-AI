@@ -258,11 +258,21 @@ export class ChatService {
   private async assertWorkspaceCeiling(workspaceId: string | null, label: Label): Promise<void> {
     if (!workspaceId) return;
     const ws = (await this.db('workspaces').where({ id: workspaceId }).first('label_ceiling')) as { label_ceiling: Label } | undefined;
-    if (ws && labelRank(label) > labelRank(ws.label_ceiling)) throw forbidden(`This workspace's ceiling is ${ws.label_ceiling}; this message would make the conversation ${label}.`, { step: 'zone' });
+    if (ws && labelRank(label) > labelRank(ws.label_ceiling)) throw forbidden(`This workspace's ceiling is ${ws.label_ceiling}; this message would make the conversation ${label}.`, { step: 'zone', ceiling: 'workspace' });
+  }
+
+  /**
+   * The label a new conversation (or request) gets when none is asked for: internal, or the workspace's ceiling when
+   * that is lower. A public workspace could otherwise never start a conversation, since internal is above its ceiling.
+   */
+  async defaultLabel(p: Principal): Promise<Label> {
+    if (!p.workspaceId) return 'internal';
+    const ws = (await this.db('workspaces').where({ id: p.workspaceId }).first('label_ceiling')) as { label_ceiling: Label } | undefined;
+    return ws && labelRank(ws.label_ceiling) < labelRank('internal') ? ws.label_ceiling : 'internal';
   }
 
   async createConversation(p: Principal, input: { title?: string | null; label?: Label; kind?: 'chat' | 'compare'; profileId?: string | null }): Promise<ConversationRow> {
-    const label = input.label ?? 'internal';
+    const label = input.label ?? (await this.defaultLabel(p));
     if (!clears(p.clearance, label)) throw forbidden(`Your clearance is ${p.clearance}; a ${label} conversation is above it.`, { step: 'clearance' });
     await this.assertWorkspaceCeiling(p.workspaceId ?? null, label);
     const t = Date.now();
@@ -520,7 +530,7 @@ export class ChatService {
 
   /** Compare: one prompt, 2–4 profiles answering in parallel, each metered on its own. */
   async compare(p: Principal, input: { prompt: string; profiles: string[]; think?: ThinkLevel; label?: Label }) {
-    const label = input.label ?? 'internal';
+    const label = input.label ?? (await this.defaultLabel(p));
     const resolved: ResolvedProfile[] = [];
     for (const name of input.profiles) resolved.push(await this.resolveFor(p, name, label));
     await this.admit(p, p.workspaceId ?? null);
