@@ -33,7 +33,7 @@ for (const d of [
       await migrate(db);
       const s = createServices(cfg, db, createLogger('silent', false), new Metrics());
       try {
-        expect(await migrateCheck(db)).toMatchObject({ state: 'current', pending: [], database: '026c_core', destructive: [] });
+        expect(await migrateCheck(db)).toMatchObject({ state: 'current', pending: [], database: (await migrationSource.getMigrations([])).at(-1), destructive: [] });
         await bootstrap(s);
         const tenant = (await s.tenants.bySlug(cfg.DEFAULT_TENANT))!;
         const op = { userId: null, clearance: 'restricted' as const, audit: { service: 'test' } };

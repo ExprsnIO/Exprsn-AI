@@ -1,3 +1,4 @@
+import { migrationSource } from '../src/db/migrations/index.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -520,7 +521,9 @@ describe('migration discipline (B-2104)', () => {
     const h = await harness();
     try {
       const r = await migrateCheck(h.s.db);
-      expect(r).toMatchObject({ state: 'current', pending: [], database: '026c_core' });
+      // The newest registered migration (026c_core or a later one: parallel sprints add their own).
+      expect(r).toMatchObject({ state: 'current', pending: [], database: (await migrationSource.getMigrations([])).at(-1) });
+      expect((await migrationSource.getMigrations([])).includes('026c_core')).toBe(true);
       expect(await h.s.db.schema.hasTable('plugins')).toBe(true);
       expect(await h.s.db.schema.hasTable('plugin_transitions')).toBe(true);
     } finally {
