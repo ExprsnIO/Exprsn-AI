@@ -31,6 +31,7 @@ import * as m027 from './027_acme.js';
 import * as m027b from './027b_atproto.js';
 import * as m027c from './027c_leases.js';
 import * as m027d from './027d_plugins.js';
+import * as m028d from './028d_files.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -70,7 +71,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '027_acme': m027,
   '027b_atproto': m027b,
   '027c_leases': m027c,
-  '027d_plugins': m027d
+  '027d_plugins': m027d,
+  '028d_files': m028d
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {
