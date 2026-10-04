@@ -391,3 +391,13 @@ filter, private `/tmp`, only the state directory writable.
   and reports not ready, but keeps answering requests that reach it until its load balancer drains it. Expand-only
   migrations keep the previous release working during a rolling upgrade; a contract step (marked `// contract:`) needs
   every old instance stopped first, which `migrate --check` reports.
+- Secrets vault (1.4.0, B-1701 to B-1703): KV values and transit key material are sealed with the tenant data key, so
+  they are as strong as its key-encryption key (local `DATA_KEY`, the signer, or OpenBao transit when
+  `KMS_PROVIDER=openbao`) and are crypto-shredded with the tenant. Transit operations themselves run in the app
+  process: the material is opened in memory for each call and never exported, but it is not held by OpenBao transit
+  or the signer the way the OIDC and webhook keys are; an OpenBao-native transit backend (named keys in OpenBao, its
+  own `min_decryption_version`) is not built. Vault paths and transit names are lower case only, so they compare the
+  same way on every database. A grant to a directory group follows the groups the user's stores reported at the last
+  sign-in or sync. Encrypt and verify calls are not audited (they reveal nothing); decrypt, rewrap, sign and every
+  read of a secret are. `vault:path#key` references in other features (B-1705), rotation schedules (B-1706) and
+  dynamic database leases (B-1704) follow in Sprint 25.
