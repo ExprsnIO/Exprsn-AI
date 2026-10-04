@@ -33,8 +33,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 21 | AI: held `/v1` requests and compare prompts, the Responses API, evaluations, thinking at the full output check, membership changes ending watches, scheduled agents (1.3.0) | Compare, Flags, Profiles, Runs | **Done** |
 | 22 | Operations: tracing, dashboards and alerts, safe upgrades, key escrow, zones applied in-cluster, NTP quorum, rate-limit health (1.3.0) | Platform, Zones | **Done** |
 | 23 | Knowledge, integrations and accessibility: S3 and web-crawl sources, PostgreSQL row security, webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow (1.3.0) | Knowledge, Usage and audit; accessibility in Profiles, Workflows and the header | **Done** |
-| 24 | Trust foundations: CA issuance and OCSP, tenant secrets, the event catalogue and plugin manifests, core (1.4.0) | — (server only) | Planned |
-| 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | Planned |
+| 24 | Trust foundations: CA issuance and OCSP, tenant secrets, the event catalogue and plugin manifests, core (1.4.0) | — (server only) | **Done** |
+| 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | In progress |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | Planned |
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | Planned |
 | 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | Planned |

@@ -74,12 +74,18 @@ import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
+import { EventCatalogue } from './events/catalogue.js';
+import { createCacheStore, TenantCache } from './platform/cache.js';
+import { RoomRegistry } from './realtime/rooms.js';
+import { PluginService } from './plugins/service.js';
 import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
 import { instrumentKnex, parseOtlpHeaders, SpanKind, Tracer, tracesUrl, withSpan } from './observability/tracing.js';
 import { registerOpsMetrics } from './observability/ops-metrics.js';
 import { SchemaGuard } from './db/schema.js';
 import { ZoneCluster } from './zones/cluster.js';
+import { VaultService } from './vault/service.js';
+import { PkiService } from './pki/service.js';
 
 export interface Services {
   cfg: Config;
@@ -173,6 +179,18 @@ export interface Services {
   schema: SchemaGuard;
   /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
   zoneCluster: ZoneCluster;
+  /** Sprint 24 (B-1701 to B-1703): the tenant secrets vault (KV secrets, transit keys, path policies). */
+  vault: VaultService;
+  /** Sprint 24 (B-1601 to B-1604): the certificate authority (issuers, profiles, issuance, CRLs, OCSP). */
+  pki: PkiService;
+  /** 1.4.0 (B-2001): the event catalogue; every emitted event is checked against its schema. */
+  events: EventCatalogue;
+  /** 1.4.0 (B-2102): the tenant-scoped read-through cache (Redis when configured, else memory), cleared over the bus. */
+  cache: TenantCache;
+  /** 1.4.0 (B-2101): authorisers for the domain realtime rooms (conversation, group, feed, channel). */
+  rooms: RoomRegistry;
+  /** 1.4.0 (B-2002): per-tenant plugin installs (manifests and grants; data, never code). */
+  plugins: PluginService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -379,6 +397,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
     zoneCluster: new ZoneCluster(() => s),
+    vault: new VaultService(() => s, { maxVersions: cfg.VAULT_KV_MAX_VERSIONS }),
+    pki: new PkiService(() => s),
+    // 1.4.0, Sprint 24c: platform core.
+    events: new EventCatalogue(metrics.registry, (type, problems) => log.warn({ type, problems: problems.slice(0, 5) }, 'event does not match its catalogue schema')),
+    cache: new TenantCache(createCacheStore(cfg.CACHE_STORE, cfg.REDIS_URL, cfg.CACHE_MAX_ENTRIES, log), bus, metrics.registry, { ttlSeconds: { short: cfg.CACHE_TTL_SHORT_SECONDS, medium: cfg.CACHE_TTL_MEDIUM_SECONDS, long: cfg.CACHE_TTL_LONG_SECONDS } }, log),
+    rooms: new RoomRegistry(bus),
+    plugins: new PluginService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -394,6 +419,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await mcp.close();
       await bus.close();
       await counters.close();
+      await s.cache.close();
       await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
       // Sprint 20: the signer connection, when the KMS is the signer.
@@ -428,6 +454,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.openai.holds.registerJobs(); // Sprint 21 (B-1301)
   s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
   s.evals.registerJobs(); // Sprint 21 (B-1303)
+  s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -477,4 +504,5 @@ export function startSchedules(s: Services): void {
   s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
   s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
+  s.pki.schedule(s.scheduler); // Sprint 24 (B-1603): CRLs for every live issuer
 }

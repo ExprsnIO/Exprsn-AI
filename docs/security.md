@@ -269,7 +269,7 @@ filter, private `/tmp`, only the state directory writable.
   the caller's credentials: access rests on the socket directory and socket permissions (0700/0600, or 0750/0660 for
   a shared group) and a shared token every connection must present first; run the signer as its own user so the
   app's user cannot read the signer's key file. Anyone who can reach the socket with the token can have the signer
-  sign or decrypt (it never exports a key). The signer signs the bytes it is sent (at most 64 KiB), not a digest,
+  sign or decrypt (it never exports a key). The signer signs the bytes it is sent (at most 512 KiB since 1.4.0, for CRLs; 64 KiB before), not a digest,
   because node:crypto cannot sign a precomputed digest with ECDSA or Ed25519. Without the signer, the local KMS keeps
   the federation and webhook keys sealed with the data keys and unsealed in memory while in use. With OpenBao, OIDC,
   SAML and webhook signatures are made in transit; the SAML SP decryption key is then still sealed locally (transit's
@@ -277,6 +277,19 @@ filter, private `/tmp`, only the state directory writable.
   keys at once (the old public keys stay published for the overlap): SAML service providers must re-import the IdP
   metadata, and upstream IdPs the SP encryption certificate (the replaced decryption key is still tried while it is
   published).
+- Certificate authority (Sprint 24): issuer and OCSP responder keys are made and used only in the signer or OpenBao
+  transit; with neither the CA refuses to make keys. Creating, rotating or re-issuing the root needs `platform:manage`
+  and a recent sign-in, not a second admin (no dual control yet). Tenant intermediates carry no name constraints: a
+  tenant admin with `pki:manage` sets their own profiles, so the CA checks names against policy but not domain
+  control (there is no ACME-style validation before B-1605), and anyone who trusts the platform root trusts every
+  tenant's issuance; trust a tenant's intermediate rather than the root where that matters. CRLs are full CRLs only
+  (no delta, indirect or partitioned CRLs; no `certificateHold`), and a CRL's to-be-signed list is capped by the
+  signer at 512 KiB (roughly 10,000 entries; expired certificates drop off). OCSP request signatures are ignored
+  (no requestor is trusted), responder certificates carry `ocsp-nocheck` and are short-lived (`PKI_OCSP_SIGNER_DAYS`)
+  instead of being checked, and answers are cached per instance: a revocation clears them on every instance through
+  the bus, which needs `REDIS_URL` across instances. Issued certificates have a CN-only subject; other CSR attributes
+  and extensions besides subjectAltName are ignored. Export formats, renewal and expiry notices (B-1606) and the CLI
+  (B-1607) are not built yet.
 - HTTP Message Signatures (RFC 9421, Sprint 20): a subset (`@method`, `@target-uri`, `@authority`, `@path`,
   `@query`, header fields; no component parameters; `ed25519` and `hmac-sha256`). A signed `/v1` request is accepted
   within `HTTP_SIGNATURE_MAX_AGE_SECONDS` of its `created` time and nonces are not remembered, so a captured request
@@ -391,3 +404,27 @@ filter, private `/tmp`, only the state directory writable.
   and reports not ready, but keeps answering requests that reach it until its load balancer drains it. Expand-only
   migrations keep the previous release working during a rolling upgrade; a contract step (marked `// contract:`) needs
   every old instance stopped first, which `migrate --check` reports.
+- Secrets vault (1.4.0, B-1701 to B-1703): KV values and transit key material are sealed with the tenant data key, so
+  they are as strong as its key-encryption key (local `DATA_KEY`, the signer, or OpenBao transit when
+  `KMS_PROVIDER=openbao`) and are crypto-shredded with the tenant. Transit operations themselves run in the app
+  process: the material is opened in memory for each call and never exported, but it is not held by OpenBao transit
+  or the signer the way the OIDC and webhook keys are; an OpenBao-native transit backend (named keys in OpenBao, its
+  own `min_decryption_version`) is not built. Vault paths and transit names are lower case only, so they compare the
+  same way on every database. A grant to a directory group follows the groups the user's stores reported at the last
+  sign-in or sync. Encrypt and verify calls are not audited (they reveal nothing); decrypt, rewrap, sign and every
+  read of a secret are. `vault:path#key` references in other features (B-1705), rotation schedules (B-1706) and
+  dynamic database leases (B-1704) follow in Sprint 25.
+- Plugins (1.4.0, Sprint 24c): manifests, grants and the lifecycle are enforced, but nothing runs a plugin yet:
+  enabling one only marks it enabled. Declarative actions (each checked against its granted capability) and script
+  handlers in the sandbox arrive later in 1.4.0; until then a script plugin is stored and cannot be enabled, and a
+  manifest's `webhook.url` is not checked against the outbound host rules (it will be when plugin deliveries use the
+  webhook path).
+- Event catalogue (1.4.0): an emitted event that does not match its schema is still delivered (counted and logged),
+  so a receiver must still validate what it gets. The `record`, `file`, `group`, `message` and `post` types are
+  reserved, not emitted.
+- Read-through cache (1.4.0): with Redis, cached values sit in Redis unsealed, so only ids and settings are cached,
+  never tenant content (today: each tenant's list of enabled plugins). A Redis failure makes reads go to the database
+  (`exprsn_cache_errors_total`); a cached value can outlive a change on an instance that missed the bus message by at
+  most its tier's TTL.
+- Realtime rooms (1.4.0): the generic mechanism is in place, but no domain registers an authoriser yet, so every
+  `room.join` is refused until messaging, groups, feeds or channels ship.

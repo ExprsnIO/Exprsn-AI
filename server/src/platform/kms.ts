@@ -35,8 +35,8 @@ export interface Kms {
   heldKeys?: HeldKeys;
 }
 
-/** ed25519: Sprint 20 (B-1202), webhook signing keys in transit. */
-export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048' | 'ed25519';
+/** ed25519: Sprint 20 (B-1202), webhook signing keys in transit. rsa-3072: Sprint 24 (B-1601), CA issuer keys. */
+export type SigningKeyType = 'ecdsa-p256' | 'rsa-2048' | 'ed25519' | 'rsa-3072';
 
 /** Key types the signer holds: the signing types, and an RSA key that only decrypts (RSA-OAEP), for SAML SP keys. */
 export type HeldKeyType = SigningKeyType | 'rsa-oaep-2048';
@@ -47,7 +47,7 @@ export interface HeldKeys {
    * `certificate` asks for a self-signed X.509 certificate made with the new key (RSA types), signed in the signer.
    */
   create(name: string, type: HeldKeyType, certificate?: { commonName: string; organization: string; days: number }): Promise<{ publicKey: string; wrapped: string; certificate: string | null }>;
-  /** ES256 as raw r||s, RS256 as PKCS#1 v1.5 over SHA-256, Ed25519 as the 64-byte signature. */
+  /** ES256 as raw r||s, RS256 (2048 or 3072) as PKCS#1 v1.5 over SHA-256, Ed25519 as the 64-byte signature. */
   sign(name: string, type: SigningKeyType, wrapped: string, data: Buffer): Promise<Buffer>;
   /** RSA-OAEP decryption with an `rsa-oaep-2048` key (the digest is used for MGF1 too). */
   decrypt(name: string, wrapped: string, ciphertext: Buffer, oaepHash: 'sha1' | 'sha256'): Promise<Buffer>;

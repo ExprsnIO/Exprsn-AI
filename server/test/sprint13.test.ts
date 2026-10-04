@@ -328,8 +328,8 @@ describe('B-302 and B-303 webhooks and the tenant host allow-list', () => {
     // Job states and flag events.
     h.s.jobs.register('test.noop', async () => ({ ok: true }));
     await h.s.jobs.enqueue({ tenantId: h.tenantId, type: 'test.noop' });
-    h.s.bus.emitLocal(TOPICS.integrationEvent, { tenantId: h.tenantId, type: 'flag.created', label: 'internal', id: 'flag-event:x1', data: { flag: 'F-1' } });
-    h.s.bus.emitLocal(TOPICS.integrationEvent, { tenantId: h.tenantId, type: 'flag.created', label: 'internal', id: 'flag-event:x1', data: { flag: 'F-1' } });
+    h.s.bus.emitLocal(TOPICS.integrationEvent, { tenantId: h.tenantId, type: 'flag.created', label: 'internal', id: 'flag-event:x1', data: { flag: 'F-1', id: 'x1', action: 'created', severity: 'high', checkpoint: 'user-input' } });
+    h.s.bus.emitLocal(TOPICS.integrationEvent, { tenantId: h.tenantId, type: 'flag.created', label: 'internal', id: 'flag-event:x1', data: { flag: 'F-1', id: 'x1', action: 'created', severity: 'high', checkpoint: 'user-input' } });
     await drain(4);
     const events = (await deliveries(created.body.id)).map((d) => d.event);
     expect(events).toContain('job.succeeded');

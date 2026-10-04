@@ -1107,15 +1107,17 @@ export class ChatService {
   }
 
   /**
-   * Asks the context providers for material up to the turn's ceiling, adds it as one delimited system message after
-   * the profile's prompt, raises the conversation's label to the highest item used and records the citations. The
-   * items are kept with the stream: when the answer is finished, each knowledge citation gets its passage.
+   * Asks the context providers for material up to the turn's ceiling (the lowest of the user's clearance, the
+   * profile's label and the workspace's ceiling). This runs before the turn leases a slot: retrieval embeds the
+   * question and may rerank with a model, which need slots of their own, so a turn holding its slot while it waited for
+   * another could starve itself (with one slot per instance it always did). The pool's ceiling is applied once the
+   * lease names the pool (`applyContext`).
    */
-  private async addContext(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], st: Stream): Promise<void> {
-    if (!this.contextProviders.length) return;
+  private async gatherContext(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, messages: ChatMessage[]): Promise<ContextItem[]> {
+    if (!this.contextProviders.length) return [];
     const query = [...messages].reverse().find((x) => x.role === 'user')?.content ?? '';
     const ws = c.workspace_id ? ((await this.db('workspaces').where({ id: c.workspace_id }).first('label_ceiling')) as { label_ceiling: Label } | undefined) : undefined;
-    const caps: Label[] = [p.clearance, r.profile.label, lease.pool.label_ceiling, ...(ws ? [ws.label_ceiling] : [])];
+    const caps: Label[] = [p.clearance, r.profile.label, ...(ws ? [ws.label_ceiling] : [])];
     const ceiling = caps.reduce((a, b) => (labelRank(b) < labelRank(a) ? b : a));
     const items: ContextItem[] = [];
     for (const provider of this.contextProviders) {
@@ -1125,6 +1127,16 @@ export class ChatService {
         this.log.warn({ err, message: m.id }, 'context provider failed');
       }
     }
+    return items;
+  }
+
+  /**
+   * Adds the gathered items the leased pool may see (nothing above its ceiling) as one delimited system message after
+   * the profile's prompt, raises the conversation's label to the highest item used and records the citations. The
+   * items are kept with the stream: when the answer is finished, each knowledge citation gets its passage.
+   */
+  private async applyContext(c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], gathered: ContextItem[], st: Stream): Promise<void> {
+    const items = gathered.filter((x) => labelRank(x.label) <= labelRank(lease.pool.label_ceiling));
     if (!items.length) return;
     messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items) });
     const label = highest(c.label, ...items.map((x) => x.label));
@@ -1278,7 +1290,16 @@ export class ChatService {
       // The fallback chain: when every slot for a profile stays busy past its queue wait, try its fallback, whose own
       // fallback applies in turn (at most three hops, never revisiting a profile).
       const tried = new Set<string>([r.profile.id]);
+      // The prompt and its retrieved context are built before the lease (see gatherContext), again for a fallback.
+      const prepare = async (rp: ResolvedProfile) => {
+        const msgs: ChatMessage[] = [];
+        if (rp.profile.system_prompt) msgs.push({ role: 'system', content: rp.profile.system_prompt });
+        msgs.push(...(await this.history(c, m.parent_id!, rp.model.capabilities.includes('vision'))));
+        return { r: rp, messages: msgs, items: await this.gatherContext(p, c, m, rp, msgs) };
+      };
+      let prep = await prepare(r);
       for (let hop = 0; ; hop++) {
+        if (prep.r !== r) prep = await prepare(r);
         const fallback = hop < 3 && r.profile.fallback && !tried.has(r.profile.fallback.profileId) ? r.profile.fallback : null;
         try {
           lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: st.ac.signal, ...(fallback ? { waitMs: fallback.afterQueueWaitMs } : {}), onPosition });
@@ -1296,10 +1317,8 @@ export class ChatService {
       await this.db('messages').where({ id: m.id }).update({ state: 'streaming', instance_id: lease.instance.id, model: r.model.name, heartbeat_at: Date.now(), generator: this.instance });
       this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: lease.cold ? 'loading' : 'streaming', instance: lease.instance.name, model: r.model.name, profile: r.profile.name });
 
-      const messages: ChatMessage[] = [];
-      if (r.profile.system_prompt) messages.push({ role: 'system', content: r.profile.system_prompt });
-      messages.push(...(await this.history(c, m.parent_id!, r.model.capabilities.includes('vision'))));
-      await this.addContext(p, c, m, r, lease, messages, st);
+      const messages = prep.messages;
+      await this.applyContext(c, m, r, lease, messages, prep.items, st);
       // A continued answer: the stored text is the start of the model's turn, which it carries on.
       if (from?.content) messages.push({ role: 'assistant', content: from.content });
       await this.startGuards(p, c, m, r, st, from);

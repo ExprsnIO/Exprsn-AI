@@ -1721,3 +1721,180 @@ No route changes.
 Audit actions: `billing.statement.refunded`, `billing.statement.credited`, `billing.statement.credit-voided`,
 `billing.statement.disputed`, `billing.statement.dispute-updated`, `billing.statement.dispute-closed` (actor
 `service: stripe`, detail with the amounts in micro-units and the statement's state).
+
+## Sprint 24: Secrets vault (B-1701 to B-1703)
+
+All routes are under `/api` and answer `Cache-Control: no-store`. Each needs a vault permission and then the **path
+policy** for the capability it uses. Permissions: `secrets:read` (read and list secrets, use transit keys, explain
+your own access), `secrets:write` (write, soft-delete and undelete, edit metadata), `secrets:admin` (destroy, remove
+a path, manage transit keys, edit policies). Built-in roles: `tenant-admin` has all three, `connection-admin` read and
+write, `member` read (a member reaches nothing until a policy grants it). Policy paths are `kv/<path>` for secrets and
+`transit/<name>` for transit keys; a denial is `403` with `step: vault-policy`, `path`, `capability` and the deciding
+`grant {id, effect, path, subjectKind, subject}` (null when nothing matched), and is written to the audit chain as
+`vault.denied` (capped per principal like other denials). Secrets and keys carry a label; above the caller's clearance
+they answer `404`. Paths are 1 to 16 segments of lower-case letters, digits, `.`, `-` and `_`.
+
+### KV secrets (B-1701)
+
+| Route | Capability | Notes |
+| --- | --- | --- |
+| `GET /vault/kv?prefix=` | `list` | Secrets under the prefix the caller may list: `{secrets: [{path, label, currentVersion, updatedAt}]}` |
+| `PUT /vault/kv/data/*path` `{data: {key: value}, cas?, label?}` | `write` | Writes a new version (`201` for version 1, else `200`): `{path, version, label, createdAt}`. `data` has 1 to 200 string values, 64 KiB in all, sealed with the tenant data key (associated data: the version row id). `cas`: the write happens only if the current version is `cas` (`0`: only when the path is new), else `409` with `currentVersion`; required when the path's `casRequired` is set. `label` (default `internal`, at most the caller's clearance) applies when the path is created. Versions beyond `maxVersions` are removed, oldest first |
+| `GET /vault/kv/data/*path?version=` | `read` | Reveals a version (default current): `{path, version, label, data, createdAt, createdBy}`. `410` with `state: deleted` or `destroyed`; `404` for a version removed by `maxVersions`. Audited as `vault.secret.read` (path, version and the number of keys; never values) |
+| `GET /vault/kv/metadata/*path` | `list` | `{path, label, currentVersion, oldestVersion, maxVersions, casRequired, customMetadata, createdBy, createdAt, updatedAt, versions: [{version, state: active\|deleted\|destroyed, createdBy, createdAt, deletedAt, destroyedAt}]}` |
+| `PATCH /vault/kv/metadata/*path` `{maxVersions?: 1-100, casRequired?, customMetadata?, label?}` | `write` | Lowering `maxVersions` removes older versions at once |
+| `POST /vault/kv/delete/*path` `{versions?}` | `delete` | Soft delete (default: the current version); readable again after undelete |
+| `POST /vault/kv/undelete/*path` `{versions}` | `delete` | `410` for a destroyed version |
+| `POST /vault/kv/destroy/*path` `{versions}` (`secrets:admin`) | `destroy` | Removes the sealed values for good; the version numbers stay in the metadata |
+| `DELETE /vault/kv/metadata/*path` (`secrets:admin`) | `destroy` | Removes the path, its metadata and every version (`204`) |
+
+Soft delete and undelete need `secrets:write` and the `delete` capability. New secrets keep
+`VAULT_KV_MAX_VERSIONS` versions (default 10). Audit actions: `vault.secret.written`, `vault.secret.read`,
+`vault.secret.metadata.updated`, `vault.secret.deleted`, `vault.secret.undeleted`, `vault.secret.destroyed`,
+`vault.secret.removed`.
+
+### Transit (B-1702)
+
+Named, versioned keys per tenant: `aes256-gcm96` (encrypt, decrypt, rewrap) and `ed25519` or `ecdsa-p256` (sign,
+verify). Key material is generated in the server, sealed with the tenant data key and never exported. Ciphertext and
+signatures are `exai:v<version>:<base64>`. Encryption binds the tenant, the key, the version and the optional
+`context` (base64), which must be given again to decrypt. Plaintext, input and context are base64.
+
+| Route | Capability | Notes |
+| --- | --- | --- |
+| `GET /vault/transit/keys` | `list` | `{keys: [{name, type, label, latestVersion, minDecryptVersion}]}` |
+| `POST /vault/transit/keys` `{name, type?, label?}` (`secrets:admin`) | `manage` | `201` with the key view; `409` if the name exists. Names: 1 to 64 lower-case letters, digits, `.`, `-`, `_` |
+| `GET /vault/transit/keys/:name` | `list` | `{name, type, label, latestVersion, minDecryptVersion, minAvailableVersion, deletionAllowed, supports, versions: [{version, createdAt, publicKey?}]}` (SPKI PEM for signing keys) |
+| `POST /vault/transit/keys/:name/rotate` (`secrets:admin`) | `manage` | New latest version; older versions still decrypt and verify down to `minDecryptVersion` |
+| `PATCH /vault/transit/keys/:name` `{minDecryptVersion?, deletionAllowed?}` (`secrets:admin`) | `manage` | `minDecryptVersion` between `minAvailableVersion` and `latestVersion`: ciphertext and signatures from older versions are refused (`400`, title `Version below minimum`) |
+| `POST /vault/transit/keys/:name/trim` `{minAvailableVersion}` (`secrets:admin`) | `manage` | Deletes the material of versions below it; it may not pass `minDecryptVersion` (`400`) |
+| `DELETE /vault/transit/keys/:name` (`secrets:admin`) | `manage` | Only with `deletionAllowed` (`409` otherwise); everything encrypted with the key becomes unreadable |
+| `POST /vault/transit/encrypt/:name` `{plaintext, context?}` or `{batch: [{plaintext, context?}]}` | `encrypt` | `{ciphertext}` or `{batch: [{ciphertext}]}`, with the latest version. Up to 100 items |
+| `POST /vault/transit/decrypt/:name` `{ciphertext, context?}` or `{batch}` | `decrypt` | `{plaintext}`; in a batch each item is `{plaintext}` or `{error, status}`. Audited as `vault.transit.decrypted` (counts only) |
+| `POST /vault/transit/rewrap/:name` `{ciphertext, context?}` or `{batch}` | `rewrap` | Decrypts and re-encrypts with the latest version inside the server: `{ciphertext}`; the plaintext is never returned. Audited as `vault.transit.rewrapped` |
+| `POST /vault/transit/sign/:name` `{input}` | `sign` | `{signature, version}` (Ed25519; ECDSA P-256 over SHA-256, DER). Audited as `vault.transit.signed` |
+| `POST /vault/transit/verify/:name` `{input, signature}` | `verify` | `{valid, version}`; a signature below `minDecryptVersion` is refused (`400`) |
+
+Audit actions: `vault.transit.key.created`, `.rotated`, `.configured`, `.trimmed`, `.deleted`,
+`vault.transit.decrypted`, `vault.transit.rewrapped`, `vault.transit.signed`. Encrypt and verify reveal nothing and are
+not audited.
+
+### Policies (B-1703)
+
+A grant allows or denies capabilities (`list`, `read`, `write`, `delete`, `destroy`, `encrypt`, `decrypt`, `rewrap`,
+`sign`, `verify`, `manage`, or `*`) on a path prefix (`*`, `kv`, `transit`, or a path under them) to a subject: a
+`user` (id), a directory `group` (name, matched case-insensitively against the groups the user's stores report), a
+`workspace` (its members) or an `api_key` (id). An API key acts as its owner plus itself, so a grant to the key adds
+to the owner's access and a deny on the key narrows it. Prefixes match whole segments (`kv/apps` covers `kv/apps/db`,
+not `kv/apps2`). Any matching deny refuses, however specific the allows; otherwise the longest matching allow
+decides; nothing matching is a default deny.
+
+| Route | Notes |
+| --- | --- |
+| `GET /vault/policies` (`secrets:admin`) | `{policies: [{id, subjectKind, subject, path, capabilities, effect, description, createdBy, createdAt, updatedAt}]}` |
+| `POST /vault/policies` `{subjectKind, subject, path, capabilities, effect?: allow\|deny, description?}` (`secrets:admin`) | `201`. The user, workspace or API key must exist in the tenant (`400`) |
+| `PATCH /vault/policies/:id` `{path?, capabilities?, effect?, description?}` (`secrets:admin`) | The subject cannot change |
+| `DELETE /vault/policies/:id` (`secrets:admin`) | `204` |
+| `POST /vault/policies/explain` `{path, capability, userId?, apiKeyId?}` (`secrets:read`; another user or key needs `secrets:admin`) | `{subjects {userId, groups, workspaces, apiKeyId}, decision {allow, capability, path, grant, reason}, grants: [{grant, appliesToCapability, deciding}]}`: every grant naming the subject that covers the path, most specific first, with the deciding one marked |
+
+Audit actions: `vault.policy.created`, `vault.policy.updated`, `vault.policy.deleted`, `vault.denied`.
+
+## Sprint 24: Certificate authority (B-1601 to B-1604)
+
+A platform root and one active intermediate per tenant. Issuer and OCSP responder keys are made and used in the
+signer process (`SIGNER_SOCKET`) or OpenBao transit (`KMS_PROVIDER=openbao`); without either, key-making routes answer
+`409` (`step: custody`). Rows hold the certificate, the public key and the signer's wrapped blob or the transit key
+name, never a private key. Errors are problem details; refusals by policy are `422` with `step` (`names`, `key`,
+`lifetime`) and, for a name, `name {type, value}`.
+
+### Admin (`pki:manage`; the root also needs `platform:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/pki` | `custody` (`signer process`, `OpenBao transit` or `unavailable`), the CRL and OCSP settings, `baseUrl`, `profileMaxDays`, `reasons` |
+| `GET /api/pki/issuers[?all=true]` | The roots and the tenant's intermediates (every tenant's with `all=true` and `platform:manage`): `{id, tenantId, parentId, kind, name, organization, keyType, custody, serial, generation, pathLen, notBefore, notAfter, state: active\|retired\|revoked, revokedAt, revocationReason, crlNumber, replacedBy, certificatePem, urls {crl, certificate, ocsp}}` |
+| `POST /api/pki/issuers` `{kind: root, commonName, organization?, keyType?: ecdsa-p256\|rsa-3072, days?: 30-9125 (3650)}` | `platform:manage` and a recent sign-in. Self-signed, CA with no path length, keyCertSign and cRLSign. `409` while a root is active (rotate instead). `201` |
+| `POST /api/pki/issuers` `{kind: intermediate, commonName?, organization?, keyType?, days?: 7-1825 (1825)}` | The session's tenant's issuing CA, signed by the active root: pathLen 0, CRL distribution point and AIA (OCSP, caIssuers) pointing at the root's public routes, never past the root's expiry. `409` without an active root or with an active intermediate. `201` |
+| `GET /api/pki/issuers/:id` | Adds `chain` (PEM, the issuer first) and the last five `crls` |
+| `POST /api/pki/issuers/:id/rotate` `{days?}` | Recent sign-in. A new key and certificate (`generation` + 1); the old issuer becomes `retired` with `replacedBy`, stops issuing, and keeps serving its CRL and OCSP. `201` with the new issuer |
+| `POST /api/pki/issuers/:id/reissue` `{days?}` | Recent sign-in. The same key, a new serial and validity; an intermediate is signed by the current root (after a root rotation). Certificates issued before still verify |
+| `POST /api/pki/issuers/:id/revoke` `{reason?}` | Recent sign-in; intermediates only (a root is retired by rotation). Listed on the root's next CRL (a CRL job is queued) |
+| `POST /api/pki/issuers/:id/issue` `{csr (PEM PKCS#10), profileId, days?, sans?: [{type: dns\|ip\|email\|uri, value}]}` | B-1602. The tenant's active intermediate only (`404` for a root or another tenant's, `409` when retired, revoked or expired). The CSR's self-signature must verify (`400`, `step: csr`); keys: P-256, P-384, RSA 2048/3072/4096, Ed25519, as the profile allows. Names come from `sans`, else the CSR's subjectAltName, else (server profiles) its CN; each is checked against the profile and a refusal is audited as `pki.issue.refused`. `days` over the profile's maximum is `422`; validity never passes the issuer's (`clamped: true`). The subject is the CN only. `201` `{…certificate, certificatePem, chainPem, clamped}` |
+| `POST /api/pki/issuers/:id/crl` | Queues a `pki.crl` job now. `202 {jobId}` |
+| `GET /api/pki/issuers/:id/crls` | The last 50 CRLs `{number, thisUpdate, nextUpdate, entries}` and the public `url` |
+| `GET /api/pki/certificates[?issuerId&state=valid\|revoked&limit&before]` | The tenant's certificates, newest first: `{id, issuerId, profileId, serial, commonName, sans, keyType, notBefore, notAfter, fingerprint, state, revokedAt, revocationReason, invalidityDate, requestedBy, createdAt}` |
+| `GET /api/pki/certificates/:id` | Adds `certificatePem` and `chainPem` |
+| `POST /api/pki/certificates/:id/revoke` `{reason?: unspecified\|keyCompromise\|affiliationChanged\|superseded\|cessationOfOperation\|privilegeWithdrawn, invalidityDate?}` | B-1603. RFC 5280 reason codes (`cACompromise` is for issuers, `422`; holds and `removeFromCRL` are not supported, `400`). Drops cached OCSP answers on every instance and queues the issuer's next CRL. `409` when already revoked |
+| `GET /api/pki/profiles`, `POST /api/pki/profiles` `{name, kind: server\|client\|code-signing, maxDays, defaultDays?, policy?}` | `policy {domains: ["host", "*.domain"], allowWildcard, ipRanges: [CIDR], emailDomains, uriPrefixes, keyTypes}`. Server profiles issue dNSName and iPAddress names (serverAuth, at most 398 days); client profiles dNSName, iPAddress, rfc822Name and URI (clientAuth, 825 days); code-signing rfc822Name and URI and need a CN (codeSigning, 1185 days). `*.domain` allows every name below it; a wildcard name also needs `allowWildcard`. `409` for a duplicate name |
+| `PATCH /api/pki/profiles/:id` `{policy?, maxDays?, defaultDays?, state?: active\|disabled}`, `DELETE /api/pki/profiles/:id` | `204` on delete |
+
+Audit actions: `pki.root.created`, `pki.intermediate.created`, `pki.issuer.rotated`, `pki.issuer.reissued`,
+`pki.issuer.revoked`, `pki.profile.created`, `pki.profile.updated`, `pki.profile.deleted`, `pki.certificate.issued`,
+`pki.issue.refused`, `pki.certificate.revoked`, `pki.crl.requested`, `pki.responder.issued` (system). Jobs:
+`pki.crl` (every `PKI_CRL_MINUTES` per live issuer, and after each revocation; it also renews the issuer's OCSP
+responder certificate).
+
+### Public (no session; `PKI_PUBLIC_RATE_PER_MINUTE` per address, then `429`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /pki/crl/:issuer.crl`, `GET /pki/crl/:issuer.pem` | The issuer's latest CRL (X.509 v2, `application/pkix-crl` or PEM): `cRLNumber` increasing per issuer, the authority key identifier, each revoked certificate (and revoked child intermediate) not yet expired with its reason code (absent for unspecified) and invalidity date. Signed afresh on request when none exists or the latest is past `nextUpdate`. `Cache-Control: public, max-age` up to an hour, never past `nextUpdate` |
+| `GET /pki/ca/:issuer.crt`, `GET /pki/ca/:issuer.pem` | The issuer's certificate (the caIssuers URL in what it issued) |
+| `POST /pki/ocsp` (`application/ocsp-request`, at most 16 KiB), `GET /pki/ocsp/<url-encoded base64 request>` | B-1604, RFC 6960. CertIDs with SHA-1 or SHA-256, up to 10 per request, all under one issuer. Signed by the issuer's delegated responder (a P-256 certificate it issued with id-kp-OCSPSigning and id-pkix-ocsp-nocheck, `PKI_OCSP_SIGNER_DAYS`, renewed a third before expiry; responder id by key hash; the responder and issuer certificates are included). `good`, `revoked` (time and reason) or `unknown`; `thisUpdate` now, `nextUpdate` after `PKI_OCSP_VALIDITY_MINUTES`; a request nonce (RFC 8954, up to 32 octets) is echoed. Errors are OCSP statuses: `malformedRequest`, `unauthorized` (an issuer this CA does not know), `internalError` (the key store failed). Answers without a nonce are cached per instance for `PKI_OCSP_CACHE_SECONDS` and dropped on revocation; GET answers carry `Cache-Control: public, max-age` |
+
+## Sprint 24c (1.4.0): platform core
+
+The complete route list, with request and response schemas for the routes below, is [openapi.json](openapi.json)
+(OpenAPI 3.1). `server/test/openapi.test.ts` fails when a registered route is missing from it or an operation in it is
+no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes with their summary from this
+file.
+
+### Event catalogue (`webhooks:manage` or `plugins:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `GET /events/catalogue` | B-2001. `{version, envelope, groups: [{pattern, description}], types: [{type, group, version, since, status: emitted \| reserved, description, schema}], auditActions: {version, since, description, schema}}`. The envelope is the body of every delivery `{id, type, tenant, label, createdAt, data}`; `schema` is the JSON Schema of `data`. Named types: `job.*`, `flag.*`, `approval.requested`, and, reserved until their domains ship, `record.*`, `file.*`, `group.*`, `message.*` and `post.*`. Every other type is an audit action whose data is the audit entry; a change audited under a named type's name (`flag.confirmed`) is delivered with both shapes, told apart by `data.hash`. `version` moves when a type is added or changes; a type's own `version` only when its data changes incompatibly. `ETag`, `304` on `If-None-Match` |
+
+Every event the webhook fan-out sees is checked against the catalogue; a mismatch is still delivered, counted in
+`exprsn_event_schema_violations_total{type}` and logged. `GET /admin/webhooks` lists the catalogue's groups as
+`events` (now also `plugin.*`, `record.*`, `file.*`, `group.*`, `message.*`, `post.*`).
+
+### Plugins (`plugins:manage`)
+
+A plugin is data: a manifest and the capabilities granted to it, per tenant. Nothing in a manifest is loaded or run
+by the server (declarative actions and script handlers come later). Tenant admins hold `plugins:manage`.
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/plugins/capabilities` | The closed vocabulary `{capabilities: [{name, description, risk: low \| high, events?}], actions: {log: "emit:log", …}}`: `read:events`, `read:records`, `read:files`, `read:groups`, `read:messages`, `read:posts`, `emit:log`, `emit:audit`, `emit:notification`, `emit:flag` (low), `call:webhook`, `call:workflow`, `write:records`, `write:posts` (high) |
+| `POST /admin/plugins/validate` `{manifest}` | `200 {valid: true, manifest}` or `422` with `errors` (every problem). A manifest is `{key, name, version (semver), kind: declarative \| webhook \| script, description?, publisher?, homepage?, events?, capabilities?, optionalCapabilities?, config?: {schema}, actions?: [{type, on?, with?}], webhook?: {url}, script?: {entry, source}}`; unknown fields are refused. Each capability must be in the vocabulary, each event a catalogue group or type covered by a read capability (`record.*` needs `read:records`), each action's capability declared, `config.schema` a JSON Schema |
+| `GET /admin/plugins?removed=true` | `{plugins: [{id, key, name, version, kind, description, publisher, state: installed \| enabled \| disabled \| removed, events, capabilities, optionalCapabilities, granted, missing, maxLabel, configured, manifestHash, installedBy, stateChangedAt, createdAt, updatedAt}]}`; plugins above the caller's clearance are left out. `missing` lists required capabilities not granted |
+| `POST /admin/plugins` `{manifest, grants?, maxLabel?: internal, config?, reason?}` | Installs, or reinstalls a removed plugin (same id, new manifest). `grants` default to the low-risk capabilities the manifest asks for; high-risk ones only when named; anything not in the manifest is `400`. `config` is checked against `config.schema` (`422`) and sealed with the tenant key. `409` when installed and not removed; `403` when `maxLabel` is above the caller's clearance. Audited `plugin.installed` or `plugin.reinstalled` |
+| `GET /admin/plugins/:id` | `:id` is the id or the key. The plugin, its `manifest` (a script's source as `{entry, bytes}`) and `transitions` |
+| `POST /admin/plugins/:id/enable` `{reason?}` | installed or disabled to enabled. `409` with `missing` when a required capability is not granted, for a script plugin (stored, not run, in this release) and from any other state. Audited `plugin.enabled` |
+| `POST /admin/plugins/:id/disable` `{reason?}` | installed or enabled to disabled. Audited `plugin.disabled` |
+| `DELETE /admin/plugins/:id?reason=` | installed, enabled or disabled to removed (`204`). Audited `plugin.removed` |
+| `PUT /admin/plugins/:id/grants` `{grants, reason?}` | Replaces the grants; an enabled plugin that loses a required one is disabled. Audited `plugin.grants.updated` (`before`, `after`, `added`, `removed`, `highRisk`) |
+| `GET /admin/plugins/:id/transitions` | `{transitions: [{event: install \| enable \| disable \| remove \| grants, from, to, version, actor, reason, at}]}`, oldest first |
+
+Two transitions racing from one state never both apply (the second is `409`). Each change publishes `plugin.changed`
+on the bus and clears the tenant's cached list of enabled plugins on every instance.
+
+### Realtime rooms (sockets)
+
+B-2101, the generic mechanism for the domains to come (messaging conversations, groups, feeds, channels). A client
+asks `room.join {kind: conversation | group | feed | channel, id}` (acknowledged `{ok, label}` or `{ok: false,
+error}`) and `room.leave {kind, id}`; the domain's authoriser decides from the session, and a kind no domain has
+registered admits nobody. A socket holds at most 50 rooms. Domain events arrive named `<kind>.<event>` with `{kind, id,
+…}`. When access ends (a member removed, a label raised, the workspace that admitted the user left) the socket leaves
+the room before any further event is relayed and receives `room.closed {kind, id}`, unless a fresh check lets it back
+in. No domain registers rooms yet.
+
+### CLI
+
+`exprsn-ai plugins list | show | capabilities | validate | install | enable | disable | remove | grants` (as the
+routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 for a refused transition) and
+`exprsn-ai events replay --webhook <id> [--source deliveries | audit] [--since] [--until] [--type]… [--state]
+[--limit] [--dry-run]`: `deliveries` sends past deliveries again, each its exact body as a new delivery; `audit`
+backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
+Audited `webhook.replayed`.

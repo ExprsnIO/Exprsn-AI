@@ -42,12 +42,17 @@ import { sharingRoutes } from '../routes/sharing.js';
 import { promptRoutes } from '../routes/prompts.js';
 import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
+import { vaultRoutes } from '../routes/vault.js';
+import { pkiRoutes } from '../routes/pki.js';
+import { pkiPublicRoutes } from '../routes/pki-public.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
 import { mediaHostGuard, mediaOriginRoutes } from '../media/origin.js';
 import { sendBytes } from '../routes/media.js';
 import { authenticate, csrfProtection, noStore } from './middleware.js';
+import { eventRoutes } from '../routes/events.js';
+import { pluginAdminRoutes } from '../routes/admin/plugins.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -136,6 +141,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(integrationPublicRoutes(s));
   // Sprint 18 (B-905): the training worker's callbacks (run keys, artefacts), grant tokens only.
   app.use(trainerWorkerRoutes(s));
+  // Sprint 24 (B-1603, B-1604): the CA's CRLs, issuer certificates and OCSP responder (public, rate-limited).
+  app.use(pkiPublicRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -193,6 +200,13 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', billingAdminRoutes(s));
   // Sprint 22 (B-1405): zone NetworkPolicies applied in-cluster.
   api.use('/admin', zoneClusterRoutes(s));
+  // Sprint 24 (B-1701 to B-1703): the secrets vault.
+  api.use(vaultRoutes(s));
+  // Sprint 24 (B-1601 to B-1603): the certificate authority.
+  api.use(pkiRoutes(s));
+  // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
+  api.use(eventRoutes(s));
+  api.use('/admin', pluginAdminRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
