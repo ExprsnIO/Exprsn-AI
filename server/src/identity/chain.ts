@@ -65,6 +65,7 @@ export class IdentityChain {
         break;
       case 'oidc':
       case 'saml':
+      case 'atproto': // Sprint 26 (B-1808): AT-Protocol accounts sign in by redirect too
         provider = new FederatedProvider(row, (r, steps) => (this.federatedTester ? this.federatedTester(r, steps) : Promise.resolve(false)));
         break;
     }
