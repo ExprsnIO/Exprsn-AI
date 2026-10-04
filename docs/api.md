@@ -1900,6 +1900,84 @@ routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 f
 backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
 Audited `webhook.replayed`.
 
+## Sprint 26d (1.4.0): the file store (B-2401 to B-2405)
+
+Workspace folders and files on the blob store. Members of a workspace read (`files:read`) and change (`files:write`)
+its files within their clearance; members get both, tenant admins too. Every upload, new version and restored
+version is quarantined: the bytes stream into the blob store sealed (64 KiB AES-GCM segments under a random key per
+version, that key sealed with the tenant key), then the `file.scan` job detects the type from the bytes (text,
+Markdown, CSV, JSON, HTML, PDF, Word, Excel, PowerPoint, PNG, JPEG, WebP, GIF), classifies text, scans with ClamAV
+(`CLAMD_HOST`) and checks the label against the uploader's clearance and the workspace ceiling. Only a ready version
+is served. Names are 1 to 255 characters without `/`, `\` or control characters, unique (case-insensitive) in their
+folder. Every route answers `Cache-Control: no-store`.
+
+### Folders, files and versions (B-2401)
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/browse?workspace=&folder=` | A folder's contents (the workspace root without `folder`): `{workspace, folder, path, folders, files}`; files above the caller's clearance are left out |
+| `POST /files/folders` `{name, parentId?, workspaceId?}` | `201` with the folder; `409` if the name is taken |
+| `PATCH /files/folders/:id` `{name?, parentId?}` | Rename or move within the workspace (not into itself) |
+| `DELETE /files/folders/:id` | Puts the folder in the trash with everything in it: `{…folder, files, folders}` |
+| `PUT /files/uploads?name=&label=&folder=&workspace=` | The raw body is the file, streamed (never buffered). `202` with the file (`state: pending`) and `version {number: 1, state: quarantined}`. `413` above `FILES_MAX_BYTES` or over a storage quota (checked while the bytes arrive) |
+| `GET /files/:id` | The file: `{id, name, workspaceId, folderId, ownerId, ownerName, label, state: pending\|ready\|rejected, size, type, currentVersion, tags, access: workspace\|shared, preview: queued\|ready\|failed\|unavailable\|null, …}`; shared readers too |
+| `PATCH /files/:id` `{name?, folderId?}` | Rename or move within the workspace |
+| `PUT /files/:id/tags` `{tags}` | Up to 20 lower-case tags |
+| `DELETE /files/:id` | To the trash (`purgeAfter` is `FILES_TRASH_DAYS` later) |
+| `GET /files/:id/content` | The current version, streamed and audited (`file.downloaded`), as an attachment with `Content-Security-Policy: sandbox`, `nosniff` and the name escaped in `Content-Disposition` (`filename` and `filename*`). `409` while no version is ready |
+| `PUT /files/:id/content?label=` | A new version (raw body, as an upload): `202`; it becomes current when its scan passes |
+| `GET /files/:id/versions` | Every version, newest first: `{number, state, size, sha256, type, label, reason, findings, restoredFrom, createdBy, createdAt, scannedAt}` (members of the file's workspace) |
+| `GET /files/:id/versions/:n/content` | An older ready version, audited |
+| `POST /files/:id/versions/:n/restore` | Writes version `n`'s content again as a new version, which goes through quarantine and is **scanned again**: `202` |
+| `GET /files/trash?workspace=` | What was put in the trash on its own (folders and files), within clearance |
+| `POST /files/trash/restore` `{kind: file\|folder, id}` | Restores it with what went with it, to the workspace root when its folder is gone; a clashing name gets ` (2)`. `409` for something that went with a folder |
+| `POST /files/trash/empty` `{workspaceId?}` | Purges the workspace's trash now: `202 {jobId}`. The `files.purge` job also runs every `FILES_PURGE_MINUTES` for what passed its purge date |
+
+Events (catalogue group `file.*`, now emitted): `file.uploaded` (version 1 passed quarantine), `file.updated` (a later
+version), `file.restored` (`from`), `file.deleted` (to the trash), `file.shared` (`with`). Audit actions:
+`file.upload.received`, `file.version.ready`, `file.version.rejected`, `file.version.restore.requested`,
+`file.downloaded`, `file.changed`, `file.tags.updated`, `file.trashed`, `file.untrashed`, `file.purged`,
+`file.trash.emptied`, `file.folder.created`, `.updated`, `.trashed`, `.untrashed`, `file.share.created`,
+`file.share.revoked`, `file.quota.updated`. The owner's sockets get `file.state` when a version is ready or rejected.
+
+### Sharing (B-2402)
+
+Read-only: a shared reader downloads the current version and its preview, nothing else.
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/:id/shares` | `[{id, kind, userId, userName, group, workspaceId, workspaceName, anonymous, expiresAt, maxUses, uses, state: active\|revoked\|expired\|used up, …}]` |
+| `POST /files/:id/shares` `{kind: user, userId}` \| `{kind: group, group}` \| `{kind: workspace, workspaceId}` \| `{kind: link, expiresInHours?, maxUses?, anonymous?}` | `201`. A user must be cleared for the file's label, a workspace's ceiling must cover it; a group is a directory group (as the reader's identities carried it at sign-in or sync). A link answers with `token` (`exf_…`) **once**; it is stored as an HMAC. Anonymous links need the tenant's anonymous-link setting (`PUT /admin/tenants/:tid/sharing`, shared with conversations), a `public` file and a lifetime within the tenant's maximum |
+| `DELETE /files/:id/shares/:shareId` | Revokes at once (`204`) |
+| `GET /files/shared` | Files shared with the caller (directly, through a workspace or a group), live shares only, within clearance |
+| `POST /file-links/open` `{token}` | Signed in, same tenant, cleared: `{name, size, type, label, expiresAt, usesLeft}`; does not use the link. Every other case is the same `404` |
+| `POST /file-links/download` `{token}` | Signed in: takes one use atomically and streams the file (sandboxed, audited with the address). **A link past its use limit, expired or revoked is refused** with the same `404` as an unknown token |
+| `POST /api/public/file-links/download` `{token}` | Anonymous (no session, no cookie; `SHARE_ANONYMOUS_PER_MINUTE` per address): only an anonymous link to a file that is `public` now, while the tenant allows anonymous links. No metadata route |
+
+### Quotas and usage (B-2403)
+
+Stored and quarantined versions count (trash too, until purged; previews do not).
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/usage?workspace=` | `{workspace: {usedBytes, maxBytes, files}, tenant: {…}, maxUploadBytes, trashDays}` (`files:read`) |
+| `GET /admin/usage/storage` | Storage per tenant and workspace (`usage:read`) |
+| `PUT /admin/tenants/:tid/file-quota` `{maxBytes \| null}` | The tenant total (`tenant:manage`, system admins only) |
+| `PUT /admin/tenants/:tid/workspaces/:wid/file-quota` `{maxBytes \| null}` | A workspace's limit (`tenant:manage`), at most the tenant total. **An upload over either limit is refused** with `413 {limit: storage_bytes, scope, used, max, incoming}` |
+
+### Previews (B-2404)
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/:id/preview` | A PNG of an image or a PDF's first page, drawn by the `file.preview` job (ffmpeg, `pdftoppm`), sealed like the original, served with the media sandbox headers (B-413); with `MEDIA_ORIGIN`, a `302` to a signed URL on the media origin. `409` while it is drawn, `404` when there is none (`unavailable` without the tool, or above `FILES_PREVIEW_MAX_BYTES`) |
+
+### Search and folders as knowledge sources (B-2405)
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/search?q=&tag=&workspace=` | Ready files in the caller's workspaces whose name contains `q` (`%` and `_` literal) and that carry every `tag` (repeatable), within clearance; at most 100 |
+| `POST /knowledge/bases/:id/sources` `{kind: folder, location: <folder id>}` | A folder (and its subfolders) the curator can read becomes a source (`location` shows `folder: <name>`). Each sync indexes its ready files of a knowledge type up to the base's label, named by their path below the folder; chat cites them like any document |
+
 ## Sprint 25d (1.4.0): plugins that run (B-2003 to B-2005)
 
 Events reach enabled plugins as jobs. Every event the webhook fan-out sees (audit actions, `job.*` except the plugin

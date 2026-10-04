@@ -6635,6 +6635,30 @@
         }
       }
     },
+    "/api/admin/tenants/{tid}/file-quota": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Set the tenant file quota",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "tenant:manage, system admins only: {maxBytes | null}. See docs/api.md, Sprint 26d."
+      }
+    },
     "/api/admin/tenants/{tid}/offboard": {
       "post": {
         "tags": [
@@ -6934,6 +6958,38 @@
         }
       }
     },
+    "/api/admin/tenants/{tid}/workspaces/{wid}/file-quota": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Set a workspace file quota",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "tenant:manage: {maxBytes | null}, at most the tenant total. See docs/api.md, Sprint 26d."
+      }
+    },
     "/api/admin/tenants/{tid}/workspaces/{wid}/members": {
       "get": {
         "tags": [
@@ -7130,6 +7186,20 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/admin/usage/storage": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Storage per workspace",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "usage:read: file storage used and limits for the tenant and each workspace. See docs/api.md, Sprint 26d."
       }
     },
     "/api/admin/usage/summary": {
@@ -9659,6 +9729,534 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/file-links/download": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Use a file link",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: takes one use atomically and streams the file; a link past its use limit is refused (404). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/file-links/open": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Open a file link",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: name, size, type, label, expiry and uses left of a live link of the caller's tenant; uses nothing. Any refusal is the same 404. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/browse": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Browse a folder",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: a folder's folders and files (the workspace root without folder), files above the caller's clearance left out. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/folders": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Create a folder",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: {name, parentId?, workspaceId?}; 409 when the name is taken in that folder. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/folders/{id}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Put a folder in the trash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: with everything in it; restorable until its purge date. See docs/api.md, Sprint 26d."
+      },
+      "patch": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Rename or move a folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: within its workspace, never into itself. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/search": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Search files",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: ready files in the caller's workspaces by name (q, wildcards literal) and tags, within clearance. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/shared": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Files shared with me",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: live user, workspace and group shares, within clearance. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/trash": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List the trash",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: folders and files put in the trash on their own, within clearance. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/trash/empty": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Empty the trash",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: purges the workspace's trash now as a job (202 {jobId}). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/trash/restore": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Restore from the trash",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: {kind, id}; restores what went with it, to the root when its folder is gone. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/uploads": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload a file",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: the raw body, streamed into sealed quarantine (202). 413 above FILES_MAX_BYTES or a storage quota. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/usage": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "File storage use",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: used bytes and limits for the workspace and the tenant. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Put a file in the trash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: purged FILES_TRASH_DAYS later. See docs/api.md, Sprint 26d."
+      },
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Get a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: details, tags, access and preview state; members and shared readers. See docs/api.md, Sprint 26d."
+      },
+      "patch": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Rename or move a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: within its workspace. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/content": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: the current version, streamed under the media sandbox headers and audited. See docs/api.md, Sprint 26d."
+      },
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload a new version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: the raw body, quarantined and scanned before it becomes current (202). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/preview": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Get a preview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: a PNG of an image or a PDF page, sandboxed; a signed MEDIA_ORIGIN redirect when configured. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/shares": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List shares",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: user, group, workspace and link shares with their state. See docs/api.md, Sprint 26d."
+      },
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Share a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: with a user, group or workspace, or a link (token shown once) with an expiry and an optional use limit; anonymous links on the B-706 rules. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/shares/{shareId}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Revoke a share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shareId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: access ends at once. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/tags": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Set tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: up to 20 lower-case tags. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/versions": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List versions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: every version with its scan state (members of the file's workspace). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/versions/{n}/content": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download a version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: an older ready version, audited. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/versions/{n}/restore": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Restore a version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: writes version n again as a new version, which is scanned again (202). See docs/api.md, Sprint 26d."
       }
     },
     "/api/flags": {
@@ -12845,6 +13443,20 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/public/file-links/download": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Use an anonymous file link",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "No session: an anonymous link to a public file while the tenant allows anonymous links; rate-limited per address, audited. See docs/api.md, Sprint 26d."
       }
     },
     "/api/public/shared-links/open": {

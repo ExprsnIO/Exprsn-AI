@@ -512,3 +512,23 @@ filter, private `/tmp`, only the state directory writable.
   `app.bsky.actor.profile` record, which accounts outside Bluesky may not have (they can link by signing in instead);
   whoever runs the account's PDS can also write that record. The handle stored with a binding is checked when it is set,
   not again later (sign-in checks the handle it uses each time). Handles under `.test` are accepted outside production.
+- File store (1.4.0, Sprint 26d): content is sealed in 64 KiB AES-GCM segments under a random key per version, and
+  that key is sealed with the tenant key, so offboarding crypto-shreds files with the rest of the tenant's content.
+  The quarantine scan reads the whole file twice (type check and classification, then ClamAV); ClamAV refuses streams
+  above its `StreamMaxLength` (25 MB by default), which rejects larger files until the operator raises it to
+  `FILES_MAX_BYTES`. Zip archives are buffered to find out whether they are Office documents, so larger zips than
+  32 MiB are refused; only text, PDF, Word, Excel, PowerPoint, PNG, JPEG, WebP and GIF are accepted. Classification
+  for personal and financial data covers text files only (PDFs and Office files are classified when a knowledge
+  source indexes them, not in the store). Sharing is per file (not per folder) and read-only; a group share matches
+  the groups the reader's identities carried at their last sign-in or directory sync. A link's use is consumed when
+  the download starts, so a download that fails part-way still counts. Anonymous links follow the conversation
+  settings (one tenant switch for both) and have no landing page or metadata route: the holder can only download.
+  Previews are drawn by external tools (ffmpeg, poppler's pdftoppm) on the server, as argument arrays without a
+  shell, from a decrypted temporary copy in `FILES_WORK_DIR` (mode 0600, removed afterwards); run them in a
+  sandboxed host or container if untrusted PDFs are a concern. A folder used as a knowledge source is indexed on the
+  source's schedule, not when a file changes, and only files at or below the knowledge base's label; whoever may read
+  the base reads what it indexed, so the curator adding the folder decides who sees its contents. Storage quotas
+  count every stored and quarantined version (trash included, previews not); two uploads racing at the limit are
+  checked again after they are recorded, so one may be refused that would have fitted after the other failed.
+  Files are not yet moderation objects: `FileService.moderationTarget` and `takeDown` are ready for the moderation
+  object registry (B-1901) to call.

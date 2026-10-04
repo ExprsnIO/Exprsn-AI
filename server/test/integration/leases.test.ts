@@ -5,7 +5,9 @@
  * no longer exists in the database.
  *
  *   TEST_PG_URL      a superuser URL, e.g. postgres://postgres:postgres@localhost:5432/exprsn_test
- *   TEST_MYSQL_URL   a URL whose account may CREATE USER and GRANT, e.g. mysql://root:root@localhost:3306/exprsn_test
+ *   TEST_MYSQL_URL   the app database, e.g. mysql://exprsn:exprsn@localhost:3306/exprsn_test
+ *   TEST_MYSQL_ADMIN_URL   optional: an account that may CREATE USER and GRANT on the same server (e.g. root), used only
+ *                    to make the engine's admin login; defaults to TEST_MYSQL_URL
  */
 import { randomBytes } from 'node:crypto';
 import knexFactory from 'knex';
@@ -36,7 +38,9 @@ for (const d of [
       const admin = `exai_it_admin_${randomBytes(3).toString('hex')}`;
       const adminPw = `It-${randomBytes(12).toString('hex')}`;
       const schema = d.dialect === 'postgres' ? `it_leases_${randomBytes(3).toString('hex')}` : database;
-      const raw = knexFactory({ client: d.client === 'pg' ? 'pg' : 'mysql2', connection: d.url! });
+      // Making the engine's admin login needs CREATE USER, which the app database's own account may lack (it does in CI).
+      const setupUrl = d.dialect === 'mysql' ? (process.env.TEST_MYSQL_ADMIN_URL ?? d.url!) : d.url!;
+      const raw = knexFactory({ client: d.client === 'pg' ? 'pg' : 'mysql2', connection: setupUrl });
 
       // The target: an admin login that may create accounts, owning (or granting on) one table.
       if (d.dialect === 'postgres') {

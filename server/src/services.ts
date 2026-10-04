@@ -92,6 +92,8 @@ import { RotationNotices } from './vault/rotation.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
+import { FileService } from './files/service.js';
+import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
 
 export interface Services {
   cfg: Config;
@@ -207,6 +209,8 @@ export interface Services {
   atproto: AtprotoService;
   /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
   atprotoAccounts: AtprotoAccounts;
+  /** 1.4.0, Sprint 26d (B-2401 to B-2405): workspace folders and files, versions, trash, shares, quotas, previews. */
+  files: FileService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -232,6 +236,8 @@ export interface ServiceOverrides {
   billingProvider?: BillingProvider | null;
   /** Sprint 25 (B-1704): the database engines behind leases (tests use an in-memory fake). */
   dbAdmins?: DbAdminFactory;
+  /** Sprint 26d (B-2404): the file store's preview renderer (tests use an in-process fake). */
+  previewRenderer?: PreviewRenderer;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -428,6 +434,16 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     atproto: new AtprotoService(() => s),
     atprotoAccounts: new AtprotoAccounts(() => s),
+    // 1.4.0, Sprint 26d: the file store.
+    files: new FileService(() => s, {
+      maxBytes: cfg.FILES_MAX_BYTES,
+      trashDays: cfg.FILES_TRASH_DAYS,
+      previewMaxBytes: cfg.FILES_PREVIEW_MAX_BYTES,
+      previewPx: cfg.FILES_PREVIEW_PX,
+      ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
+      ...(cfg.FILES_WORK_DIR ? { workDir: cfg.FILES_WORK_DIR } : {}),
+      renderer: overrides.previewRenderer ?? new ProcessPreviewRenderer({ ffmpeg: cfg.MEDIA_FFMPEG, pdftoppm: cfg.FILES_PDFTOPPM })
+    }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -493,6 +509,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.mcp.vaultResolver = vaultRead;
   }
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
+  // Sprint 26d (B-2401 to B-2405): quarantine scans, previews and the trash purge; folders as knowledge sources.
+  s.files.registerJobs();
+  s.knowledge.folders = s.files.folderSource();
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -546,4 +565,5 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
+  s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
 }

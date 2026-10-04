@@ -512,7 +512,22 @@ const base = z.object({
      * notify their owner once per threshold; the sweep runs every PKI_EXPIRY_SWEEP_MINUTES (0 turns it off).
      */
     PKI_EXPIRY_NOTICE_DAYS: z.string().regex(/^\s*\d{1,3}(\s*,\s*\d{1,3})*\s*$/, 'comma-separated whole days, such as 30,7').default('30,7'),
-    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360)
+    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360),
+    /**
+     * Sprint 26d (B-2401 to B-2404): the file store. FILES_MAX_BYTES caps one upload (streamed, never buffered; ClamAV's
+     * StreamMaxLength must be at least this when CLAMD_HOST is set). Trashed files and folders are purged
+     * FILES_TRASH_DAYS after they went to the trash, by a job every FILES_PURGE_MINUTES (0 turns it off). Previews
+     * (a PNG at most FILES_PREVIEW_PX on its longer side) are drawn for images and PDFs up to FILES_PREVIEW_MAX_BYTES,
+     * with MEDIA_FFMPEG for images and FILES_PDFTOPPM (poppler) for PDFs, in FILES_WORK_DIR (default the system
+     * temporary directory).
+     */
+    FILES_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024 * 1024).default(1024 * 1024 * 1024),
+    FILES_TRASH_DAYS: z.coerce.number().int().min(0).max(3650).default(30),
+    FILES_PURGE_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    FILES_PREVIEW_MAX_BYTES: z.coerce.number().int().min(0).max(1024 * 1024 * 1024).default(50 * 1024 * 1024),
+    FILES_PREVIEW_PX: z.coerce.number().int().min(64).max(2048).default(512),
+    FILES_PDFTOPPM: z.string().min(1).default('pdftoppm'),
+    FILES_WORK_DIR: z.string().optional()
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

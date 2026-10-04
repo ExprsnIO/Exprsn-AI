@@ -58,6 +58,7 @@ import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { eventRoutes } from '../routes/events.js';
 import { pluginAdminRoutes } from '../routes/admin/plugins.js';
 import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
+import { fileRoutes, publicFileRoutes } from '../routes/files.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -161,7 +162,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path)) ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path)) ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -222,10 +223,14 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(atprotoRoutes(s));
   // Sprint 26 (B-1807, B-1808): users' AT-Protocol DIDs and handles.
   api.use(atprotoAccountRoutes(s));
+  // 1.4.0, Sprint 26d (B-2401 to B-2405): the file store.
+  api.use(fileRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
   // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
+  // Sprint 26d (B-2402): anonymous file links, on the same rules.
+  app.use('/api/public', publicFileRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 
