@@ -1721,3 +1721,46 @@ No route changes.
 Audit actions: `billing.statement.refunded`, `billing.statement.credited`, `billing.statement.credit-voided`,
 `billing.statement.disputed`, `billing.statement.dispute-updated`, `billing.statement.dispute-closed` (actor
 `service: stripe`, detail with the amounts in micro-units and the statement's state).
+
+## Sprint 24: Certificate authority (B-1601 to B-1604)
+
+A platform root and one active intermediate per tenant. Issuer and OCSP responder keys are made and used in the
+signer process (`SIGNER_SOCKET`) or OpenBao transit (`KMS_PROVIDER=openbao`); without either, key-making routes answer
+`409` (`step: custody`). Rows hold the certificate, the public key and the signer's wrapped blob or the transit key
+name, never a private key. Errors are problem details; refusals by policy are `422` with `step` (`names`, `key`,
+`lifetime`) and, for a name, `name {type, value}`.
+
+### Admin (`pki:manage`; the root also needs `platform:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/pki` | `custody` (`signer process`, `OpenBao transit` or `unavailable`), the CRL and OCSP settings, `baseUrl`, `profileMaxDays`, `reasons` |
+| `GET /api/pki/issuers[?all=true]` | The roots and the tenant's intermediates (every tenant's with `all=true` and `platform:manage`): `{id, tenantId, parentId, kind, name, organization, keyType, custody, serial, generation, pathLen, notBefore, notAfter, state: active\|retired\|revoked, revokedAt, revocationReason, crlNumber, replacedBy, certificatePem, urls {crl, certificate, ocsp}}` |
+| `POST /api/pki/issuers` `{kind: root, commonName, organization?, keyType?: ecdsa-p256\|rsa-3072, days?: 30-9125 (3650)}` | `platform:manage` and a recent sign-in. Self-signed, CA with no path length, keyCertSign and cRLSign. `409` while a root is active (rotate instead). `201` |
+| `POST /api/pki/issuers` `{kind: intermediate, commonName?, organization?, keyType?, days?: 7-1825 (1825)}` | The session's tenant's issuing CA, signed by the active root: pathLen 0, CRL distribution point and AIA (OCSP, caIssuers) pointing at the root's public routes, never past the root's expiry. `409` without an active root or with an active intermediate. `201` |
+| `GET /api/pki/issuers/:id` | Adds `chain` (PEM, the issuer first) and the last five `crls` |
+| `POST /api/pki/issuers/:id/rotate` `{days?}` | Recent sign-in. A new key and certificate (`generation` + 1); the old issuer becomes `retired` with `replacedBy`, stops issuing, and keeps serving its CRL and OCSP. `201` with the new issuer |
+| `POST /api/pki/issuers/:id/reissue` `{days?}` | Recent sign-in. The same key, a new serial and validity; an intermediate is signed by the current root (after a root rotation). Certificates issued before still verify |
+| `POST /api/pki/issuers/:id/revoke` `{reason?}` | Recent sign-in; intermediates only (a root is retired by rotation). Listed on the root's next CRL (a CRL job is queued) |
+| `POST /api/pki/issuers/:id/issue` `{csr (PEM PKCS#10), profileId, days?, sans?: [{type: dns\|ip\|email\|uri, value}]}` | B-1602. The tenant's active intermediate only (`404` for a root or another tenant's, `409` when retired, revoked or expired). The CSR's self-signature must verify (`400`, `step: csr`); keys: P-256, P-384, RSA 2048/3072/4096, Ed25519, as the profile allows. Names come from `sans`, else the CSR's subjectAltName, else (server profiles) its CN; each is checked against the profile and a refusal is audited as `pki.issue.refused`. `days` over the profile's maximum is `422`; validity never passes the issuer's (`clamped: true`). The subject is the CN only. `201` `{…certificate, certificatePem, chainPem, clamped}` |
+| `POST /api/pki/issuers/:id/crl` | Queues a `pki.crl` job now. `202 {jobId}` |
+| `GET /api/pki/issuers/:id/crls` | The last 50 CRLs `{number, thisUpdate, nextUpdate, entries}` and the public `url` |
+| `GET /api/pki/certificates[?issuerId&state=valid\|revoked&limit&before]` | The tenant's certificates, newest first: `{id, issuerId, profileId, serial, commonName, sans, keyType, notBefore, notAfter, fingerprint, state, revokedAt, revocationReason, invalidityDate, requestedBy, createdAt}` |
+| `GET /api/pki/certificates/:id` | Adds `certificatePem` and `chainPem` |
+| `POST /api/pki/certificates/:id/revoke` `{reason?: unspecified\|keyCompromise\|affiliationChanged\|superseded\|cessationOfOperation\|privilegeWithdrawn, invalidityDate?}` | B-1603. RFC 5280 reason codes (`cACompromise` is for issuers, `422`; holds and `removeFromCRL` are not supported, `400`). Drops cached OCSP answers on every instance and queues the issuer's next CRL. `409` when already revoked |
+| `GET /api/pki/profiles`, `POST /api/pki/profiles` `{name, kind: server\|client\|code-signing, maxDays, defaultDays?, policy?}` | `policy {domains: ["host", "*.domain"], allowWildcard, ipRanges: [CIDR], emailDomains, uriPrefixes, keyTypes}`. Server profiles issue dNSName and iPAddress names (serverAuth, at most 398 days); client profiles dNSName, iPAddress, rfc822Name and URI (clientAuth, 825 days); code-signing rfc822Name and URI and need a CN (codeSigning, 1185 days). `*.domain` allows every name below it; a wildcard name also needs `allowWildcard`. `409` for a duplicate name |
+| `PATCH /api/pki/profiles/:id` `{policy?, maxDays?, defaultDays?, state?: active\|disabled}`, `DELETE /api/pki/profiles/:id` | `204` on delete |
+
+Audit actions: `pki.root.created`, `pki.intermediate.created`, `pki.issuer.rotated`, `pki.issuer.reissued`,
+`pki.issuer.revoked`, `pki.profile.created`, `pki.profile.updated`, `pki.profile.deleted`, `pki.certificate.issued`,
+`pki.issue.refused`, `pki.certificate.revoked`, `pki.crl.requested`, `pki.responder.issued` (system). Jobs:
+`pki.crl` (every `PKI_CRL_MINUTES` per live issuer, and after each revocation; it also renews the issuer's OCSP
+responder certificate).
+
+### Public (no session; `PKI_PUBLIC_RATE_PER_MINUTE` per address, then `429`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /pki/crl/:issuer.crl`, `GET /pki/crl/:issuer.pem` | The issuer's latest CRL (X.509 v2, `application/pkix-crl` or PEM): `cRLNumber` increasing per issuer, the authority key identifier, each revoked certificate (and revoked child intermediate) not yet expired with its reason code (absent for unspecified) and invalidity date. Signed afresh on request when none exists or the latest is past `nextUpdate`. `Cache-Control: public, max-age` up to an hour, never past `nextUpdate` |
+| `GET /pki/ca/:issuer.crt`, `GET /pki/ca/:issuer.pem` | The issuer's certificate (the caIssuers URL in what it issued) |
+| `POST /pki/ocsp` (`application/ocsp-request`, at most 16 KiB), `GET /pki/ocsp/<url-encoded base64 request>` | B-1604, RFC 6960. CertIDs with SHA-1 or SHA-256, up to 10 per request, all under one issuer. Signed by the issuer's delegated responder (a P-256 certificate it issued with id-kp-OCSPSigning and id-pkix-ocsp-nocheck, `PKI_OCSP_SIGNER_DAYS`, renewed a third before expiry; responder id by key hash; the responder and issuer certificates are included). `good`, `revoked` (time and reason) or `unknown`; `thisUpdate` now, `nextUpdate` after `PKI_OCSP_VALIDITY_MINUTES`; a request nonce (RFC 8954, up to 32 octets) is echoed. Errors are OCSP statuses: `malformedRequest`, `unauthorized` (an issuer this CA does not know), `internalError` (the key store failed). Answers without a nonce are cached per instance for `PKI_OCSP_CACHE_SECONDS` and dropped on revocation; GET answers carry `Cache-Control: public, max-age` |
