@@ -907,7 +907,9 @@ export class ChatService {
     st.timer = setInterval(() => void this.beat(st), Math.max(250, Math.floor(this.leaseMs / 3)));
     st.timer.unref();
     this.streams.set(m.id, st);
-    void this.generate(p, c, m, r, think, kind, st, from)
+    // Sprint 26a: one gateway turn, so the screens and tools this answer runs never queue for the slot it holds.
+    void this.gateway
+      .turn(() => this.generate(p, c, m, r, think, kind, st, from))
       .catch((err) => this.log.error({ err, message: m.id }, 'generation crashed'))
       .finally(() => {
         if (st.timer) clearInterval(st.timer);
