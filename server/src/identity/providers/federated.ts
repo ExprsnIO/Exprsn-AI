@@ -9,7 +9,7 @@ export type FederatedTester = (row: ProviderRow, steps: Step[]) => Promise<boole
  * routes, so it never takes a password (the chain passes to the next store) and has no directory to look users up in.
  */
 export class FederatedProvider implements IdentityProvider {
-  readonly kind: 'oidc' | 'saml';
+  readonly kind: 'oidc' | 'saml' | 'github';
   readonly id: string;
   readonly name: string;
 
@@ -17,7 +17,7 @@ export class FederatedProvider implements IdentityProvider {
     private readonly row: ProviderRow,
     private readonly tester: FederatedTester | null
   ) {
-    this.kind = row.kind as 'oidc' | 'saml';
+    this.kind = row.kind as 'oidc' | 'saml' | 'github';
     this.id = row.id;
     this.name = row.name;
   }

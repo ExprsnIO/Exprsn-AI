@@ -78,6 +78,9 @@ import { EventCatalogue } from './events/catalogue.js';
 import { createCacheStore, TenantCache } from './platform/cache.js';
 import { RoomRegistry } from './realtime/rooms.js';
 import { PluginService } from './plugins/service.js';
+import { IdentityPolicies } from './identity/policy.js';
+import { SignupService } from './identity/signup.js';
+import { UserImportService } from './identity/user-import.js';
 import { PluginRuntime } from './plugins/runtime.js';
 import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
@@ -204,6 +207,12 @@ export interface Services {
   rotation: RotationNotices;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
+  /** 1.4.0, Sprint 26a (B-1801, B-1803): per-tenant signup and MFA policies, trusted devices. */
+  identityPolicy: IdentityPolicies;
+  /** 1.4.0, Sprint 26a (B-1801, B-1802): self-registration, email verification, invitations by workspace admins. */
+  signup: SignupService;
+  /** 1.4.0, Sprint 26a (B-1805): users, memberships and group mappings imported from CSV as a job. */
+  userImports: UserImportService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -424,6 +433,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     atproto: new AtprotoService(() => s),
+    identityPolicy: new IdentityPolicies(() => s),
+    signup: new SignupService(() => s),
+    userImports: new UserImportService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -489,6 +501,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.mcp.vaultResolver = vaultRead;
   }
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
+  s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;

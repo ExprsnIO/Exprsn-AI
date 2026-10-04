@@ -392,6 +392,17 @@ const base = z.object({
     /** B-2005: which plugins must come from a signed import bundle: script plugins (default), all, or none. */
     PLUGINS_REQUIRE_SIGNED: z.enum(['scripts', 'all', 'none']).default('scripts'),
     // --- end Sprint 25d ---
+    // --- Sprint 26a (1.4.0): identity gaps ---
+    /** B-1802: how long an email verification link works. */
+    EMAIL_VERIFY_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(48),
+    /** B-1801: how long an invitation by a workspace admin works. */
+    INVITATION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+    /** B-1801: self-registrations accepted per client address per hour (per address and email too). */
+    SIGNUP_PER_HOUR: z.coerce.number().int().min(1).max(1000).default(10),
+    /** B-1805: the largest CSV a user import accepts, and its most rows. */
+    USER_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(64 * 1024 * 1024).default(2 * 1024 * 1024),
+    USER_IMPORT_MAX_ROWS: z.coerce.number().int().min(1).max(100_000).default(5000),
+    // --- end Sprint 26a ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */

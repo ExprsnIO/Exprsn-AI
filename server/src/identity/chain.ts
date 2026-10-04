@@ -65,6 +65,7 @@ export class IdentityChain {
         break;
       case 'oidc':
       case 'saml':
+      case 'github':
         provider = new FederatedProvider(row, (r, steps) => (this.federatedTester ? this.federatedTester(r, steps) : Promise.resolve(false)));
         break;
     }

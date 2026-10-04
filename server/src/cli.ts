@@ -16,6 +16,7 @@ import { migrateCheck, schemaStatus } from './db/schema.js';
 import { decodeShare, escrowById, escrowKey, recordEscrow, recoverKey } from './platform/escrow.js';
 import { eventsCommand, pluginsCommand } from './cli/core.js';
 import { pkiCommand } from './cli/pki.js';
+import { secretsCommand, usersCommand } from './cli/identity.js';
 
 const RESTORE_PHRASE = 'replace all data';
 
@@ -78,6 +79,10 @@ Commands:
                                received (\`exprsn-ai events\` lists the options)
   pki <command>                1.4.0: issuers, list, issue, revoke and crl for a tenant's certificate authority
                                (\`exprsn-ai pki\` lists the options)
+  secrets <command> --as <user> 1.4.0: kv list, get and put, transit encrypt and decrypt, policy explain, through the
+                               vault under that account's policy, audited as the CLI (\`exprsn-ai secrets\` lists them)
+  users import <file.csv>      1.4.0: users, memberships and group mappings from CSV; --dry-run prints the plan and
+      [--dry-run]              changes nothing (\`exprsn-ai users\` lists the options)
 `;
 
 async function readPassword(prompt: string): Promise<string> {
@@ -358,6 +363,13 @@ async function main(): Promise<void> {
       // Sprint 25 (B-1607)
       case 'pki':
         process.exitCode = await pkiCommand(s, rest, (t) => void process.stdout.write(t));
+        break;
+      // Sprint 26a (B-2103, B-1805)
+      case 'secrets':
+        process.exitCode = await secretsCommand(s, rest, (t) => void process.stdout.write(t));
+        break;
+      case 'users':
+        process.exitCode = await usersCommand(s, rest, (t) => void process.stdout.write(t));
         break;
       default:
         process.stdout.write(USAGE);

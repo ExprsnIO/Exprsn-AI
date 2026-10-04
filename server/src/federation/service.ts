@@ -10,6 +10,7 @@ import { SigningKeys } from './keys.js';
 import { DENIED_TOPIC, DpopNonceError, OidcProvider, type DpopInput, type TenantCtx } from './oidc.js';
 import { SamlIdp } from './saml.js';
 import { Upstream } from './upstream.js';
+import { GitHubStore } from './github.js';
 import { FederationProposals } from './proposals.js';
 import { FederationMetadata } from './metadata.js';
 
@@ -52,6 +53,8 @@ export class FederationService {
   readonly oidc: OidcProvider;
   readonly saml: SamlIdp;
   readonly upstream: Upstream;
+  /** Sprint 26a (B-1804): GitHub sign-in as an OAuth 2.0 user store. */
+  readonly github: GitHubStore;
   /** Sprint 17: changes waiting for approval (introspection rights, fetched metadata) and fetched SAML metadata. */
   readonly proposals: FederationProposals;
   readonly metadata: FederationMetadata;
@@ -61,6 +64,7 @@ export class FederationService {
     this.oidc = new OidcProvider(s, this.keys);
     this.saml = new SamlIdp(s, this.keys);
     this.upstream = new Upstream(s);
+    this.github = new GitHubStore(s);
     this.proposals = new FederationProposals(s);
     this.metadata = new FederationMetadata(s, this.proposals);
     // B-806: a client may introspect every client's tokens only after a second identity admin approves.
@@ -170,7 +174,7 @@ export class FederationService {
   /** Registers this area's job handlers on `s.jobs`, and the upstream checks on the identity chain. */
   registerJobs(): void {
     const s = this.s();
-    s.chain.useFederatedTester((row, steps) => this.upstream.test(row, steps));
+    s.chain.useFederatedTester((row, steps) => (row.kind === 'github' ? this.github.test(row, steps) : this.upstream.test(row, steps)));
     s.jobs.register('federation.keys', async (p, ctx) => this.keys.scheduled(String(p.tenantId ?? ctx.job.tenant_id)));
     s.jobs.register('federation.purge', async () => ({ deleted: await this.oidc.purge() }));
     // Sprint 17 (B-807): fetched SAML metadata, refreshed on a schedule; changes wait for approval.

@@ -42,10 +42,13 @@ export interface IdentityProvider {
   close(): Promise<void>;
 }
 
-export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml'] as const;
-/** Upstream identity providers: sign-in is redirected to them; they take no passwords and have no directory to sync. */
-export const FEDERATED_KINDS = ['oidc', 'saml'] as const;
-export const isFederatedKind = (k: string): k is 'oidc' | 'saml' => k === 'oidc' || k === 'saml';
+export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml', 'github'] as const;
+/**
+ * Upstream identity providers: sign-in is redirected to them; they take no passwords and have no directory to sync.
+ * Sprint 26a (B-1804): GitHub is one, as an OAuth 2.0 store.
+ */
+export const FEDERATED_KINDS = ['oidc', 'saml', 'github'] as const;
+export const isFederatedKind = (k: string): k is 'oidc' | 'saml' | 'github' => k === 'oidc' || k === 'saml' || k === 'github';
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 /**
@@ -158,13 +161,34 @@ export const samlConfigSchema = z
   })
   .strict();
 
+const githubLogin = z.string().trim().toLowerCase().regex(/^[a-z0-9](?:[a-z0-9-]{0,38})$/, 'A GitHub organisation login');
+
+/**
+ * Sprint 26a (B-1804): sign-in with GitHub (or GitHub Enterprise Server) as an OAuth 2.0 user store. Organisations
+ * and teams become groups (`acme`, `acme/platform`) for the group mappings; `allowedOrgs` limits who may sign in.
+ * The endpoints go through the service URL checks, at save and at every connection.
+ */
+export const githubConfigSchema = z
+  .object({
+    ...common,
+    clientId: z.string().trim().min(1).max(200),
+    clientSecret: secretRef,
+    webUrl: z.url().refine((u) => /^https?:\/\//.test(u), 'http:// or https:// URL').default('https://github.com'),
+    apiUrl: z.url().refine((u) => /^https?:\/\//.test(u), 'http:// or https:// URL').default('https://api.github.com'),
+    /** Members of at least one of these organisations may sign in (empty: any GitHub account, then the mappings decide). */
+    allowedOrgs: z.array(githubLogin).max(50).default([]),
+    scopes: z.string().trim().max(200).default('read:user user:email read:org')
+  })
+  .strict();
+
+export type GitHubConfig = z.infer<typeof githubConfigSchema>;
 export type LocalConfig = z.infer<typeof localConfigSchema>;
 export type OidcUpstreamConfig = z.infer<typeof oidcConfigSchema>;
 export type SamlUpstreamConfig = z.infer<typeof samlConfigSchema>;
 export type LdapConfig = z.infer<typeof ldapConfigSchema>;
 export type SqlConfig = z.infer<typeof sqlConfigSchema>;
 
-export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig {
+export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig | GitHubConfig {
   switch (kind) {
     case 'local':
       return localConfigSchema.parse(config ?? {});
@@ -176,6 +200,8 @@ export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalC
       return oidcConfigSchema.parse(config);
     case 'saml':
       return samlConfigSchema.parse(config);
+    case 'github':
+      return githubConfigSchema.parse(config);
   }
 }
 

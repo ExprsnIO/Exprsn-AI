@@ -4,7 +4,7 @@ import { actorFrom } from '../../audit/chain.js';
 import { clears, highest, LABELS, type Label } from '../../authz/labels.js';
 import { canGrant, isRole } from '../../authz/permissions.js';
 import { LoginThrottle } from '../../identity/lockout.js';
-import { PROVIDER_KINDS, parseProviderConfig, type Step } from '../../identity/providers/types.js';
+import { PROVIDER_KINDS, parseProviderConfig, type GitHubConfig, type Step } from '../../identity/providers/types.js';
 import { vaultRefsIn } from '../../identity/secrets.js';
 import { resolveMappings } from '../../repos/users.js';
 import type { ProviderRow } from '../../repos/providers.js';
@@ -75,7 +75,11 @@ export function identityAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const body = parseBody(createSchema, req.body);
     try {
-      parseProviderConfig(body.kind, body.config);
+      const parsed = parseProviderConfig(body.kind, body.config);
+      // Sprint 26a (B-1804): GitHub's endpoints pass the service URL checks before they are saved.
+      if (body.kind === 'github') await s.federation.github.checkConfig(parsed as GitHubConfig).catch((err: Error) => {
+        throw badRequest(`The GitHub address was refused: ${err.message}`, { reason: 'service_url' });
+      });
       if (body.kind === 'local' && (await s.providers.list(p.tenantId)).some((x) => x.kind === 'local')) throw conflict('A tenant has one local user store.');
       // Sprint 25 (B-1705): vault references must be readable by the admin saving them; they resolve as that admin.
       const refs = vaultRefsIn(body.config);
@@ -100,6 +104,17 @@ export function identityAdminRoutes(s: Services): Router {
     if (current.managed_by === 'config' && (body.config !== undefined || body.name !== undefined)) throw conflict('This store is managed by the configuration file; change it there.');
     if (body.enabled === false && current.enabled) await assertAnotherEnabled(p.tenantId, current.id);
     let vaultOwner: string | null | undefined;
+    if (body.config !== undefined && current.kind === 'github') {
+      let parsed: GitHubConfig;
+      try {
+        parsed = parseProviderConfig('github', body.config) as GitHubConfig;
+      } catch (err) {
+        throw configProblem(err);
+      }
+      await s.federation.github.checkConfig(parsed).catch((err: Error) => {
+        throw badRequest(`The GitHub address was refused: ${err.message}`, { reason: 'service_url' });
+      });
+    }
     if (body.config !== undefined) {
       const refs = vaultRefsIn(body.config);
       await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
