@@ -259,8 +259,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - Inline styles may use CSS variables only (`var(--fg)`, `--panel`, `--accent`, `--warn-bg`…), never literal colours.
 - Handlers registered with `ctx.on` are dropped on every re-render and route change. Register them inside `render`
   each time. Keep UI state in `ctx.state` and re-render the whole screen after a change.
-- Each board's "States to design from this page" section becomes the screen's `states` array, each with an `apply`;
-  render the strip with `UI.states(list)`.
+- Each board's "States to design from this page" section becomes the screen's `states` array, each with an `apply`.
+  The console shows no way to pick them (no strip at the foot of the page, no header "States" button); they exist
+  for `App.applyState(i)`, which the accessibility suite drives. The prototype in `design/prototype/` keeps both.
 - Reproduce the board faithfully and don't invent features, but make every control do something. Primary actions go
   through confirm → toast → visible change. Plain copy: no exclamation marks, emoji or lorem ipsum.
 - Escape data with `UI.esc`, and use `type="button"` on buttons.

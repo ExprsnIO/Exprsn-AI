@@ -134,7 +134,7 @@
 
       let page;
       let inspector = '';
-      if (!st.run) page = '<div class="page runs-page">' + UI.pagehead('Runs', 'Agent runs, step by step', '') + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '') + UI.empty('No runs yet', 'Start a run of a published agent; its thinking, doing and calculating steps appear here as they happen.', App.can('agents:run') ? UI.btn('Start a run', { kind: 'primary', attrs: 'data-start' }) : '') + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+      if (!st.run) page = '<div class="page runs-page">' + UI.pagehead('Runs', 'Agent runs, step by step', '') + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '') + UI.empty('No runs yet', 'Start a run of a published agent; its thinking, doing and calculating steps appear here as they happen.', App.can('agents:run') ? UI.btn('Start a run', { kind: 'primary', attrs: 'data-start' }) : '') + '</div>';
       else if (!v) page = '<div class="page">' + UI.notice('Loading…', 'info') + '</div>';
       else if (v.error) page = '<div class="page">' + UI.problem('The run could not be loaded', v.error.message, v.error.problem && v.error.problem.trace_id) + '</div>';
       else {
@@ -214,7 +214,7 @@
           + '<div class="runs-lanes"><div></div>' + ['think', 'do', 'calc'].map((l) => '<div class="runs-lane"><span class="ln">' + UI.icon(l === 'think' ? 'brain' : l === 'do' ? 'play' : 'calc', 12) + esc(LANES[l]) + '</span><span class="ls">' + esc(laneSum[l]) + '</span></div>').join('') + '</div>'
           + (rows || '<div class="muted">No steps yet.</div>')
           + answer
-          + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+          + '</div>';
       }
       root.innerHTML = style + left + page + inspector;
 
@@ -230,7 +230,6 @@
       ctx.on('click', '[data-fig]', (e, t) => { st.sel = +t.dataset.fig; ctx.rerender(); setTimeout(() => { const c = ctx.$('.runs-card.selected'); if (c) c.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 20); });
       ctx.on('click', '[data-toggleanswer]', () => { st.showAnswer = !st.showAnswer; ctx.rerender(); });
       ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-start]', () => startModal(''));
       ctx.on('click', '[data-schedules]', () => schedulesModal());
       ctx.on('click', '[data-copyprov]', () => {

@@ -144,7 +144,7 @@
       root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.id-secret{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--warn-fg);border-radius:6px;background:var(--warn-bg)}.id-secret .muted{color:var(--warn-fg)}</style>'
         + '<div class="page">' + UI.pagehead('Identity and SSO', 'The identity service is the only token issuer', UI.btn('Test a login', { attrs: 'data-testlogin' }) + UI.btn('Create client', { kind: 'primary', icon: 'plus', attrs: 'data-create' }))
         + banner + pendingPanel + tabs + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector">' + insp + '</aside>';
 
       const act = async (fn, okMsg, kind) => { try { const r = await fn(); if (okMsg) ctx.toast(typeof okMsg === 'function' ? okMsg(r) : okMsg, kind || 'ok', 5000); reload(); return r; } catch (err) { App.fail(err); return null; } };
@@ -335,7 +335,6 @@
       ctx.on('click', '[data-gousers]', () => ctx.navigate('directories', { tab: 'users' }));
       ctx.on('click', '[data-gozones]', () => ctx.navigate('zones', { zone: 'directory' }));
       ctx.on('click', '[data-goplatform]', () => ctx.navigate('platform', { tab: 'secrets' }));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

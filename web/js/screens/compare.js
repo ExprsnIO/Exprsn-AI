@@ -533,7 +533,6 @@
         + (st.run ? '<div class="muted" style="font-size:12px">Showing the answers to <span class="fg2">' + esc(st.run.prompt.length > 120 ? st.run.prompt.slice(0, 120) + '…' : st.run.prompt) + '</span> · Sending again starts a new comparison.</div>' : '')
         + grid
         + '<div id="cp-usage-wrap">' + usageHtml(st) + '</div>'
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div></div>';
 
       ctx.on('input', '#cp-input', (e, t) => { st.prompt = t.value; });
@@ -592,7 +591,6 @@
           if (off.length) ctx.toast(esc(off.join(', ')) + ' disabled: ceiling below ' + esc(st.label) + '.', 'warn');
         });
       });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.focusPrompt) { st.focusPrompt = false; setTimeout(() => { const i = ctx.$('#cp-input'); if (i) { i.focus(); i.select(); } }, 30); }
     }
   });

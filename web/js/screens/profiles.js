@@ -300,13 +300,12 @@
         + '.pf-out{max-height:120px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--fg2)}'
         + '</style>'
         + side
-        + '<div class="page">' + main + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '<div class="page">' + main + '</div>';
 
       // The header's crumb and label were drawn before this render picked the profile; redraw them when it changed.
       if (st.sel !== selBefore && App.renderHeader) App.renderHeader();
 
       // ---- events ----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-profile]', (e, t) => { st.sel = t.dataset.profile; st.demoNote = null; st.showDependants = null; ctx.rerender(); });
       ctx.on('click', '[data-profile-link]', (e, t) => { e.preventDefault(); st.sel = t.dataset.profileLink; ctx.rerender(); });
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go, t.dataset.go === 'models' && target && target.model ? { model: target.model.name } : undefined); });

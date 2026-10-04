@@ -128,14 +128,13 @@
         + notice
         + (s ? UI.tabs([{ id: 'tools', label: 'Tools', count: d && d.tools ? d.tools.length : s.tools }, { id: 'authorization', label: 'Authorization' }, { id: 'health', label: 'Health' }, { id: 'changes', label: 'Changes', count: d && d.events ? d.events.length : undefined }], st.tab) : '')
         + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---- events ----
       const tool = (name) => (d && d.tools ? d.tools.find((t) => t.name === name) : null);
       ctx.on('click', '[data-server]', (e, t) => { st.sel = t.dataset.server; st.tool = null; st.problem = null; st.vaultPrompt = false; ctx.rerender(); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
       ctx.on('click', 'tr.row[data-tool]', (e, t) => { if (e.target.closest('button')) return; st.tool = t.dataset.tool; openTool(tool(t.dataset.tool)); });
       ctx.on('click', '[data-review]', (e, t) => reviewTool(tool(t.dataset.review)));

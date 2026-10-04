@@ -243,7 +243,6 @@
         + UI.pagehead('Model catalog', 'Weights enter only through the import path: GGUF or safetensors, verified by digest, approved by a second person',
           UI.iconbtn('refresh', 'Refresh', { attrs: 'data-reload', cls: 'sm ghost' }) + (canManage ? UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }) : ''))
         + problem + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div>' + inspector;
 
       // ---------- handlers ----------
@@ -258,7 +257,6 @@
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-dismiss]', () => { st.showImportProblem = null; ctx.rerender(); });
       ctx.on('click', '[data-reload]', () => reload());
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
 
       // A form dialog that stays open when the server refuses, so nothing typed is lost.
       const formModal = (opts) => ctx.modal({

@@ -474,7 +474,7 @@
         + '<div class="page">' + UI.pagehead('Usage and audit', 'Metering per tenant, user, model and workspace; a hash-chained audit log for ' + esc(tenantName), UI.btn('Refresh', { kind: 'ghost', icon: 'refresh', attrs: 'data-reload' }) + UI.btn('Export CSV', { icon: 'download', attrs: 'data-export' }) + UI.btn(st.chain === 'verifying' ? 'Verifying…' : 'Verify chain', { kind: 'primary', attrs: 'data-verify' + (st.chain === 'verifying' ? ' disabled' : '') }))
         + (st.loaded ? '<div class="ua-top">' + chartPanel + chainCard + '</div>' : '')
         + UI.tabs(tabItems, st.tab) + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector w300">' + insp + '</aside>';
 
       // ----- actions -----
@@ -651,7 +651,6 @@
       ctx.on('click', '[data-dl]', (e, t) => download(t.dataset.dl));
       ctx.on('click', '[data-openws]', (e, t) => ctx.navigate('tenants', { workspace: t.dataset.openws }));
       ctx.on('click', '[data-editquota]', (e, t) => (t.dataset.editquota ? ctx.navigate('tenants', { workspace: t.dataset.editquota, tab: 'quotas' }) : ctx.navigate('tenants', { tab: 'quotas' })));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       billingWire(st, ctx, refresh);
     }
   });

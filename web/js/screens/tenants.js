@@ -443,7 +443,7 @@
       }
 
       root.innerHTML = left + '<div class="page">' + head + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---------- modals ----------
       const errorBox = (m, err) => { const p = err.problem || {}; m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>' + (p.trace_id ? '<div class="mono muted" style="font-size:11px">trace ' + esc(p.trace_id) + '</div>' : ''), 'danger'); };
@@ -816,7 +816,6 @@
         if (ok) act(() => Promise.all(stores.map((p) => App.post('/api/admin/identity-providers/' + enc(p.id) + '/sync'))), 'Directory sync queued. The result shows here when it finishes.');
       });
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       integWire(st, ctx);
 
       const style = document.createElement('style');

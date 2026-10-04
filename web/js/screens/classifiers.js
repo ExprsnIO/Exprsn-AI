@@ -146,7 +146,7 @@
         + batchPanel
         + UI.tabs([{ id: 'definition', label: 'Definition' }, { id: 'thresholds', label: 'Thresholds' }, { id: 'evaluation', label: 'Evaluation' }, { id: 'usage', label: 'Usage', count: (c.usage || []).length }], st.tab)
         + (st.tab === 'definition' ? definition : st.tab === 'thresholds' ? thresholds : st.tab === 'usage' ? usage : evalTab)
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
       live.handler = (e) => {
@@ -217,7 +217,6 @@
             App.post('/api/admin/classifiers', body).then((x) => { App.closeOverlay(); st.sel = x.id; st.tab = 'definition'; toast('Draft classifier created. Add labelled cases to ' + esc(x.dataset) + ', then ' + (x.engine === 'linear' ? 'train it.' : 'evaluate it.'), 'ok'); load(true); }).catch((err) => App.fail(err, 'Not created'));
           });
         } }));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 

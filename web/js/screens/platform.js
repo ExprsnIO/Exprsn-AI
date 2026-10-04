@@ -250,7 +250,7 @@ App.register({
         + (sum.passwords && sum.passwords.breachedCheck === 'off' ? UI.notice('<b>New passwords are not checked against breached-password lists.</b> Set <span class="mono">BREACHED_PASSWORDS</span> to <span class="mono">hibp</span> (with an internal mirror in <span class="mono">BREACHED_HIBP_URL</span>), <span class="mono">file</span> or <span class="mono">both</span> so that known-breached passwords are refused.', 'warn') : '')
         + ops2Notices(sum)
         + tabs + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(self.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector">' + insp + '</aside>';
       if (st.focusStale && st.tab !== 'mirrors') st.focusStale = false;
 
@@ -466,7 +466,6 @@ App.register({
       ctx.on('click', '[data-withdraw-signer]', (e, t) => decide(t.dataset.withdrawSigner, 'withdraw', 'Withdrawn. Audit event written.'));
       ctx.on('click', '[data-ack]', () => act(App.post('/api/admin/platform/backups/alert/acknowledge'), 'Alert acknowledged. It clears when the next backup lands.'));
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();
