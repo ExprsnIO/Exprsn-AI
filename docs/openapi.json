@@ -1077,6 +1077,472 @@
           "signature"
         ],
         "description": "A flattened JWS (RFC 7515) signed with ES256, ES384, RS256 or EdDSA"
+      },
+      "SignupPolicy": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "closed",
+              "open",
+              "approval"
+            ]
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requireEmailVerification": {
+            "type": "boolean"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clearance": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "workspaceId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "domains",
+          "requireEmailVerification",
+          "roles",
+          "clearance"
+        ]
+      },
+      "MfaPolicy": {
+        "type": "object",
+        "properties": {
+          "require": {
+            "type": "string",
+            "enum": [
+              "off",
+              "all",
+              "roles"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "graceDays": {
+            "type": "integer"
+          },
+          "trustedDeviceDays": {
+            "type": "integer"
+          },
+          "effectiveAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "require",
+          "roles",
+          "graceDays",
+          "trustedDeviceDays"
+        ]
+      },
+      "IdentityPolicy": {
+        "type": "object",
+        "properties": {
+          "signup": {
+            "$ref": "#/components/schemas/SignupPolicy"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/MfaPolicy"
+          },
+          "updatedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "signup",
+          "mfa"
+        ]
+      },
+      "Invitation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clearance": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "invitedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "revoked",
+              "expired"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": "integer"
+          },
+          "acceptedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "acceptedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revokedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "roles",
+          "clearance",
+          "state",
+          "expiresAt"
+        ]
+      },
+      "Signup": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "active"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "decidedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decidedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "state"
+        ]
+      },
+      "UserImportSummary": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "integer"
+          },
+          "create": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          },
+          "unchanged": {
+            "type": "integer"
+          },
+          "conflict": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "integer"
+          },
+          "applied": {
+            "type": "integer"
+          },
+          "dryRun": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserImport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ]
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "sendInvites": {
+            "type": "boolean"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "createdBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserImportSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "update",
+                    "unchanged",
+                    "conflict",
+                    "error"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "changes": {
+                  "type": "object"
+                },
+                "outcome": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "row",
+                "kind",
+                "key",
+                "action",
+                "detail"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "dryRun",
+          "rows"
+        ]
       }
     },
     "responses": {
@@ -2944,7 +3410,14 @@
         "summary": "B-1801, B-1803: the tenant signup and MFA policies; identity:manage",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPolicy"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -2961,7 +3434,14 @@
         "summary": "B-1803: set the MFA policy (all or roles, grace period, trusted-device period); identity:manage",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaPolicy"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -3015,7 +3495,14 @@
         "summary": "B-1801, B-1802: set the signup policy (mode, domains, email verification, roles, clearance, workspace); identity:manage",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupPolicy"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -6414,7 +6901,17 @@
         "summary": "B-1801: self-registered accounts by state; users:manage",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Signup"
+                  }
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -6457,7 +6954,26 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "userId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "userId",
+                    "state"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -6500,7 +7016,26 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "userId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "userId",
+                    "state"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -7111,7 +7646,17 @@
         "summary": "B-1805: the tenant's recent CSV imports; users:manage",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserImport"
+                  }
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -7126,7 +7671,30 @@
         "summary": "B-1805: queue a CSV import of users, memberships and group mappings (dryRun=true changes nothing); users:manage",
         "responses": {
           "202": {
-            "description": "Accepted"
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "jobId": {
+                      "type": "string"
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "jobId",
+                    "dryRun"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -7189,7 +7757,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserImport"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -8918,7 +9493,25 @@
         "summary": "B-1802: ask for a new verification link (same answer whether or not the account exists)",
         "responses": {
           "202": {
-            "description": "Accepted"
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -8957,7 +9550,28 @@
         "summary": "B-1802: redeem an email verification link (single use)",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {
+                      "type": "boolean"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "verified"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -8993,7 +9607,29 @@
         "summary": "B-1801: accept an invitation with a new local account",
         "responses": {
           "201": {
-            "description": "Created"
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "tenant"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -9041,7 +9677,81 @@
         "summary": "B-1801: what an invitation link offers",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tenant": {
+                      "type": "object",
+                      "properties": {
+                        "slug": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "workspace": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "invitedBy": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "roles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "clearance": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "internal",
+                        "confidential",
+                        "restricted"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "tenant",
+                    "email",
+                    "roles"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -9194,7 +9904,44 @@
         "summary": "B-1801: sign up under the tenant signup policy (closed by default; domain allow-list; approval)",
         "responses": {
           "201": {
-            "description": "Created"
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "pending"
+                      ]
+                    },
+                    "verification": {
+                      "type": "string",
+                      "enum": [
+                        "sent",
+                        "not_required"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "state",
+                    "verification"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -10357,7 +11104,17 @@
         "summary": "B-1801: invitations (all for tenant admins, own for other inviters); members:invite",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invitation"
+                  }
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -10372,7 +11129,14 @@
         "summary": "B-1801: invite an address with roles and a clearance into a workspace; members:invite",
         "responses": {
           "201": {
-            "description": "Created"
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -11068,13 +11832,63 @@
         "summary": "B-1802: send a verification link to the account's own unproven address",
         "responses": {
           "202": {
-            "description": "Accepted"
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {
+                      "type": "boolean"
+                    },
+                    "sent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "verified"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
+          },
+          "200": {
+            "description": "Already verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {
+                      "type": "boolean"
+                    },
+                    "sent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "verified"
+                  ]
+                }
+              }
+            }
           }
         },
-        "x-exprsn-since": "1.4.0"
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        }
       }
     },
     "/api/me/grants": {
@@ -11121,7 +11935,38 @@
         "summary": "B-1801: accept an invitation as the signed-in account",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "roles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "workspaceId": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -11457,7 +12302,22 @@
         "summary": "B-1803: forget every trusted device of the account",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -11472,7 +12332,50 @@
         "summary": "B-1803: the account's trusted devices and the tenant's trusted-device period",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "periodDays": {
+                      "type": "integer"
+                    },
+                    "thisDevice": {
+                      "type": "boolean"
+                    },
+                    "devices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "browser": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          },
+                          "expiresAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "periodDays",
+                    "devices"
+                  ]
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -15373,8 +16276,7 @@
           "default": {
             "$ref": "#/components/responses/Default"
           }
-        },
-        "x-exprsn-since": "1.4.0"
+        }
       }
     },
     "/federation/github/start": {
@@ -15390,8 +16292,7 @@
           "default": {
             "$ref": "#/components/responses/Default"
           }
-        },
-        "x-exprsn-since": "1.4.0"
+        }
       }
     },
     "/federation/oidc/callback": {
@@ -16255,8 +17156,7 @@
           "default": {
             "$ref": "#/components/responses/Default"
           }
-        },
-        "x-exprsn-since": "1.4.0"
+        }
       }
     },
     "/t/{tenant}/federation/github/start": {
@@ -16282,8 +17182,7 @@
           "default": {
             "$ref": "#/components/responses/Default"
           }
-        },
-        "x-exprsn-since": "1.4.0"
+        }
       }
     },
     "/t/{tenant}/federation/oidc/callback": {
