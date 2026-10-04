@@ -449,7 +449,31 @@ const base = z.object({
     PKI_OCSP_VALIDITY_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(60),
     PKI_OCSP_CACHE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
     PKI_OCSP_SIGNER_DAYS: z.coerce.number().int().min(1).max(365).default(30),
-    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600)
+    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600),
+
+    /**
+     * Sprint 25 (B-1605): the ACME server at `/pki/acme/<tenant>/directory`. Orders and their pending authorizations
+     * last PKI_ACME_ORDER_HOURS; replay nonces PKI_ACME_NONCE_MINUTES. PKI_ACME_RATE_PER_MINUTE caps new accounts,
+     * orders and challenge requests per address (on top of PKI_PUBLIC_RATE_PER_MINUTE). http-01 is fetched from
+     * port PKI_ACME_HTTP_PORT through the service address checks (cloud metadata and link-local always refused; public
+     * addresses refused with PKI_ACME_INTERNAL_ONLY unless PKI_ACME_ALLOWED_HOSTS names them); dns-01 asks
+     * PKI_ACME_DNS_SERVERS (host[:port], comma-separated) or the system resolver. PKI_ACME_URL overrides the base
+     * the directory's URLs are built on (default PKI_PUBLIC_URL, then PUBLIC_URL).
+     */
+    PKI_ACME_URL: z.url().optional(),
+    PKI_ACME_ORDER_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
+    PKI_ACME_NONCE_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(60),
+    PKI_ACME_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(120),
+    PKI_ACME_HTTP_PORT: z.coerce.number().int().min(1).max(65_535).default(80),
+    PKI_ACME_INTERNAL_ONLY: bool.default(false),
+    PKI_ACME_ALLOWED_HOSTS: z.string().default(''),
+    PKI_ACME_DNS_SERVERS: z.string().optional(),
+    /**
+     * Sprint 25 (B-1606): expiry notices. Certificates PKI_EXPIRY_NOTICE_DAYS (comma-separated) days from expiry
+     * notify their owner once per threshold; the sweep runs every PKI_EXPIRY_SWEEP_MINUTES (0 turns it off).
+     */
+    PKI_EXPIRY_NOTICE_DAYS: z.string().regex(/^\s*\d{1,3}(\s*,\s*\d{1,3})*\s*$/, 'comma-separated whole days, such as 30,7').default('30,7'),
+    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

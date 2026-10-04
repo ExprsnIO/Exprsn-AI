@@ -15,6 +15,7 @@ import { writeFileSync } from 'node:fs';
 import { migrateCheck, schemaStatus } from './db/schema.js';
 import { decodeShare, escrowById, escrowKey, recordEscrow, recoverKey } from './platform/escrow.js';
 import { eventsCommand, pluginsCommand } from './cli/core.js';
+import { pkiCommand } from './cli/pki.js';
 
 const RESTORE_PHRASE = 'replace all data';
 
@@ -75,6 +76,8 @@ Commands:
                                for a tenant's plugins (\`exprsn-ai plugins\` lists the options)
   events replay --webhook <id> 1.4.0: send a webhook's past deliveries again, or backfill audit events it never
                                received (\`exprsn-ai events\` lists the options)
+  pki <command>                1.4.0: issuers, list, issue, revoke and crl for a tenant's certificate authority
+                               (\`exprsn-ai pki\` lists the options)
 `;
 
 async function readPassword(prompt: string): Promise<string> {
@@ -351,6 +354,10 @@ async function main(): Promise<void> {
         break;
       case 'events':
         process.exitCode = await eventsCommand(s, rest, (t) => void process.stdout.write(t));
+        break;
+      // Sprint 25 (B-1607)
+      case 'pki':
+        process.exitCode = await pkiCommand(s, rest, (t) => void process.stdout.write(t));
         break;
       default:
         process.stdout.write(USAGE);
