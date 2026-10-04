@@ -2203,3 +2203,113 @@ dns:<name>]… [--days] [--out <file>]` (from the tenant's active intermediate),
 (queues the next CRL), `list [--state] [--issuer] [--limit] [--json]`, `crl [--issuer <id>] [--out <file>] [--der]`
 (signs the next CRL now). Exit codes: 0 done, 1 refused or failed, 3 conflict (already revoked, no active
 intermediate), 64 usage. See `docs/pki.md`.
+
+## Sprint 26a (1.4.0): identity gaps (B-1801 to B-1805) and the secrets and users CLI (B-2103)
+
+Self-registration, email verification, invitations by workspace admins, the tenant MFA policy with trusted devices,
+GitHub sign-in and CSV imports. Every route below answers `Cache-Control: no-store`. New permission: `members:invite`
+(tenant admins and identity admins).
+
+### Sign-up, verification and invitation links (public, under `/api/auth`, behind the sign-in limiter)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/auth/register` `{tenant?, username, displayName, email, password}` | B-1801. Creates a local account under the tenant's signup policy: `403 {reason: closed}` while sign-up is closed (the default), `403 {reason: domain}` for an email domain outside the list (both audited `user.signup.refused`); `409` (the same answer for a taken username or address); `503` when verification is required and email is not configured. The password passes the policy and breached checks. `201 {username, tenant, state: active\|pending, verification: sent\|not_required, detail}`. With `approval` the account is created disabled (`pending`) and tenant and identity admins get a console notice. Throttled per address (`SIGNUP_PER_HOUR`) and per email (3 an hour). Audited `user.signup.created` |
+| `POST /api/auth/email/verify` `{token}` | B-1802. Redeems a verification link (single use, `EMAIL_VERIFY_HOURS`, bound to the address it was sent to): `{verified: true, username, tenant}`; `400 Invalid link` otherwise. Audited `user.email.verified` |
+| `POST /api/auth/email/resend` `{tenant?, identifier}` | B-1802. A new link for a local account whose address is not proven yet. `202` with the same answer whether or not such an account exists; throttled per address and identifier (`PASSWORD_RESET_PER_HOUR`) and per account (3 an hour, silently) |
+| `POST /api/auth/invitations/preview` `{token}` | B-1801. `{tenant {slug, name}, workspace {id, name}\|null, invitedBy, email, roles, clearance, expiresAt}`; `400 Invalid link` for an unknown, used, withdrawn or expired invitation |
+| `POST /api/auth/invitations/accept` `{token, username, displayName, password}` | B-1801. Creates a local account for the invited address (verified by the link), with the invitation's roles and clearance, in its workspace; it does not depend on the signup policy. `409` when an account has that address (accept as that account instead) or the username is taken. `201 {username, tenant}`. Audited `user.created` (`via: invitation`) and `user.invitation.accepted` |
+
+Links are console links with the token in the fragment, like reset links: `#/signin?verify=<token>` and
+`#/signin?invitation=<token>` (plus `&tenant=<slug>` outside the default tenant). Tokens are 256-bit random values,
+stored as SHA-256.
+
+`POST /api/auth/login` now also answers `403 {reason: signup_pending}` or `{reason: signup_rejected}` (after the right
+password) for a sign-up waiting for or refused approval, and `403 {reason: email_unverified}` when the tenant requires
+verified addresses and the local account has an unproven one (a new link is sent, throttled; audited
+`auth.login.refused`). Its session body carries `mfa.enrolBy` during an MFA grace period and `mfa.trustedDevice: true`
+when the second factor was skipped. `POST /api/auth/mfa/totp`, `/mfa/recovery` and `/mfa/webauthn` take
+`rememberDevice: true` (not for recovery codes) and then answer `trustedDevice: {until}` (or `null` when the tenant
+allows no trusted devices). `GET /api/auth/sign-in-options` adds `signup: false | {approval, verifyEmail}`.
+
+### Invitations by workspace admins (`members:invite`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/invitations[?state=pending\|accepted\|revoked]` | Tenant admins see every invitation, other inviters their own (within their clearance): `[{id, email, workspaceId, roles, clearance, invitedBy, state: pending\|accepted\|revoked\|expired, createdAt, expiresAt, acceptedBy, acceptedAt, revokedAt}]` |
+| `POST /api/invitations` `{email, workspaceId?, roles, clearance?}` | Every role must be one the inviter may grant (`403 step: role`), the clearance at most theirs (`step: clearance`); without `tenant:manage` the workspace must be one the inviter belongs to (`step: workspace`). Needs SMTP (`409`). Replaces a pending invitation for the same address and workspace. Valid for `INVITATION_DAYS`. `201` with the invitation and `sent`. Audited `user.invitation.created` |
+| `DELETE /api/invitations/:id` | The inviter or a tenant admin withdraws a pending invitation. `204`. Audited `user.invitation.revoked` |
+| `POST /api/me/invitations/accept` `{token}` | The signed-in account accepts (its address must be the invited one, `403 step: email`): the roles are added to its direct roles, the clearance raised to the invitation's if lower, the workspace joined; the address counts as verified. Audited `user.invitation.accepted` |
+
+### The account's own verification and trusted devices
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/me/email/verify` | Sends a verification link to the account's own unproven address (`202 {verified: false, sent}`); `{verified: true}` when it is proven; `403` for directory accounts or no address |
+| `GET /api/me/trusted-devices` | `{periodDays, thisDevice, devices: [{browser, createdAt, expiresAt}]}` |
+| `DELETE /api/me/trusted-devices` | Forgets every trusted device of the account: `{removed}`. Audited `auth.trusted_device.removed` |
+
+### Tenant identity policy (`identity:manage`) and sign-ups (`users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/identity-policy` | `{signup, mfa: {…, effectiveAt}, updatedBy, updatedAt}` |
+| `PUT /api/admin/identity-policy/signup` `{mode: closed\|open\|approval, domains?, requireEmailVerification?, roles?, clearance?, workspaceId?}` | B-1801, B-1802. `domains` (up to 200): exact domains or `*.example.com` for subdomains; empty allows any. `roles`: `member`, `flag-reviewer`, `knowledge-curator` only. `clearance` at most the caller's. `requireEmailVerification` (default off) also covers other local accounts with an unproven address; accounts created by an admin, imported, or from an invitation count as proven. Audited `identity.signup_policy.updated` |
+| `PUT /api/admin/identity-policy/mfa` `{require: off\|all\|roles, roles?, graceDays?, trustedDeviceDays?}` | B-1803. A second factor for everyone or for listed roles, on top of the roles that always need one. An account the requirement covers may sign in without a factor until `graceDays` after the requirement last widened (or after its creation, if later), then enrols first. `trustedDeviceDays` (0 to 90, default 0) lets a browser skip the factor after "trust this device"; shortening it ends older trust at once. `{…, effectiveAt}`. Audited `identity.mfa_policy.updated` (`graceRestarted` when the requirement widened) |
+| `GET /api/admin/signups[?state=pending\|approved\|rejected\|active]` | `[{userId, username, displayName, email, emailVerified, domain, state, createdAt, decidedBy, decidedAt, reason}]` |
+| `POST /api/admin/signups/:userId/approve`, `…/reject` `{reason?}` | Approval activates the account; rejection keeps it disabled. `409` once decided. The user is told by email. Audited `user.signup.approved`, `user.signup.rejected` |
+
+Trusted devices are keyed by a digest of the user and the B-801 device cookie, and end when their period ends, when
+the user's sessions are revoked (sign out everywhere, a password change or reset, an admin's factor reset, a disabled
+account, a revoked tenant), when that session is revoked on purpose (`DELETE /api/me/sessions/:id`,
+`DELETE /api/admin/sessions/:id`; a plain sign-out keeps it), or when the tenant shortens the period. A session that
+skipped the factor counts as factor-verified (method `…, trusted device`). Upstream (OIDC, SAML, GitHub) and Kerberos
+sign-ins follow the same policy.
+
+### GitHub sign-in (B-1804)
+
+A user store of kind `github` (`POST /api/admin/identity-providers`, `identity:manage`) with config
+`{clientId, clientSecret (secret reference), webUrl? (https://github.com), apiUrl? (https://api.github.com),
+allowedOrgs?, scopes? (read:user user:email read:org), defaultRoles?, defaultClearance?}`. Both URLs pass the service
+URL checks (B-901) when saved (`400 {reason: service_url}`, e.g. a metadata or link-local address) and at every
+connection. Register the OAuth app's callback as `<issuer>/federation/github/callback`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /federation/github/start?provider=<id>` (and `/t/<slug>/…`) | Redirects to GitHub's authorize page with a single-use `state` bound to the browser (`exai_fed` cookie) and PKCE (S256) |
+| `GET /federation/github/callback?code&state` | Exchanges the code, reads `/user`, `/user/emails` (only a verified primary address is kept), `/user/orgs` and `/user/teams` (up to 500 each), then signs in like an upstream OIDC store: JIT provisioning linked by the numeric GitHub id, roles from group mappings, MFA policy. Organisations become groups `org` and teams `org/team-slug`; with `allowedOrgs` an account outside them is refused and other organisations' groups are dropped. The access token is never stored |
+
+The store appears in `GET /api/auth/sign-in-options` and `GET /api/admin/federation/upstream` (`protocol: github`), and
+"Test connection" checks the addresses, the API and the client secret reference.
+
+### CSV imports of users, memberships and group mappings (B-1805, `users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/user-imports[?dryRun=true][&sendInvites=true]` (body: the CSV, `Content-Type: text/csv`, at most `USER_IMPORT_MAX_BYTES`, `USER_IMPORT_MAX_ROWS` rows) | Stores the CSV sealed with the tenant key and queues job `users.import` (run as the submitter's current roles and clearance). `202 {id, jobId, dryRun}`. A malformed file is `400` at once. Audited `user.import.requested` or `user.import.dry_run` |
+| `GET /api/admin/user-imports` | The tenant's last 100 imports without their reports |
+| `GET /api/admin/user-imports/:id` | `{id, state: queued\|running\|done\|failed, dryRun, rows, summary {rows, create, update, unchanged, conflict, error, applied, dryRun}, report: [{row, kind, key, action: create\|update\|unchanged\|conflict\|error, detail, changes?, outcome?}], …}` |
+
+The CSV has a header row; columns `kind,username,display_name,email,roles,clearance,workspace,provider,group` (any
+order, unknown columns refused). `kind=user` creates a local account (roles separated by `;`; a password nobody knows,
+or with `sendInvites` an invitation link) or updates a local account's name, address, direct roles and clearance (and
+then ends its sessions); an account linked to another store, a username or address used twice or by another account
+is a `conflict`. `kind=membership` adds a direct membership (`workspace` by slug or id). `kind=mapping` adds a group
+mapping (`roles` holds one role; `provider` a store name or id, empty for any) or changes its clearance. Every row is
+checked like the API (roles the importer may grant, clearance at or below theirs, accounts whose roles they may
+manage). The plan only reads; a dry run reports it and changes nothing. A real run applies the accepted rows (accounts,
+then mappings, then memberships), auditing each change (`user.created`, `user.updated`, `user.invited`,
+`workspace.member.added`, `identity.mapping.created`, `identity.mapping.updated`, with `via: import`), then
+`user.import.completed` or `user.import.dry_run_reported`.
+
+### CLI
+
+- `exprsn-ai secrets <command> --as <username> [--tenant <slug>]`: `kv list [<prefix>] [--json]`,
+  `kv get <path> [--version] [--field]`, `kv put <path> <key>=<value>|<key>=@<file>… [--cas] [--label]`,
+  `transit encrypt <key> --plaintext <text> [--base64] [--context]`, `transit decrypt <key> <ciphertext> [--base64]
+  [--context]`, `policy explain <path> --capability <cap> [--group | --workspace]`. Through the vault service under
+  the named account's roles (`secrets:read`, `secrets:write`), policy subjects and clearance; audited with actor
+  `{service: cli, user, username, via: cli}` (values never). `policy explain` is audited `vault.policy.explained`.
+- `exprsn-ai users import <file.csv> [--dry-run] [--send-invites] [--tenant <slug>] [--json]`: the same import, in the
+  process, as the operator (no role ceiling, like `admin:create`); prints the report. Exit codes: 0 done, 1 refused or
+  failed, 3 conflicts or errors in the file, 64 usage.

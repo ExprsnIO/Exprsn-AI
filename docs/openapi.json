@@ -2936,6 +2936,155 @@
         }
       }
     },
+    "/api/admin/identity-policy": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801, B-1803: the tenant signup and MFA policies; identity:manage",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
+    "/api/admin/identity-policy/mfa": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1803: set the MFA policy (all or roles, grace period, trusted-device period); identity:manage",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "require": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "all",
+                      "roles"
+                    ]
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "graceDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 90
+                  },
+                  "trustedDeviceDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 90
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/identity-policy/signup": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801, B-1802: set the signup policy (mode, domains, email verification, roles, clearance, workspace); identity:manage",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "closed",
+                      "open",
+                      "approval"
+                    ]
+                  },
+                  "domains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 200
+                  },
+                  "requireEmailVerification": {
+                    "type": "boolean"
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "member",
+                        "flag-reviewer",
+                        "knowledge-curator"
+                      ]
+                    }
+                  },
+                  "clearance": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "workspaceId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/identity-providers": {
       "get": {
         "tags": [
@@ -6257,6 +6406,125 @@
         }
       }
     },
+    "/api/admin/signups": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: self-registered accounts by state; users:manage",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "active"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/signups/{userId}/approve": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: approve a pending sign-up (the account becomes active); users:manage",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/signups/{userId}/reject": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: reject a pending sign-up (the account stays disabled); users:manage",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/tenants": {
       "get": {
         "tags": [
@@ -6833,6 +7101,101 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/admin/user-imports": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1805: the tenant's recent CSV imports; users:manage",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1805: queue a CSV import of users, memberships and group mappings (dryRun=true changes nothing); users:manage",
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/csv": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "dryRun",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "sendInvites",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/user-imports/{id}": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1805: one import with its summary and per-row report; users:manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
       }
     },
     "/api/admin/users": {
@@ -8547,6 +8910,165 @@
         }
       }
     },
+    "/api/auth/email/resend": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1802: ask for a new verification link (same answer whether or not the account exists)",
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tenant": {
+                    "type": "string"
+                  },
+                  "identifier": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "identifier"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/email/verify": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1802: redeem an email verification link (single use)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/invitations/accept": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: accept an invitation with a new local account",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token",
+                  "username",
+                  "displayName",
+                  "password"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/invitations/preview": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: what an invitation link offers",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [
@@ -8660,6 +9182,58 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: sign up under the tenant signup policy (closed by default; domain allow-list; approval)",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tenant": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "username",
+                  "displayName",
+                  "email",
+                  "password"
+                ]
+              }
+            }
           }
         }
       }
@@ -9775,6 +10349,112 @@
         }
       }
     },
+    "/api/invitations": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: invitations (all for tenant admins, own for other inviters); members:invite",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: invite an address with roles and a clearance into a workspace; members:invite",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "workspaceId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "clearance": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "email",
+                  "roles"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/invitations/{id}": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: withdraw a pending invitation; members:invite (inviter or tenant admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
     "/api/knowledge/bases": {
       "get": {
         "tags": [
@@ -10380,6 +11060,23 @@
         }
       }
     },
+    "/api/me/email/verify": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1802: send a verification link to the account's own unproven address",
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
     "/api/me/grants": {
       "get": {
         "tags": [
@@ -10412,6 +11109,42 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/invitations/accept": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: accept an invitation as the signed-in account",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token"
+                ]
+              }
+            }
           }
         }
       }
@@ -10714,6 +11447,38 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/me/trusted-devices": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1803: forget every trusted device of the account",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1803: the account's trusted devices and the tenant's trusted-device period",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
       }
     },
     "/api/me/workspace": {
@@ -14595,6 +15360,40 @@
         }
       }
     },
+    "/federation/github/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: GitHub OAuth callback: code exchange, organisations and teams to groups, sign-in",
+        "responses": {
+          "302": {
+            "description": "Signed in"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
+    "/federation/github/start": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: start a GitHub sign-in (redirect with state and PKCE)",
+        "responses": {
+          "302": {
+            "description": "Redirect to GitHub"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
     "/federation/oidc/callback": {
       "get": {
         "tags": [
@@ -15431,6 +16230,60 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/t/{tenant}/federation/github/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: GitHub OAuth callback for a tenant",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Signed in"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
+    "/t/{tenant}/federation/github/start": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: start a GitHub sign-in for a tenant (redirect with state and PKCE)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to GitHub"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
       }
     },
     "/t/{tenant}/federation/oidc/callback": {
