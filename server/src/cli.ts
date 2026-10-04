@@ -14,6 +14,7 @@ import { readPrivateFile, startSigner } from './signer/server.js';
 import { writeFileSync } from 'node:fs';
 import { migrateCheck, schemaStatus } from './db/schema.js';
 import { decodeShare, escrowById, escrowKey, recordEscrow, recoverKey } from './platform/escrow.js';
+import { eventsCommand, pluginsCommand } from './cli/core.js';
 
 const RESTORE_PHRASE = 'replace all data';
 
@@ -70,6 +71,10 @@ Commands:
       [--no-blobs]             --force is given with --confirm "${RESTORE_PHRASE}" (or the phrase is typed at the
       [--force]                prompt). --from reads the backup from a directory holding a copy of the blob store
       [--confirm <phrase>]     (platform/backups/...) instead of the configured store. Stop every instance first.
+  plugins <command>            1.4.0: list, show, capabilities, validate, install, enable, disable, remove and grants
+                               for a tenant's plugins (\`exprsn-ai plugins\` lists the options)
+  events replay --webhook <id> 1.4.0: send a webhook's past deliveries again, or backfill audit events it never
+                               received (\`exprsn-ai events\` lists the options)
 `;
 
 async function readPassword(prompt: string): Promise<string> {
@@ -340,6 +345,13 @@ async function main(): Promise<void> {
         if (d.state !== 'passed') process.exitCode = 2;
         break;
       }
+      // Sprint 24c (B-2103)
+      case 'plugins':
+        process.exitCode = await pluginsCommand(s, rest, (t) => void process.stdout.write(t));
+        break;
+      case 'events':
+        process.exitCode = await eventsCommand(s, rest, (t) => void process.stdout.write(t));
+        break;
       default:
         process.stdout.write(USAGE);
         process.exitCode = 64;

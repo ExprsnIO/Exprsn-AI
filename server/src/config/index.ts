@@ -367,6 +367,16 @@ const base = z.object({
     /** Per-request timeout for those fetches (ms). */
     KNOWLEDGE_FETCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).default(30_000),
     // --- end Sprint 23 ---
+    // --- Sprint 24c (1.4.0): platform core ---
+    /** B-2102: where the read-through cache keeps values: Redis when REDIS_URL is set (auto), or this process. */
+    CACHE_STORE: z.enum(['auto', 'memory', 'redis']).default('auto'),
+    /** TTL tiers (seconds) the cache's callers choose from. */
+    CACHE_TTL_SHORT_SECONDS: z.coerce.number().int().min(1).max(3600).default(10),
+    CACHE_TTL_MEDIUM_SECONDS: z.coerce.number().int().min(1).max(86_400).default(60),
+    CACHE_TTL_LONG_SECONDS: z.coerce.number().int().min(1).max(7 * 86_400).default(600),
+    /** Entries the memory store keeps (least recently used go first). */
+    CACHE_MAX_ENTRIES: z.coerce.number().int().min(100).max(10_000_000).default(10_000),
+    // --- end Sprint 24c ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */
@@ -463,6 +473,9 @@ const schema = base
     }
     if (c.JOB_QUEUE === 'bullmq' && !c.REDIS_URL) {
       ctx.addIssue({ code: 'custom', path: ['REDIS_URL'], message: 'REDIS_URL is required when JOB_QUEUE=bullmq' });
+    }
+    if (c.CACHE_STORE === 'redis' && !c.REDIS_URL) {
+      ctx.addIssue({ code: 'custom', path: ['REDIS_URL'], message: 'REDIS_URL is required when CACHE_STORE=redis' });
     }
     if ((c.BREACHED_PASSWORDS === 'file' || c.BREACHED_PASSWORDS === 'both') && !c.BREACHED_FILE) {
       ctx.addIssue({ code: 'custom', path: ['BREACHED_FILE'], message: `BREACHED_FILE is required when BREACHED_PASSWORDS=${c.BREACHED_PASSWORDS}` });

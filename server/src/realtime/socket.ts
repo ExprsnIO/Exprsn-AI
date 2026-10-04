@@ -10,6 +10,7 @@ import type { ShareAccessEvent } from '../chat/sharing.js';
 import { TOPICS, type MembershipEvent } from '../platform/bus.js';
 import type { JobProgressEvent } from '../platform/jobs.js';
 import type { Services } from '../services.js';
+import { attachRooms, type RoomSocketData } from './rooms.js';
 
 export interface SocketData {
   principal: Principal;
@@ -19,6 +20,8 @@ export interface SocketData {
   watching?: Map<string, string>;
   /** Sprint 21 (B-1305): the workspace of each watch that came through a workspace share. */
   watchingVia?: Map<string, string>;
+  /** 1.4.0 (B-2101): domain rooms (conversation, group, feed, channel) this socket is in. */
+  rooms?: RoomSocketData['rooms'];
 }
 
 export type Realtime = Server<Record<string, never>, Record<string, never>, Record<string, never>, SocketData>;
@@ -94,8 +97,12 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     }
   });
 
+  // 1.4.0 (B-2101): the generic domain rooms, decided by the server like shared watches.
+  const domainRooms = attachRooms(io as unknown as Parameters<typeof attachRooms>[0], s.rooms, s.bus, rooms.user, s.log);
+
   io.on('connection', (socket: Socket) => {
     const d = socket.data as SocketData;
+    domainRooms.onConnection(socket);
     const perms = effectivePermissions(d.principal);
     const permRooms = LIVE_PERMS.filter((x) => perms.has(x)).flatMap((x) => [rooms.perm(d.principal.tenantId, x), rooms.platformPerm(x)]);
     void socket.join([rooms.user(d.principal.userId), rooms.tenant(d.principal.tenantId), rooms.session(d.sessionId), ...permRooms]);
@@ -197,6 +204,7 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
 
   // Every instance hears revocations through the bus and closes the sockets it holds.
   const offs = [
+    ...domainRooms.offs,
     s.bus.on<string[]>(TOPICS.sessionsRevoked, (ids) => {
       for (const id of ids) {
         io.local.to(rooms.session(id)).emit('session.revoked' as never);
