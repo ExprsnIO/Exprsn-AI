@@ -92,8 +92,11 @@ import { RotationNotices } from './vault/rotation.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
+import { clears } from './authz/labels.js';
 import { FileService } from './files/service.js';
 import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
+import { ModerationService } from './moderation/service.js';
+import type { ModerationProviderClient } from './moderation/providers.js';
 
 export interface Services {
   cfg: Config;
@@ -211,6 +214,8 @@ export interface Services {
   atprotoAccounts: AtprotoAccounts;
   /** 1.4.0, Sprint 26d (B-2401 to B-2405): workspace folders and files, versions, trash, shares, quotas, previews. */
   files: FileService;
+  /** 1.4.0, Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues, providers. */
+  moderation: ModerationService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -238,6 +243,8 @@ export interface ServiceOverrides {
   dbAdmins?: DbAdminFactory;
   /** Sprint 26d (B-2404): the file store's preview renderer (tests use an in-process fake). */
   previewRenderer?: PreviewRenderer;
+  /** Sprint 26 (B-1906): external moderation providers (tests use a fake). */
+  moderationProviders?: ModerationProviderClient;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -444,6 +451,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       ...(cfg.FILES_WORK_DIR ? { workDir: cfg.FILES_WORK_DIR } : {}),
       renderer: overrides.previewRenderer ?? new ProcessPreviewRenderer({ ffmpeg: cfg.MEDIA_FFMPEG, pdftoppm: cfg.FILES_PDFTOPPM })
     }),
+    moderation: new ModerationService(() => s, overrides.moderationProviders),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -462,6 +470,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await counters.close();
       await s.cache.close();
       await s.atproto.close().catch(() => undefined);
+      await s.moderation.close().catch(() => undefined);
       await knowledge.replication.close().catch(() => undefined);
       await connections.close().catch(() => undefined);
       // Sprint 20: the signer connection, when the KMS is the signer.
@@ -512,6 +521,24 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 26d (B-2401 to B-2405): quarantine scans, previews and the trash purge; folders as knowledge sources.
   s.files.registerJobs();
   s.knowledge.folders = s.files.folderSource();
+  // Files as moderation objects (B-1902 with B-2401): a takedown trashes the file and revokes its shares; an upheld
+  // appeal takes it out of the trash again (if not purged meanwhile).
+  if (!s.moderation.registry.get('file')) {
+    const MODERATION = 'moderation';
+    s.moderation.registry.register({
+      type: 'file',
+      description: 'A file in a workspace folder (a taken-down file is in the trash and its shares are revoked)',
+      resolve: async (tenantId, id) => {
+        const f = await s.files.moderationTarget(tenantId, id);
+        return f ? { type: 'file', id: f.id, tenantId, workspaceId: f.workspaceId, label: f.label, ownerId: f.ownerId, state: f.trashed ? 'hidden' : f.state } : null;
+      },
+      canRead: async (p, o, workspaces) => clears(p.clearance, o.label) && (o.ownerId === p.userId || (!!o.workspaceId && workspaces.includes(o.workspaceId))),
+      text: async (o) => (await s.files.moderationTarget(o.tenantId, o.id))?.name ?? '',
+      hide: async (o) => (o.state === 'hidden' || !(await s.files.takeDown(o.tenantId, o.id, MODERATION)) ? null : (o.state ?? 'ready')),
+      restore: (o) => s.files.undoTakeDown(o.tenantId, o.id, MODERATION)
+    });
+  }
+  s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -566,4 +593,5 @@ export function startSchedules(s: Services): void {
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
+  s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
 }

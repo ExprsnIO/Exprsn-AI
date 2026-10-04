@@ -42,7 +42,7 @@ export interface EventType {
 export const EVENT_GROUPS: EventGroup[] = [
   { pattern: '*', description: 'Every event below' },
   { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
-  { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached' },
+  { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached, reopened' },
   { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
   { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
@@ -62,6 +62,8 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
   { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
+  // 1.4.0, Sprint 26 (B-1901 to B-1907)
+  { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
   // 1.4.0, Sprint 25c (B-1704 to B-1706)
   { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' }
 ];
@@ -98,7 +100,9 @@ const flagActions: [string, string][] = [
   ['escalated', 'A flag moved up a review level'],
   ['reassigned', 'A flag was handed to another reviewer'],
   ['breached', 'A flag passed its review deadline'],
-  ['eval', 'A flag was added to an evaluation set']
+  ['eval', 'A flag was added to an evaluation set'],
+  // 1.4.0, Sprint 26 (B-1903)
+  ['reopened', 'An upheld appeal put a decided flag back in the queue']
 ];
 
 export const EVENT_TYPES: EventType[] = [

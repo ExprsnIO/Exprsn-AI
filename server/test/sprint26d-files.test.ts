@@ -92,6 +92,30 @@ describe('file store (Sprint 26d)', () => {
     };
   }
 
+  it('files are moderation objects: a takedown trashes the file and revokes its shares; an upheld appeal restores it', async () => {
+    const mo = await member('mo');
+    const pat = await member('pat');
+    const up = (await mo.upload('notes.txt', 'Quarterly notes').expect(202)).body;
+    await drain(h);
+    const share = (await mo.post(`/api/files/${up.id}/shares`, { kind: 'user', userId: pat.user.id }).expect(201)).body;
+    const handler = h.s.moderation.registry.get('file')!;
+    const o = await handler.resolve(h.tenantId, up.id);
+    expect(o).toMatchObject({ type: 'file', id: up.id, workspaceId: wsId, ownerId: mo.user.id });
+    expect(await handler.text!(o!)).toBe('notes.txt');
+    // a takedown: the file goes to the trash and every share is revoked
+    const prev = await handler.hide!(o!);
+    expect(prev).not.toBeNull();
+    expect((await h.s.db('files').where({ id: up.id }).first()).trashed_at).not.toBeNull();
+    expect((await h.s.db('file_shares').where({ id: share.id }).first()).revoked_at).not.toBeNull();
+    expect((await handler.resolve(h.tenantId, up.id))!.state).toBe('hidden');
+    expect(await handler.hide!((await handler.resolve(h.tenantId, up.id))!)).toBeNull();
+    // an upheld appeal takes it out of the trash again; a file the owner trashed themselves is left alone
+    expect(await handler.restore!(o!, prev!)).toBe(true);
+    expect((await h.s.db('files').where({ id: up.id }).first()).trashed_at).toBeNull();
+    await mo.del(`/api/files/${up.id}`).expect(200);
+    expect(await handler.restore!(o!, prev!)).toBe(false);
+  });
+
   const audits = async (action: string) => (await h.s.db('audit_events').where({ tenant_id: h.tenantId, action })) as { target: string; detail: string | null }[];
 
   it('B-2401: folders, streamed sealed uploads through quarantine, versions, and a restored version scanned again', async () => {

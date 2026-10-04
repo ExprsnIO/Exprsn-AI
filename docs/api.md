@@ -2331,3 +2331,91 @@ need their second factor. "Test connection" checks the client metadata address a
 | `GET /federation/atproto/client-metadata.json` | The OAuth client metadata document; its URL is the `client_id`. `{client_id, client_name, client_uri, application_type: web, grant_types: [authorization_code, refresh_token], response_types: [code], redirect_uris: [<issuer>/federation/atproto/callback], scope: atproto, token_endpoint_auth_method: private_key_jwt, token_endpoint_auth_signing_alg: ES256, jwks_uri: <issuer>/.well-known/jwks.json, dpop_bound_access_tokens: true}` |
 | `GET /federation/atproto/start?provider=<store id>[&handle=<handle or DID>][&return]` | Without `handle`, a page asking for it. With it: resolves the account, reads the PDS's protected-resource metadata (exactly one authorization server) and that server's metadata (issuer, PAR, S256, ES256 DPoP, `iss` response parameter, `private_key_jwt`, the `atproto` scope), sends a pushed authorization request with PKCE S256, `login_hint` and a DPoP proof from a P-256 key made for this sign-in (retried once with the server's `DPoP-Nonce` after `use_dpop_nonce`), client-authenticated by a JWT the tenant's ES256 OIDC key signs, and redirects to the authorization endpoint with only `client_id` and `request_uri`. The state is bound to the browser by the federation cookie |
 | `GET /federation/atproto/callback?code&state&iss` | `iss` must be the authorization server the request went to; the code is exchanged with PKCE and DPoP (nonce retry as above). The token must be `token_type: DPoP` with the `atproto` scope and a DID `sub` equal to the account asked for; that DID's own PDS must name the same authorization server, and `com.atproto.server.getSession` at the PDS with the token (DPoP proof with `ath` and the resource server's nonce) must answer for the same DID. The tokens are then revoked (best effort) and never stored. Sign-in continues as for upstream OIDC (JIT provisioning, second factor for admin roles, sign-in notices, `auth.login` with `kind: atproto`). Other tenants' paths are under `/t/<slug>/` |
+
+## Sprint 26c (1.4.0): moderation actions and appeals (B-1901 to B-1907)
+
+Moderation is built on the guardrails and the flag queue (`/api/flags`), not beside them: every check, report and
+provider verdict ends in a guard flag, and reviewers keep working the queue there. Objects are named by `{type, id}`.
+Types are registered by their domain (`GET /api/moderation/types`): today `conversation`, `message`,
+`knowledge-document`, `media-asset` and `image`; later domains (posts, files, records, group content) register their
+own. A registered type resolves the object's tenant, workspace, label, owner and state, and can hide it (state
+`hidden`: a hidden message is shown to nobody, its owner included, and left out of model context, shares and `/v1`; a
+hidden document is left out of search and retrieval; hidden media and images cannot be downloaded) and restore it
+(compare-and-set on the state it had). Objects outside the caller's workspaces are `404`. Problem details carry
+`step`: `type` (no such type, `422`), `text`, `clearance`, `independence`, `sanction`, `self`, `role`, `disabled`,
+`zone`, `url`.
+
+### Checks (`moderation:check`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/types` | `moderation:check` or `moderation:report`. `{items: [{type, description, hide, text}]}` |
+| `POST /api/moderation/check` `{type, id, text?, workspaceId?, label?, checkpoint?, subject?, apply?}` | B-1901. Runs the guardrail engine on the object at `checkpoint` (default `user-input`): the text is the object's own (opened from its sealed form) unless given; a type nobody registered needs `text` and takes `workspaceId` (one the caller may use; default the current one) and `label`. A verdict of `flag` or worse files one flag per object: a second check finds the open flag (`flag.created: false`), and a dismissed flag is not raised again while the text is unchanged; two checks at once make one flag. A `block` hides a registered object that can be hidden (unless `apply: false`). With `subject` (an `at://` URI or DID) and a verdict of `warn` or worse, the tenant's labeler signs labels for it tied to the flag (`labels`, or `labelError` when there is no identity). Enabled external providers get a job each (`providers: [{id, mode, jobId}]`). `200 {object: {type, id, workspaceId, label, registered}, verdict: {action, reason, findings}, flag: {id, ref, state, severity, queueId, dueAt, created} \| null, action \| null, labels, providers}`. A new flag is audited `moderation.flagged`, a hide `moderation.action.applied` |
+| `POST /api/moderation/batch` `{items: [check body]}` | B-1901. Up to 100 checks in order; an item that fails is `{ok: false, object, status, detail}` and the rest go on. `200 {items: [{ok, …check result}], flagged}` |
+
+### Reports (`moderation:report`, held by members)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/moderation/reports` `{type, id, reason, note?, severity?: high \| medium \| low}` | B-1902. Only a registered type, and only an object the reporter can see (a message in their own conversation, or a reviewer in its workspace; a knowledge document in a base they can read; media and images their own or in their workspace), within clearance; otherwise `404`. Files a `report` flag (a `reviewer` flag from a reviewer) in the object's workspace, checkpoint `user-report`, routed like any flag. The same reporter reporting the same object while their flag is open gets it back (`200 {duplicate: true}`). Audited `moderation.reported`. `201 {duplicate: false, flag: {id, ref, severity, dueAt, workspaceId, queueId}}` |
+
+### Actions and appeals
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/moderation/flags/:ref/action` `{action: hide, reason}` | `moderation:review`. B-1903. Hides the object behind an open or confirmed flag (an open one is confirmed first); flags that point at no registered object are `409`. The owner is notified. Audited `moderation.action.applied`. `201 {flag, action}` |
+| `GET /api/moderation/actions[?type&id&ownerId]` | `moderation:review`. `{items: [{id, objectType, objectId, workspaceId, ownerId, flagId, action, state: applied \| reversed, source: reviewer \| guardrail \| provider, createdBy, reason, createdAt, reversedBy, reversedAt, appealId}]}` |
+| `GET /api/moderation/mine` | `moderation:appeal`. The caller's own `{sanctions, actions, appeals}` |
+| `POST /api/moderation/appeals` `{actionId \| sanctionId, statement, forUserId?}` | `moderation:appeal` or `moderation:review`. B-1903. The owner of a hidden object, or a sanctioned user, appeals; a reviewer may record the appeal for someone who cannot sign in (`forUserId`). One open appeal per action or sanction (`409`). The statement is sealed. Audited `moderation.appeal.submitted`. `201 {id, ref: "A-3", kind: action \| sanction, actionId, sanctionId, flagId, workspaceId, label, restricted, userId, filedBy, statement, state: pending, …}` |
+| `GET /api/moderation/appeals[?state]` | `moderation:review`. Appeals in the reviewer's workspaces (without statements) |
+| `GET /api/moderation/appeals/:ref` | The appellant, or a reviewer in its workspace; the statement is withheld above the reviewer's clearance |
+| `POST /api/moderation/appeals/:ref/review` | `moderation:review`. Claims it (`reviewing`). Neither the appellant nor whoever took the decision under appeal may review it (`403`, `step: independence`), nor anyone below its label. Audited `moderation.appeal.reviewing` |
+| `POST /api/moderation/appeals/:ref/decide` `{decision: upheld \| denied, note?}` | `moderation:review`, same independence rules; while someone else reviews it, `409`. Upheld, for an action: the object is restored to its previous state (`moderation.action.reversed`), its flag reopened with a fresh timer (event `flag.reopened`) and the AT-Protocol labels made from the flag negated (`atproto.label.negated`); for a sanction: it ends as `reversed`. Audited `moderation.appeal.upheld` or `moderation.appeal.denied` with the effects. `200 {appeal, effects: {restored, flagReopened, labelsNegated} \| {sanctionEnded}}` |
+
+### Sanctions (`moderation:sanction`, a browser session with a recent sign-in)
+
+A `suspend` or `ban` keeps the user out: it revokes their sessions at once (their sockets close over the bus), no new
+session is made for them however they sign in, and every request with any credential (session, API key, OAuth token)
+is `403` (`step: sanction`, `sanction`, `until`). Background work run as them (schedules, plugins) stops. A `warn` only
+notifies. The sweep (`MODERATION_SWEEP_SECONDS`) ends sanctions whose time is up (`expired`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/sanctions[?userId&state]` | `{items: [{id, userId, kind, reason, flagId, state: active \| expired \| lifted \| reversed, startsAt, endsAt, createdBy, createdAt, endedBy, endedAt, endReason}]}` |
+| `POST /api/moderation/sanctions` `{userId, kind: warn \| suspend \| ban, durationMinutes?, reason, flag?}` | B-1904. A suspension needs a duration; a ban without one lasts until lifted. Not yourself; an administrator (a role that requires MFA) only by a tenant admin, a system admin only by a system admin. The user is notified (B-1907). Audited `moderation.sanction.created` (`sessionsRevoked`). Refused sign-ins are audited `moderation.signin.refused`. `201` |
+| `POST /api/moderation/sanctions/:id/lift` `{reason?}` | Ends an active sanction (`lifted`). Audited `moderation.sanction.lifted` |
+
+### Review queues and the dead-letter queue
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/queues` | `moderation:review` or `moderation:manage`. `{items: [{id, name, workspaceId, rules, labels, kinds, priority, slaMinutes, escalateTo, escalationSlaMinutes, enabled, createdAt, updatedAt}]}` |
+| `POST /api/moderation/queues` `{name, workspaceId?, rules?, labels?, kinds?, priority?, slaMinutes, escalateTo: workspace \| tenant \| platform, escalationSlaMinutes?, enabled?}` | `moderation:manage`. B-1905. A new flag goes to the first enabled queue (lowest `priority`) whose workspace, rules (rule ids or names), labels and kinds (flag kind, object type or checkpoint) all match; its timer becomes the queue's SLA. The sweep escalates a routed flag past its timer to `escalateTo` with a fresh `escalationSlaMinutes` timer and notifies that level (event `flag.escalated`, audit `moderation.queue.escalated`). `409` for a name in use. Audited `moderation.queue.created` |
+| `PATCH /api/moderation/queues/:id`, `DELETE /api/moderation/queues/:id` | `moderation:manage`. Audited `moderation.queue.updated`, `moderation.queue.deleted` (its flags become unrouted); `204` on delete |
+| `GET /api/moderation/queues/:id/flags` | `moderation:review`. `{queue, open, overdue, escalated, items: [flag as in /api/flags, queueId, escalatedAt]}`, the flags the reviewer may work |
+| `GET /api/moderation/dead-letters[?state]` | `moderation:manage`. Moderation jobs (`moderation.provider`) that failed their last attempt: `{items: [{id, jobId, type, error, attempts, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveJobId}]}`. Audited `moderation.job.dead_lettered` when one lands |
+| `POST /api/moderation/dead-letters/:id/redrive` | `moderation:manage`. Queues the job again with its payload (texts in it stay sealed); `409` when already redriven. Audited `moderation.job.redriven`. `201 {…, jobId}` |
+
+### External providers (`moderation:manage`)
+
+Off unless `MODERATION_EXTERNAL_PROVIDERS` is set (`403`, `step: disabled`), and each provider only in a zone whose
+egress reaches outside the site (an allow-list with a public range or the external zone; never with
+`ZONES_AIR_GAPPED`; `403`, `step: zone`). A provider is created disabled and in `shadow`. When enabled, each check of a
+type it takes queues a `moderation.provider` job (the text sealed in the payload): `shadow` records the verdict and does
+nothing else; `enforce` files (or reuses) the object's flag on a flagged verdict, hides a registered object and audits
+`moderation.provider.enforced`. A failed call retries, then lands in the dead-letter queue. Wire formats: `json`
+(`POST {input, type}` → `{flagged, score?, categories?}`) and `openai` (the OpenAI moderation shape); the key goes as
+`Authorization: Bearer` and is stored sealed, never shown. Connections go through the service address checks.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/providers` | `{items: [{id, name, kind, url, hasSecret, zone, mode, enabled, objectTypes, threshold, createdAt, updatedAt}], enabled}` |
+| `POST /api/moderation/providers` `{name, kind?: json \| openai, url, secret?, zone, mode?: shadow \| enforce, enabled?, objectTypes?, threshold?}` | B-1906. The URL passes the service URL checks (`422`, `step: url`). Audited `moderation.provider.created` (host only). `201` |
+| `PATCH /api/moderation/providers/:id`, `DELETE /api/moderation/providers/:id` | The zone is checked again on every change. Audited `moderation.provider.updated`, `moderation.provider.deleted`; `204` on delete |
+| `GET /api/moderation/providers/:id/verdicts` | `{items: [{id, objectType, objectId, mode, flagged, categories, score, acted, flagId, latencyMs, createdAt}]}` |
+
+### Notices (B-1907)
+
+The person concerned is notified in the console and by email (template `moderation-notice`, escaped like the other
+templates, without the moderated content): an action on something of theirs, a sanction (issued, ended, lifted), an
+appeal received and decided.

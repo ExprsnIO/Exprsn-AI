@@ -292,6 +292,8 @@ export class GuardrailEngine implements Guardrails {
       latency_ms: latency,
       created_at: Date.now()
     });
+    // Sprint 26 (B-1901): a moderation check files one flag per object itself, so the engine files none for it.
+    if (input.meta?.moderation === true) return;
     // Flags: every rule whose enforced action is flag, every fail-open decision, and a sample of shadow findings.
     const byRule = new Map<string, Recorded>();
     for (const f of findings) {

@@ -49,6 +49,7 @@ import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
+import { moderationRoutes } from '../routes/moderation.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -225,6 +226,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(atprotoAccountRoutes(s));
   // 1.4.0, Sprint 26d (B-2401 to B-2405): the file store.
   api.use(fileRoutes(s));
+  // Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues and providers.
+  api.use(moderationRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

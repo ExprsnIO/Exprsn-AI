@@ -63,6 +63,12 @@ const TEMPLATES = {
     ],
     required: ['name', 'username', 'product', 'event', 'time', 'link']
   },
+  // Sprint 26 (B-1907): moderation decisions, sanctions and appeals. Never the moderated content itself.
+  'moderation-notice': {
+    subject: '{{product}} moderation notice: {{event}}',
+    body: ['Hello {{name}},', '{{event}} (account {{username}}, {{time}}).', '{{detail}}', '{{next}}', '{{link}}'],
+    required: ['name', 'username', 'product', 'event', 'time', 'detail', 'next', 'link']
+  },
   notification: {
     subject: '{{title}}',
     body: ['{{title}}', 'Open the console:', '{{link}}'],

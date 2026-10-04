@@ -324,7 +324,7 @@ export class ConversationSharing {
     const messages: TranscriptMessage[] = [];
     for (const m of path) {
       // A question held for review (or rejected) is not shown to readers, nor its answer.
-      const shown = m.role === 'user' ? m.state !== 'held' && m.state !== 'withdrawn' : SHOWN.has(m.state);
+      const shown = m.role === 'user' ? m.state !== 'held' && m.state !== 'withdrawn' && m.state !== 'hidden' : SHOWN.has(m.state);
       const content = shown && m.content ? await keys.open(c.tenant_id, m.content, `content:${m.id}`) : '';
       const citations = shown && m.citations ? json<Record<string, unknown>[]>(await keys.open(c.tenant_id, m.citations, `citations:${m.id}`), []) : [];
       const tools = shown && m.tools ? json<Record<string, unknown>[]>(await keys.open(c.tenant_id, m.tools, `tools:${m.id}`), []) : [];

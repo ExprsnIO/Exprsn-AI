@@ -1123,4 +1123,13 @@ export class FileService {
     if (f.trashed_at == null) await this.db('files').where({ id: f.id }).update({ trashed_at: t, trashed_by: by, trashed_with: f.id, purge_after: t + this.o.trashDays * 86_400_000 });
     return true;
   }
+
+  /**
+   * Undoes `takeDown` for an upheld appeal: the file leaves the trash if it is still there because of that takedown
+   * (`by` matches and it has not been purged). Shares revoked by the takedown stay revoked; the owner shares again.
+   */
+  async undoTakeDown(tenantId: string, id: string, by: string): Promise<boolean> {
+    const n = await this.db('files').where({ tenant_id: tenantId, id, trashed_by: by, trashed_with: id }).whereNotNull('trashed_at').update({ trashed_at: null, trashed_by: null, trashed_with: null, purge_after: null });
+    return n > 0;
+  }
 }

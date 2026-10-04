@@ -527,7 +527,17 @@ const base = z.object({
     FILES_PREVIEW_MAX_BYTES: z.coerce.number().int().min(0).max(1024 * 1024 * 1024).default(50 * 1024 * 1024),
     FILES_PREVIEW_PX: z.coerce.number().int().min(64).max(2048).default(512),
     FILES_PDFTOPPM: z.string().min(1).default('pdftoppm'),
-    FILES_WORK_DIR: z.string().optional()
+    FILES_WORK_DIR: z.string().optional(),
+    /**
+     * Sprint 26 (B-1904 to B-1906): moderation. The sweep escalates routed flags past their queue's SLA and ends
+     * sanctions past their duration every MODERATION_SWEEP_SECONDS (0 turns it off; enforcement still compares the
+     * end time). External moderation providers send content off the site, so they are off unless
+     * MODERATION_EXTERNAL_PROVIDERS is set, and then only run in zones with egress; each call waits at most
+     * MODERATION_PROVIDER_TIMEOUT_MS.
+     */
+    MODERATION_SWEEP_SECONDS: z.coerce.number().int().min(0).max(24 * 3600).default(60),
+    MODERATION_EXTERNAL_PROVIDERS: bool.default(false),
+    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

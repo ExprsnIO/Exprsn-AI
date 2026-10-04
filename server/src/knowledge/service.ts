@@ -157,7 +157,7 @@ export interface RoleMapping {
   role: string;
 }
 
-export type DocState = 'quarantined' | 'scanning' | 'queued' | 'indexing' | 'indexed' | 'unchanged' | 'failed' | 'rejected' | 'removed';
+export type DocState = 'quarantined' | 'scanning' | 'queued' | 'indexing' | 'indexed' | 'unchanged' | 'failed' | 'rejected' | 'removed' | 'hidden';
 
 export interface DocRow {
   id: string;
@@ -805,7 +805,7 @@ export class KnowledgeService {
 
   async reindexDocument(p: Principal, id: string): Promise<{ jobId: string }> {
     const { doc } = await this.documentFor(p, id, 'manage');
-    if (['quarantined', 'scanning', 'rejected', 'removed'].includes(doc.state)) throw conflict(`${doc.name} is ${doc.state} and cannot be indexed.`);
+    if (['quarantined', 'scanning', 'rejected', 'removed', 'hidden'].includes(doc.state)) throw conflict(`${doc.name} is ${doc.state} and cannot be indexed.`);
     await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'queued', error: null, trace_id: null, updated_at: Date.now() });
     const job = await this.d.jobs.enqueue({ tenantId: doc.tenant_id, type: 'knowledge.index', payload: { documentId: doc.id }, createdBy: p.userId, maxAttempts: 1 });
     return { jobId: job.id };
@@ -946,7 +946,7 @@ export class KnowledgeService {
     const r = await this.db('knowledge_documents').where({ id: documentId }).first();
     if (!r) return { skipped: 'gone' };
     const doc = docFrom(r);
-    if (['quarantined', 'scanning', 'rejected', 'removed'].includes(doc.state)) return { skipped: doc.state };
+    if (['quarantined', 'scanning', 'rejected', 'removed', 'hidden'].includes(doc.state)) return { skipped: doc.state };
     const targets = await this.liveIndexes(doc.kb_id);
     await ctx.progress(10, `Extracting ${doc.name}`);
     return this.indexInto(doc, targets);
@@ -1394,6 +1394,7 @@ export class KnowledgeService {
       const c = byId.get(id);
       if (!c) continue;
       const d = docs.get(c.document_id);
+      if (d?.state === 'hidden') continue; // Sprint 26 (B-1903): hidden by moderation until an appeal restores it
       const opened = await this.openChunk(c.tenant_id, c.id, c.content);
       const src = d ? srcs.get(d.source_id) : undefined;
       hits.push({ chunkId: c.id, kbId: c.kb_id, kb: kbById.get(c.kb_id)?.name ?? '', documentId: c.document_id, document: d?.name ?? '', source: src ? (src.kind === 'upload' ? 'Uploads' : src.location) : '', heading: opened.heading, label: c.label, vector: vScore.has(id) ? Number(vScore.get(id)!.toFixed(4)) : null, keyword: kScore.has(id) ? Number(kScore.get(id)!.toFixed(4)) : null, fused: Number(score.toFixed(5)), rerank: null, text: opened.text });
