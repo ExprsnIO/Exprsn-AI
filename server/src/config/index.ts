@@ -377,6 +377,21 @@ const base = z.object({
     /** Entries the memory store keeps (least recently used go first). */
     CACHE_MAX_ENTRIES: z.coerce.number().int().min(100).max(10_000_000).default(10_000),
     // --- end Sprint 24c ---
+    // --- Sprint 25d (1.4.0): plugins that run ---
+    /** B-2003: invocations a minute per plugin per tenant; events past it are dropped (counted, audited once a window). */
+    PLUGIN_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(120),
+    /** Invocations of one plugin running at once, across every instance; the rest wait their turn as queued jobs. */
+    PLUGIN_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(2),
+    /** How many plugins one chain of events may pass through (a plugin's action triggering another plugin…). */
+    PLUGIN_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    /** B-2004: limits for a script handler run in the sandbox. */
+    PLUGIN_SCRIPT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(600).default(30),
+    PLUGIN_SCRIPT_MEMORY_MB: z.coerce.number().int().min(64).max(4096).default(256),
+    /** Platform calls one handler run may make through its scoped token. */
+    PLUGIN_MAX_CALLS: z.coerce.number().int().min(1).max(10_000).default(50),
+    /** B-2005: which plugins must come from a signed import bundle: script plugins (default), all, or none. */
+    PLUGINS_REQUIRE_SIGNED: z.enum(['scripts', 'all', 'none']).default('scripts'),
+    // --- end Sprint 25d ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */

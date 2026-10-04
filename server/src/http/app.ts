@@ -53,6 +53,7 @@ import { sendBytes } from '../routes/media.js';
 import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { eventRoutes } from '../routes/events.js';
 import { pluginAdminRoutes } from '../routes/admin/plugins.js';
+import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -143,6 +144,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(trainerWorkerRoutes(s));
   // Sprint 24 (B-1603, B-1604): the CA's CRLs, issuer certificates and OCSP responder (public, rate-limited).
   app.use(pkiPublicRoutes(s));
+  // Sprint 25 (B-2004): the plugin broker, for handler runs' scoped tokens only.
+  app.use(pluginBrokerRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
