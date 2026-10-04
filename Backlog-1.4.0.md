@@ -25,11 +25,37 @@ repeat them; webhook delivery is dropped from the plugins epic entirely.
 
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
-| 24 | Trust foundations: CA issuance, OCSP, secrets, plugin catalogue, core | B-2101–B-2104, B-1601–B-1604, B-1701–B-1703, B-2001–B-2002 | 78 | `026_pki_secrets` | Planned |
-| 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_atproto` | Planned |
+| 24 | Trust foundations: CA issuance, OCSP, secrets, plugin catalogue, core | B-2101–B-2104, B-1601–B-1604, B-1701–B-1703, B-2001–B-2002 | 78 | `026_pki_secrets`, `026b_secrets`, `026c_core` | **Done** |
+| 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_atproto` | In progress |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity_moderation` | Planned |
 | 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps` | Planned |
 | 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels_social` | Planned |
+
+### Progress
+
+**Before Sprint 24: done.** `fix/schema-dialects-load-timeout` merged (#23). The gateway slot deadlock is fixed: chat
+builds its prompt and retrieval context before taking the slot, then applies the pool ceiling, label and citations
+after the lease (`server/test/chat-slot.test.ts` fails on the old code). Two places still hold a slot while asking for
+another and are left for a later sprint: the guard model screening a stream, and chat's tool rounds.
+
+**Sprint 24: done** (78 points), built as three parallel parts with migrations `026_pki_secrets`, `026b_secrets` and
+`026c_core`. Unit suite 599 passed, console suite 57 passed; the PostgreSQL integration tests ran against throwaway
+servers, MySQL and Redis run in CI.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| B-1601 to B-1604 | Done | Root and per-tenant intermediates (P-256, RSA 3072) with keys only in the signer or OpenBao; profiles and CSR issuance; numbered CRLs; OCSP. Interop with `openssl x509`, `crl`, `verify` and `ocsp` |
+| B-1701 to B-1703 | Done | Versioned KV, tenant transit (with rewrap and trim), path policies with `explain`. Transit key material is sealed with the tenant key rather than held in OpenBao (known gap) |
+| B-2001 | Done | Catalogue at `GET /api/events/catalogue`; every emitted event is checked against its schema, and the test suite fails on a mismatch |
+| B-2002 | Done (data only) | Manifests, grants and lifecycle; nothing runs a plugin until B-2003 and B-2004 |
+| B-2101 | Done (mechanism) | Generic rooms; no domain registers one until messaging, groups, feeds or channels ship |
+| B-2102 | Done | Tenant read-through cache, Redis or memory, invalidated over the bus |
+| B-2103 | Partial | `plugins` and `events replay` done; `pki` comes with B-1607, `secrets` and `users import` remain |
+| B-2104 | Done | `docs/openapi.json` covers every registered route and is checked by a test |
+
+**Sprint 25: in progress.** Decisions taken for it (open decisions below): a service DID and labeler per tenant with a
+platform fallback; built-in database leases registered only by `connections:manage` holders, in a zone whose ceiling
+covers the target database.
 
 The order follows the dependencies: the event catalogue (B-2001) before record triggers (B-2206); the moderation API
 (B-1901) before the labeler (B-1610), the firehose (B-1908), held replies (B-2302) and the moderation of files,
@@ -239,11 +265,11 @@ open sockets and dev-only token bypasses.
 
 - [ ] Team size and the Sprint 24 start date (the plan assumes about five engineers).
 - [ ] Do messaging (B-26) and the workspace feed (B-27) belong in Exprsn-AI, or in a separate product?
-- [ ] CA and AT-Protocol key custody: the signer or OpenBao (planned), or an HSM through PKCS#11 (neither codebase has
-  one). And whether each tenant gets its own service DID and labeler, or the platform runs one.
-- [ ] One intermediate CA per tenant (planned, as the platform's ADR 0003), or one shared issuing CA.
-- [ ] Built-in dynamic database credentials need an admin login to each target database: who may register one, and in
-  which zone.
+- [x] CA and AT-Protocol key custody: the signer or OpenBao, as planned (Sprint 24; an HSM through PKCS#11 stays
+  open). Each tenant gets its own service DID and labeler, with a platform fallback (Sprint 25).
+- [x] One intermediate CA per tenant, as the platform's ADR 0003 (Sprint 24).
+- [x] Built-in dynamic database credentials need an admin login to each target database: only `connections:manage`
+  holders register one, in a zone whose ceiling covers the target database (Sprint 25).
 - [ ] Customer-service email: IMAP polling, a provider webhook, or both.
 
 ## Risks
