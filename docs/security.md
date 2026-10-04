@@ -498,3 +498,16 @@ filter, private `/tmp`, only the state directory writable.
   record (`app.bsky.labeler.service`) needs a PDS, which Exprsn-AI does not host, so clients only act on the global
   values (`!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`) unless they read this labeler's values some
   other way.
+- Moderation (1.4.0, Sprint 26): a check of a registered object inspects its stored text: a message's content, but
+  only a knowledge document's name, a media asset's name and an image's prompt, unless the caller passes the text
+  (there is no OCR or transcript step, and the image-safety classifier stays separate). Hiding is a state on the
+  object; a knowledge document whose source later syncs changed content goes back to indexing and is no longer
+  hidden, and its next check decides again. A suspended or banned user cannot sign in to appeal: they ask an
+  administrator, and a reviewer files the appeal for them (`forUserId`). Enforcement reads a cached sanction (the
+  short cache tier, cleared over the bus on every change), and a sanction's end is compared at each request, so the
+  sweep only records it. A sanction does not revoke API keys or OAuth grants; they are refused while it lasts and work
+  again after it. Review queues route a flag when it is created (adding a queue does not route older flags) and
+  escalate one level, once; unrouted flags keep the breach notice only. Dead letters are recorded by the instance on
+  which the job failed. External providers receive the object's text (up to 32,000 characters) and its type; the
+  zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
+  rules. Notices carry the moderator's reason, not the moderated content.
