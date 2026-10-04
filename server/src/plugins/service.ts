@@ -7,6 +7,7 @@ import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../http/
 import { TOPICS } from '../platform/bus.js';
 import type { Services } from '../services.js';
 import { capability } from './capabilities.js';
+import { HostRefused } from '../mcp/hosts.js';
 import { configProblems, defaultGrants, ManifestError, missingGrants, validateManifest, type Manifest } from './manifest.js';
 
 /*
@@ -18,13 +19,29 @@ import { configProblems, defaultGrants, ManifestError, missingGrants, validateMa
  *
  * Every transition is recorded in `plugin_transitions` and in the audit chain (`plugin.<event>`), and published on
  * the bus (`plugin.changed`); the tenant's cached list of enabled plugins is cleared on every instance first.
- * Nothing here runs a plugin: declarative actions arrive with B-2003 and script handlers with B-2004.
+ * Running a plugin is `runtime.ts` (B-2003, B-2004). Since Sprint 25 this service also checks, at install and at
+ * enable, every webhook endpoint a plugin names against the outbound host rules; a script plugin can be enabled
+ * (its handler runs in the script sandbox); and plugins can be installed from a promoted, signed import bundle
+ * (B-2005), which `PLUGINS_REQUIRE_SIGNED` makes the only way for script plugins (the default) or for all.
  */
 
 /** Transition ids sort in the order they were made, also within one millisecond. */
 const nextId = monotonicFactory();
 
 export type PluginState = 'installed' | 'enabled' | 'disabled' | 'removed';
+
+/** What the dispatcher needs of an enabled plugin (cached per tenant: ids and settings only, no tenant content). */
+export interface EnabledPlugin {
+  id: string;
+  key: string;
+  version: string;
+  kind: Manifest['kind'];
+  granted: string[];
+  events: string[];
+  /** Each declarative action's event (`null`: every event the plugin subscribes to). */
+  actionOn: (string | null)[];
+  maxLabel: Label;
+}
 export type PluginEvent = 'install' | 'enable' | 'disable' | 'remove' | 'grants';
 
 export const TRANSITIONS: Record<'enable' | 'disable' | 'remove', { from: readonly PluginState[]; to: PluginState }> = {
@@ -51,6 +68,20 @@ export interface PluginRow {
   state_changed_at: number;
   created_at: number;
   updated_at: number;
+  /** Sprint 25 (B-2005): installed from an inline manifest, or from a signed import bundle. */
+  source: 'inline' | 'bundle';
+  bundle_id: string | null;
+  bundle_digest: string | null;
+  bundle_path: string | null;
+  signer_fingerprint: string | null;
+}
+
+/** Where a bundle-installed plugin came from (B-2005). */
+export interface PluginProvenance {
+  bundleId: string;
+  digest: string;
+  path: string;
+  signerFingerprint: string;
 }
 
 /** Who acts: a signed-in user (with their clearance) or an operator through the CLI. */
@@ -67,7 +98,12 @@ const fromRow = (r: Record<string, unknown>): PluginRow => ({
   granted: json<string[]>(r.granted, []),
   state_changed_at: Number(r.state_changed_at),
   created_at: Number(r.created_at),
-  updated_at: Number(r.updated_at)
+  updated_at: Number(r.updated_at),
+  source: r.source === 'bundle' ? 'bundle' : 'inline',
+  bundle_id: (r.bundle_id as string | null | undefined) ?? null,
+  bundle_digest: (r.bundle_digest as string | null | undefined) ?? null,
+  bundle_path: (r.bundle_path as string | null | undefined) ?? null,
+  signer_fingerprint: (r.signer_fingerprint as string | null | undefined) ?? null
 });
 
 export const pluginView = (p: PluginRow) => ({
@@ -87,6 +123,8 @@ export const pluginView = (p: PluginRow) => ({
   maxLabel: p.max_label,
   configured: !!p.config_sealed,
   manifestHash: p.manifest_hash,
+  source: p.source,
+  bundle: p.source === 'bundle' ? { id: p.bundle_id, digest: p.bundle_digest, path: p.bundle_path, signer: p.signer_fingerprint } : null,
   installedBy: p.installed_by,
   stateChangedAt: p.state_changed_at,
   createdAt: p.created_at,
@@ -98,8 +136,46 @@ export const manifestView = (m: Manifest) => ({ ...m, ...(m.script ? { script: {
 
 const manifestProblem = (err: ManifestError) => new HttpProblem(422, 'Manifest refused', err.problems[0] ?? 'The manifest is not valid.', { extensions: { errors: err.problems } });
 
+/** The webhook endpoints a manifest and configuration name (checked against the outbound host rules). */
+export function endpointsOf(m: Manifest, config: Record<string, unknown> | undefined): string[] {
+  const urls = new Set<string>();
+  if (m.webhook?.url) urls.add(m.webhook.url);
+  for (const a of m.actions ?? []) if (a.type === 'webhook' && typeof a.with?.url === 'string') urls.add(a.with.url);
+  if (typeof config?.webhookUrl === 'string') urls.add(config.webhookUrl);
+  return [...urls];
+}
+
 export class PluginService {
   constructor(private readonly s: () => Services) {}
+
+  /** A row as stored, parsed (the runtime reads plugins through this too). */
+  fromRow(r: Record<string, unknown>): PluginRow {
+    return fromRow(r);
+  }
+
+  /**
+   * Sprint 25: every webhook endpoint the plugin names must pass the operator's and the tenant's outbound host rules
+   * (the same check as a webhook's URL); a refused one is 422 with the reason. Deliveries check again at every attempt.
+   */
+  private async checkEndpoints(tenantId: string, m: Manifest, config: Record<string, unknown> | undefined): Promise<void> {
+    for (const url of endpointsOf(m, config)) {
+      try {
+        await this.s().webhooks.checkEndpoint(tenantId, url);
+      } catch (err) {
+        if (err instanceof HostRefused) throw new HttpProblem(422, 'Endpoint refused', `The webhook endpoint ${url} is refused by the outbound host rules: ${err.message}`, { extensions: { errors: [`webhook: ${err.message}`], url } });
+        throw err;
+      }
+    }
+  }
+
+  /** B-2005: does the signing policy let this plugin be installed or enabled from where it came from? */
+  private signingProblem(m: Pick<Manifest, 'kind' | 'key'>, source: 'inline' | 'bundle'): string | null {
+    if (source === 'bundle') return null;
+    const policy = this.s().cfg.PLUGINS_REQUIRE_SIGNED;
+    if (policy === 'all') return `${m.key} must be installed from a signed import bundle (PLUGINS_REQUIRE_SIGNED=all).`;
+    if (policy === 'scripts' && m.kind === 'script') return `${m.key} is a script plugin: script plugins are installed only from a signed import bundle (PLUGINS_REQUIRE_SIGNED=scripts).`;
+    return null;
+  }
 
   /** Validates a manifest without installing it (the console's and the CLI's dry run). */
   check(input: unknown): Manifest {
@@ -126,10 +202,49 @@ export class PluginService {
   }
 
   /** Enabled plugins of a tenant, through the cache (B-2102); the dispatchers of B-2003 and B-2004 read this. */
-  async enabled(tenantId: string): Promise<{ id: string; key: string; version: string; granted: string[]; events: string[]; maxLabel: Label }[]> {
+  async enabled(tenantId: string): Promise<EnabledPlugin[]> {
     return this.s().cache.get(tenantId, 'plugins', 'enabled', 'medium', async () =>
-      (((await this.s().db('plugins').where({ tenant_id: tenantId, state: 'enabled' }).orderBy('plugin_key')) as Record<string, unknown>[]).map(fromRow)).map((p) => ({ id: p.id, key: p.plugin_key, version: p.version, granted: p.granted, events: p.manifest.events, maxLabel: p.max_label }))
+      (((await this.s().db('plugins').where({ tenant_id: tenantId, state: 'enabled' }).orderBy('plugin_key')) as Record<string, unknown>[]).map(fromRow)).map((p) => ({ id: p.id, key: p.plugin_key, version: p.version, kind: p.kind, granted: p.granted, events: p.manifest.events, actionOn: (p.manifest.actions ?? []).map((a) => a.on ?? null), maxLabel: p.max_label }))
     );
+  }
+
+  // ---------- B-2005: plugins from signed import bundles ----------
+
+  /** Plugins tenants can install: the plugin files of promoted bundles, with what each manifest says it is. */
+  async available(): Promise<{ bundle: { id: string; name: string; digest: string | null; signer: string | null; promotedAt: number | null }; path: string; sha256: string; size: number; manifest: { key: string; name: string; version: string; kind: string; capabilities: string[] } | null; problem: string | null }[]> {
+    const s = this.s();
+    const out = [];
+    for (const { bundle: b, files } of await s.ops.bundles.pluginBundles()) {
+      for (const f of files) {
+        let manifest = null;
+        let problem: string | null = null;
+        const bytes = await s.blobs.get(`mirrors/plugins/sha256/${f.sha256}`);
+        try {
+          const m = validateManifest(JSON.parse((bytes ?? Buffer.from('null')).toString('utf8')));
+          manifest = { key: m.key, name: m.name, version: m.version, kind: m.kind, capabilities: m.capabilities };
+        } catch (err) {
+          problem = err instanceof ManifestError ? err.problems.slice(0, 3).join('; ') : 'not a JSON plugin manifest';
+        }
+        out.push({ bundle: { id: b.id, name: b.name, digest: b.digest, signer: b.signer_fingerprint, promotedAt: b.promoted_at }, path: f.path, sha256: f.sha256, size: f.size, manifest, problem });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * B-2005: installs a plugin from a promoted import bundle. The file is read again from the stored transfer, with the
+   * signature checked against the signer keys registered now and the file's digest against the signed manifest
+   * (`BundleService.signedPluginFile`): an unsigned, badly signed, unpromoted or altered bundle installs nothing.
+   */
+  async importFromBundle(tenantId: string, by: PluginActor, input: { bundle: string; path: string; grants?: string[]; maxLabel: Label; config?: Record<string, unknown>; reason?: string | null }): Promise<PluginRow> {
+    const f = await this.s().ops.bundles.signedPluginFile(input.bundle, input.path);
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(f.bytes.toString('utf8'));
+    } catch {
+      throw new HttpProblem(422, 'Manifest refused', `${input.path} in ${f.bundle.name} is not JSON.`, { extensions: { errors: ['manifest: not JSON'] } });
+    }
+    return this.install(tenantId, by, { manifest, maxLabel: input.maxLabel, ...(input.grants ? { grants: input.grants } : {}), ...(input.config ? { config: input.config } : {}), reason: input.reason ?? null }, { bundleId: f.bundle.id, digest: f.bundle.digest ?? `sha256:${f.sha256}`, path: input.path, signerFingerprint: f.signer.fingerprint });
   }
 
   async transitions(tenantId: string, pluginId: string) {
@@ -146,13 +261,16 @@ export class PluginService {
    * Installs a plugin (or reinstalls a removed one, with its new manifest). Grants default to the low-risk
    * capabilities the manifest asks for; high-risk ones (`call:*`, `write:*`) are granted only when named.
    */
-  async install(tenantId: string, by: PluginActor, input: { manifest: unknown; grants?: string[]; maxLabel: Label; config?: Record<string, unknown>; reason?: string | null }): Promise<PluginRow> {
+  async install(tenantId: string, by: PluginActor, input: { manifest: unknown; grants?: string[]; maxLabel: Label; config?: Record<string, unknown>; reason?: string | null }, provenance: PluginProvenance | null = null): Promise<PluginRow> {
     const m = this.check(input.manifest);
+    const signing = this.signingProblem(m, provenance ? 'bundle' : 'inline');
+    if (signing) throw conflict(signing);
     if (!clears(by.clearance, input.maxLabel)) throw forbidden(`Your clearance is ${by.clearance}; a plugin cannot receive ${input.maxLabel} events.`, { step: 'clearance' });
     const grants = [...new Set(input.grants ?? defaultGrants(m))];
     this.checkGrants(m, grants);
     const cfg = configProblems(m, input.config);
     if (cfg.length) throw new HttpProblem(422, 'Configuration refused', cfg[0]!, { extensions: { errors: cfg } });
+    await this.checkEndpoints(tenantId, m, input.config);
     const s = this.s();
     const existing = await s.db('plugins').where({ tenant_id: tenantId, plugin_key: m.key }).first();
     if (existing && existing.state !== 'removed') throw conflict(`${m.key} is already installed (${String(existing.state)}). Remove it before installing another version.`);
@@ -173,7 +291,12 @@ export class PluginService {
       installed_by: by.userId,
       updated_by: by.userId,
       state_changed_at: t,
-      updated_at: t
+      updated_at: t,
+      source: provenance ? 'bundle' : 'inline',
+      bundle_id: provenance?.bundleId ?? null,
+      bundle_digest: provenance?.digest ?? null,
+      bundle_path: provenance?.path ?? null,
+      signer_fingerprint: provenance?.signerFingerprint ?? null
     };
     try {
       await s.db.transaction(async (trx) => {
@@ -187,7 +310,7 @@ export class PluginService {
       if (isUniqueViolation(err)) throw conflict(`${m.key} is already installed.`);
       throw err;
     }
-    await this.audit(tenantId, by, existing ? 'plugin.reinstalled' : 'plugin.installed', id, m, { version: m.version, kind: m.kind, capabilities: m.capabilities, granted: grants, maxLabel: input.maxLabel, manifestHash: row.manifest_hash });
+    await this.audit(tenantId, by, existing ? 'plugin.reinstalled' : 'plugin.installed', id, m, { version: m.version, kind: m.kind, capabilities: m.capabilities, granted: grants, maxLabel: input.maxLabel, manifestHash: row.manifest_hash, source: row.source, ...(provenance ? { bundle: provenance.bundleId, digest: provenance.digest, path: provenance.path, signer: provenance.signerFingerprint } : {}) });
     await this.changed(tenantId, id);
     return this.get(tenantId, id, by.clearance);
   }
@@ -198,9 +321,17 @@ export class PluginService {
     const tr = TRANSITIONS[event];
     if (!tr.from.includes(p.state)) throw conflict(`${p.plugin_key} is ${p.state}; it cannot be ${event === 'remove' ? 'removed' : `${event}d`} from there.`);
     if (event === 'enable') {
-      if (p.kind === 'script') throw conflict(`${p.plugin_key} is a script plugin. Script handlers run in the sandbox in a later release; until then a script plugin is stored but cannot be enabled.`);
+      const signing = this.signingProblem(p.manifest, p.source);
+      if (signing) throw conflict(signing);
       const missing = missingGrants(p.manifest, p.granted);
       if (missing.length) throw new HttpProblem(409, 'Conflict', `${p.plugin_key} needs ${missing.join(', ')} granted before it can be enabled.`, { extensions: { missing } });
+      if (p.kind === 'script') {
+        const runner = this.s().scripts.runner;
+        if (!runner.session || !(await runner.available())) throw conflict(`${p.plugin_key} is a script plugin, and the script sandbox (${runner.name}) is not available on this server (SCRIPT_RUNNER).`);
+      }
+      // Endpoints are checked again: the host rules, the tenant's allow-list or the name's addresses may have changed.
+      const config = p.config_sealed ? (JSON.parse(await this.s().keys.open(tenantId, p.config_sealed, `plugin-config:${p.id}`)) as Record<string, unknown>) : undefined;
+      await this.checkEndpoints(tenantId, p.manifest, config);
     }
     const t = Date.now();
     await this.s().db.transaction(async (trx) => {
@@ -209,7 +340,9 @@ export class PluginService {
       if (n !== 1) throw conflict(`${p.plugin_key} changed while this was being applied; try again.`);
       await trx('plugin_transitions').insert({ id: nextId(), tenant_id: tenantId, plugin_id: p.id, event, from_state: p.state, to_state: tr.to, version: p.version, actor: actorRef(by), reason: reason?.slice(0, 500) ?? null, created_at: t });
     });
-    await this.audit(tenantId, by, `plugin.${event === 'remove' ? 'removed' : `${event}d`}`, p.id, p.manifest, { from: p.state, to: tr.to, version: p.version, ...(reason ? { reason } : {}) });
+    // A removed plugin's webhooks go with it (their pending deliveries too).
+    const hooks = event === 'remove' ? await this.s().webhooks.removeManaged(tenantId, p.plugin_key) : 0;
+    await this.audit(tenantId, by, `plugin.${event === 'remove' ? 'removed' : `${event}d`}`, p.id, p.manifest, { from: p.state, to: tr.to, version: p.version, ...(reason ? { reason } : {}), ...(hooks ? { webhooksRemoved: hooks } : {}) });
     await this.changed(tenantId, p.id);
     return { ...p, state: tr.to, state_changed_at: t, updated_at: t, updated_by: by.userId };
   }

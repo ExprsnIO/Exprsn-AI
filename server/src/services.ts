@@ -78,6 +78,7 @@ import { EventCatalogue } from './events/catalogue.js';
 import { createCacheStore, TenantCache } from './platform/cache.js';
 import { RoomRegistry } from './realtime/rooms.js';
 import { PluginService } from './plugins/service.js';
+import { PluginRuntime } from './plugins/runtime.js';
 import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
 import { instrumentKnex, parseOtlpHeaders, SpanKind, Tracer, tracesUrl, withSpan } from './observability/tracing.js';
@@ -191,6 +192,8 @@ export interface Services {
   rooms: RoomRegistry;
   /** 1.4.0 (B-2002): per-tenant plugin installs (manifests and grants; data, never code). */
   plugins: PluginService;
+  /** 1.4.0 (B-2003, B-2004): runs plugins: the event fan-out, declarative actions and the broker for script handlers. */
+  pluginRuntime: PluginRuntime;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -404,10 +407,12 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     cache: new TenantCache(createCacheStore(cfg.CACHE_STORE, cfg.REDIS_URL, cfg.CACHE_MAX_ENTRIES, log), bus, metrics.registry, { ttlSeconds: { short: cfg.CACHE_TTL_SHORT_SECONDS, medium: cfg.CACHE_TTL_MEDIUM_SECONDS, long: cfg.CACHE_TTL_LONG_SECONDS } }, log),
     rooms: new RoomRegistry(bus),
     plugins: new PluginService(() => s),
+    pluginRuntime: new PluginRuntime(() => s, metrics.registry),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
       s.webhooks.close();
+      s.pluginRuntime.close();
       await denials.flushAll().catch(() => undefined);
       chat.close();
       await chat.store.close();
@@ -455,6 +460,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
   s.evals.registerJobs(); // Sprint 21 (B-1303)
   s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
+  s.pluginRuntime.registerJobs(); // Sprint 25 (B-2003, B-2004): plugin invocations
+  s.pluginRuntime.listen();
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;

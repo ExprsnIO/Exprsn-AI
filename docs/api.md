@@ -1861,8 +1861,9 @@ Every event the webhook fan-out sees is checked against the catalogue; a mismatc
 
 ### Plugins (`plugins:manage`)
 
-A plugin is data: a manifest and the capabilities granted to it, per tenant. Nothing in a manifest is loaded or run
-by the server (declarative actions and script handlers come later). Tenant admins hold `plugins:manage`.
+A plugin is data: a manifest and the capabilities granted to it, per tenant. Nothing in a manifest is loaded into the
+server; declarative actions and script handlers (in the sandbox) run from Sprint 25 (below). Tenant admins hold
+`plugins:manage`.
 
 | Route | Notes |
 | --- | --- |
@@ -1871,7 +1872,7 @@ by the server (declarative actions and script handlers come later). Tenant admin
 | `GET /admin/plugins?removed=true` | `{plugins: [{id, key, name, version, kind, description, publisher, state: installed \| enabled \| disabled \| removed, events, capabilities, optionalCapabilities, granted, missing, maxLabel, configured, manifestHash, installedBy, stateChangedAt, createdAt, updatedAt}]}`; plugins above the caller's clearance are left out. `missing` lists required capabilities not granted |
 | `POST /admin/plugins` `{manifest, grants?, maxLabel?: internal, config?, reason?}` | Installs, or reinstalls a removed plugin (same id, new manifest). `grants` default to the low-risk capabilities the manifest asks for; high-risk ones only when named; anything not in the manifest is `400`. `config` is checked against `config.schema` (`422`) and sealed with the tenant key. `409` when installed and not removed; `403` when `maxLabel` is above the caller's clearance. Audited `plugin.installed` or `plugin.reinstalled` |
 | `GET /admin/plugins/:id` | `:id` is the id or the key. The plugin, its `manifest` (a script's source as `{entry, bytes}`) and `transitions` |
-| `POST /admin/plugins/:id/enable` `{reason?}` | installed or disabled to enabled. `409` with `missing` when a required capability is not granted, for a script plugin (stored, not run, in this release) and from any other state. Audited `plugin.enabled` |
+| `POST /admin/plugins/:id/enable` `{reason?}` | installed or disabled to enabled. `409` with `missing` when a required capability is not granted, and from any other state; since Sprint 25 also `409` for a script plugin not from a signed bundle (`PLUGINS_REQUIRE_SIGNED`) or without a sandbox, and `422` when a webhook endpoint it names is now refused. Audited `plugin.enabled` |
 | `POST /admin/plugins/:id/disable` `{reason?}` | installed or enabled to disabled. Audited `plugin.disabled` |
 | `DELETE /admin/plugins/:id?reason=` | installed, enabled or disabled to removed (`204`). Audited `plugin.removed` |
 | `PUT /admin/plugins/:id/grants` `{grants, reason?}` | Replaces the grants; an enabled plugin that loses a required one is disabled. Audited `plugin.grants.updated` (`before`, `after`, `added`, `removed`, `highRisk`) |
@@ -1898,3 +1899,72 @@ routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 f
 [--limit] [--dry-run]`: `deliveries` sends past deliveries again, each its exact body as a new delivery; `audit`
 backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
 Audited `webhook.replayed`.
+
+## Sprint 25d (1.4.0): plugins that run (B-2003 to B-2005)
+
+Events reach enabled plugins as jobs. Every event the webhook fan-out sees (audit actions, `job.*` except the plugin
+and webhook deliveries' own, `flag.*`, `approval.requested`) is offered to the tenant's enabled plugins that subscribe
+to it at or below their `maxLabel` (a declarative plugin only when one of its actions is `on` it); each delivery is a
+`plugin_invocations` row with the event sealed and a `plugin.invoke` job. An event reaches a plugin once. Bounds:
+`PLUGIN_RATE_PER_MINUTE` invocations a minute per plugin (past it the event is dropped, counted in
+`exprsn_plugin_dropped_total{reason="rate"}` and audited once a window as `plugin.throttled`), `PLUGIN_CONCURRENCY`
+running at once per plugin across instances (the rest wait as queued jobs). The loop rule: an event caused by a
+plugin's work carries the chain of plugins behind it and is never delivered to a plugin in that chain, nor at all once
+the chain is `PLUGIN_MAX_DEPTH` long (`exprsn_plugin_dropped_total{reason="loop" | "depth"}`); see
+`docs/security.md`. Metrics: `exprsn_plugin_invocations_total{result}`, `exprsn_plugin_calls_total{api,status}`.
+
+### Declarative actions (B-2003)
+
+Each action names its capability and is checked against the plugin's grants when it runs: an action whose capability
+is not granted (an optional one, or one withdrawn since) is refused and audited `plugin.action.refused` (actor
+`service: plugin:<key>`, detail `{action, capability, granted, event}`); the other actions still run. Strings in `with`
+may use `{{event.type}}`, `{{event.data.<field>}}`, `{{config.<field>}}`, `{{plugin.key}}`.
+
+| Action | Capability | `with` | Effect |
+| --- | --- | --- | --- |
+| `log` | `emit:log` | `message?`, `level?: info \| warn \| error` | A line in the plugin's own log (sealed) |
+| `audit` | `emit:audit` | `message?`, `detail?` (flat values) | `plugin.audited` in the tenant's audit chain, attributed to the plugin |
+| `notify` | `emit:notification` | `title?`, `body?`, `roles?` (default `tenant-admin`), `users?` | In-app notifications (kind `plugin`) to active users cleared for the event's label |
+| `flag` | `emit:flag` | `reason?`, `severity?: low \| medium \| high` | A `report` flag at checkpoint `plugin` for human review (it never acts on its own) |
+| `webhook` | `call:webhook` | `url?` (else the install's `config.webhookUrl`; a `webhook` plugin's `webhook.url`) | One delivery through the webhook path: a webhook named `plugin:<key>:<hash>` per endpoint (subscribed to nothing, Ed25519-signed, so receivers verify with the tenant's JWKS), its retries and breaker, and the outbound host checks at install, at enable and at every attempt (`422` when refused). The body is the triggering event. Removing the plugin removes its webhooks |
+| `workflow` | `call:workflow` | `workflow` (name or id), `input?`, `includeEvent?` | Starts the tenant-wide published workflow as the user who installed the plugin (still active, with `agents:run`), at no more than the plugin's `maxLabel`; trigger `plugin:<chain>`; audited `workflow.run.started` |
+
+A manifest's `with` is checked per action at install (`422` naming each problem).
+
+### Script plugins (B-2004)
+
+A script plugin names `script: {entry, source, language?: javascript | python}`; `entry` is a function the source
+declares, called as `entry(event, platform)`. The source passes the scripts' checks (no network or process modules, no
+credentials). Its handler runs per invocation in the script sandbox (`SCRIPT_RUNNER`: a disposable docker or podman
+container with no network, optionally under gVisor), never in the server, within `PLUGIN_SCRIPT_TIMEOUT_SECONDS` and
+`PLUGIN_SCRIPT_MEMORY_MB`. It reaches the platform only through the broker: `platform.call(api, args)` (and
+`platform.log(message)`) sends the call over the container's stdout with the invocation's scoped token, and the answer
+comes back on stdin. The token (`xpt_…`, stored as sha256) is made per invocation, lives for the time limit, carries the
+grants at that moment, allows `PLUGIN_MAX_CALLS` calls and is revoked when the handler ends. Every call is checked
+against the token's grants and the plugin's grants now: an ungranted call answers `403` (the handler sees an error
+with `status` 403) and is audited `plugin.call.refused`. Calls: `log`, `audit`, `notify`, `flag`, `webhook`
+(`args.data` as the body), `workflow` (as the actions above), and `records.read`, `records.write`, `files.read`,
+`groups.read`, `posts.write` (`501` until their domains ship). The handler's output and return value go to the
+plugin's log.
+
+| Route | Notes |
+| --- | --- |
+| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `501` |
+
+### Plugins from signed import bundles (B-2005)
+
+A signed import bundle (`/admin/platform/bundles`) may carry plugin manifests: files with `mirror: "plugins"`, each a
+JSON manifest. They go through the same verification (signature against the signer keys under dual control, digests,
+SBOM scan, licence allow-list, staging) and promotion, which puts them in the plugin catalogue. With
+`PLUGINS_REQUIRE_SIGNED=scripts` (default) script plugins are installed only this way; `all` makes it the only way for
+every plugin; `none` allows inline installs of all kinds.
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/plugins/available` | `{plugins: [{bundle: {id, name, digest, signer, promotedAt}, path, sha256, size, manifest: {key, name, version, kind, capabilities} \| null, problem}]}`: plugin files of promoted bundles |
+| `POST /admin/plugins/import` `{bundle (id or name), path, grants?, maxLabel?, config?, reason?}` | Installs from a promoted bundle, reading the file again from the stored transfer: the transfer's digest, the signature against the signer keys registered now (a key revoked since fails it) and the file's sha256 against the signed manifest. `409` for a bundle not promoted (an unsigned or badly signed one is rejected at verification) or one that fails these checks (`title: Bundle refused`); otherwise as `POST /admin/plugins`. The plugin records `source: bundle` and `bundle: {id, digest, path, signer}`; audited `plugin.installed` with them |
+| `GET /admin/plugins/:id/invocations?limit=&state=` | `{invocations: [{id, event, eventId, label, state: queued \| running \| succeeded \| failed \| cancelled, attempts, chain, outcome, error, jobId, createdAt, startedAt, finishedAt}]}`, newest first. `outcome` is `{actions: [{type, ok, status?, error?}]}` or, for a handler, `{calls: [{api, status}], exitCode, timedOut, durationMs, returned}` |
+| `GET /admin/plugins/:id/logs?limit=&invocation=` | `{logs: [{id, invocationId, level, message, at}]}`, newest first (opened from the sealed log) |
+
+`GET /admin/plugins/capabilities` also lists `calls` (each brokered call and its capability). Plugin views carry
+`source` and `bundle`.

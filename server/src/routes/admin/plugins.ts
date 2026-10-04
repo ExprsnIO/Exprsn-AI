@@ -5,6 +5,7 @@ import { LABELS } from '../../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { CAPABILITIES } from '../../plugins/capabilities.js';
 import { ACTION_CAPABILITY } from '../../plugins/manifest.js';
+import { CALL_CAPABILITY } from '../../plugins/runtime.js';
 import { manifestView, pluginView, type PluginActor } from '../../plugins/service.js';
 import type { Services } from '../../services.js';
 
@@ -27,7 +28,19 @@ export function pluginAdminRoutes(s: Services): Router {
   const pathId = (req: Request) => parseBody(ref, req.params.id);
 
   r.get('/plugins/capabilities', (_req, res) => {
-    res.json({ capabilities: CAPABILITIES, actions: ACTION_CAPABILITY });
+    res.json({ capabilities: CAPABILITIES, actions: ACTION_CAPABILITY, calls: CALL_CAPABILITY });
+  });
+
+  // B-2005: plugins from promoted, signed import bundles.
+  r.get('/plugins/available', async (_req, res) => {
+    res.json({ plugins: await s.plugins.available() });
+  });
+
+  r.post('/plugins/import', async (req, res) => {
+    const p = principalOf(req);
+    const b = parseBody(z.object({ bundle: z.string().trim().min(1).max(200), path: z.string().trim().min(1).max(400), grants: grants.optional(), maxLabel: z.enum(LABELS).default('internal'), config: z.record(z.string(), z.unknown()).optional(), reason }).strict(), req.body);
+    const row = await s.plugins.importFromBundle(p.tenantId, actor(req), { bundle: b.bundle, path: b.path, maxLabel: b.maxLabel, ...(b.grants ? { grants: b.grants } : {}), ...(b.config ? { config: b.config } : {}), reason: b.reason ?? null });
+    res.status(201).json(pluginView(row));
   });
 
   r.post('/plugins/validate', (req, res) => {
@@ -74,6 +87,21 @@ export function pluginAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const b = parseBody(z.object({ grants, reason }).strict(), req.body);
     res.json(pluginView(await s.plugins.setGrants(p.tenantId, actor(req), pathId(req), b.grants, b.reason ?? null)));
+  });
+
+  // B-2003, B-2004: what the plugin did.
+  r.get('/plugins/:id/invocations', async (req, res) => {
+    const p = principalOf(req);
+    const q = parseBody(z.object({ limit: z.coerce.number().int().min(1).max(200).optional(), state: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']).optional() }).strict(), req.query);
+    const row = await s.plugins.get(p.tenantId, pathId(req), p.clearance);
+    res.json({ invocations: await s.pluginRuntime.invocationsOf(p.tenantId, row.id, { ...(q.limit ? { limit: q.limit } : {}), ...(q.state ? { state: q.state } : {}) }) });
+  });
+
+  r.get('/plugins/:id/logs', async (req, res) => {
+    const p = principalOf(req);
+    const q = parseBody(z.object({ limit: z.coerce.number().int().min(1).max(500).optional(), invocation: z.string().length(26).optional() }).strict(), req.query);
+    const row = await s.plugins.get(p.tenantId, pathId(req), p.clearance);
+    res.json({ logs: await s.pluginRuntime.logsOf(p.tenantId, row.id, { ...(q.limit ? { limit: q.limit } : {}), ...(q.invocation ? { invocation: q.invocation } : {}) }) });
   });
 
   r.get('/plugins/:id/transitions', async (req, res) => {

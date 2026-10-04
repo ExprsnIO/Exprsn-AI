@@ -2,7 +2,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, si
 import { hostname } from 'node:os';
 import { ulid } from 'ulid';
 import { fetch } from 'undici';
-import { hmac, randomToken, safeEqual } from '../crypto/index.js';
+import { hmac, randomToken, safeEqual, sha256 } from '../crypto/index.js';
 import { contentDigest, signMessage } from '../crypto/httpsig.js';
 import { json } from '../db/knex.js';
 import { labelRank, type Label } from '../authz/labels.js';
@@ -800,6 +800,56 @@ export class WebhookService {
       }
     }
     return { matched: events.length, queued, skipped };
+  }
+
+  // ---------- plugin deliveries (1.4.0, B-2003) ----------
+
+  /** The name of the webhook a plugin's deliveries to `url` go through. */
+  static pluginHookName(pluginKey: string, url: string): string {
+    return `plugin:${pluginKey}:${sha256(url).slice(0, 8)}`;
+  }
+
+  /**
+   * B-2003: the webhook a plugin's webhook action delivers through, one per plugin and endpoint, created on first use.
+   * It subscribes to nothing (only the plugin queues to it), signs with the tenant's Ed25519 key (receivers verify
+   * with the published JWKS, so no secret is handed out), and is checked against the operator's and the tenant's
+   * outbound host rules here and again at every attempt. Its deliveries, retries and breaker are the webhook path's.
+   */
+  async managed(tenantId: string, pluginKey: string, url: string, maxLabel: Label): Promise<WebhookRow> {
+    await this.checkEndpoint(tenantId, url);
+    const name = WebhookService.pluginHookName(pluginKey, url);
+    const s = this.s();
+    const existing = await s.db('webhooks').where({ tenant_id: tenantId, name }).first();
+    if (existing) {
+      const w = hookFromRow(existing);
+      if (w.max_label !== maxLabel) {
+        await s.db('webhooks').where({ id: w.id }).update({ max_label: maxLabel, updated_at: Date.now() });
+        this.forget(tenantId);
+        return { ...w, max_label: maxLabel };
+      }
+      return w;
+    }
+    const id = ulid();
+    const t = Date.now();
+    try {
+      await s.db('webhooks').insert({ id, tenant_id: tenantId, name, url, events: '[]', max_label: maxLabel, secret_sealed: await s.keys.seal(tenantId, `whsec_${randomToken(32)}`, `webhook:${id}`), state: 'active', ordered: false, signing: 'ed25519', message_signatures: false, breaker: 'closed', failures: 0, created_by: null, created_at: t, updated_at: t });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+    }
+    this.forget(tenantId);
+    return hookFromRow((await s.db('webhooks').where({ tenant_id: tenantId, name }).first()) as Record<string, unknown>);
+  }
+
+  /** B-2003: queues one delivery to a plugin's webhook (deduplicated by event id, like every delivery). */
+  async sendTo(w: WebhookRow, type: string, label: Label, eventId: string, data: Record<string, unknown>): Promise<DeliveryRow | null> {
+    return this.queue(w, type, label, eventId, data, null);
+  }
+
+  /** Removes the webhooks a plugin delivered through (when the plugin is removed). */
+  async removeManaged(tenantId: string, pluginKey: string): Promise<number> {
+    const rows = (await this.s().db('webhooks').where({ tenant_id: tenantId }).andWhere('name', 'like', `plugin:${pluginKey}:%`).select('id')) as { id: string }[];
+    for (const r of rows) await this.remove(tenantId, r.id);
+    return rows.length;
   }
 
   /** A `webhook.ping` delivery to one subscription, whatever its event list. */

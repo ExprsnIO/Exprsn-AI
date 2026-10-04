@@ -54,7 +54,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'billing.*', description: 'Statements and price books (audit actions)' },
   { pattern: 'webhook.*', description: 'Changes to webhooks themselves (audit actions)' },
   // 1.4.0 (B-2001)
-  { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants (audit actions)' },
+  { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants; since Sprint 25 also plugin.audited, plugin.action.refused, plugin.call.refused and plugin.throttled (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records: created, updated, deleted, transitioned (reserved until B-22)' },
   { pattern: 'file.*', description: 'File store: uploaded, updated, deleted, restored, shared (reserved until B-24)' },
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },
