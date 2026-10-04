@@ -476,7 +476,20 @@ const base = z.object({
     VAULT_LEASE_SWEEP_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
     /** Sprint 25 (B-1706): how often rotation schedules are checked (0 turns it off), and how early a notice comes. */
     VAULT_ROTATION_CHECK_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
-    VAULT_ROTATION_NOTICE_DAYS: z.coerce.number().int().min(0).max(90).default(7)
+    VAULT_ROTATION_NOTICE_DAYS: z.coerce.number().int().min(0).max(90).default(7),
+    /**
+     * Sprint 25 (B-1608 to B-1611): AT-Protocol trust. ATPROTO_PUBLIC_URL is the base the platform's did:web and the
+     * tenants' path-form DIDs and labeler endpoints live under (default PUBLIC_URL); ATPROTO_PLC_URL is the PLC
+     * directory did:plc operations go to and are resolved from (through the service URL checks). The public DID,
+     * queryLabels and subscribeLabels routes are capped per address by ATPROTO_PUBLIC_RATE_PER_MINUTE, with at most
+     * ATPROTO_SUBSCRIBERS_MAX open label streams per instance; trusted external labelers are read every
+     * ATPROTO_LABEL_PULL_MINUTES (0: only on demand).
+     */
+    ATPROTO_PUBLIC_URL: z.url().optional(),
+    ATPROTO_PLC_URL: z.url().default('https://plc.directory'),
+    ATPROTO_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600),
+    ATPROTO_SUBSCRIBERS_MAX: z.coerce.number().int().min(1).max(100_000).default(200),
+    ATPROTO_LABEL_PULL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(5)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

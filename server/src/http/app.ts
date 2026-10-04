@@ -46,6 +46,8 @@ import { vaultRoutes } from '../routes/vault.js';
 import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
+import { atprotoRoutes } from '../routes/atproto.js';
+import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -147,6 +149,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(pkiPublicRoutes(s));
   // Sprint 25 (B-2004): the plugin broker, for handler runs' scoped tokens only.
   app.use(pluginBrokerRoutes(s));
+  // Sprint 25 (B-1609, B-1610): DID documents, handle resolution and queryLabels (public, rate-limited).
+  app.use(atprotoPublicRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -213,6 +217,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', pluginAdminRoutes(s));
   // 1.4.0, Sprint 25c (B-1704): database leases from the built-in engines.
   api.use(vaultLeaseRoutes(s));
+  // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.
+  api.use(atprotoRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

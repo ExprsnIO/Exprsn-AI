@@ -2060,3 +2060,72 @@ owner, or to the tenant admins when the owner is no longer active. Writing a new
 the schedule again. A key with `autoRotate` is rotated by the job instead (`vault.transit.key.rotated` with
 `actor.service: vault.rotation` and `scheduled: true`) and the owner is told. Audit actions: `vault.rotation.due`,
 `vault.rotation.overdue`.
+
+## Sprint 25 (1.4.0): AT-Protocol trust (B-1608 to B-1611)
+
+Each tenant may have its own service DID (`did:web` or `did:plc`); a tenant without one labels under the platform's,
+the fallback. Keys are secp256k1 or P-256, made and used in the signer (`SIGNER_SOCKET`, both curves) or OpenBao
+transit (`KMS_PROVIDER=openbao`, P-256 only: transit has no secp256k1 key type); without either, identity routes
+answer `409` (`step: custody`). Rows hold the public key and the signer's wrapped blob or the transit key name, never
+a private key. Signatures are ECDSA over SHA-256, compact r||s, folded to low-S. Errors are problem details; `step`
+is `custody`, `identity` (no identity to sign with), `plc` (the directory refused or was unreachable, `502`),
+`resolve` (`502`) or `document` (`422`).
+
+A platform `did:web` is `did:web:<host of ATPROTO_PUBLIC_URL or PUBLIC_URL>`; a tenant's is `did:web:<its own host>`
+when it names one, else `did:web:<base host>:atproto:<tenant slug>` with the labeler endpoint
+`<base>/atproto/<slug>`. A `did:plc` is made by a genesis operation (DAG-CBOR, signed by its rotation key) submitted
+to `ATPROTO_PLC_URL`; every key rotation is a further operation chained by `prev` (CIDv1 dag-cbor sha2-256) and signed
+by the rotation key in force.
+
+### Identities and keys (`pki:manage`; the platform's identity also `platform:manage` and a recent sign-in)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto` | `pki:manage` or `labels:manage`. `{custody: signer \| openbao \| null, curves, defaultCurve, plcUrl, base, identity, fallback}`: the tenant's own identity summary, or the platform's it falls back to |
+| `GET /api/atproto/identity[?platform=true]` | `{id, platform, method, did, handle, host, endpoint, plcCid, state, keys: [{id, purpose: label \| rotation, curve, custody, didKey, state: active \| retired, createdAt, retiredAt}], document, createdAt, updatedAt}`. `document` is the DID document (`#atproto_label` Multikey, `#atproto_labeler` service). `404` without one |
+| `POST /api/atproto/identity` `{platform?, method: web \| plc, handle?, host?, curve?: secp256k1 \| p256, rotationCurve?}` | B-1609. Makes the label key (and for `plc` the rotation key) in custody, then the DID. The handle defaults to the host (platform: the base host) when it is a valid domain; `host` is for tenants with their own name (`did:web:<host>`, served for requests with that `Host`). `curve` defaults to secp256k1 with the signer, P-256 with OpenBao; secp256k1 under OpenBao is `409`. For `plc`, the directory must accept the genesis operation (`502` otherwise, nothing stored). `409` when the tenant (or platform) has one, or the handle, host or path is taken. Audited `atproto.identity.created`. `201` |
+| `POST /api/atproto/identity/rotate` `{platform?, purpose: label \| rotation, curve?}` | B-1608. A new key in custody; the old one is `retired`. A `did:web` document changes at once; a `did:plc` changes when the directory accepts the operation signed by the rotation key in force (a rotation key is replaced by an operation the old one signs). `rotation` on a `did:web` is `400`. Labels signed with a retired label key are signed again with the current one the next time they are served. Audited `atproto.key.rotated` (`plcCid`) |
+
+### Labels (`labels:manage`)
+
+A label is `{ver: 1, src, uri, cid?, val, neg, cts, exp?, sig}` signed over its DAG-CBOR without `sig` by the
+identity's `#atproto_label` key, numbered with the identity's next `seq`. Values are lower-case letters, digits and
+hyphens, optionally behind `!` (`!hide`, `!warn`). Guardrail decisions map as: `block` and `require-approval` to
+`!hide`; `warn`, `flag` and `redact` to `!warn`; and each enforced finding's rule name and detail to categories
+(`porn`, `sexual`, `nudity`, `graphic-media`, `spam`, `self-harm`, `hate`, `harassment`, `pii`, `secrets`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/labels[?uri&limit&before]` | The tenant's labels, newest first: `{labels: [{id, seq, flagId, createdAt, label}]}` (`label` in XRPC JSON form, `sig` as `{$bytes}`) |
+| `POST /api/atproto/labels` `{uri, cid?, vals?: [val] \| flag?: "F-12", exp?}` | B-1610. Either explicit values or a flag's verdict (its rule action and name; a dismissed or approved flag is `409`; a flag above the caller's clearance is `404`). The subject is an `at://` URI, a DID or an https URL. Values already in force on the subject are not repeated. Audited `atproto.label.created` (subject as `subjectHash`). `201 {labels}` (`200` with none) |
+| `POST /api/atproto/labels/negate` `{uri, val, reason?}` | A negation (`neg: true`, its own seq) of a label in force; `409` when none is. Audited `atproto.label.negated`. Dismissing or approving a flag negates the labels made from it (the hook an upheld appeal, B-1903, will call: `negateForFlag`) |
+
+### Trusted external labelers (`labels:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/labelers` | `{labelers: [{id, did, name, endpoint, didKey, workspaceId, vals, state: active \| paused, cursor, lastPullAt, lastError, received, rejected, createdAt, updatedAt}]}` |
+| `POST /api/atproto/labelers` `{did, name, workspaceId?, vals?}` | B-1611. Resolves the DID (did:plc through `ATPROTO_PLC_URL`, did:web over https) through the service URL checks (B-901: metadata addresses always refused, link-local unless allowed), and records its `#atproto_label` key and `#atproto_labeler` endpoint (`422` without them). `vals` are the label values that become flags (default `!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`, `spam`). Audited `atproto.labeler.created`. `201` |
+| `PATCH /api/atproto/labelers/:id` `{name?, workspaceId?, vals?, state?}`, `DELETE /api/atproto/labelers/:id` | Audited `atproto.labeler.updated`, `atproto.labeler.deleted`; `204` on delete |
+| `GET /api/atproto/labelers/:id/labels[?limit]` | Verified labels received: `{labels: [{id, seq, uri, cid, val, neg, cts, exp, flagId, createdAt}]}` |
+| `POST /api/atproto/labelers/:id/pull` | Queues an `atproto.labels.pull` job now. `202 {job}`. Audited `atproto.labeler.pulled` |
+
+The pull job reads the labeler's `subscribeLabels` from its stored cursor (0 at first) until the stream is quiet,
+verifies each label (`src` must be the labeler; the signature against its key, fetching the document again once when
+it fails, for a rotated key), stores verified labels once, and raises a `report` flag (checkpoint `atproto-label`,
+severity high for `!hide`, medium for `!warn`, else low) in the chosen workspace for each new one whose value is in
+`vals`. A label that fails is dropped and audited `atproto.label.rejected` (`reason: signature | source | unsigned |
+malformed`; at most 20 a pull, then one summary). Each pull with results is audited `atproto.labels.ingested`. Jobs
+run every `ATPROTO_LABEL_PULL_MINUTES` per active labeler.
+
+### Public (no session; `ATPROTO_PUBLIC_RATE_PER_MINUTE` per address, then `429`; `Access-Control-Allow-Origin: *`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/did.json` | The `did:web` document of the identity for the request's `Host` (a tenant's own host, or the platform's on the base host), `application/did+json` |
+| `GET /.well-known/atproto-did` | The DID whose handle is the request's host, `text/plain`; `404` otherwise |
+| `GET /atproto/:key/did.json` | A tenant's path-form `did:web` document |
+| `GET /xrpc/com.atproto.label.queryLabels`, `GET /atproto/:key/xrpc/com.atproto.label.queryLabels` `?uriPatterns=…&sources=…&limit=1-250 (50)&cursor` | The labels of the identity for the host (or path), in seq order: `{cursor?, labels}`. A pattern ending in `*` is a prefix; `*` alone matches everything. `sources` without this labeler's DID gives none. Errors are XRPC `{error: InvalidRequest \| NotFound, message}` |
+| `WS /xrpc/com.atproto.label.subscribeLabels[?cursor]`, `WS /atproto/:key/xrpc/com.atproto.label.subscribeLabels` | An AT-Protocol event stream over a plain WebSocket: binary frames, each a DAG-CBOR header and body. `{op: 1, t: "#labels"}` `{seq, labels: [label]}`, one label per message in seq order; `{op: -1}` `{error: FutureCursor \| ConsumerTooSlow \| InvalidRequest \| InternalError, message}` then close. With a cursor, every label after it and then live; without, live only. New labels reach subscribers on every instance over the bus. At most `ATPROTO_SUBSCRIBERS_MAX` streams per instance (`503`), `429` past the rate limit |
+
+Audit actions are in the event catalogue's `atproto.*` group.

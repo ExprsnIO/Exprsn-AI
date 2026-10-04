@@ -27,6 +27,7 @@ import * as m025 from './025_integrations3.js';
 import * as m026 from './026_pki_secrets.js';
 import * as m026b from './026b_secrets.js';
 import * as m026c from './026c_core.js';
+import * as m027b from './027b_atproto.js';
 import * as m027c from './027c_leases.js';
 import * as m027d from './027d_plugins.js';
 
@@ -65,6 +66,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '026_pki_secrets': m026,
   '026b_secrets': m026b,
   '026c_core': m026c,
+  '027b_atproto': m027b,
   '027c_leases': m027c,
   '027d_plugins': m027d
 };

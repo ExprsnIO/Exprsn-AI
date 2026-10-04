@@ -8,6 +8,9 @@
  * The first request on a connection must be `hello` with the shared token; anything else, or a wrong token, closes
  * the connection. Frames are capped at 1 MiB, and data to sign at 512 KiB (64 KiB before Sprint 24; a CRL's
  * to-be-signed list can be larger).
+ *
+ * Sprint 25 (B-1608) adds the key type `ecdsa-secp256k1` to `keygen` and `sign` (signatures as raw r||s, like P-256).
+ * The change is additive and the protocol version stays 1: a signer from before it answers "Unknown key type".
  */
 
 export const PROTOCOL_VERSION = 1;

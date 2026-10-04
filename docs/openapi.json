@@ -460,6 +460,485 @@
             ]
           }
         }
+      },
+      "AtKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "purpose",
+          "curve",
+          "custody",
+          "didKey",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "label",
+              "rotation"
+            ]
+          },
+          "curve": {
+            "type": "string",
+            "enum": [
+              "secp256k1",
+              "p256"
+            ]
+          },
+          "custody": {
+            "enum": [
+              "signer",
+              "openbao"
+            ]
+          },
+          "didKey": {
+            "type": "string",
+            "pattern": "^did:key:z"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "retired"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retiredAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "DidDocument": {
+        "type": "object",
+        "required": [
+          "@context",
+          "id",
+          "verificationMethod",
+          "service"
+        ],
+        "properties": {
+          "@context": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "alsoKnownAs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verificationMethod": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "controller": {
+                  "type": "string"
+                },
+                "publicKeyMultibase": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "service": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "serviceEndpoint": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AtIdentity": {
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "method",
+          "did",
+          "endpoint",
+          "keys"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "boolean"
+          },
+          "method": {
+            "enum": [
+              "web",
+              "plc"
+            ]
+          },
+          "did": {
+            "type": "string"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "plcCid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "deactivated"
+            ]
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AtKey"
+            }
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DidDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AtLabel": {
+        "type": "object",
+        "description": "An AT-Protocol label in XRPC JSON form",
+        "required": [
+          "ver",
+          "src",
+          "uri",
+          "val",
+          "neg",
+          "cts"
+        ],
+        "properties": {
+          "ver": {
+            "const": 1
+          },
+          "src": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "cid": {
+            "type": "string"
+          },
+          "val": {
+            "type": "string",
+            "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+          },
+          "neg": {
+            "type": "boolean"
+          },
+          "cts": {
+            "type": "string"
+          },
+          "exp": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "object",
+            "required": [
+              "$bytes"
+            ],
+            "properties": {
+              "$bytes": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "AtLabelRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "seq",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "label": {
+            "$ref": "#/components/schemas/AtLabel"
+          }
+        }
+      },
+      "AtLabeler": {
+        "type": "object",
+        "required": [
+          "id",
+          "did",
+          "name",
+          "vals",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "didKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vals": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+            }
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ]
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastPullAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "received": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AtInboundLabel": {
+        "type": "object",
+        "required": [
+          "id",
+          "uri",
+          "val",
+          "neg",
+          "cts"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "type": "string"
+          },
+          "cid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "val": {
+            "type": "string",
+            "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+          },
+          "neg": {
+            "type": "boolean"
+          },
+          "cts": {
+            "type": "string"
+          },
+          "exp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       }
     },
     "responses": {
@@ -493,6 +972,54 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/atproto-did": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "The DID whose handle is the request's host (AT-Protocol handle resolution). 404 otherwise",
+        "responses": {
+          "200": {
+            "description": "The DID",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/did.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "The did:web DID document of the identity for the request's Host: a tenant's own host, or the platform's on the base host (ATPROTO_PUBLIC_URL or PUBLIC_URL). Public, rate-limited",
+        "responses": {
+          "200": {
+            "description": "DID document",
+            "content": {
+              "application/did+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DidDocument"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -7015,6 +7542,813 @@
         }
       }
     },
+    "/api/atproto": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage or labels:manage. Key custody, the curves it holds, the PLC directory, and the tenant's identity or the platform identity it falls back to",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "custody",
+                    "curves"
+                  ],
+                  "properties": {
+                    "custody": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "signer",
+                            "openbao"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "curves": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "secp256k1",
+                          "p256"
+                        ]
+                      }
+                    },
+                    "defaultCurve": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "secp256k1",
+                            "p256"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "plcUrl": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "identity": {
+                      "anyOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "fallback": {
+                      "anyOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/identity": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage. The tenant's identity (the platform's with ?platform=true and platform:manage), its keys and DID document",
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtIdentity"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage (platform: platform:manage and a recent sign-in). Makes a did:web or did:plc with its label key (and rotation key) in the signer or OpenBao; a did:plc genesis operation must be accepted by the PLC directory. Audited atproto.identity.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "boolean"
+                  },
+                  "method": {
+                    "enum": [
+                      "web",
+                      "plc"
+                    ]
+                  },
+                  "handle": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 253
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "host": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 259
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "curve": {
+                    "type": "string",
+                    "enum": [
+                      "secp256k1",
+                      "p256"
+                    ]
+                  },
+                  "rotationCurve": {
+                    "type": "string",
+                    "enum": [
+                      "secp256k1",
+                      "p256"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtIdentity"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/identity/rotate": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "pki:manage. Rotates the label or (did:plc) rotation key; did:web documents change at once, did:plc through an operation signed by the rotation key in force. Audited atproto.key.rotated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "purpose"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "boolean"
+                  },
+                  "purpose": {
+                    "enum": [
+                      "label",
+                      "rotation"
+                    ]
+                  },
+                  "curve": {
+                    "type": "string",
+                    "enum": [
+                      "secp256k1",
+                      "p256"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "identity",
+                    "key",
+                    "retired"
+                  ],
+                  "properties": {
+                    "identity": {
+                      "$ref": "#/components/schemas/AtIdentity"
+                    },
+                    "key": {
+                      "$ref": "#/components/schemas/AtKey"
+                    },
+                    "retired": {
+                      "$ref": "#/components/schemas/AtKey"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. The tenant's trusted external labelers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labelers"
+                  ],
+                  "properties": {
+                    "labelers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabeler"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Trusts a labeler: resolves its DID through the service URL checks and records its #atproto_label key and endpoint. Audited atproto.labeler.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "did",
+                  "name"
+                ],
+                "properties": {
+                  "did": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtLabeler"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Stops trusting a labeler. Audited atproto.labeler.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Renames, moves, pauses or changes the values that become flags. Audited atproto.labeler.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                    }
+                  },
+                  "state": {
+                    "enum": [
+                      "active",
+                      "paused"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtLabeler"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers/{id}/labels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Verified labels received from the labeler, newest first",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtInboundLabel"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labelers/{id}/pull": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Queues an atproto.labels.pull job: reads the labeler's subscribeLabels from its cursor, verifies each label (bad ones dropped and audited) and raises flags. Audited atproto.labeler.pulled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "job"
+                  ],
+                  "properties": {
+                    "job": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. The tenant's signed labels, newest first",
+        "parameters": [
+          {
+            "name": "uri",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabelRow"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Signs labels on a subject from explicit values or a flag's verdict (!hide, !warn, categories), each with the identity's next seq. Audited atproto.label.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uri"
+                ],
+                "properties": {
+                  "uri": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 2048
+                  },
+                  "cid": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "vals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "flag": {
+                    "type": "string",
+                    "pattern": "^F-\\d+$"
+                  },
+                  "exp": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Labels made (200 when every value was already in force)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabelRow"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/labels/negate": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "labels:manage. Negates a label in force with a new signed label (neg: true). Audited atproto.label.negated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uri",
+                  "val"
+                ],
+                "properties": {
+                  "uri": {
+                    "type": "string"
+                  },
+                  "val": {
+                    "type": "string",
+                    "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Negated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtLabelRow"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/attachments": {
       "put": {
         "tags": [
@@ -12336,6 +13670,134 @@
         }
       }
     },
+    "/atproto/{key}/did.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "A tenant's path-form did:web document (did:web:<base host>:atproto:<key>)",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DID document",
+            "content": {
+              "application/did+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DidDocument"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/atproto/{key}/xrpc/com.atproto.label.queryLabels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "com.atproto.label.queryLabels for a tenant's path-form labeler",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,63}$"
+            }
+          },
+          {
+            "name": "uriPatterns",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 250,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Labels in seq order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabel"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/auth/negotiate": {
       "get": {
         "tags": [
@@ -13788,6 +15250,90 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/xrpc/com.atproto.label.queryLabels": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (…*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
+        "parameters": [
+          {
+            "name": "uriPatterns",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 250,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Labels in seq order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "labels"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtLabel"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }

@@ -45,7 +45,8 @@ describe('OpenAPI document (B-2104)', () => {
       expect(op.summary && op.summary !== 'See docs/api.md', key).toBeTruthy();
       const ok = Object.entries(op.responses ?? {}).filter(([code]) => /^2/.test(code));
       expect(ok.length, key).toBeGreaterThan(0);
-      if (ok.every(([code]) => code !== '204')) expect(ok.some(([, r]) => r.content?.['application/json']?.schema), key).toBe(true);
+      // A JSON body as a rule; public protocol routes may answer another media type (application/did+json, text/plain).
+      if (ok.every(([code]) => code !== '204')) expect(ok.some(([, r]) => Object.values(r.content ?? {}).some((c) => c.schema)), key).toBe(true);
       if (/^(post|put) /.test(key) && !/\/(enable|disable)$/.test(key)) expect(op.requestBody, key).toBeTruthy();
     }
     const refs = [...JSON.stringify(doc).matchAll(/"\$ref":"#\/components\/(schemas|responses)\/([^"]+)"/g)];

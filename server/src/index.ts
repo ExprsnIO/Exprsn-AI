@@ -4,6 +4,7 @@ import { createDb, migrate, pendingMigrations } from './db/knex.js';
 import { createApp, type AppState } from './http/app.js';
 import { createLogger } from './observability/index.js';
 import { attachRealtime } from './realtime/socket.js';
+import { attachLabelStream } from './atproto/stream.js';
 import { createServices, startSchedules } from './services.js';
 import { bootstrap } from './bootstrap.js';
 import { schemaStatus } from './db/schema.js';
@@ -35,6 +36,8 @@ async function main(): Promise<void> {
   server.requestTimeout = 120_000;
   server.keepAliveTimeout = 61_000;
   const realtime = attachRealtime(server, services);
+  // Sprint 25 (B-1610): com.atproto.label.subscribeLabels, a plain WebSocket next to Socket.io.
+  const labelStream = attachLabelStream(server, services);
   if (cfg.WORKERS_ENABLED) {
     services.jobs.start();
     startSchedules(services);
@@ -64,6 +67,7 @@ async function main(): Promise<void> {
     clearInterval(housekeeping);
     stopWatch();
     server.closeIdleConnections();
+    await labelStream.close();
     await realtime.close(); // also stops the HTTP server accepting new connections
     await services.close();
     await db.destroy();
