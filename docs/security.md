@@ -269,7 +269,7 @@ filter, private `/tmp`, only the state directory writable.
   the caller's credentials: access rests on the socket directory and socket permissions (0700/0600, or 0750/0660 for
   a shared group) and a shared token every connection must present first; run the signer as its own user so the
   app's user cannot read the signer's key file. Anyone who can reach the socket with the token can have the signer
-  sign or decrypt (it never exports a key). The signer signs the bytes it is sent (at most 64 KiB), not a digest,
+  sign or decrypt (it never exports a key). The signer signs the bytes it is sent (at most 512 KiB since 1.4.0, for CRLs; 64 KiB before), not a digest,
   because node:crypto cannot sign a precomputed digest with ECDSA or Ed25519. Without the signer, the local KMS keeps
   the federation and webhook keys sealed with the data keys and unsealed in memory while in use. With OpenBao, OIDC,
   SAML and webhook signatures are made in transit; the SAML SP decryption key is then still sealed locally (transit's
@@ -277,6 +277,19 @@ filter, private `/tmp`, only the state directory writable.
   keys at once (the old public keys stay published for the overlap): SAML service providers must re-import the IdP
   metadata, and upstream IdPs the SP encryption certificate (the replaced decryption key is still tried while it is
   published).
+- Certificate authority (Sprint 24): issuer and OCSP responder keys are made and used only in the signer or OpenBao
+  transit; with neither the CA refuses to make keys. Creating, rotating or re-issuing the root needs `platform:manage`
+  and a recent sign-in, not a second admin (no dual control yet). Tenant intermediates carry no name constraints: a
+  tenant admin with `pki:manage` sets their own profiles, so the CA checks names against policy but not domain
+  control (there is no ACME-style validation before B-1605), and anyone who trusts the platform root trusts every
+  tenant's issuance; trust a tenant's intermediate rather than the root where that matters. CRLs are full CRLs only
+  (no delta, indirect or partitioned CRLs; no `certificateHold`), and a CRL's to-be-signed list is capped by the
+  signer at 512 KiB (roughly 10,000 entries; expired certificates drop off). OCSP request signatures are ignored
+  (no requestor is trusted), responder certificates carry `ocsp-nocheck` and are short-lived (`PKI_OCSP_SIGNER_DAYS`)
+  instead of being checked, and answers are cached per instance: a revocation clears them on every instance through
+  the bus, which needs `REDIS_URL` across instances. Issued certificates have a CN-only subject; other CSR attributes
+  and extensions besides subjectAltName are ignored. Export formats, renewal and expiry notices (B-1606) and the CLI
+  (B-1607) are not built yet.
 - HTTP Message Signatures (RFC 9421, Sprint 20): a subset (`@method`, `@target-uri`, `@authority`, `@path`,
   `@query`, header fields; no component parameters; `ed25519` and `hmac-sha256`). A signed `/v1` request is accepted
   within `HTTP_SIGNATURE_MAX_AGE_SECONDS` of its `created` time and nonces are not remembered, so a captured request

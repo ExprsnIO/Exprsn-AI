@@ -24,6 +24,7 @@ import * as m022 from './022_keys.js';
 import * as m023 from './023_ai.js';
 import * as m024 from './024_ops2.js';
 import * as m025 from './025_integrations3.js';
+import * as m026 from './026_pki_secrets.js';
 import * as m026b from './026b_secrets.js';
 
 interface Migration {
@@ -58,6 +59,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '023_ai': m023,
   '024_ops2': m024,
   '025_integrations3': m025,
+  '026_pki_secrets': m026,
   '026b_secrets': m026b
 };
 

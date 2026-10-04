@@ -6,12 +6,13 @@
  *   response  { id, ok: true, result } | { id, ok: false, error }
  *
  * The first request on a connection must be `hello` with the shared token; anything else, or a wrong token, closes
- * the connection. Frames are capped at 1 MiB, and data to sign at 64 KiB.
+ * the connection. Frames are capped at 1 MiB, and data to sign at 512 KiB (64 KiB before Sprint 24; a CRL's
+ * to-be-signed list can be larger).
  */
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME = 1024 * 1024;
-export const MAX_SIGN_BYTES = 64 * 1024;
+export const MAX_SIGN_BYTES = 512 * 1024;
 
 export type SignerOp = 'hello' | 'health' | 'wrap' | 'unwrap' | 'hmac' | 'keygen' | 'sign' | 'decrypt';
 

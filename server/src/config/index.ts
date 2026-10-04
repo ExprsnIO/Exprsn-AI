@@ -424,7 +424,22 @@ const base = z.object({
     /** Sprint 21 (B-1306): how often due agent schedules are looked for (a schedule fires at most this late). */
     AGENT_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
     /** Sprint 24 (B-1701): versions a new vault KV secret keeps (each secret's metadata can change it, 1 to 100). */
-    VAULT_KV_MAX_VERSIONS: z.coerce.number().int().min(1).max(100).default(10)
+    VAULT_KV_MAX_VERSIONS: z.coerce.number().int().min(1).max(100).default(10),
+
+    /**
+     * Sprint 24 (B-1601 to B-1604): the certificate authority. PKI_PUBLIC_URL is the base its certificates name for
+     * CRLs (`/pki/crl/<issuer>.crl`), OCSP (`/pki/ocsp`) and issuer certificates (default PUBLIC_URL). CRLs are signed
+     * every PKI_CRL_MINUTES (and at once after a revocation) and are valid for PKI_CRL_VALIDITY_HOURS; OCSP answers are
+     * valid for PKI_OCSP_VALIDITY_MINUTES and cached for PKI_OCSP_CACHE_SECONDS; delegated OCSP responder certificates
+     * last PKI_OCSP_SIGNER_DAYS. PKI_PUBLIC_RATE_PER_MINUTE caps the public CRL, OCSP and CA routes per address.
+     */
+    PKI_PUBLIC_URL: z.url().optional(),
+    PKI_CRL_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    PKI_CRL_VALIDITY_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(24),
+    PKI_OCSP_VALIDITY_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(60),
+    PKI_OCSP_CACHE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
+    PKI_OCSP_SIGNER_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
@@ -498,6 +513,10 @@ const schema = base
     // Sprint 18 (B-902): plaintext links to the backing services are refused in production when asked to.
     if (c.NODE_ENV === 'production' && c.REQUIRE_BACKEND_TLS) {
       for (const p of backendTlsProblems(c)) ctx.addIssue({ code: 'custom', path: [p.path], message: p.message });
+    }
+    // Sprint 24: a CRL must still be valid when the next scheduled one is signed.
+    if (c.PKI_CRL_MINUTES > 0 && c.PKI_CRL_MINUTES >= c.PKI_CRL_VALIDITY_HOURS * 60) {
+      ctx.addIssue({ code: 'custom', path: ['PKI_CRL_VALIDITY_HOURS'], message: 'PKI_CRL_VALIDITY_HOURS must be longer than PKI_CRL_MINUTES' });
     }
     if (c.NODE_ENV === 'production' && !c.COOKIE_SECURE) {
       ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'Production requires HTTPS (PUBLIC_URL https://) or COOKIE_SECURE=true behind a TLS proxy' });

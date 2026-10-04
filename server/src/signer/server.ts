@@ -10,7 +10,7 @@ import { encodeFrame, FrameReader, MAX_SIGN_BYTES, PROTOCOL_VERSION, type Signer
 /*
  * The signer process (B-1201, B-1205): `exprsn-ai signer`. It holds the local key-encryption key (what DATA_KEY was)
  * and every private key the app asks it to create — OIDC (ES256), SAML (RS256), the SAML SP decryption key
- * (RSA-OAEP) and webhook Ed25519 keys — and answers on a UNIX socket. The app never sees any of them: it stores the
+ * (RSA-OAEP), webhook Ed25519 keys and, since Sprint 24, the CA's issuer and OCSP responder keys (P-256, RSA 3072) — and answers on a UNIX socket. The app never sees any of them: it stores the
  * opaque wrapped blob a key comes back as (sealed under a key derived from the KEK, bound to the key's name and
  * type) and hands it back with every request, so any signer holding the same key file can serve any app instance.
  *
@@ -25,7 +25,7 @@ import { encodeFrame, FrameReader, MAX_SIGN_BYTES, PROTOCOL_VERSION, type Signer
  */
 
 const NAME_RE = /^[A-Za-z0-9:._-]{1,200}$/;
-const HELD_TYPES: readonly HeldKeyType[] = ['ecdsa-p256', 'rsa-2048', 'ed25519', 'rsa-oaep-2048'];
+const HELD_TYPES: readonly HeldKeyType[] = ['ecdsa-p256', 'rsa-2048', 'ed25519', 'rsa-oaep-2048', 'rsa-3072'];
 
 export interface SignerOptions {
   socketPath: string;
@@ -144,7 +144,7 @@ export class SignerCore {
       case 'keygen': {
         const name = this.name(req.name);
         const type = this.type(req.type);
-        const pair = type === 'ecdsa-p256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : type === 'ed25519' ? generateKeyPairSync('ed25519') : generateKeyPairSync('rsa', { modulusLength: 2048 });
+        const pair = type === 'ecdsa-p256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : type === 'ed25519' ? generateKeyPairSync('ed25519') : generateKeyPairSync('rsa', { modulusLength: type === 'rsa-3072' ? 3072 : 2048 });
         const der = pair.privateKey.export({ type: 'pkcs8', format: 'der' });
         const wrapped = this.held.seal(der.toString('base64'), `held:${type}:${name}`);
         let certificate: string | null = null;
