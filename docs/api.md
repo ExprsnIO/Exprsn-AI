@@ -1721,3 +1721,60 @@ No route changes.
 Audit actions: `billing.statement.refunded`, `billing.statement.credited`, `billing.statement.credit-voided`,
 `billing.statement.disputed`, `billing.statement.dispute-updated`, `billing.statement.dispute-closed` (actor
 `service: stripe`, detail with the amounts in micro-units and the statement's state).
+
+## Sprint 24c (1.4.0): platform core
+
+The complete route list, with request and response schemas for the routes below, is [openapi.json](openapi.json)
+(OpenAPI 3.1). `server/test/openapi.test.ts` fails when a registered route is missing from it or an operation in it is
+no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes with their summary from this
+file.
+
+### Event catalogue (`webhooks:manage` or `plugins:manage`)
+
+| Route | Notes |
+| --- | --- |
+| `GET /events/catalogue` | B-2001. `{version, envelope, groups: [{pattern, description}], types: [{type, group, version, since, status: emitted \| reserved, description, schema}], auditActions: {version, since, description, schema}}`. The envelope is the body of every delivery `{id, type, tenant, label, createdAt, data}`; `schema` is the JSON Schema of `data`. Named types: `job.*`, `flag.*`, `approval.requested`, and, reserved until their domains ship, `record.*`, `file.*`, `group.*`, `message.*` and `post.*`. Every other type is an audit action whose data is the audit entry; a change audited under a named type's name (`flag.confirmed`) is delivered with both shapes, told apart by `data.hash`. `version` moves when a type is added or changes; a type's own `version` only when its data changes incompatibly. `ETag`, `304` on `If-None-Match` |
+
+Every event the webhook fan-out sees is checked against the catalogue; a mismatch is still delivered, counted in
+`exprsn_event_schema_violations_total{type}` and logged. `GET /admin/webhooks` lists the catalogue's groups as
+`events` (now also `plugin.*`, `record.*`, `file.*`, `group.*`, `message.*`, `post.*`).
+
+### Plugins (`plugins:manage`)
+
+A plugin is data: a manifest and the capabilities granted to it, per tenant. Nothing in a manifest is loaded or run
+by the server (declarative actions and script handlers come later). Tenant admins hold `plugins:manage`.
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/plugins/capabilities` | The closed vocabulary `{capabilities: [{name, description, risk: low \| high, events?}], actions: {log: "emit:log", …}}`: `read:events`, `read:records`, `read:files`, `read:groups`, `read:messages`, `read:posts`, `emit:log`, `emit:audit`, `emit:notification`, `emit:flag` (low), `call:webhook`, `call:workflow`, `write:records`, `write:posts` (high) |
+| `POST /admin/plugins/validate` `{manifest}` | `200 {valid: true, manifest}` or `422` with `errors` (every problem). A manifest is `{key, name, version (semver), kind: declarative \| webhook \| script, description?, publisher?, homepage?, events?, capabilities?, optionalCapabilities?, config?: {schema}, actions?: [{type, on?, with?}], webhook?: {url}, script?: {entry, source}}`; unknown fields are refused. Each capability must be in the vocabulary, each event a catalogue group or type covered by a read capability (`record.*` needs `read:records`), each action's capability declared, `config.schema` a JSON Schema |
+| `GET /admin/plugins?removed=true` | `{plugins: [{id, key, name, version, kind, description, publisher, state: installed \| enabled \| disabled \| removed, events, capabilities, optionalCapabilities, granted, missing, maxLabel, configured, manifestHash, installedBy, stateChangedAt, createdAt, updatedAt}]}`; plugins above the caller's clearance are left out. `missing` lists required capabilities not granted |
+| `POST /admin/plugins` `{manifest, grants?, maxLabel?: internal, config?, reason?}` | Installs, or reinstalls a removed plugin (same id, new manifest). `grants` default to the low-risk capabilities the manifest asks for; high-risk ones only when named; anything not in the manifest is `400`. `config` is checked against `config.schema` (`422`) and sealed with the tenant key. `409` when installed and not removed; `403` when `maxLabel` is above the caller's clearance. Audited `plugin.installed` or `plugin.reinstalled` |
+| `GET /admin/plugins/:id` | `:id` is the id or the key. The plugin, its `manifest` (a script's source as `{entry, bytes}`) and `transitions` |
+| `POST /admin/plugins/:id/enable` `{reason?}` | installed or disabled to enabled. `409` with `missing` when a required capability is not granted, for a script plugin (stored, not run, in this release) and from any other state. Audited `plugin.enabled` |
+| `POST /admin/plugins/:id/disable` `{reason?}` | installed or enabled to disabled. Audited `plugin.disabled` |
+| `DELETE /admin/plugins/:id?reason=` | installed, enabled or disabled to removed (`204`). Audited `plugin.removed` |
+| `PUT /admin/plugins/:id/grants` `{grants, reason?}` | Replaces the grants; an enabled plugin that loses a required one is disabled. Audited `plugin.grants.updated` (`before`, `after`, `added`, `removed`, `highRisk`) |
+| `GET /admin/plugins/:id/transitions` | `{transitions: [{event: install \| enable \| disable \| remove \| grants, from, to, version, actor, reason, at}]}`, oldest first |
+
+Two transitions racing from one state never both apply (the second is `409`). Each change publishes `plugin.changed`
+on the bus and clears the tenant's cached list of enabled plugins on every instance.
+
+### Realtime rooms (sockets)
+
+B-2101, the generic mechanism for the domains to come (messaging conversations, groups, feeds, channels). A client
+asks `room.join {kind: conversation | group | feed | channel, id}` (acknowledged `{ok, label}` or `{ok: false,
+error}`) and `room.leave {kind, id}`; the domain's authoriser decides from the session, and a kind no domain has
+registered admits nobody. A socket holds at most 50 rooms. Domain events arrive named `<kind>.<event>` with `{kind, id,
+…}`. When access ends (a member removed, a label raised, the workspace that admitted the user left) the socket leaves
+the room before any further event is relayed and receives `room.closed {kind, id}`, unless a fresh check lets it back
+in. No domain registers rooms yet.
+
+### CLI
+
+`exprsn-ai plugins list | show | capabilities | validate | install | enable | disable | remove | grants` (as the
+routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 for a refused transition) and
+`exprsn-ai events replay --webhook <id> [--source deliveries | audit] [--since] [--until] [--type]… [--state]
+[--limit] [--dry-run]`: `deliveries` sends past deliveries again, each its exact body as a new delivery; `audit`
+backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
+Audited `webhook.replayed`.
