@@ -42,6 +42,7 @@ import { sharingRoutes } from '../routes/sharing.js';
 import { promptRoutes } from '../routes/prompts.js';
 import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
+import { vaultRoutes } from '../routes/vault.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -193,6 +194,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', billingAdminRoutes(s));
   // Sprint 22 (B-1405): zone NetworkPolicies applied in-cluster.
   api.use('/admin', zoneClusterRoutes(s));
+  // Sprint 24 (B-1701 to B-1703): the secrets vault.
+  api.use(vaultRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

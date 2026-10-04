@@ -80,6 +80,7 @@ import { instrumentKnex, parseOtlpHeaders, SpanKind, Tracer, tracesUrl, withSpan
 import { registerOpsMetrics } from './observability/ops-metrics.js';
 import { SchemaGuard } from './db/schema.js';
 import { ZoneCluster } from './zones/cluster.js';
+import { VaultService } from './vault/service.js';
 
 export interface Services {
   cfg: Config;
@@ -173,6 +174,8 @@ export interface Services {
   schema: SchemaGuard;
   /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
   zoneCluster: ZoneCluster;
+  /** Sprint 24 (B-1701 to B-1703): the tenant secrets vault (KV secrets, transit keys, path policies). */
+  vault: VaultService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -379,6 +382,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
     zoneCluster: new ZoneCluster(() => s),
+    vault: new VaultService(() => s, { maxVersions: cfg.VAULT_KV_MAX_VERSIONS }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();

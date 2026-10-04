@@ -1721,3 +1721,80 @@ No route changes.
 Audit actions: `billing.statement.refunded`, `billing.statement.credited`, `billing.statement.credit-voided`,
 `billing.statement.disputed`, `billing.statement.dispute-updated`, `billing.statement.dispute-closed` (actor
 `service: stripe`, detail with the amounts in micro-units and the statement's state).
+
+## Sprint 24: Secrets vault (B-1701 to B-1703)
+
+All routes are under `/api` and answer `Cache-Control: no-store`. Each needs a vault permission and then the **path
+policy** for the capability it uses. Permissions: `secrets:read` (read and list secrets, use transit keys, explain
+your own access), `secrets:write` (write, soft-delete and undelete, edit metadata), `secrets:admin` (destroy, remove
+a path, manage transit keys, edit policies). Built-in roles: `tenant-admin` has all three, `connection-admin` read and
+write, `member` read (a member reaches nothing until a policy grants it). Policy paths are `kv/<path>` for secrets and
+`transit/<name>` for transit keys; a denial is `403` with `step: vault-policy`, `path`, `capability` and the deciding
+`grant {id, effect, path, subjectKind, subject}` (null when nothing matched), and is written to the audit chain as
+`vault.denied` (capped per principal like other denials). Secrets and keys carry a label; above the caller's clearance
+they answer `404`. Paths are 1 to 16 segments of lower-case letters, digits, `.`, `-` and `_`.
+
+### KV secrets (B-1701)
+
+| Route | Capability | Notes |
+| --- | --- | --- |
+| `GET /vault/kv?prefix=` | `list` | Secrets under the prefix the caller may list: `{secrets: [{path, label, currentVersion, updatedAt}]}` |
+| `PUT /vault/kv/data/*path` `{data: {key: value}, cas?, label?}` | `write` | Writes a new version (`201` for version 1, else `200`): `{path, version, label, createdAt}`. `data` has 1 to 200 string values, 64 KiB in all, sealed with the tenant data key (associated data: the version row id). `cas`: the write happens only if the current version is `cas` (`0`: only when the path is new), else `409` with `currentVersion`; required when the path's `casRequired` is set. `label` (default `internal`, at most the caller's clearance) applies when the path is created. Versions beyond `maxVersions` are removed, oldest first |
+| `GET /vault/kv/data/*path?version=` | `read` | Reveals a version (default current): `{path, version, label, data, createdAt, createdBy}`. `410` with `state: deleted` or `destroyed`; `404` for a version removed by `maxVersions`. Audited as `vault.secret.read` (path, version and the number of keys; never values) |
+| `GET /vault/kv/metadata/*path` | `list` | `{path, label, currentVersion, oldestVersion, maxVersions, casRequired, customMetadata, createdBy, createdAt, updatedAt, versions: [{version, state: active\|deleted\|destroyed, createdBy, createdAt, deletedAt, destroyedAt}]}` |
+| `PATCH /vault/kv/metadata/*path` `{maxVersions?: 1-100, casRequired?, customMetadata?, label?}` | `write` | Lowering `maxVersions` removes older versions at once |
+| `POST /vault/kv/delete/*path` `{versions?}` | `delete` | Soft delete (default: the current version); readable again after undelete |
+| `POST /vault/kv/undelete/*path` `{versions}` | `delete` | `410` for a destroyed version |
+| `POST /vault/kv/destroy/*path` `{versions}` (`secrets:admin`) | `destroy` | Removes the sealed values for good; the version numbers stay in the metadata |
+| `DELETE /vault/kv/metadata/*path` (`secrets:admin`) | `destroy` | Removes the path, its metadata and every version (`204`) |
+
+Soft delete and undelete need `secrets:write` and the `delete` capability. New secrets keep
+`VAULT_KV_MAX_VERSIONS` versions (default 10). Audit actions: `vault.secret.written`, `vault.secret.read`,
+`vault.secret.metadata.updated`, `vault.secret.deleted`, `vault.secret.undeleted`, `vault.secret.destroyed`,
+`vault.secret.removed`.
+
+### Transit (B-1702)
+
+Named, versioned keys per tenant: `aes256-gcm96` (encrypt, decrypt, rewrap) and `ed25519` or `ecdsa-p256` (sign,
+verify). Key material is generated in the server, sealed with the tenant data key and never exported. Ciphertext and
+signatures are `exai:v<version>:<base64>`. Encryption binds the tenant, the key, the version and the optional
+`context` (base64), which must be given again to decrypt. Plaintext, input and context are base64.
+
+| Route | Capability | Notes |
+| --- | --- | --- |
+| `GET /vault/transit/keys` | `list` | `{keys: [{name, type, label, latestVersion, minDecryptVersion}]}` |
+| `POST /vault/transit/keys` `{name, type?, label?}` (`secrets:admin`) | `manage` | `201` with the key view; `409` if the name exists. Names: 1 to 64 lower-case letters, digits, `.`, `-`, `_` |
+| `GET /vault/transit/keys/:name` | `list` | `{name, type, label, latestVersion, minDecryptVersion, minAvailableVersion, deletionAllowed, supports, versions: [{version, createdAt, publicKey?}]}` (SPKI PEM for signing keys) |
+| `POST /vault/transit/keys/:name/rotate` (`secrets:admin`) | `manage` | New latest version; older versions still decrypt and verify down to `minDecryptVersion` |
+| `PATCH /vault/transit/keys/:name` `{minDecryptVersion?, deletionAllowed?}` (`secrets:admin`) | `manage` | `minDecryptVersion` between `minAvailableVersion` and `latestVersion`: ciphertext and signatures from older versions are refused (`400`, title `Version below minimum`) |
+| `POST /vault/transit/keys/:name/trim` `{minAvailableVersion}` (`secrets:admin`) | `manage` | Deletes the material of versions below it; it may not pass `minDecryptVersion` (`400`) |
+| `DELETE /vault/transit/keys/:name` (`secrets:admin`) | `manage` | Only with `deletionAllowed` (`409` otherwise); everything encrypted with the key becomes unreadable |
+| `POST /vault/transit/encrypt/:name` `{plaintext, context?}` or `{batch: [{plaintext, context?}]}` | `encrypt` | `{ciphertext}` or `{batch: [{ciphertext}]}`, with the latest version. Up to 100 items |
+| `POST /vault/transit/decrypt/:name` `{ciphertext, context?}` or `{batch}` | `decrypt` | `{plaintext}`; in a batch each item is `{plaintext}` or `{error, status}`. Audited as `vault.transit.decrypted` (counts only) |
+| `POST /vault/transit/rewrap/:name` `{ciphertext, context?}` or `{batch}` | `rewrap` | Decrypts and re-encrypts with the latest version inside the server: `{ciphertext}`; the plaintext is never returned. Audited as `vault.transit.rewrapped` |
+| `POST /vault/transit/sign/:name` `{input}` | `sign` | `{signature, version}` (Ed25519; ECDSA P-256 over SHA-256, DER). Audited as `vault.transit.signed` |
+| `POST /vault/transit/verify/:name` `{input, signature}` | `verify` | `{valid, version}`; a signature below `minDecryptVersion` is refused (`400`) |
+
+Audit actions: `vault.transit.key.created`, `.rotated`, `.configured`, `.trimmed`, `.deleted`,
+`vault.transit.decrypted`, `vault.transit.rewrapped`, `vault.transit.signed`. Encrypt and verify reveal nothing and are
+not audited.
+
+### Policies (B-1703)
+
+A grant allows or denies capabilities (`list`, `read`, `write`, `delete`, `destroy`, `encrypt`, `decrypt`, `rewrap`,
+`sign`, `verify`, `manage`, or `*`) on a path prefix (`*`, `kv`, `transit`, or a path under them) to a subject: a
+`user` (id), a directory `group` (name, matched case-insensitively against the groups the user's stores report), a
+`workspace` (its members) or an `api_key` (id). An API key acts as its owner plus itself, so a grant to the key adds
+to the owner's access and a deny on the key narrows it. Prefixes match whole segments (`kv/apps` covers `kv/apps/db`,
+not `kv/apps2`). Any matching deny refuses, however specific the allows; otherwise the longest matching allow
+decides; nothing matching is a default deny.
+
+| Route | Notes |
+| --- | --- |
+| `GET /vault/policies` (`secrets:admin`) | `{policies: [{id, subjectKind, subject, path, capabilities, effect, description, createdBy, createdAt, updatedAt}]}` |
+| `POST /vault/policies` `{subjectKind, subject, path, capabilities, effect?: allow\|deny, description?}` (`secrets:admin`) | `201`. The user, workspace or API key must exist in the tenant (`400`) |
+| `PATCH /vault/policies/:id` `{path?, capabilities?, effect?, description?}` (`secrets:admin`) | The subject cannot change |
+| `DELETE /vault/policies/:id` (`secrets:admin`) | `204` |
+| `POST /vault/policies/explain` `{path, capability, userId?, apiKeyId?}` (`secrets:read`; another user or key needs `secrets:admin`) | `{subjects {userId, groups, workspaces, apiKeyId}, decision {allow, capability, path, grant, reason}, grants: [{grant, appliesToCapability, deciding}]}`: every grant naming the subject that covers the path, most specific first, with the deciding one marked |
+
+Audit actions: `vault.policy.created`, `vault.policy.updated`, `vault.policy.deleted`, `vault.denied`.
