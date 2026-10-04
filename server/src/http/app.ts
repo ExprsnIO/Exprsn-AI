@@ -47,6 +47,7 @@ import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
+import { identityPolicyRoutes, signupPublicRoutes } from '../routes/signup.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
@@ -180,6 +181,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   const authLimit = limit(authLimiter);
   const generalLimit = limit(general);
   api.use('/auth', (req, res, next) => (req.method === 'GET' ? generalLimit(req, res, next) : authLimit(req, res, next)), authRoutes(s));
+  // Sprint 26a (B-1801, B-1802): sign-up, verification and invitation links, behind the same limiter as sign-in.
+  api.use('/auth', signupPublicRoutes(s));
   api.use(generalLimit);
   api.use('/me', meRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
@@ -228,6 +231,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(fileRoutes(s));
   // Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues and providers.
   api.use(moderationRoutes(s));
+  // Sprint 26a (B-1801 to B-1803, B-1805): invitations, trusted devices, signup and MFA policies, CSV imports.
+  api.use(identityPolicyRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

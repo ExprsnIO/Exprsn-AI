@@ -198,6 +198,8 @@ export class SessionService {
     const q = this.db('sessions').where({ user_id: userId, revoked_at: null });
     if (exceptId) q.andWhereNot({ id: exceptId });
     const ids = (await q.clone().select('id')).map((r: { id: string }) => r.id);
+    // Sprint 26a (B-1803): trusted devices end with the sessions (all of them; the kept one keeps no trust either).
+    await this.db('trusted_devices').where({ user_id: userId }).delete();
     if (!ids.length) return 0;
     await this.db('sessions').whereIn('id', ids).update({ revoked_at: Date.now() });
     this.onRevoke(ids);
@@ -207,6 +209,7 @@ export class SessionService {
   /** Revokes every live session in a tenant (tenant disabled or offboarded); their sockets close everywhere. */
   async revokeAllForTenant(tenantId: string): Promise<number> {
     const ids = (await this.db('sessions').where({ tenant_id: tenantId, revoked_at: null }).select('id')).map((r: { id: string }) => r.id);
+    await this.db('trusted_devices').where({ tenant_id: tenantId }).delete();
     if (!ids.length) return 0;
     await this.db('sessions').whereIn('id', ids).update({ revoked_at: Date.now() });
     this.onRevoke(ids);

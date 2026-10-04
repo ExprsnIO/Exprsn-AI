@@ -545,3 +545,22 @@ filter, private `/tmp`, only the state directory writable.
   which the job failed. External providers receive the object's text (up to 32,000 characters) and its type; the
   zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
   rules. Notices carry the moderator's reason, not the moderated content.
+- Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
+  the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
+  (as most registration forms do); they are throttled per client address and per address. Email verification is off
+  until a tenant turns it on; addresses that an admin typed, imported or invited count as proven, and directory
+  accounts' addresses belong to the directory. There is no per-workspace admin role yet: `members:invite` is a
+  tenant-wide permission (tenant and identity admins), limited to the inviter's own workspaces and to roles they may
+  grant. A trusted device skips the second factor for the tenant's `trustedDeviceDays`, but never for accounts whose
+  roles require a second factor (admins) or that are marked as needing one: those are asked for it on every sign-in.
+  For everyone else it is bound to the device cookie, so a stolen cookie together with the password passes until the
+  period ends or the user's sessions are revoked (a plain sign-out keeps the trust). The MFA grace period starts when
+  the requirement last widened, not per user. GitHub sign-in reads organisation and team membership once per sign-in;
+  leaving a team takes effect at the next sign-in (there is no directory sync for GitHub), and an organisation that
+  restricts OAuth app access hides its membership until the app is approved there. Step-up re-authentication through
+  GitHub is not offered (GitHub has no `prompt=login`); GitHub accounts step up with a second factor. CSV imports create accounts with a
+  password nobody knows: the users need an invitation link (`sendInvites`) or a reset by an admin.
+- Gateway slots: a chat turn's own requests (embeddings, guard-model verdicts on the streamed text and on tool results,
+  tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
+  receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and
+  queues them itself. The `/v1` API, agent runs and workflows still lease a separate slot for each call they make.

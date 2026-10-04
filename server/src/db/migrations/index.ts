@@ -31,6 +31,7 @@ import * as m027 from './027_acme.js';
 import * as m027b from './027b_atproto.js';
 import * as m027c from './027c_leases.js';
 import * as m027d from './027d_plugins.js';
+import * as m028 from './028_identity.js';
 import * as m028b from './028b_atproto_accounts.js';
 import * as m028d from './028d_files.js';
 import * as m028c from './028c_moderation.js';
@@ -74,6 +75,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '027b_atproto': m027b,
   '027c_leases': m027c,
   '027d_plugins': m027d,
+  '028_identity': m028,
   '028b_atproto_accounts': m028b,
   '028c_moderation': m028c,
   '028d_files': m028d

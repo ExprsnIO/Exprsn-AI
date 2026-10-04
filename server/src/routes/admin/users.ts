@@ -94,6 +94,8 @@ export function userAdminRoutes(s: Services): Router {
         const users = s.users.within(trx);
         const u = await users.create(p.tenantId, { username: body.username, displayName: body.displayName, email: body.email, clearance: body.clearance, mfaRequired: rolesRequireMfa(body.roles) });
         await users.update(p.tenantId, u.id, { clearance_direct: body.clearance });
+        // Sprint 26a (B-1802): an address an admin gives is vouched for (an invitation link also proves it).
+        if (body.email) await trx('users').where({ id: u.id }).update({ email_verified_at: Date.now() });
         await trx('local_credentials').insert({ user_id: u.id, password_hash: passwordHash, must_change: !body.invite && body.mustChange, updated_at: Date.now() });
         await users.upsertIdentity(u.id, local.id, u.id, []);
         await users.setRoles(u.id, 'direct', body.roles);
@@ -237,6 +239,7 @@ export function userAdminRoutes(s: Services): Router {
     // As for role changes and factor resets: only someone who could grant all of the owner's roles may end their session.
     if (target.user_id !== p.userId && !canManage(p.roles, await s.users.roleIds(target.user_id))) throw forbidden('This session belongs to someone holding roles you cannot grant, so you cannot end it.', { step: 'role' });
     await s.sessions.revoke(p.tenantId, target.id);
+    await s.identityPolicy.forgetSession(target.id); // Sprint 26a (B-1803): and the device trusted from it
     await audit(req, 'session.revoked', { session: target.id, user: target.user_id }, { note: 'Refresh tokens and sockets for this session end with it.' });
     if (target.user_id !== p.userId) await securityAlert(s, { tenantId: p.tenantId, userId: target.user_id, event: 'session.revoked', detail: `${p.displayName} signed out your session (${target.method}).` });
     res.status(204).end();

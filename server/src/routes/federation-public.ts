@@ -2,7 +2,6 @@ import express, { Router, type Request, type Response } from 'express';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { hmac, randomToken, safeEqual } from '../crypto/index.js';
 import { json as parseJson } from '../db/knex.js';
-import { rolesRequireMfa } from '../authz/permissions.js';
 import { provision, type ProvisionResult } from '../identity/provisioning.js';
 import { AtAccountError } from '../atproto/accounts.js';
 import { isFederatedKind, type ExternalUser } from '../identity/providers/types.js';
@@ -60,7 +59,7 @@ export const publicReason = (err: unknown, fallback: string): string => (err ins
 
 /** Browser sign-in endpoints and userinfo: requests per client address per minute (token endpoints have their own). */
 export const SIGN_IN_POINTS = 120;
-const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/federation/atproto/start', '/federation/atproto/callback', '/auth/negotiate', '/oauth/logout', '/saml/slo', '/federation/saml/slo', '/oauth/logged-out'];
+const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/federation/atproto/start', '/federation/atproto/callback', '/auth/negotiate', '/oauth/logout', '/saml/slo', '/federation/saml/slo', '/oauth/logged-out', '/federation/github/start', '/federation/github/callback'];
 
 /** First value of each string field; repeated OAuth parameters are refused (RFC 6749 3.1). */
 function formOf(body: unknown): Record<string, string> {
@@ -173,11 +172,11 @@ export function federationPublicRoutes(s: Services): Router {
       const prev = await s.sessions.resolve(old);
       if (prev) await s.sessions.revoke(prev.tenant_id, prev.id);
     }
-    const methods = await s.mfa.methods(prov.user.id);
-    // Upstream and Kerberos sign-ins count as the first factor only: admin roles still need their second factor.
-    const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);
-    const stage = methods.length ? 'mfa' : needsMfa ? 'enroll' : 'active';
-    const { token, session } = await s.sessions.create({ userId: prov.user.id, tenantId: t.id, stage, method, providerId: row.id, ip: req.ip ?? null, userAgent: req.header('user-agent') ?? null });
+    // Upstream and Kerberos sign-ins count as the first factor only: admin roles still need their second factor, and
+    // so (Sprint 26a, B-1803) does the tenant's MFA policy, unless this browser is a trusted device.
+    const next = await s.identityPolicy.signInStage(req, { tenantId: t.id, user: prov.user, roles: prov.roles, mustChange: false });
+    const stage = next.stage;
+    const { token, session } = await s.sessions.create({ userId: prov.user.id, tenantId: t.id, stage, method: next.trustedDevice ? `${method}, trusted device` : method, providerId: row.id, ip: req.ip ?? null, userAgent: req.header('user-agent') ?? null, mfaVerified: next.mfaVerified });
     setSessionCookie(res, s, token, session.expires_at);
     if (afterSession) await afterSession(session.id);
     // B-801: new-device and new-network notices, as for password sign-ins.
@@ -188,7 +187,7 @@ export function federationPublicRoutes(s: Services): Router {
       kind: 'auth',
       actor: { user: prov.user.id, username: prov.user.username, name: prov.user.display_name, session: session.id, roles: prov.roles, ip: req.ip ?? null },
       target: { provider: row.name, kind },
-      detail: { jit: prov.created, stage, method },
+      detail: { jit: prov.created, stage, method, ...(next.trustedDevice ? { trustedDevice: true } : {}), ...(next.enrolBy ? { mfaEnrolBy: next.enrolBy } : {}) },
       traceId: req.traceId
     });
     s.metrics.logins.inc({ result: stage === 'active' ? 'ok' : stage, kind });
@@ -703,12 +702,12 @@ export function federationPublicRoutes(s: Services): Router {
     return m?.[1] ? decodeURIComponent(m[1]) : undefined;
   };
 
-  const start = (protocol: 'oidc' | 'saml') => async (req: Request, res: Response) => {
+  const start = (protocol: 'oidc' | 'saml' | 'github') => async (req: Request, res: Response) => {
     const t = await tenantOf(req);
     if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
     const providerId = typeof req.query.provider === 'string' ? req.query.provider : '';
     try {
-      const out = protocol === 'oidc' ? await fed().upstream.startOidc(t, providerId, safeReturn(req.query.return)) : await fed().upstream.startSaml(t, providerId, safeReturn(req.query.return));
+      const out = protocol === 'oidc' ? await fed().upstream.startOidc(t, providerId, safeReturn(req.query.return)) : protocol === 'github' ? await fed().github.start(t, providerId, safeReturn(req.query.return)) : await fed().upstream.startSaml(t, providerId, safeReturn(req.query.return));
       fedCookie(res, out.browser, protocol === 'saml' ? 'none' : 'lax');
       res.setHeader('Cache-Control', 'no-store');
       res.redirect(302, out.url);
@@ -719,6 +718,7 @@ export function federationPublicRoutes(s: Services): Router {
   };
   r.get('/federation/oidc/start', start('oidc'));
   r.get('/federation/saml/start', start('saml'));
+  r.get('/federation/github/start', start('github')); // Sprint 26a (B-1804)
 
   const upstreamDone = async (req: Request, res: Response, t: TenantCtx, fn: () => Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject?: SamlSubject; stepUp?: StepUpBinding }>) => {
     res.clearCookie(FED_COOKIE, { path: '/' });
@@ -738,7 +738,7 @@ export function federationPublicRoutes(s: Services): Router {
       }
       // Upstream SAML sessions are remembered with their NameID and SessionIndex for single logout.
       const after = out.subject ? (sessionId: string) => fed().upstream.recordSamlSession(t.id, sessionId, out.row.id, out.subject!) : undefined;
-      await completeSignIn(req, res, t, out.row, out.user, `${out.row.kind === 'oidc' ? 'OIDC' : 'SAML'} (${out.row.name})`, out.row.kind, out.returnTo, {}, after);
+      await completeSignIn(req, res, t, out.row, out.user, `${out.row.kind === 'oidc' ? 'OIDC' : out.row.kind === 'github' ? 'GitHub' : 'SAML'} (${out.row.name})`, out.row.kind, out.returnTo, {}, after);
     } catch (err) {
       await s.audit.append({ tenantId: t.id, action: 'auth.login.failed', kind: 'auth', actor: { ip: req.ip ?? null }, target: { kind: 'upstream' }, detail: { reason: (err as Error).message.slice(0, 300) }, traceId: req.traceId });
       s.metrics.logins.inc({ result: 'invalid', kind: 'upstream' });
@@ -751,6 +751,13 @@ export function federationPublicRoutes(s: Services): Router {
     const t = await tenantOf(req);
     if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
     await upstreamDone(req, res, t, () => fed().upstream.finishOidc(t, req.query as Record<string, unknown>, fedCookieOf(req)));
+  });
+
+  // Sprint 26a (B-1804): GitHub's OAuth callback, finished like an upstream OIDC sign-in.
+  r.get('/federation/github/callback', async (req, res) => {
+    const t = await tenantOf(req);
+    if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
+    await upstreamDone(req, res, t, () => fed().github.finish(t, req.query as Record<string, unknown>, fedCookieOf(req)));
   });
 
   r.post('/federation/saml/acs', largeForm, async (req, res) => {

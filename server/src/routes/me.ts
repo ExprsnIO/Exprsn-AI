@@ -292,6 +292,7 @@ export function meRoutes(s: Services): Router {
     const target = await s.sessions.get(p.tenantId, String(req.params.id));
     if (!target || target.user_id !== p.userId) throw notFound('Session');
     await s.sessions.revoke(p.tenantId, target.id);
+    await s.identityPolicy.forgetSession(target.id); // Sprint 26a (B-1803): and the device trusted from it
     await audit(req, 'session.revoked', { session: target.id });
     await alert(req, 'session.revoked', `The session signed in with ${target.method}${target.ip ? ` from ${target.ip}` : ''} was ended.`);
     res.status(204).end();

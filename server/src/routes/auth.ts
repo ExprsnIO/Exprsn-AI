@@ -5,7 +5,6 @@ import { LoginThrottle } from '../identity/lockout.js';
 import { provision } from '../identity/provisioning.js';
 import { signsInByRedirect } from '../identity/providers/types.js';
 import type { SessionRow } from '../identity/sessions.js';
-import { rolesRequireMfa } from '../authz/permissions.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { estimateStrength, passwordRules } from '../identity/passwords.js';
 import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
@@ -59,7 +58,11 @@ export function authRoutes(s: Services): Router {
     await s.throttle.succeed(`mfa:${session.id}`);
     await s.audit.append({ tenantId: session.tenant_id, action: 'auth.mfa.verified', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { method }, traceId: req.traceId });
     s.metrics.logins.inc({ result: 'ok', kind: method });
-    res.json(await sessionBody(next));
+    // Sprint 26a (B-1803): "trust this device" skips the factor on this browser for the tenant's trusted-device period.
+    const remember = (req.body as { rememberDevice?: unknown } | undefined)?.rememberDevice === true;
+    const trustedUntil = remember && method !== 'recovery code' ? await s.identityPolicy.trust(req, { tenantId: session.tenant_id, userId: session.user_id, sessionId: next.id }) : null;
+    if (trustedUntil) await s.audit.append({ tenantId: session.tenant_id, action: 'auth.trusted_device.added', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { user: session.user_id }, detail: { until: trustedUntil }, traceId: req.traceId });
+    res.json({ ...(await sessionBody(next)), ...(remember ? { trustedDevice: trustedUntil ? { until: trustedUntil } : null } : {}) });
   };
 
   const endPending = async (session: SessionRow, res: Response): Promise<never> => {
@@ -108,6 +111,16 @@ export function authRoutes(s: Services): Router {
     }
 
     const result = await s.chain.authenticate(tenant.id, body.username, body.password);
+    // Sprint 26a (B-1801): the right password for a sign-up still waiting for approval gets a clear answer.
+    if (result.status === 'disabled' && result.provider.kind === 'local') {
+      const pendingUser = await s.users.byUsername(tenant.id, body.username);
+      const state = pendingUser ? await s.signup.signupState(pendingUser.id) : null;
+      if (pendingUser && (state === 'pending' || state === 'rejected')) {
+        await s.throttle.release(throttleKeys);
+        await s.audit.append({ tenantId: tenant.id, action: 'auth.login.refused', kind: 'auth', actor: { username: pendingUser.username, user: pendingUser.id, ip: ip(req) }, target: { provider: result.provider.name }, detail: { reason: state === 'pending' ? 'signup_pending' : 'signup_rejected' }, traceId: req.traceId });
+        throw forbidden(state === 'pending' ? 'Your sign-up is waiting for an admin to approve it. You will get an email when it is.' : 'Your sign-up was not approved. Ask an admin.', { reason: state === 'pending' ? 'signup_pending' : 'signup_rejected' });
+      }
+    }
     if (result.status !== 'ok') {
       const after = await s.throttle.failed(throttleKeys);
       await s.audit.append({
@@ -122,6 +135,20 @@ export function authRoutes(s: Services): Router {
       s.metrics.logins.inc({ result: result.status, kind: 'password' });
       if (after.locked) throw tooManyRequests(`Too many failed sign-ins. Try again in ${Math.ceil(after.retryAfterSeconds / 60)} minutes.`, after.retryAfterSeconds);
       throw invalidCredentials(after.remaining);
+    }
+
+    // Sprint 26a (B-1802): a local account must have proven its address when the tenant requires it. A new link is
+    // sent (throttled), and the refusal comes only after the right password, so it says nothing to a guesser.
+    if (result.provider.kind === 'local') {
+      const policy = await s.identityPolicy.get(tenant.id);
+      const local = await s.users.get(tenant.id, result.user.externalId);
+      if (local && (await s.signup.needsVerification(policy, local))) {
+        await s.throttle.release(throttleKeys);
+        const sent = await s.signup.sendVerification(tenant, local);
+        await s.audit.append({ tenantId: tenant.id, action: 'auth.login.refused', kind: 'auth', actor: { username: local.username, user: local.id, ip: ip(req) }, target: { provider: result.provider.name }, detail: { reason: 'email_unverified', linkSent: sent }, traceId: req.traceId });
+        s.metrics.logins.inc({ result: 'email_unverified', kind: 'password' });
+        throw forbidden('Confirm your email address first: open the link we sent you. A new link is on its way if the last one expired.', { reason: 'email_unverified' });
+      }
     }
 
     const prov = await provision(s.users, tenant.id, result.provider, result.user);
@@ -144,18 +171,20 @@ export function authRoutes(s: Services): Router {
     // A new sign-in in this browser ends the session its cookie held before (ASVS 3.2.1), as federated sign-ins do.
     if (req.authSession) await s.sessions.revoke(req.authSession.tenant_id, req.authSession.id);
 
-    const methods = await s.mfa.methods(prov.user.id);
-    const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);
     const mustChange = result.provider.kind === 'local' && (await s.account.mustChange(prov.user.id));
-    const stage = methods.length ? 'mfa' : needsMfa ? 'enroll' : mustChange ? 'password' : 'active';
+    // Sprint 26a (B-1803): the second factor (skipped on a trusted device), enrolment for roles that need it and for
+    // the tenant's MFA policy once its grace period is over, then a forced password change.
+    const next = await s.identityPolicy.signInStage(req, { tenantId: tenant.id, user: prov.user, roles: prov.roles, mustChange });
+    const stage = next.stage;
     const { token, session } = await s.sessions.create({
       userId: prov.user.id,
       tenantId: tenant.id,
       stage,
-      method: `${result.provider.kind === 'ldap' ? 'LDAP' : result.provider.kind === 'sql' ? 'SQL' : 'Local'} password`,
+      method: `${result.provider.kind === 'ldap' ? 'LDAP' : result.provider.kind === 'sql' ? 'SQL' : 'Local'} password${next.trustedDevice ? ', trusted device' : ''}`,
       providerId: result.provider.id,
       ip: ip(req),
-      userAgent: req.header('user-agent') ?? null
+      userAgent: req.header('user-agent') ?? null,
+      mfaVerified: next.mfaVerified
     });
     setSessionCookie(res, s, token, session.expires_at);
     // B-801: a sign-in from a new browser or network notifies the owner (the password was right, whatever comes next).
@@ -166,24 +195,25 @@ export function authRoutes(s: Services): Router {
       kind: 'auth',
       actor: { user: prov.user.id, username: prov.user.username, name: prov.user.display_name, session: session.id, roles: prov.roles, ip: ip(req) },
       target: { provider: result.provider.name, kind: result.provider.kind },
-      detail: { jit: prov.created, stage },
+      detail: { jit: prov.created, stage, ...(next.trustedDevice ? { trustedDevice: true } : {}), ...(next.enrolBy ? { mfaEnrolBy: next.enrolBy } : {}) },
       traceId: req.traceId
     });
     s.metrics.logins.inc({ result: stage === 'active' ? 'ok' : stage, kind: 'password' });
-    res.json(await sessionBody(session));
+    const body2 = await sessionBody(session);
+    res.json({ ...body2, mfa: { ...body2.mfa, ...(next.enrolBy ? { enrolBy: next.enrolBy } : {}), ...(next.trustedDevice ? { trustedDevice: true } : {}) } });
   });
 
   const pending = requireAuth({ stages: ['mfa'], sessionOnly: true });
 
   r.post('/mfa/totp', pending, async (req, res) => {
-    const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/) }), req.body);
+    const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/), rememberDevice: z.boolean().optional() }), req.body);
     await reserveMfa(req, res);
     if (await s.mfa.verifyTotp(req.authSession!.user_id, code)) return completeMfa(req, res, 'TOTP');
     await failMfa(req, res, 'TOTP');
   });
 
   r.post('/mfa/recovery', pending, async (req, res) => {
-    const { code } = parseBody(z.object({ code: z.string().trim().min(8).max(20) }), req.body);
+    const { code } = parseBody(z.object({ code: z.string().trim().min(8).max(20), rememberDevice: z.boolean().optional() }), req.body);
     await reserveMfa(req, res);
     if (await s.mfa.useRecoveryCode(req.authSession!.user_id, code)) return completeMfa(req, res, 'recovery code');
     await failMfa(req, res, 'recovery code');
@@ -196,7 +226,7 @@ export function authRoutes(s: Services): Router {
   });
 
   r.post('/mfa/webauthn', pending, async (req, res) => {
-    const { response } = parseBody(z.object({ response: z.looseObject({ id: z.string(), type: z.literal('public-key') }) }), req.body);
+    const { response } = parseBody(z.object({ response: z.looseObject({ id: z.string(), type: z.literal('public-key') }), rememberDevice: z.boolean().optional() }), req.body);
     const challenge = await s.sessions.takeChallenge(req.authSession!.id);
     if (!challenge) throw unauthorized('The passkey challenge expired. Try again.');
     await reserveMfa(req, res);
@@ -315,7 +345,7 @@ export function authRoutes(s: Services): Router {
   r.get('/sign-in-options', async (req, res) => {
     const slug = typeof req.query.tenant === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(req.query.tenant) ? req.query.tenant : s.cfg.DEFAULT_TENANT;
     const t = await s.federation.tenantBySlug(slug);
-    if (!t) return void res.json({ upstream: [], kerberos: false });
+    if (!t) return void res.json({ upstream: [], kerberos: false, signup: false });
     const base = slug === s.cfg.DEFAULT_TENANT ? '' : `/t/${slug}`;
     // Sprint 26 (B-1808): AT-Protocol stores too; their start page asks for the handle.
     const rows = (await s.providers.list(t.id)).filter((p) => p.enabled && signsInByRedirect(p.kind));
@@ -323,7 +353,9 @@ export function authRoutes(s: Services): Router {
     const kerberos = settings.kerberos.enabled && (await s.kerberos.status()).available;
     res.json({
       upstream: rows.map((p) => ({ id: p.id, name: p.name, protocol: p.kind, start: `${base}/federation/${p.kind}/start?provider=${p.id}` })),
-      kerberos: kerberos ? { start: `${base}/auth/negotiate` } : false
+      kerberos: kerberos ? { start: `${base}/auth/negotiate` } : false,
+      // Sprint 26a (B-1801): whether this tenant takes sign-ups (and whether they wait for approval).
+      signup: await s.identityPolicy.get(t.id).then((p) => (p.signup.mode === 'closed' ? false : { approval: p.signup.mode === 'approval', verifyEmail: p.signup.requireEmailVerification }))
     });
   });
 

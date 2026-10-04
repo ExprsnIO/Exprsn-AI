@@ -78,6 +78,9 @@ import { EventCatalogue } from './events/catalogue.js';
 import { createCacheStore, TenantCache } from './platform/cache.js';
 import { RoomRegistry } from './realtime/rooms.js';
 import { PluginService } from './plugins/service.js';
+import { IdentityPolicies } from './identity/policy.js';
+import { SignupService } from './identity/signup.js';
+import { UserImportService } from './identity/user-import.js';
 import { PluginRuntime } from './plugins/runtime.js';
 import { CheckLimiter } from './guardrails/stream.js';
 import { createPreviousKms, withPrevious } from './platform/rewrap.js';
@@ -216,6 +219,12 @@ export interface Services {
   files: FileService;
   /** 1.4.0, Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues, providers. */
   moderation: ModerationService;
+  /** 1.4.0, Sprint 26a (B-1801, B-1803): per-tenant signup and MFA policies, trusted devices. */
+  identityPolicy: IdentityPolicies;
+  /** 1.4.0, Sprint 26a (B-1801, B-1802): self-registration, email verification, invitations by workspace admins. */
+  signup: SignupService;
+  /** 1.4.0, Sprint 26a (B-1805): users, memberships and group mappings imported from CSV as a job. */
+  userImports: UserImportService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -452,6 +461,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       renderer: overrides.previewRenderer ?? new ProcessPreviewRenderer({ ffmpeg: cfg.MEDIA_FFMPEG, pdftoppm: cfg.FILES_PDFTOPPM })
     }),
     moderation: new ModerationService(() => s, overrides.moderationProviders),
+    identityPolicy: new IdentityPolicies(() => s),
+    signup: new SignupService(() => s),
+    userImports: new UserImportService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -539,6 +551,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     });
   }
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
+  s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;

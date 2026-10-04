@@ -193,6 +193,8 @@ export class AccountService {
     let n = await this.db('account_throttle').where('window_start', '<', t - 24 * 3600_000).delete();
     n += await this.db('password_tokens').where('expires_at', '<', t - 7 * 24 * 3600_000).delete();
     n += await this.signIns.purge();
+    n += await this.s().identityPolicy.purge(); // Sprint 26a: expired trusted devices
+    n += await this.s().db('email_verifications').where('expires_at', '<', t - 7 * 24 * 3600_000).delete();
     return n;
   }
 

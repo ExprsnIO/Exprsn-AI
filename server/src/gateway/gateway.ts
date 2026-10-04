@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Logger } from 'pino';
 import type { ServicePolicy } from '../platform/egress.js';
 import { labelRank, type Label } from '../authz/labels.js';
@@ -48,7 +49,17 @@ export interface Lease {
   model: ModelRow;
   /** The model was not resident when the request was admitted: expect a load before the first token. */
   cold: boolean;
+  /**
+   * Sprint 26a: the request rides on a slot its own turn already holds on this instance (see `Gateway.turn`), so it
+   * took no slot of its own and its release frees nothing.
+   */
+  shared?: boolean;
   release(firstTokenMs?: number | null): void;
+}
+
+/** The slots one turn holds (a chat answer and everything it asks for while answering), by instance runtime. */
+interface TurnSlots {
+  held: Runtime[];
 }
 
 export interface ResolvedProfile {
@@ -72,6 +83,9 @@ export class QueueTimeout extends Error {}
  * jobs. Pools and instances are shared by every tenant; profiles are per tenant.
  */
 export class Gateway {
+  /** Sprint 26a: the slots held by the turn running in the current async context. */
+  private readonly turns = new AsyncLocalStorage<TurnSlots>();
+
   private readonly runtimes = new Map<string, Runtime>();
   private timer: NodeJS.Timeout | null = null;
   private polling = false;
@@ -455,6 +469,8 @@ export class Gateway {
         const r = free[0]!;
         r.inflight++;
         let released = false;
+        const turn = this.turns.getStore();
+        turn?.held.push(r);
         return {
           instance: r.row,
           pool: poolById.get(r.row.pool_id)!,
@@ -465,11 +481,16 @@ export class Gateway {
             if (released) return;
             released = true;
             r.inflight--;
+            const k = turn ? turn.held.indexOf(r) : -1;
+            if (k >= 0) turn!.held.splice(k, 1);
             if (ftok != null) r.firstTokenMs = r.firstTokenMs == null ? ftok : Math.round(r.firstTokenMs * 0.8 + ftok * 0.2);
             this.wake(r);
           }
         };
       }
+      // Sprint 26a: never queue for a slot this turn itself holds.
+      const borrowed = this.borrow(list, poolById, model);
+      if (borrowed) return borrowed;
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new QueueTimeout(`Every instance serving ${model.name} is busy.`);
       // Wait on the least-queued instance for a slot, then re-pick.
@@ -508,6 +529,25 @@ export class Gateway {
         opts.onPosition?.(target.waiting.length);
       });
     }
+  }
+
+  /**
+   * Sprint 26a: runs `fn` as one turn. A request made inside it (an embedding, a guard-model verdict on the streamed
+   * text, a screen of a tool result, a tool that calls a model) that finds no free slot rides on a slot the same turn
+   * already holds on an instance that can serve it, instead of queueing for that slot: the turn would otherwise wait
+   * on itself (with one slot per instance, until the queue timeout). Ollama queues the extra request behind the
+   * turn's own on that instance. Requests outside a turn, and requests no held slot can serve, queue as before.
+   */
+  turn<T>(fn: () => Promise<T>): Promise<T> {
+    return this.turns.run({ held: [] }, fn);
+  }
+
+  /** A lease on a slot the current turn holds on one of `list`, or null. */
+  private borrow(list: Runtime[], poolById: Map<string, PoolRow>, model: ModelRow): Lease | null {
+    const own = this.turns.getStore()?.held.find((h) => list.includes(h));
+    if (!own) return null;
+    this.log.debug({ instance: own.row.name, model: model.name }, 'request rides on a slot its turn holds');
+    return { instance: own.row, pool: poolById.get(own.row.pool_id)!, client: own.client, model, cold: !own.ps.some((m) => sameModel(m.name, model.name)), shared: true, release: () => undefined };
   }
 
   private wake(r: Runtime): void {
