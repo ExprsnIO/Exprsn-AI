@@ -26,8 +26,9 @@ import { bm25, rrf, termCounts, TermKeys, tokenize } from './terms.js';
 import { aclAllows, readAcl, readerEntries, rowAcl, type AccessKind } from './acl.js';
 import { ReplicationManager } from './replication.js';
 import type { MaskedChange } from '../connections/service.js';
+import type { FolderSourceProvider } from '../files/service.js';
 
-export const SOURCE_KINDS = ['upload', 's3', 'git', 'database', 'web'] as const;
+export const SOURCE_KINDS = ['upload', 's3', 'git', 'database', 'web', 'folder'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 export const SCHEDULES = ['15m', 'hourly', 'daily', 'manual'] as const;
 export type Schedule = (typeof SCHEDULES)[number];
@@ -103,6 +104,8 @@ export interface SourceRow {
     sitemap?: boolean;
     /** B-1503: rows are read as each mapped PostgreSQL role, and the groups whose role saw a row may retrieve it. */
     roleMappings?: RoleMapping[];
+    /** B-2405: a file store folder (and its subfolders). */
+    folderId?: string;
   };
   /** B-1501: the sealed secret access key of the source's own S3-compatible endpoint. */
   secret_sealed?: string | null;
@@ -154,7 +157,7 @@ export interface RoleMapping {
   role: string;
 }
 
-export type DocState = 'quarantined' | 'scanning' | 'queued' | 'indexing' | 'indexed' | 'unchanged' | 'failed' | 'rejected' | 'removed';
+export type DocState = 'quarantined' | 'scanning' | 'queued' | 'indexing' | 'indexed' | 'unchanged' | 'failed' | 'rejected' | 'removed' | 'hidden';
 
 export interface DocRow {
   id: string;
@@ -334,6 +337,8 @@ export class KnowledgeService {
   readonly terms: TermKeys;
   readonly replication: ReplicationManager;
   private readonly db: Db;
+  /** Sprint 26d (B-2405): the file store's folders as sources; set when the file store is built. */
+  folders: FolderSourceProvider | null = null;
 
   constructor(
     private readonly d: KnowledgeDeps,
@@ -589,6 +594,13 @@ export class KnowledgeService {
       const pathPrefix = (input.pathPrefix ?? '').trim();
       if (pathPrefix && !pathPrefix.startsWith('/')) throw new HttpProblem(400, 'Invalid request', 'A path prefix starts with /.');
       config = { url, maxDepth: input.maxDepth ?? 2, maxPages: input.maxPages ?? 100, pathPrefix, sitemap: input.sitemap ?? true };
+    } else if (input.kind === 'folder') {
+      // B-2405: a file store folder the curator can read; its files are indexed up to the base's label.
+      if (!this.folders) throw conflict('The file store is not available on this server.');
+      const f = await this.folders.check(p, location);
+      if (await this.db('knowledge_sources').where({ kb_id: kb.id, kind: 'folder', location: `folder: ${f.name}` }).whereRaw("config like ?", [`%${f.id}%`]).first('id')) throw conflict(`${f.name} is already a source of this knowledge base.`);
+      location = `folder: ${f.name}`;
+      config = { folderId: f.id };
     } else if (input.kind === 'git') {
       location = location.replace(/^git:\s*/i, '');
       config = { url: location, ref: input.ref ?? null, path: input.path ?? '' };
@@ -793,7 +805,7 @@ export class KnowledgeService {
 
   async reindexDocument(p: Principal, id: string): Promise<{ jobId: string }> {
     const { doc } = await this.documentFor(p, id, 'manage');
-    if (['quarantined', 'scanning', 'rejected', 'removed'].includes(doc.state)) throw conflict(`${doc.name} is ${doc.state} and cannot be indexed.`);
+    if (['quarantined', 'scanning', 'rejected', 'removed', 'hidden'].includes(doc.state)) throw conflict(`${doc.name} is ${doc.state} and cannot be indexed.`);
     await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'queued', error: null, trace_id: null, updated_at: Date.now() });
     const job = await this.d.jobs.enqueue({ tenantId: doc.tenant_id, type: 'knowledge.index', payload: { documentId: doc.id }, createdBy: p.userId, maxAttempts: 1 });
     return { jobId: job.id };
@@ -934,7 +946,7 @@ export class KnowledgeService {
     const r = await this.db('knowledge_documents').where({ id: documentId }).first();
     if (!r) return { skipped: 'gone' };
     const doc = docFrom(r);
-    if (['quarantined', 'scanning', 'rejected', 'removed'].includes(doc.state)) return { skipped: doc.state };
+    if (['quarantined', 'scanning', 'rejected', 'removed', 'hidden'].includes(doc.state)) return { skipped: doc.state };
     const targets = await this.liveIndexes(doc.kb_id);
     await ctx.progress(10, `Extracting ${doc.name}`);
     return this.indexInto(doc, targets);
@@ -1120,6 +1132,13 @@ export class KnowledgeService {
       } finally {
         await co.cleanup();
       }
+    }
+    if (s.kind === 'folder') {
+      // B-2405: the folder's files, at most the base's label (a document never sits below its own label).
+      if (!this.folders) throw new Error('The file store is not available on this server.');
+      const kb = await this.kbRow(s.kb_id);
+      const items = await this.folders.items(s.tenant_id, s.config.folderId!, highest(kb.label, s.label_floor), this.o.maxBytes);
+      return { ...(await this.apply(s, items, true, ctx)), watermark: new Date().toISOString() };
     }
     if (s.kind === 'database' && s.config.roleMappings?.length) return this.syncAsRoles(s, ctx);
     if (s.kind === 'database') {
@@ -1375,6 +1394,7 @@ export class KnowledgeService {
       const c = byId.get(id);
       if (!c) continue;
       const d = docs.get(c.document_id);
+      if (d?.state === 'hidden') continue; // Sprint 26 (B-1903): hidden by moderation until an appeal restores it
       const opened = await this.openChunk(c.tenant_id, c.id, c.content);
       const src = d ? srcs.get(d.source_id) : undefined;
       hits.push({ chunkId: c.id, kbId: c.kb_id, kb: kbById.get(c.kb_id)?.name ?? '', documentId: c.document_id, document: d?.name ?? '', source: src ? (src.kind === 'upload' ? 'Uploads' : src.location) : '', heading: opened.heading, label: c.label, vector: vScore.has(id) ? Number(vScore.get(id)!.toFixed(4)) : null, keyword: kScore.has(id) ? Number(kScore.get(id)!.toFixed(4)) : null, fused: Number(score.toFixed(5)), rerank: null, text: opened.text });

@@ -51,6 +51,8 @@ const toRow = (r: Record<string, unknown>): SessionRow => ({
  */
 export class SessionService {
   private readonly touched = new Map<string, number>();
+  /** Sprint 26 (B-1904): refuses a session for a sanctioned user (installed by the moderation service); throws. */
+  admit: ((tenantId: string, userId: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly db: Db,
@@ -71,6 +73,8 @@ export class SessionService {
   }
 
   async create(input: { userId: string; tenantId: string; stage: SessionStage; method: string; providerId: string | null; ip: string | null; userAgent: string | null; mfaVerified?: boolean }): Promise<{ token: string; session: SessionRow }> {
+    // Sprint 26 (B-1904): a suspended or banned user gets no session, whichever way they signed in.
+    if (this.admit) await this.admit(input.tenantId, input.userId);
     const token = randomToken(32);
     const t = Date.now();
     const row: SessionRow = {
@@ -194,6 +198,8 @@ export class SessionService {
     const q = this.db('sessions').where({ user_id: userId, revoked_at: null });
     if (exceptId) q.andWhereNot({ id: exceptId });
     const ids = (await q.clone().select('id')).map((r: { id: string }) => r.id);
+    // Sprint 26a (B-1803): trusted devices end with the sessions (all of them; the kept one keeps no trust either).
+    await this.db('trusted_devices').where({ user_id: userId }).delete();
     if (!ids.length) return 0;
     await this.db('sessions').whereIn('id', ids).update({ revoked_at: Date.now() });
     this.onRevoke(ids);
@@ -203,6 +209,7 @@ export class SessionService {
   /** Revokes every live session in a tenant (tenant disabled or offboarded); their sockets close everywhere. */
   async revokeAllForTenant(tenantId: string): Promise<number> {
     const ids = (await this.db('sessions').where({ tenant_id: tenantId, revoked_at: null }).select('id')).map((r: { id: string }) => r.id);
+    await this.db('trusted_devices').where({ tenant_id: tenantId }).delete();
     if (!ids.length) return 0;
     await this.db('sessions').whereIn('id', ids).update({ revoked_at: Date.now() });
     this.onRevoke(ids);

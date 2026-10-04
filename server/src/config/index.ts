@@ -392,6 +392,17 @@ const base = z.object({
     /** B-2005: which plugins must come from a signed import bundle: script plugins (default), all, or none. */
     PLUGINS_REQUIRE_SIGNED: z.enum(['scripts', 'all', 'none']).default('scripts'),
     // --- end Sprint 25d ---
+    // --- Sprint 26a (1.4.0): identity gaps ---
+    /** B-1802: how long an email verification link works. */
+    EMAIL_VERIFY_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(48),
+    /** B-1801: how long an invitation by a workspace admin works. */
+    INVITATION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+    /** B-1801: self-registrations accepted per client address per hour (per address and email too). */
+    SIGNUP_PER_HOUR: z.coerce.number().int().min(1).max(1000).default(10),
+    /** B-1805: the largest CSV a user import accepts, and its most rows. */
+    USER_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(64 * 1024 * 1024).default(2 * 1024 * 1024),
+    USER_IMPORT_MAX_ROWS: z.coerce.number().int().min(1).max(100_000).default(5000),
+    // --- end Sprint 26a ---
 
     COOKIE_SECURE: bool.optional(),
     /** Requests a minute per user (or per address when signed out) across `/api`. */
@@ -512,7 +523,32 @@ const base = z.object({
      * notify their owner once per threshold; the sweep runs every PKI_EXPIRY_SWEEP_MINUTES (0 turns it off).
      */
     PKI_EXPIRY_NOTICE_DAYS: z.string().regex(/^\s*\d{1,3}(\s*,\s*\d{1,3})*\s*$/, 'comma-separated whole days, such as 30,7').default('30,7'),
-    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360)
+    PKI_EXPIRY_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(360),
+    /**
+     * Sprint 26d (B-2401 to B-2404): the file store. FILES_MAX_BYTES caps one upload (streamed, never buffered; ClamAV's
+     * StreamMaxLength must be at least this when CLAMD_HOST is set). Trashed files and folders are purged
+     * FILES_TRASH_DAYS after they went to the trash, by a job every FILES_PURGE_MINUTES (0 turns it off). Previews
+     * (a PNG at most FILES_PREVIEW_PX on its longer side) are drawn for images and PDFs up to FILES_PREVIEW_MAX_BYTES,
+     * with MEDIA_FFMPEG for images and FILES_PDFTOPPM (poppler) for PDFs, in FILES_WORK_DIR (default the system
+     * temporary directory).
+     */
+    FILES_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024 * 1024).default(1024 * 1024 * 1024),
+    FILES_TRASH_DAYS: z.coerce.number().int().min(0).max(3650).default(30),
+    FILES_PURGE_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    FILES_PREVIEW_MAX_BYTES: z.coerce.number().int().min(0).max(1024 * 1024 * 1024).default(50 * 1024 * 1024),
+    FILES_PREVIEW_PX: z.coerce.number().int().min(64).max(2048).default(512),
+    FILES_PDFTOPPM: z.string().min(1).default('pdftoppm'),
+    FILES_WORK_DIR: z.string().optional(),
+    /**
+     * Sprint 26 (B-1904 to B-1906): moderation. The sweep escalates routed flags past their queue's SLA and ends
+     * sanctions past their duration every MODERATION_SWEEP_SECONDS (0 turns it off; enforcement still compares the
+     * end time). External moderation providers send content off the site, so they are off unless
+     * MODERATION_EXTERNAL_PROVIDERS is set, and then only run in zones with egress; each call waits at most
+     * MODERATION_PROVIDER_TIMEOUT_MS.
+     */
+    MODERATION_SWEEP_SECONDS: z.coerce.number().int().min(0).max(24 * 3600).default(60),
+    MODERATION_EXTERNAL_PROVIDERS: bool.default(false),
+    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

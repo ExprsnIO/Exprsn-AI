@@ -35,8 +35,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 23 | Knowledge, integrations and accessibility: S3 and web-crawl sources, PostgreSQL row security, webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow (1.3.0) | Knowledge, Usage and audit; accessibility in Profiles, Workflows and the header | **Done** |
 | 24 | Trust foundations: CA issuance and OCSP, tenant secrets, the event catalogue and plugin manifests, core (1.4.0) | — (server only) | **Done** |
 | 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | **Done** |
-| 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | Planned |
-| 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | Planned |
+| 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | **Done** |
+| 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | Next |
 | 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,

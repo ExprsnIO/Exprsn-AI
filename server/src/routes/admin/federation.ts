@@ -518,7 +518,7 @@ export function federationAdminRoutes(s: Services): Router {
   const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> => Promise.race([p.catch(() => fallback), new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms).unref())]);
 
   const upstreamView = async (t: TenantCtx, row: ProviderRow) => {
-    const url = row.kind === 'oidc' ? (row.config as unknown as OidcUpstreamConfig).issuer : (row.config as unknown as SamlUpstreamConfig).ssoUrl;
+    const url = row.kind === 'oidc' ? (row.config as unknown as OidcUpstreamConfig).issuer : row.kind === 'github' ? String((row.config as { apiUrl?: string }).apiUrl ?? 'https://api.github.com') : (row.config as unknown as SamlUpstreamConfig).ssoUrl;
     const reach = await withTimeout(fed().upstream.reachOf(url), 2000, null);
     const linked = (await s.db('user_identities').where({ provider_id: row.id }).count({ n: '*' }).first()) as { n: number | string } | undefined;
     const users = Number(linked?.n ?? 0);
@@ -526,7 +526,7 @@ export function federationAdminRoutes(s: Services): Router {
       id: row.id,
       name: row.name,
       protocol: row.kind,
-      protocolLabel: row.kind === 'oidc' ? 'OIDC (we are RP)' : 'SAML 2.0 (we are SP)',
+      protocolLabel: row.kind === 'oidc' ? 'OIDC (we are RP)' : row.kind === 'github' ? 'GitHub (OAuth 2.0)' : 'SAML 2.0 (we are SP)',
       source: url,
       reach: reach ?? 'unreachable',
       status: !row.enabled ? 'disabled' : reach ? 'connected' : 'unreachable',

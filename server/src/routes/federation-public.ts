@@ -2,8 +2,8 @@ import express, { Router, type Request, type Response } from 'express';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { hmac, randomToken, safeEqual } from '../crypto/index.js';
 import { json as parseJson } from '../db/knex.js';
-import { rolesRequireMfa } from '../authz/permissions.js';
-import { provision } from '../identity/provisioning.js';
+import { provision, type ProvisionResult } from '../identity/provisioning.js';
+import { AtAccountError } from '../atproto/accounts.js';
 import { isFederatedKind, type ExternalUser } from '../identity/providers/types.js';
 import type { ProviderRow } from '../repos/providers.js';
 import { clearSessionCookie, loadPrincipal, sessionTokenFrom, setSessionCookie } from '../http/middleware.js';
@@ -59,7 +59,7 @@ export const publicReason = (err: unknown, fallback: string): string => (err ins
 
 /** Browser sign-in endpoints and userinfo: requests per client address per minute (token endpoints have their own). */
 export const SIGN_IN_POINTS = 120;
-const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/auth/negotiate', '/oauth/logout', '/saml/slo', '/federation/saml/slo', '/oauth/logged-out'];
+const SIGN_IN_PATHS = ['/oauth/authorize', '/oauth/userinfo', '/device', '/saml/sso', '/saml/continue', '/federation/oidc/start', '/federation/saml/start', '/federation/oidc/callback', '/federation/saml/acs', '/federation/atproto/start', '/federation/atproto/callback', '/auth/negotiate', '/oauth/logout', '/saml/slo', '/federation/saml/slo', '/oauth/logged-out', '/federation/github/start', '/federation/github/callback'];
 
 /** First value of each string field; repeated OAuth parameters are refused (RFC 6749 3.1). */
 function formOf(body: unknown): Record<string, string> {
@@ -159,8 +159,9 @@ export function federationPublicRoutes(s: Services): Router {
   };
 
   /** Finishes a federated or Kerberos sign-in exactly as a password sign-in does: JIT provisioning, second factor for admin roles, audit. */
-  const completeSignIn = async (req: Request, res: Response, t: TenantCtx, row: ProviderRow, ext: ExternalUser, method: string, kind: string, returnTo: string | null, extraHeaders: Record<string, string> = {}, afterSession?: (sessionId: string) => Promise<void>) => {
-    const prov = await provision(s.users, t.id, row, ext);
+  const completeSignIn = async (req: Request, res: Response, t: TenantCtx, row: ProviderRow, ext: ExternalUser, method: string, kind: string, returnTo: string | null, extraHeaders: Record<string, string> = {}, afterSession?: (sessionId: string) => Promise<void>, known?: ProvisionResult) => {
+    // Sprint 26 (B-1807): a DID bound to a user signs in as that user, with the roles they have (`known`).
+    const prov = known ?? (await provision(s.users, t.id, row, ext));
     if (prov.status === 'refused') {
       await s.audit.append({ tenantId: t.id, action: 'auth.login.refused', kind: 'auth', actor: { username: ext.username, user: prov.user?.id, ip: req.ip ?? null }, target: { provider: row.name, kind, groups: ext.groups.length }, detail: { reason: prov.reason }, traceId: req.traceId });
       s.metrics.logins.inc({ result: prov.reason, kind });
@@ -171,11 +172,11 @@ export function federationPublicRoutes(s: Services): Router {
       const prev = await s.sessions.resolve(old);
       if (prev) await s.sessions.revoke(prev.tenant_id, prev.id);
     }
-    const methods = await s.mfa.methods(prov.user.id);
-    // Upstream and Kerberos sign-ins count as the first factor only: admin roles still need their second factor.
-    const needsMfa = prov.user.mfa_required || rolesRequireMfa(prov.roles);
-    const stage = methods.length ? 'mfa' : needsMfa ? 'enroll' : 'active';
-    const { token, session } = await s.sessions.create({ userId: prov.user.id, tenantId: t.id, stage, method, providerId: row.id, ip: req.ip ?? null, userAgent: req.header('user-agent') ?? null });
+    // Upstream and Kerberos sign-ins count as the first factor only: admin roles still need their second factor, and
+    // so (Sprint 26a, B-1803) does the tenant's MFA policy, unless this browser is a trusted device.
+    const next = await s.identityPolicy.signInStage(req, { tenantId: t.id, user: prov.user, roles: prov.roles, mustChange: false });
+    const stage = next.stage;
+    const { token, session } = await s.sessions.create({ userId: prov.user.id, tenantId: t.id, stage, method: next.trustedDevice ? `${method}, trusted device` : method, providerId: row.id, ip: req.ip ?? null, userAgent: req.header('user-agent') ?? null, mfaVerified: next.mfaVerified });
     setSessionCookie(res, s, token, session.expires_at);
     if (afterSession) await afterSession(session.id);
     // B-801: new-device and new-network notices, as for password sign-ins.
@@ -186,7 +187,7 @@ export function federationPublicRoutes(s: Services): Router {
       kind: 'auth',
       actor: { user: prov.user.id, username: prov.user.username, name: prov.user.display_name, session: session.id, roles: prov.roles, ip: req.ip ?? null },
       target: { provider: row.name, kind },
-      detail: { jit: prov.created, stage, method },
+      detail: { jit: prov.created, stage, method, ...(next.trustedDevice ? { trustedDevice: true } : {}), ...(next.enrolBy ? { mfaEnrolBy: next.enrolBy } : {}) },
       traceId: req.traceId
     });
     s.metrics.logins.inc({ result: stage === 'active' ? 'ok' : stage, kind });
@@ -701,12 +702,12 @@ export function federationPublicRoutes(s: Services): Router {
     return m?.[1] ? decodeURIComponent(m[1]) : undefined;
   };
 
-  const start = (protocol: 'oidc' | 'saml') => async (req: Request, res: Response) => {
+  const start = (protocol: 'oidc' | 'saml' | 'github') => async (req: Request, res: Response) => {
     const t = await tenantOf(req);
     if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
     const providerId = typeof req.query.provider === 'string' ? req.query.provider : '';
     try {
-      const out = protocol === 'oidc' ? await fed().upstream.startOidc(t, providerId, safeReturn(req.query.return)) : await fed().upstream.startSaml(t, providerId, safeReturn(req.query.return));
+      const out = protocol === 'oidc' ? await fed().upstream.startOidc(t, providerId, safeReturn(req.query.return)) : protocol === 'github' ? await fed().github.start(t, providerId, safeReturn(req.query.return)) : await fed().upstream.startSaml(t, providerId, safeReturn(req.query.return));
       fedCookie(res, out.browser, protocol === 'saml' ? 'none' : 'lax');
       res.setHeader('Cache-Control', 'no-store');
       res.redirect(302, out.url);
@@ -717,6 +718,7 @@ export function federationPublicRoutes(s: Services): Router {
   };
   r.get('/federation/oidc/start', start('oidc'));
   r.get('/federation/saml/start', start('saml'));
+  r.get('/federation/github/start', start('github')); // Sprint 26a (B-1804)
 
   const upstreamDone = async (req: Request, res: Response, t: TenantCtx, fn: () => Promise<{ row: ProviderRow; user: ExternalUser; returnTo: string | null; subject?: SamlSubject; stepUp?: StepUpBinding }>) => {
     res.clearCookie(FED_COOKIE, { path: '/' });
@@ -736,7 +738,7 @@ export function federationPublicRoutes(s: Services): Router {
       }
       // Upstream SAML sessions are remembered with their NameID and SessionIndex for single logout.
       const after = out.subject ? (sessionId: string) => fed().upstream.recordSamlSession(t.id, sessionId, out.row.id, out.subject!) : undefined;
-      await completeSignIn(req, res, t, out.row, out.user, `${out.row.kind === 'oidc' ? 'OIDC' : 'SAML'} (${out.row.name})`, out.row.kind, out.returnTo, {}, after);
+      await completeSignIn(req, res, t, out.row, out.user, `${out.row.kind === 'oidc' ? 'OIDC' : out.row.kind === 'github' ? 'GitHub' : 'SAML'} (${out.row.name})`, out.row.kind, out.returnTo, {}, after);
     } catch (err) {
       await s.audit.append({ tenantId: t.id, action: 'auth.login.failed', kind: 'auth', actor: { ip: req.ip ?? null }, target: { kind: 'upstream' }, detail: { reason: (err as Error).message.slice(0, 300) }, traceId: req.traceId });
       s.metrics.logins.inc({ result: 'invalid', kind: 'upstream' });
@@ -749,6 +751,13 @@ export function federationPublicRoutes(s: Services): Router {
     const t = await tenantOf(req);
     if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
     await upstreamDone(req, res, t, () => fed().upstream.finishOidc(t, req.query as Record<string, unknown>, fedCookieOf(req)));
+  });
+
+  // Sprint 26a (B-1804): GitHub's OAuth callback, finished like an upstream OIDC sign-in.
+  r.get('/federation/github/callback', async (req, res) => {
+    const t = await tenantOf(req);
+    if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
+    await upstreamDone(req, res, t, () => fed().github.finish(t, req.query as Record<string, unknown>, fedCookieOf(req)));
   });
 
   r.post('/federation/saml/acs', largeForm, async (req, res) => {
@@ -850,6 +859,89 @@ export function federationPublicRoutes(s: Services): Router {
     }
     await s.audit.append({ tenantId: t.id, action: 'auth.login.failed', kind: 'auth', actor: { username: result.principal, ip: req.ip ?? null }, target: { kind: 'kerberos' }, detail: { reason: 'not_found' }, traceId: req.traceId });
     errorPage(res, 403, 'Sign-in refused', 'Your Kerberos principal is not in any user store for this tenant.', req);
+  });
+
+  // ---------- Sprint 26 (B-1807, B-1808): AT-Protocol accounts ----------
+
+  /** The client metadata document; its URL is the client_id the authorization servers know Exprsn-AI by. */
+  r.get('/federation/atproto/client-metadata.json', async (req, res) => {
+    const t = await tenantOf(req);
+    if (!t) return void res.status(404).json({ error: 'not_found' });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json(s.atprotoAccounts.clientMetadata(t));
+  });
+
+  const atReason = (err: unknown, fallback: string): string => (err instanceof AtAccountError ? err.message : fallback);
+
+  r.get('/federation/atproto/start', async (req, res) => {
+    const t = await tenantOf(req);
+    if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
+    const providerId = typeof req.query.provider === 'string' ? req.query.provider.slice(0, 40) : '';
+    const handle = typeof req.query.handle === 'string' ? req.query.handle.trim().slice(0, 300) : '';
+    const returnTo = safeReturn(req.query.return);
+    if (!handle) {
+      // The account's handle decides where to go, so ask for it first. The form posts back here, and the answer is a
+      // redirect to the account's own authorization server, which form-action must allow.
+      const base = t.slug === s.cfg.DEFAULT_TENANT ? '' : `/t/${t.slug}`;
+      const hidden = `<input type="hidden" name="provider" value="${esc(providerId)}">${returnTo ? `<input type="hidden" name="return" value="${esc(returnTo)}">` : ''}`;
+      return page(
+        res,
+        200,
+        'Sign in with your AT-Protocol account',
+        `<form method="get" action="${esc(base)}/federation/atproto/start" style="display:flex;flex-direction:column;gap:10px">${hidden}<label for="at-handle" class="fg2">Your handle, such as alice.bsky.social, or your DID</label><input id="at-handle" class="input" name="handle" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="300"><div><button class="btn primary" type="submit">Continue</button></div></form>`,
+        { formAction: s.cfg.NODE_ENV === 'production' ? ['https:'] : ['https:', 'http:'] }
+      );
+    }
+    try {
+      const out = await s.atprotoAccounts.start(t, { providerId, input: handle, returnTo });
+      fedCookie(res, out.browser, 'lax');
+      res.setHeader('Cache-Control', 'no-store');
+      res.redirect(302, out.url);
+    } catch (err) {
+      await s.audit.append({ tenantId: t.id, action: 'auth.login.failed', kind: 'auth', actor: { ip: req.ip ?? null }, target: { kind: 'atproto', account: handle.slice(0, 200) }, detail: { reason: (err as Error).message.slice(0, 300), step: err instanceof AtAccountError ? (err.extensions.step ?? null) : null }, traceId: req.traceId });
+      if (!(err instanceof AtAccountError)) s.log.warn({ err, provider: providerId, trace_id: req.traceId }, 'AT-Protocol sign-in could not start');
+      errorPage(res, err instanceof AtAccountError && err.status < 500 ? 400 : 502, 'Sign-in could not start', atReason(err, 'The account or its server could not be reached. Try again later, or ask an identity admin.'), req);
+    }
+  });
+
+  r.get('/federation/atproto/callback', async (req, res) => {
+    const t = await tenantOf(req);
+    if (!t) return errorPage(res, 404, 'Unknown tenant', 'No active tenant answers at this address.', req);
+    res.clearCookie(FED_COOKIE, { path: '/' });
+    try {
+      const out = await s.atprotoAccounts.finish(t, req.query as Record<string, unknown>, fedCookieOf(req));
+      if (out.link) {
+        // B-1807: signing in at the account's own authorization server proves control of the DID. The binding is to
+        // the console session that started it, which must still be signed in.
+        const session = await s.sessions.get(t.id, out.link.sessionId);
+        if (!session || session.revoked_at || session.user_id !== out.link.userId || session.expires_at < Date.now()) return errorPage(res, 403, 'Not linked', 'The console session that started this has ended. Sign in and start again.', req);
+        const user = await s.users.get(t.id, out.link.userId);
+        await s.atprotoAccounts.bind({ tenantId: t.id, userId: out.link.userId, actor: { user: out.link.userId, username: user?.username, session: session.id, ip: req.ip ?? null }, traceId: req.traceId }, out.link.userId, { did: out.did, pds: out.pds, proof: 'oauth', handle: out.handle });
+        res.setHeader('Cache-Control', 'no-store');
+        return void res.redirect(302, '/#/settings?atproto=linked');
+      }
+      const row = out.row!;
+      const method = `AT Protocol (${out.handle ?? out.did})`;
+      if (out.boundUserId) {
+        const user = await s.users.get(t.id, out.boundUserId);
+        if (user) {
+          const known: ProvisionResult = user.state === 'active' ? { status: 'ok', user, roles: await s.users.roleIds(user.id), created: false } : { status: 'refused', reason: 'disabled', user };
+          return await completeSignIn(req, res, t, row, { ...out.user, username: user.username }, method, 'atproto', out.returnTo, {}, undefined, known);
+        }
+      }
+      if ((row.config as { boundOnly?: boolean }).boundOnly) {
+        await s.audit.append({ tenantId: t.id, action: 'auth.login.refused', kind: 'auth', actor: { username: out.user.username, ip: req.ip ?? null }, target: { provider: row.name, kind: 'atproto', did: out.did }, detail: { reason: 'not_bound' }, traceId: req.traceId });
+        s.metrics.logins.inc({ result: 'not_bound', kind: 'atproto' });
+        return errorPage(res, 403, 'Sign-in refused', 'This AT-Protocol account is not linked to an account here. Sign in another way and link it in Settings, or ask an identity admin.', req);
+      }
+      await completeSignIn(req, res, t, row, out.user, method, 'atproto', out.returnTo);
+    } catch (err) {
+      await s.audit.append({ tenantId: t.id, action: 'auth.login.failed', kind: 'auth', actor: { ip: req.ip ?? null }, target: { kind: 'atproto' }, detail: { reason: (err as Error).message.slice(0, 300), step: err instanceof AtAccountError ? (err.extensions.step ?? null) : null }, traceId: req.traceId });
+      s.metrics.logins.inc({ result: 'invalid', kind: 'atproto' });
+      if (!(err instanceof AtAccountError)) s.log.warn({ err, trace_id: req.traceId }, 'AT-Protocol sign-in failed');
+      errorPage(res, 400, 'Sign-in failed', atReason(err, 'The sign-in could not be completed. Start again, or ask an identity admin with the trace id below.'), req);
+    }
   });
 
   return root;

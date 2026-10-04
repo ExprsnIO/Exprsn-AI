@@ -1077,6 +1077,1353 @@
           "signature"
         ],
         "description": "A flattened JWS (RFC 7515) signed with ES256, ES384, RS256 or EdDSA"
+      },
+      "AtUserDid": {
+        "type": "object",
+        "required": [
+          "id",
+          "did",
+          "verified",
+          "proof",
+          "handle",
+          "handleCheckedAt",
+          "pds",
+          "challengePending",
+          "challengeExpiresAt",
+          "verifiedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "proof": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "oauth"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handleCheckedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pds": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "challengePending": {
+            "type": "boolean"
+          },
+          "challengeExpiresAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verifiedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "AtCheckStep": {
+        "type": "object",
+        "required": [
+          "title",
+          "ok"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "ms": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "ModerationCheck": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9.-]{0,29}$"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200000
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "checkpoint": {
+            "type": "string",
+            "enum": [
+              "user-input",
+              "context",
+              "tool-call",
+              "model-output",
+              "image",
+              "context-transfer",
+              "memory",
+              "script",
+              "db-query",
+              "media",
+              "export"
+            ]
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "apply": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "ModerationCheckResult": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "registered": {
+                "type": "boolean"
+              }
+            }
+          },
+          "verdict": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "flag": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string"
+                  },
+                  "queueId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "dueAt": {
+                    "type": "integer"
+                  },
+                  "created": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModerationAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "labelError": {
+            "type": "string"
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                },
+                "jobId": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "object",
+          "verdict",
+          "flag",
+          "action",
+          "labels",
+          "providers"
+        ]
+      },
+      "ModerationAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "objectType": {
+            "type": "string"
+          },
+          "objectId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ownerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "hide"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "reversed"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "reviewer",
+              "guardrail",
+              "provider"
+            ]
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "reversedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reversedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appealId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ModerationAppeal": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string",
+            "pattern": "^A-\\d+$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "action",
+              "sanction"
+            ]
+          },
+          "actionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sanctionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "restricted": {
+            "type": "boolean"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "filedBy": {
+            "type": "string"
+          },
+          "statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "reviewing",
+              "upheld",
+              "denied"
+            ]
+          },
+          "reviewerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decisionNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "reviewedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decidedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ModerationSanction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "warn",
+              "suspend",
+              "ban"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "flagId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired",
+              "lifted",
+              "reversed"
+            ]
+          },
+          "startsAt": {
+            "type": "integer"
+          },
+          "endsAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "endedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ModerationQueue": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kinds": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "slaMinutes": {
+            "type": "integer"
+          },
+          "escalateTo": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "tenant",
+              "platform"
+            ]
+          },
+          "escalationSlaMinutes": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "ModerationProvider": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "json",
+              "openai"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "hasSecret": {
+            "type": "boolean"
+          },
+          "zone": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "shadow",
+              "enforce"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "objectTypes": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "ModerationDeadLetter": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "redriven"
+            ]
+          },
+          "failedAt": {
+            "type": "integer"
+          },
+          "redrivenBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redrivenAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redriveJobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SignupPolicy": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "closed",
+              "open",
+              "approval"
+            ]
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requireEmailVerification": {
+            "type": "boolean"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clearance": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "workspaceId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "domains",
+          "requireEmailVerification",
+          "roles",
+          "clearance"
+        ]
+      },
+      "MfaPolicy": {
+        "type": "object",
+        "properties": {
+          "require": {
+            "type": "string",
+            "enum": [
+              "off",
+              "all",
+              "roles"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "graceDays": {
+            "type": "integer"
+          },
+          "trustedDeviceDays": {
+            "type": "integer"
+          },
+          "effectiveAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "require",
+          "roles",
+          "graceDays",
+          "trustedDeviceDays"
+        ]
+      },
+      "IdentityPolicy": {
+        "type": "object",
+        "properties": {
+          "signup": {
+            "$ref": "#/components/schemas/SignupPolicy"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/MfaPolicy"
+          },
+          "updatedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "signup",
+          "mfa"
+        ]
+      },
+      "Invitation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clearance": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "invitedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "revoked",
+              "expired"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": "integer"
+          },
+          "acceptedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "acceptedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revokedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "roles",
+          "clearance",
+          "state",
+          "expiresAt"
+        ]
+      },
+      "Signup": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "active"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "decidedBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decidedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "state"
+        ]
+      },
+      "UserImportSummary": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "integer"
+          },
+          "create": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          },
+          "unchanged": {
+            "type": "integer"
+          },
+          "conflict": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "integer"
+          },
+          "applied": {
+            "type": "integer"
+          },
+          "dryRun": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserImport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ]
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "sendInvites": {
+            "type": "boolean"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "createdBy": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserImportSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "update",
+                    "unchanged",
+                    "conflict",
+                    "error"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "changes": {
+                  "type": "object"
+                },
+                "outcome": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "row",
+                "kind",
+                "key",
+                "action",
+                "detail"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "dryRun",
+          "rows"
+        ]
       }
     },
     "responses": {
@@ -1184,6 +2531,195 @@
         ],
         "summary": "Discovery (issuer, endpoints, S256, ES256, grant types). CORS open",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/atproto/accounts": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "identity"
+        ],
+        "summary": "identity:manage. The tenant's AT-Protocol DID claims and bindings",
+        "parameters": [
+          {
+            "name": "verified",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/AtUserDid"
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "userId",
+                          "username"
+                        ],
+                        "properties": {
+                          "userId": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/atproto/accounts/check": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "identity"
+        ],
+        "summary": "identity:manage. Resolves a handle or DID step by step: account, PDS, authorization server and its metadata. Audited atproto.account.checked",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "steps"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtCheckStep"
+                      }
+                    },
+                    "did": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "pds": {
+                      "type": "string"
+                    },
+                    "issuer": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/atproto/accounts/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "identity"
+        ],
+        "summary": "identity:manage. Removes a user's AT-Protocol binding. Audited atproto.did.removed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -2932,6 +4468,176 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/identity-policy": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801, B-1803: the tenant signup and MFA policies; identity:manage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPolicy"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      }
+    },
+    "/api/admin/identity-policy/mfa": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1803: set the MFA policy (all or roles, grace period, trusted-device period); identity:manage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaPolicy"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "require": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "all",
+                      "roles"
+                    ]
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "graceDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 90
+                  },
+                  "trustedDeviceDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 90
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/identity-policy/signup": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801, B-1802: set the signup policy (mode, domains, email verification, roles, clearance, workspace); identity:manage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupPolicy"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "closed",
+                      "open",
+                      "approval"
+                    ]
+                  },
+                  "domains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 200
+                  },
+                  "requireEmailVerification": {
+                    "type": "boolean"
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "member",
+                        "flag-reviewer",
+                        "knowledge-curator"
+                      ]
+                    }
+                  },
+                  "clearance": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "workspaceId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         }
       }
@@ -6257,6 +7963,173 @@
         }
       }
     },
+    "/api/admin/signups": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: self-registered accounts by state; users:manage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Signup"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "active"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/signups/{userId}/approve": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: approve a pending sign-up (the account becomes active); users:manage",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "userId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "userId",
+                    "state"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/signups/{userId}/reject": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: reject a pending sign-up (the account stays disabled); users:manage",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "userId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "userId",
+                    "state"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/tenants": {
       "get": {
         "tags": [
@@ -6323,6 +8196,30 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/admin/tenants/{tid}/file-quota": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Set the tenant file quota",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "tenant:manage, system admins only: {maxBytes | null}. See docs/api.md, Sprint 26d."
       }
     },
     "/api/admin/tenants/{tid}/offboard": {
@@ -6624,6 +8521,38 @@
         }
       }
     },
+    "/api/admin/tenants/{tid}/workspaces/{wid}/file-quota": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Set a workspace file quota",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "tenant:manage: {maxBytes | null}, at most the tenant total. See docs/api.md, Sprint 26d."
+      }
+    },
     "/api/admin/tenants/{tid}/workspaces/{wid}/members": {
       "get": {
         "tags": [
@@ -6822,6 +8751,20 @@
         }
       }
     },
+    "/api/admin/usage/storage": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Storage per workspace",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "usage:read: file storage used and limits for the tenant and each workspace. See docs/api.md, Sprint 26d."
+      }
+    },
     "/api/admin/usage/summary": {
       "get": {
         "tags": [
@@ -6833,6 +8776,141 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/admin/user-imports": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1805: the tenant's recent CSV imports; users:manage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserImport"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1805: queue a CSV import of users, memberships and group mappings (dryRun=true changes nothing); users:manage",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "jobId": {
+                      "type": "string"
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "jobId",
+                    "dryRun"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/csv": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "dryRun",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "sendInvites",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/user-imports/{id}": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1805: one import with its summary and per-row report; users:manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserImport"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
       }
     },
     "/api/admin/users": {
@@ -8547,6 +10625,300 @@
         }
       }
     },
+    "/api/auth/email/resend": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1802: ask for a new verification link (same answer whether or not the account exists)",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tenant": {
+                    "type": "string"
+                  },
+                  "identifier": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "identifier"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/email/verify": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1802: redeem an email verification link (single use)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {
+                      "type": "boolean"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "verified"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/invitations/accept": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: accept an invitation with a new local account",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "tenant"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token",
+                  "username",
+                  "displayName",
+                  "password"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/invitations/preview": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: what an invitation link offers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tenant": {
+                      "type": "object",
+                      "properties": {
+                        "slug": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "workspace": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "invitedBy": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "roles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "clearance": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "internal",
+                        "confidential",
+                        "restricted"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "tenant",
+                    "email",
+                    "roles"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [
@@ -8660,6 +11032,95 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: sign up under the tenant signup policy (closed by default; domain allow-list; approval)",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "pending"
+                      ]
+                    },
+                    "verification": {
+                      "type": "string",
+                      "enum": [
+                        "sent",
+                        "not_required"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "state",
+                    "verification"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tenant": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "username",
+                  "displayName",
+                  "email",
+                  "password"
+                ]
+              }
+            }
           }
         }
       }
@@ -9351,6 +11812,534 @@
         }
       }
     },
+    "/api/file-links/download": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Use a file link",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: takes one use atomically and streams the file; a link past its use limit is refused (404). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/file-links/open": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Open a file link",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: name, size, type, label, expiry and uses left of a live link of the caller's tenant; uses nothing. Any refusal is the same 404. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/browse": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Browse a folder",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: a folder's folders and files (the workspace root without folder), files above the caller's clearance left out. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/folders": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Create a folder",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: {name, parentId?, workspaceId?}; 409 when the name is taken in that folder. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/folders/{id}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Put a folder in the trash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: with everything in it; restorable until its purge date. See docs/api.md, Sprint 26d."
+      },
+      "patch": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Rename or move a folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: within its workspace, never into itself. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/search": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Search files",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: ready files in the caller's workspaces by name (q, wildcards literal) and tags, within clearance. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/shared": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Files shared with me",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: live user, workspace and group shares, within clearance. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/trash": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List the trash",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: folders and files put in the trash on their own, within clearance. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/trash/empty": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Empty the trash",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: purges the workspace's trash now as a job (202 {jobId}). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/trash/restore": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Restore from the trash",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: {kind, id}; restores what went with it, to the root when its folder is gone. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/uploads": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload a file",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: the raw body, streamed into sealed quarantine (202). 413 above FILES_MAX_BYTES or a storage quota. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/usage": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "File storage use",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: used bytes and limits for the workspace and the tenant. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Put a file in the trash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: purged FILES_TRASH_DAYS later. See docs/api.md, Sprint 26d."
+      },
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Get a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: details, tags, access and preview state; members and shared readers. See docs/api.md, Sprint 26d."
+      },
+      "patch": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Rename or move a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: within its workspace. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/content": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: the current version, streamed under the media sandbox headers and audited. See docs/api.md, Sprint 26d."
+      },
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload a new version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: the raw body, quarantined and scanned before it becomes current (202). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/preview": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Get a preview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: a PNG of an image or a PDF page, sandboxed; a signed MEDIA_ORIGIN redirect when configured. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/shares": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List shares",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: user, group, workspace and link shares with their state. See docs/api.md, Sprint 26d."
+      },
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Share a file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: with a user, group or workspace, or a link (token shown once) with an expiry and an optional use limit; anonymous links on the B-706 rules. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/shares/{shareId}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Revoke a share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shareId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: access ends at once. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/tags": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Set tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: up to 20 lower-case tags. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/versions": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List versions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: every version with its scan state (members of the file's workspace). See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/versions/{n}/content": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download a version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:read: an older ready version, audited. See docs/api.md, Sprint 26d."
+      }
+    },
+    "/api/files/{id}/versions/{n}/restore": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Restore a version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "files:write: writes version n again as a new version, which is scanned again (202). See docs/api.md, Sprint 26d."
+      }
+    },
     "/api/flags": {
       "get": {
         "tags": [
@@ -9773,6 +12762,129 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/invitations": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: invitations (all for tenant admins, own for other inviters); members:invite",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invitation"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: invite an address with roles and a clearance into a workspace; members:invite",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "workspaceId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "clearance": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "email",
+                  "roles"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/invitations/{id}": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: withdraw a pending invitation; members:invite (inviter or tenant admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
       }
     },
     "/api/knowledge/bases": {
@@ -10380,6 +13492,355 @@
         }
       }
     },
+    "/api/me/atproto": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. The user's AT-Protocol DID claim or binding (B-1807), or null",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/AtUserDid"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Removes the user's claim or binding. Audited atproto.did.removed",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/claim": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link, recent sign-in. Claims a DID (or the DID a handle names, resolved by DNS TXT or https://<handle>/.well-known/atproto-did through the service URL checks; a link-local or metadata address is refused, 422) and returns the challenge once (stored as a SHA-256). Audited atproto.did.claimed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding",
+                    "challenge"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/components/schemas/AtUserDid"
+                    },
+                    "challenge": {
+                      "type": "object",
+                      "required": [
+                        "token",
+                        "expiresAt",
+                        "instructions"
+                      ],
+                      "properties": {
+                        "token": {
+                          "type": "string",
+                          "pattern": "^exprsn-ai-verify-[0-9a-f]{32}$"
+                        },
+                        "expiresAt": {
+                          "type": "integer"
+                        },
+                        "instructions": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/handle": {
+      "put": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Sets the handle for the bound DID; it must resolve to that DID and be named by its document (422, reason: mismatch). Audited atproto.handle.set",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "handle"
+                ],
+                "properties": {
+                  "handle": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/components/schemas/AtUserDid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/link": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link, recent sign-in. Starts AT-Protocol OAuth (PAR, PKCE, DPoP) for the account in link mode and sets the federation cookie; the callback binds the DID to this user (proof: oauth). Audited atproto.did.link_started",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "url"
+                  ],
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/verify": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Checks the open challenge in the account's app.bsky.actor.profile record at its own PDS; on success binds the DID (proof: profile). 409 without a challenge or when it is not there. Audited atproto.did.verified or atproto.did.verify_failed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/components/schemas/AtUserDid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/email/verify": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1802: send a verification link to the account's own unproven address",
+        "responses": {
+          "200": {
+            "description": "Already verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {
+                      "type": "boolean"
+                    },
+                    "sent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "verified"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {
+                      "type": "boolean"
+                    },
+                    "sent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "verified"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/me/grants": {
       "get": {
         "tags": [
@@ -10412,6 +13873,73 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/invitations/accept": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1801: accept an invitation as the signed-in account",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "roles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "workspaceId": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "token"
+                ]
+              }
+            }
           }
         }
       }
@@ -10714,6 +14242,96 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/me/trusted-devices": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1803: forget every trusted device of the account",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
+      },
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "B-1803: the account's trusted devices and the tenant's trusted-device period",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "periodDays": {
+                      "type": "integer"
+                    },
+                    "thisDevice": {
+                      "type": "boolean"
+                    },
+                    "devices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "browser": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          },
+                          "expiresAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "periodDays",
+                    "devices"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.4.0"
       }
     },
     "/api/me/workspace": {
@@ -11167,6 +14785,1786 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/actions": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review. Actions on objects in the reviewer's workspaces",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9.-]{0,29}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "ownerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationAction"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/appeals": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review. Appeals in the reviewer's workspaces, without statements",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "reviewing",
+                "upheld",
+                "denied"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationAppeal"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:appeal or moderation:review. B-1903: appeals an action or a sanction (a reviewer may file for someone who cannot sign in). Audited moderation.appeal.submitted",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "actionId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "sanctionId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "statement": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "forUserId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  }
+                },
+                "required": [
+                  "statement"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationAppeal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/appeals/{ref}": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "The appellant, or a reviewer in its workspace; the statement is withheld above the reviewer's clearance",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationAppeal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/appeals/{ref}/decide": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review. Upheld: restores the object, reopens its flag and negates its labels, or reverses the sanction. Audited moderation.appeal.upheld or denied",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "upheld",
+                      "denied"
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "appeal": {
+                      "$ref": "#/components/schemas/ModerationAppeal"
+                    },
+                    "effects": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/appeals/{ref}/review": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review. Claims an appeal; neither the appellant nor whoever decided may review it. Audited moderation.appeal.reviewing",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reviewing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationAppeal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/batch": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:check. B-1901: up to 100 checks in order; a failing item does not stop the rest",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "$ref": "#/components/schemas/ModerationCheck"
+                    }
+                  }
+                },
+                "required": [
+                  "items"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The verdicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "flagged": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/check": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:check. B-1901: the guardrail verdict on one object and its one flag (deduplicated per object); a block hides a registered object",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModerationCheck"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationCheckResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/dead-letters": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. Moderation jobs that failed their last attempt",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "redriven"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationDeadLetter"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/dead-letters/{id}/redrive": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. Queues a dead-lettered job again. Audited moderation.job.redriven",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationDeadLetter"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/flags/{ref}/action": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review. B-1903: hides the object behind an open or confirmed flag. Audited moderation.action.applied",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "hide"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "action",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Hidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "flag": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "$ref": "#/components/schemas/ModerationAction"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/mine": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:appeal. The caller's own sanctions, actions on their objects and appeals",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sanctions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationSanction"
+                      }
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationAction"
+                      }
+                    },
+                    "appeals": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationAppeal"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/providers": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. External moderation providers (keys never shown) and whether they are turned on",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationProvider"
+                      }
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. B-1906: an external provider, only with MODERATION_EXTERNAL_PROVIDERS and in a zone with egress; created disabled, in shadow. Audited moderation.provider.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "openai"
+                    ]
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 500
+                  },
+                  "secret": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "zone": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,30}$"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "shadow",
+                      "enforce"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "objectTypes": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9.-]{0,29}$"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [
+                  "name",
+                  "url",
+                  "zone"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationProvider"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/providers/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. Removes a provider. Audited moderation.provider.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. Changes a provider (mode, enabled, key); the zone is checked again. Audited moderation.provider.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "openai"
+                    ]
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 500
+                  },
+                  "secret": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "zone": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,30}$"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "shadow",
+                      "enforce"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "objectTypes": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9.-]{0,29}$"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationProvider"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/providers/{id}/verdicts": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. The provider's recorded verdicts, newest first",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "objectType": {
+                            "type": "string"
+                          },
+                          "objectId": {
+                            "type": "string"
+                          },
+                          "mode": {
+                            "type": "string"
+                          },
+                          "flagged": {
+                            "type": "boolean"
+                          },
+                          "categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "score": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "acted": {
+                            "type": "boolean"
+                          },
+                          "flagId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "latencyMs": {
+                            "anyOf": [
+                              {
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/queues": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review or moderation:manage. The routed review queues",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationQueue"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. B-1905: a review queue matched by workspace, rule, label and kind, with an SLA and its escalation. Audited moderation.queue.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rules": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 50
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "labels": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "internal",
+                            "confidential",
+                            "restricted"
+                          ]
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "kinds": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "slaMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "escalateTo": {
+                    "type": "string",
+                    "enum": [
+                      "workspace",
+                      "tenant",
+                      "platform"
+                    ]
+                  },
+                  "escalationSlaMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "slaMinutes",
+                  "escalateTo"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationQueue"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/queues/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. Deletes a queue; its flags become unrouted. Audited moderation.queue.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:manage. Changes a queue. Audited moderation.queue.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rules": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 50
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "labels": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "internal",
+                            "confidential",
+                            "restricted"
+                          ]
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "kinds": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "slaMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "escalateTo": {
+                    "type": "string",
+                    "enum": [
+                      "workspace",
+                      "tenant",
+                      "platform"
+                    ]
+                  },
+                  "escalationSlaMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationQueue"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/queues/{id}/flags": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:review. The open flags of a queue the reviewer may work, with counts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "queue": {
+                      "$ref": "#/components/schemas/ModerationQueue"
+                    },
+                    "open": {
+                      "type": "integer"
+                    },
+                    "overdue": {
+                      "type": "integer"
+                    },
+                    "escalated": {
+                      "type": "integer"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/reports": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:report. B-1902: reports an object the caller can see; a flag in its workspace queue. Audited moderation.reported",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9.-]{0,29}$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "high",
+                      "medium",
+                      "low"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "id",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already reported by the caller and still open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "flag": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "severity": {
+                          "type": "string"
+                        },
+                        "dueAt": {
+                          "type": "integer"
+                        },
+                        "workspaceId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "queueId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "duplicate",
+                    "flag"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Reported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "flag": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "severity": {
+                          "type": "string"
+                        },
+                        "dueAt": {
+                          "type": "integer"
+                        },
+                        "workspaceId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "queueId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "duplicate",
+                    "flag"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/sanctions": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:sanction. Sanctions in the tenant",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "expired",
+                "lifted",
+                "reversed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModerationSanction"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:sanction, a browser session and a recent sign-in. B-1904: warn, suspend or ban; suspend and ban revoke the sessions and are enforced at sign-in and on every request. Audited moderation.sanction.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "warn",
+                      "suspend",
+                      "ban"
+                    ]
+                  },
+                  "durationMinutes": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
+                  },
+                  "flag": {
+                    "type": "string",
+                    "maxLength": 40
+                  }
+                },
+                "required": [
+                  "userId",
+                  "kind",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Sanctioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationSanction"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/sanctions/{id}/lift": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:sanction, a browser session and a recent sign-in. Ends an active sanction. Audited moderation.sanction.lifted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lifted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationSanction"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/moderation/types": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "moderation"
+        ],
+        "summary": "moderation:check or moderation:report. The registered object types, and whether each can be hidden",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "hide": {
+                            "type": "boolean"
+                          },
+                          "text": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -12253,6 +17651,20 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/public/file-links/download": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Use an anonymous file link",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "No session: an anonymous link to a public file while the tenant allows anonymous links; rate-limited per address, audited. See docs/api.md, Sprint 26d."
       }
     },
     "/api/public/shared-links/open": {
@@ -14595,6 +20007,211 @@
         }
       }
     },
+    "/federation/atproto/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Completes an AT-Protocol sign-in (B-1808): iss check, code exchange with PKCE and DPoP, a DPoP-bound token whose sub DID's PDS names the same authorization server and whose getSession at the PDS answers for it; tokens revoked, not stored; then JIT provisioning (or the bound user), second factor for admin roles. Redirects (302) to the console, or to Settings in link mode; errors are HTML pages",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Signed in, or linked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/federation/atproto/client-metadata.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "The AT-Protocol OAuth client metadata document; its URL is the client_id (B-1808)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "client_id",
+                    "redirect_uris",
+                    "scope",
+                    "token_endpoint_auth_method",
+                    "jwks_uri",
+                    "dpop_bound_access_tokens"
+                  ],
+                  "properties": {
+                    "client_id": {
+                      "type": "string"
+                    },
+                    "client_name": {
+                      "type": "string"
+                    },
+                    "client_uri": {
+                      "type": "string"
+                    },
+                    "application_type": {
+                      "const": "web"
+                    },
+                    "grant_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "response_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "redirect_uris": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "token_endpoint_auth_method": {
+                      "const": "private_key_jwt"
+                    },
+                    "token_endpoint_auth_signing_alg": {
+                      "const": "ES256"
+                    },
+                    "jwks_uri": {
+                      "type": "string"
+                    },
+                    "dpop_bound_access_tokens": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/federation/atproto/start": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "Without handle, a page asking for it; with it, resolves the account (handle, DID, PDS, authorization server) through the service URL checks, sends a pushed authorization request with PKCE S256 and a DPoP proof (nonce retry) and private_key_jwt, and redirects (302) to the authorization endpoint with client_id and request_uri; browser-binding cookie",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "handle",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "return",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The handle form",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "To the account's authorization server"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/federation/github/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: GitHub OAuth callback: code exchange, organisations and teams to groups, sign-in",
+        "responses": {
+          "302": {
+            "description": "Signed in"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/federation/github/start": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: start a GitHub sign-in (redirect with state and PKCE)",
+        "responses": {
+          "302": {
+            "description": "Redirect to GitHub"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/federation/oidc/callback": {
       "get": {
         "tags": [
@@ -15427,6 +21044,257 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/t/{tenant}/federation/atproto/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Completes an AT-Protocol sign-in (B-1808): iss check, code exchange with PKCE and DPoP, a DPoP-bound token whose sub DID's PDS names the same authorization server and whose getSession at the PDS answers for it; tokens revoked, not stored; then JIT provisioning (or the bound user), second factor for admin roles. Redirects (302) to the console, or to Settings in link mode; errors are HTML pages",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Signed in, or linked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/t/{tenant}/federation/atproto/client-metadata.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "The AT-Protocol OAuth client metadata document; its URL is the client_id (B-1808)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "client_id",
+                    "redirect_uris",
+                    "scope",
+                    "token_endpoint_auth_method",
+                    "jwks_uri",
+                    "dpop_bound_access_tokens"
+                  ],
+                  "properties": {
+                    "client_id": {
+                      "type": "string"
+                    },
+                    "client_name": {
+                      "type": "string"
+                    },
+                    "client_uri": {
+                      "type": "string"
+                    },
+                    "application_type": {
+                      "const": "web"
+                    },
+                    "grant_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "response_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "redirect_uris": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "token_endpoint_auth_method": {
+                      "const": "private_key_jwt"
+                    },
+                    "token_endpoint_auth_signing_alg": {
+                      "const": "ES256"
+                    },
+                    "jwks_uri": {
+                      "type": "string"
+                    },
+                    "dpop_bound_access_tokens": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": []
+      }
+    },
+    "/t/{tenant}/federation/atproto/start": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "Without handle, a page asking for it; with it, resolves the account (handle, DID, PDS, authorization server) through the service URL checks, sends a pushed authorization request with PKCE S256 and a DPoP proof (nonce retry) and private_key_jwt, and redirects (302) to the authorization endpoint with client_id and request_uri; browser-binding cookie",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "handle",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "return",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The handle form",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "To the account's authorization server"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/t/{tenant}/federation/github/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: GitHub OAuth callback for a tenant",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Signed in"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/t/{tenant}/federation/github/start": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "B-1804: start a GitHub sign-in for a tenant (redirect with state and PKCE)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to GitHub"
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }

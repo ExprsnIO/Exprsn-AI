@@ -47,7 +47,10 @@ import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
+import { identityPolicyRoutes, signupPublicRoutes } from '../routes/signup.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
+import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
+import { moderationRoutes } from '../routes/moderation.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -57,6 +60,7 @@ import { authenticate, csrfProtection, noStore } from './middleware.js';
 import { eventRoutes } from '../routes/events.js';
 import { pluginAdminRoutes } from '../routes/admin/plugins.js';
 import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
+import { fileRoutes, publicFileRoutes } from '../routes/files.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -160,7 +164,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path)) ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path)) ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -177,6 +181,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   const authLimit = limit(authLimiter);
   const generalLimit = limit(general);
   api.use('/auth', (req, res, next) => (req.method === 'GET' ? generalLimit(req, res, next) : authLimit(req, res, next)), authRoutes(s));
+  // Sprint 26a (B-1801, B-1802): sign-up, verification and invitation links, behind the same limiter as sign-in.
+  api.use('/auth', signupPublicRoutes(s));
   api.use(generalLimit);
   api.use('/me', meRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
@@ -219,10 +225,20 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(vaultLeaseRoutes(s));
   // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.
   api.use(atprotoRoutes(s));
+  // Sprint 26 (B-1807, B-1808): users' AT-Protocol DIDs and handles.
+  api.use(atprotoAccountRoutes(s));
+  // 1.4.0, Sprint 26d (B-2401 to B-2405): the file store.
+  api.use(fileRoutes(s));
+  // Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues and providers.
+  api.use(moderationRoutes(s));
+  // Sprint 26a (B-1801 to B-1803, B-1805): invitations, trusted devices, signup and MFA policies, CSV imports.
+  api.use(identityPolicyRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
   // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
+  // Sprint 26d (B-2402): anonymous file links, on the same rules.
+  app.use('/api/public', publicFileRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 

@@ -42,7 +42,7 @@ export interface EventType {
 export const EVENT_GROUPS: EventGroup[] = [
   { pattern: '*', description: 'Every event below' },
   { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
-  { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached' },
+  { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached, reopened' },
   { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
   { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
@@ -58,10 +58,12 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0, Sprint 25 (B-1608 to B-1611)
   { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records: created, updated, deleted, transitioned (reserved until B-22)' },
-  { pattern: 'file.*', description: 'File store: uploaded, updated, deleted, restored, shared (reserved until B-24)' },
+  { pattern: 'file.*', description: 'File store (Sprint 26d): uploaded, updated, deleted (to the trash), restored, shared; and audit actions for uploads received, versions ready or rejected, downloads, shares, trash, purges and quotas' },
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
   { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
+  // 1.4.0, Sprint 26 (B-1901 to B-1907)
+  { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
   // 1.4.0, Sprint 25c (B-1704 to B-1706)
   { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' }
 ];
@@ -81,7 +83,8 @@ const approval = {
     obj({ kind: { const: 'agent' }, run: str(64), agent: str(200) })
   ]
 };
-// Reserved domains: ids and names only; content stays in the tenant, sealed, and is fetched through the API.
+// Domain events (files emitted since Sprint 26d, the others reserved): ids and names only; content stays in the
+// tenant, sealed, and is fetched through the API.
 const record = (extra: Record<string, JsonSchema> = {}) => obj({ app: id26, entity: str(120), record: id26, workspace: nullable(id26), actor: nullable(id26), ...extra });
 const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folder: nullable(id26), workspace: id26, version: { type: 'integer', minimum: 1 }, actor: nullable(id26), ...extra });
 const group = (extra: Record<string, JsonSchema> = {}) => obj({ group: id26, workspace: id26, actor: nullable(id26), ...extra });
@@ -97,7 +100,9 @@ const flagActions: [string, string][] = [
   ['escalated', 'A flag moved up a review level'],
   ['reassigned', 'A flag was handed to another reviewer'],
   ['breached', 'A flag passed its review deadline'],
-  ['eval', 'A flag was added to an evaluation set']
+  ['eval', 'A flag was added to an evaluation set'],
+  // 1.4.0, Sprint 26 (B-1903)
+  ['reopened', 'An upheld appeal put a decided flag back in the queue']
 ];
 
 export const EVENT_TYPES: EventType[] = [
@@ -108,11 +113,11 @@ export const EVENT_TYPES: EventType[] = [
   { type: 'record.updated', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A record was updated', data: record({ fields: { type: 'array', items: str(120), maxItems: 500 } }) },
   { type: 'record.deleted', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A record was deleted', data: record() },
   { type: 'record.transitioned', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: "A record moved through its entity's state machine", data: record({ from: str(60), to: str(60) }) },
-  { type: 'file.uploaded', group: 'file.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A file passed quarantine and was stored', data: file() },
-  { type: 'file.updated', group: 'file.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A new version of a file was stored', data: file() },
-  { type: 'file.deleted', group: 'file.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A file went to the trash', data: file() },
-  { type: 'file.restored', group: 'file.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A file version was restored (and scanned again)', data: file({ from: { type: 'integer', minimum: 1 } }) },
-  { type: 'file.shared', group: 'file.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A file was shared with a user, group, workspace or link', data: file({ with: { type: 'string', enum: ['user', 'group', 'workspace', 'link'] } }) },
+  { type: 'file.uploaded', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file passed quarantine and was stored', data: file() },
+  { type: 'file.updated', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A new version of a file was stored', data: file() },
+  { type: 'file.deleted', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file went to the trash', data: file() },
+  { type: 'file.restored', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file version was restored (and scanned again)', data: file({ from: { type: 'integer', minimum: 1 } }) },
+  { type: 'file.shared', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file was shared with a user, group, workspace or link', data: file({ with: { type: 'string', enum: ['user', 'group', 'workspace', 'link'] } }) },
   { type: 'group.created', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A group was created', data: group() },
   { type: 'group.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A group was changed', data: group() },
   { type: 'group.deleted', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A group was deleted', data: group() },

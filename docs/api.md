@@ -1900,6 +1900,84 @@ routes above, for `--tenant <slug>`, audited with actor `service: cli`; exit 3 f
 backfills audit-action events from the audit chain that the webhook never received, within its event list and label.
 Audited `webhook.replayed`.
 
+## Sprint 26d (1.4.0): the file store (B-2401 to B-2405)
+
+Workspace folders and files on the blob store. Members of a workspace read (`files:read`) and change (`files:write`)
+its files within their clearance; members get both, tenant admins too. Every upload, new version and restored
+version is quarantined: the bytes stream into the blob store sealed (64 KiB AES-GCM segments under a random key per
+version, that key sealed with the tenant key), then the `file.scan` job detects the type from the bytes (text,
+Markdown, CSV, JSON, HTML, PDF, Word, Excel, PowerPoint, PNG, JPEG, WebP, GIF), classifies text, scans with ClamAV
+(`CLAMD_HOST`) and checks the label against the uploader's clearance and the workspace ceiling. Only a ready version
+is served. Names are 1 to 255 characters without `/`, `\` or control characters, unique (case-insensitive) in their
+folder. Every route answers `Cache-Control: no-store`.
+
+### Folders, files and versions (B-2401)
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/browse?workspace=&folder=` | A folder's contents (the workspace root without `folder`): `{workspace, folder, path, folders, files}`; files above the caller's clearance are left out |
+| `POST /files/folders` `{name, parentId?, workspaceId?}` | `201` with the folder; `409` if the name is taken |
+| `PATCH /files/folders/:id` `{name?, parentId?}` | Rename or move within the workspace (not into itself) |
+| `DELETE /files/folders/:id` | Puts the folder in the trash with everything in it: `{…folder, files, folders}` |
+| `PUT /files/uploads?name=&label=&folder=&workspace=` | The raw body is the file, streamed (never buffered). `202` with the file (`state: pending`) and `version {number: 1, state: quarantined}`. `413` above `FILES_MAX_BYTES` or over a storage quota (checked while the bytes arrive) |
+| `GET /files/:id` | The file: `{id, name, workspaceId, folderId, ownerId, ownerName, label, state: pending\|ready\|rejected, size, type, currentVersion, tags, access: workspace\|shared, preview: queued\|ready\|failed\|unavailable\|null, …}`; shared readers too |
+| `PATCH /files/:id` `{name?, folderId?}` | Rename or move within the workspace |
+| `PUT /files/:id/tags` `{tags}` | Up to 20 lower-case tags |
+| `DELETE /files/:id` | To the trash (`purgeAfter` is `FILES_TRASH_DAYS` later) |
+| `GET /files/:id/content` | The current version, streamed and audited (`file.downloaded`), as an attachment with `Content-Security-Policy: sandbox`, `nosniff` and the name escaped in `Content-Disposition` (`filename` and `filename*`). `409` while no version is ready |
+| `PUT /files/:id/content?label=` | A new version (raw body, as an upload): `202`; it becomes current when its scan passes |
+| `GET /files/:id/versions` | Every version, newest first: `{number, state, size, sha256, type, label, reason, findings, restoredFrom, createdBy, createdAt, scannedAt}` (members of the file's workspace) |
+| `GET /files/:id/versions/:n/content` | An older ready version, audited |
+| `POST /files/:id/versions/:n/restore` | Writes version `n`'s content again as a new version, which goes through quarantine and is **scanned again**: `202` |
+| `GET /files/trash?workspace=` | What was put in the trash on its own (folders and files), within clearance |
+| `POST /files/trash/restore` `{kind: file\|folder, id}` | Restores it with what went with it, to the workspace root when its folder is gone; a clashing name gets ` (2)`. `409` for something that went with a folder |
+| `POST /files/trash/empty` `{workspaceId?}` | Purges the workspace's trash now: `202 {jobId}`. The `files.purge` job also runs every `FILES_PURGE_MINUTES` for what passed its purge date |
+
+Events (catalogue group `file.*`, now emitted): `file.uploaded` (version 1 passed quarantine), `file.updated` (a later
+version), `file.restored` (`from`), `file.deleted` (to the trash), `file.shared` (`with`). Audit actions:
+`file.upload.received`, `file.version.ready`, `file.version.rejected`, `file.version.restore.requested`,
+`file.downloaded`, `file.changed`, `file.tags.updated`, `file.trashed`, `file.untrashed`, `file.purged`,
+`file.trash.emptied`, `file.folder.created`, `.updated`, `.trashed`, `.untrashed`, `file.share.created`,
+`file.share.revoked`, `file.quota.updated`. The owner's sockets get `file.state` when a version is ready or rejected.
+
+### Sharing (B-2402)
+
+Read-only: a shared reader downloads the current version and its preview, nothing else.
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/:id/shares` | `[{id, kind, userId, userName, group, workspaceId, workspaceName, anonymous, expiresAt, maxUses, uses, state: active\|revoked\|expired\|used up, …}]` |
+| `POST /files/:id/shares` `{kind: user, userId}` \| `{kind: group, group}` \| `{kind: workspace, workspaceId}` \| `{kind: link, expiresInHours?, maxUses?, anonymous?}` | `201`. A user must be cleared for the file's label, a workspace's ceiling must cover it; a group is a directory group (as the reader's identities carried it at sign-in or sync). A link answers with `token` (`exf_…`) **once**; it is stored as an HMAC. Anonymous links need the tenant's anonymous-link setting (`PUT /admin/tenants/:tid/sharing`, shared with conversations), a `public` file and a lifetime within the tenant's maximum |
+| `DELETE /files/:id/shares/:shareId` | Revokes at once (`204`) |
+| `GET /files/shared` | Files shared with the caller (directly, through a workspace or a group), live shares only, within clearance |
+| `POST /file-links/open` `{token}` | Signed in, same tenant, cleared: `{name, size, type, label, expiresAt, usesLeft}`; does not use the link. Every other case is the same `404` |
+| `POST /file-links/download` `{token}` | Signed in: takes one use atomically and streams the file (sandboxed, audited with the address). **A link past its use limit, expired or revoked is refused** with the same `404` as an unknown token |
+| `POST /api/public/file-links/download` `{token}` | Anonymous (no session, no cookie; `SHARE_ANONYMOUS_PER_MINUTE` per address): only an anonymous link to a file that is `public` now, while the tenant allows anonymous links. No metadata route |
+
+### Quotas and usage (B-2403)
+
+Stored and quarantined versions count (trash too, until purged; previews do not).
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/usage?workspace=` | `{workspace: {usedBytes, maxBytes, files}, tenant: {…}, maxUploadBytes, trashDays}` (`files:read`) |
+| `GET /admin/usage/storage` | Storage per tenant and workspace (`usage:read`) |
+| `PUT /admin/tenants/:tid/file-quota` `{maxBytes \| null}` | The tenant total (`tenant:manage`, system admins only) |
+| `PUT /admin/tenants/:tid/workspaces/:wid/file-quota` `{maxBytes \| null}` | A workspace's limit (`tenant:manage`), at most the tenant total. **An upload over either limit is refused** with `413 {limit: storage_bytes, scope, used, max, incoming}` |
+
+### Previews (B-2404)
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/:id/preview` | A PNG of an image or a PDF's first page, drawn by the `file.preview` job (ffmpeg, `pdftoppm`), sealed like the original, served with the media sandbox headers (B-413); with `MEDIA_ORIGIN`, a `302` to a signed URL on the media origin. `409` while it is drawn, `404` when there is none (`unavailable` without the tool, or above `FILES_PREVIEW_MAX_BYTES`) |
+
+### Search and folders as knowledge sources (B-2405)
+
+| Route | Notes |
+| --- | --- |
+| `GET /files/search?q=&tag=&workspace=` | Ready files in the caller's workspaces whose name contains `q` (`%` and `_` literal) and that carry every `tag` (repeatable), within clearance; at most 100 |
+| `POST /knowledge/bases/:id/sources` `{kind: folder, location: <folder id>}` | A folder (and its subfolders) the curator can read becomes a source (`location` shows `folder: <name>`). Each sync indexes its ready files of a knowledge type up to the base's label, named by their path below the folder; chat cites them like any document |
+
 ## Sprint 25d (1.4.0): plugins that run (B-2003 to B-2005)
 
 Events reach enabled plugins as jobs. Every event the webhook fan-out sees (audit actions, `job.*` except the plugin
@@ -2203,3 +2281,251 @@ dns:<name>]… [--days] [--out <file>]` (from the tenant's active intermediate),
 (queues the next CRL), `list [--state] [--issuer] [--limit] [--json]`, `crl [--issuer <id>] [--out <file>] [--der]`
 (signs the next CRL now). Exit codes: 0 done, 1 refused or failed, 3 conflict (already revoked, no active
 intermediate), 64 usage. See `docs/pki.md`.
+
+## Sprint 26b (1.4.0): AT-Protocol accounts (B-1807, B-1808)
+
+A user binds their own AT-Protocol DID (`did:plc` or `did:web`), and a tenant may sign people in with their
+AT-Protocol accounts. Handles are resolved by the DNS TXT record `_atproto.<handle>` (`did=<did>`) and then
+`https://<handle>/.well-known/atproto-did`; DID documents through `ATPROTO_PLC_URL` or over https. Every fetch goes
+through the service URL checks (B-901): the address dialled is the address checked, so a handle, PDS or authorization
+server that resolves to a link-local or cloud metadata address is refused (`422`, `step: handle`, `reason: refused`)
+and never fetched. A handle counts for a DID only when the DID document names it back (`alsoKnownAs: at://<handle>`).
+Errors are problem details with `step` (`handle`, `did`, `did_document`, `pds`, `challenge`, `proof`,
+`authorization_server`, `par`, `provider`) and, for handles, `reason` (`syntax`, `refused`, `not_found`, `conflict`,
+`mismatch`).
+
+### The signed-in user's DID (`atproto:link`, a browser session)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/atproto` | `{binding: {id, did, verified, proof: profile \| oauth \| null, handle, handleCheckedAt, pds, challengePending, challengeExpiresAt, verifiedAt, createdAt, updatedAt} \| null}` |
+| `POST /api/me/atproto/claim` `{account}` | Recent sign-in. `account` is a handle or a DID. Resolves it (handle → DID → document → PDS) and issues a challenge `exprsn-ai-verify-<32 hex>`, valid 24 hours, shown once and stored as a SHA-256. Replaces the user's earlier claim. `409` when the DID is bound to another user of the tenant. Audited `atproto.did.claimed`. `201 {binding, challenge: {token, expiresAt, instructions}}` |
+| `POST /api/me/atproto/verify` `{}` | Reads the account's `app.bsky.actor.profile` record (`rkey: self`) from its own PDS (`com.atproto.repo.getRecord`); its description must contain the challenge. On success the DID is bound (`proof: profile`), the challenge is used up and the handle the document names is checked both ways. `409` without an open challenge or when the token is not there (audited `atproto.did.verify_failed`). Audited `atproto.did.verified` |
+| `POST /api/me/atproto/link` `{account}` | Recent sign-in. Starts the AT-Protocol OAuth flow below in "link" mode and sets the federation cookie; `{url}` is where the console sends the browser. The callback binds the DID to this user (`proof: oauth`) if the session that started it is still signed in, then redirects to `/#/settings?atproto=linked`. Audited `atproto.did.link_started`, then `atproto.did.verified` |
+| `PUT /api/me/atproto/handle` `{handle}` | The handle shown for the bound DID: it must resolve to that DID and be named by its document (`422`, `reason: mismatch`). Audited `atproto.handle.set` |
+| `DELETE /api/me/atproto` | Removes the claim or binding. Audited `atproto.did.removed`. `204` |
+
+### Identity admins (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/atproto/accounts[?verified=true\|false&limit&offset]` | The tenant's claims and bindings with `userId` and `username` |
+| `POST /api/admin/atproto/accounts/check` `{account}` | Resolves a handle or DID step by step (account, then its PDS's authorization server and that server's metadata): `{ok, steps: [{title, ok, ms, detail}], did?, handle?, pds?, issuer?}`. Audited `atproto.account.checked` |
+| `DELETE /api/admin/atproto/accounts/:id` | Removes a user's binding. Audited `atproto.did.removed`. `204` |
+
+### The `atproto` user store (B-1808)
+
+A user store of kind `atproto` (`POST /api/admin/identity-providers`, config `{defaultRoles?, defaultClearance?,
+boundOnly?: false, authServers?: [origin]}`) adds AT-Protocol sign-in to the tenant's chain. It takes no passwords
+and has no directory. A DID bound to a user (above) signs in as that user, with the roles they have; any other account
+is provisioned (just in time) with the verified handle as its username (or the DID with `:` made `-` when it has no
+valid handle) and its DID as its only group, so group mappings name DIDs. `boundOnly` refuses unbound DIDs
+(`auth.login.refused`, `reason: not_bound`); `authServers` limits the authorization servers accepted. Admin roles still
+need their second factor. "Test connection" checks the client metadata address and the client assertion key.
+`GET /api/auth/sign-in-options` lists the store with `protocol: atproto`.
+
+### Public (no session; sign-in pages throttled per address like the other federation pages)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /federation/atproto/client-metadata.json` | The OAuth client metadata document; its URL is the `client_id`. `{client_id, client_name, client_uri, application_type: web, grant_types: [authorization_code, refresh_token], response_types: [code], redirect_uris: [<issuer>/federation/atproto/callback], scope: atproto, token_endpoint_auth_method: private_key_jwt, token_endpoint_auth_signing_alg: ES256, jwks_uri: <issuer>/.well-known/jwks.json, dpop_bound_access_tokens: true}` |
+| `GET /federation/atproto/start?provider=<store id>[&handle=<handle or DID>][&return]` | Without `handle`, a page asking for it. With it: resolves the account, reads the PDS's protected-resource metadata (exactly one authorization server) and that server's metadata (issuer, PAR, S256, ES256 DPoP, `iss` response parameter, `private_key_jwt`, the `atproto` scope), sends a pushed authorization request with PKCE S256, `login_hint` and a DPoP proof from a P-256 key made for this sign-in (retried once with the server's `DPoP-Nonce` after `use_dpop_nonce`), client-authenticated by a JWT the tenant's ES256 OIDC key signs, and redirects to the authorization endpoint with only `client_id` and `request_uri`. The state is bound to the browser by the federation cookie |
+| `GET /federation/atproto/callback?code&state&iss` | `iss` must be the authorization server the request went to; the code is exchanged with PKCE and DPoP (nonce retry as above). The token must be `token_type: DPoP` with the `atproto` scope and a DID `sub` equal to the account asked for; that DID's own PDS must name the same authorization server, and `com.atproto.server.getSession` at the PDS with the token (DPoP proof with `ath` and the resource server's nonce) must answer for the same DID. The tokens are then revoked (best effort) and never stored. Sign-in continues as for upstream OIDC (JIT provisioning, second factor for admin roles, sign-in notices, `auth.login` with `kind: atproto`). Other tenants' paths are under `/t/<slug>/` |
+
+## Sprint 26c (1.4.0): moderation actions and appeals (B-1901 to B-1907)
+
+Moderation is built on the guardrails and the flag queue (`/api/flags`), not beside them: every check, report and
+provider verdict ends in a guard flag, and reviewers keep working the queue there. Objects are named by `{type, id}`.
+Types are registered by their domain (`GET /api/moderation/types`): today `conversation`, `message`,
+`knowledge-document`, `media-asset` and `image`; later domains (posts, files, records, group content) register their
+own. A registered type resolves the object's tenant, workspace, label, owner and state, and can hide it (state
+`hidden`: a hidden message is shown to nobody, its owner included, and left out of model context, shares and `/v1`; a
+hidden document is left out of search and retrieval; hidden media and images cannot be downloaded) and restore it
+(compare-and-set on the state it had). Objects outside the caller's workspaces are `404`. Problem details carry
+`step`: `type` (no such type, `422`), `text`, `clearance`, `independence`, `sanction`, `self`, `role`, `disabled`,
+`zone`, `url`.
+
+### Checks (`moderation:check`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/types` | `moderation:check` or `moderation:report`. `{items: [{type, description, hide, text}]}` |
+| `POST /api/moderation/check` `{type, id, text?, workspaceId?, label?, checkpoint?, subject?, apply?}` | B-1901. Runs the guardrail engine on the object at `checkpoint` (default `user-input`): the text is the object's own (opened from its sealed form) unless given; a type nobody registered needs `text` and takes `workspaceId` (one the caller may use; default the current one) and `label`. A verdict of `flag` or worse files one flag per object: a second check finds the open flag (`flag.created: false`), and a dismissed flag is not raised again while the text is unchanged; two checks at once make one flag. A `block` hides a registered object that can be hidden (unless `apply: false`). With `subject` (an `at://` URI or DID) and a verdict of `warn` or worse, the tenant's labeler signs labels for it tied to the flag (`labels`, or `labelError` when there is no identity). Enabled external providers get a job each (`providers: [{id, mode, jobId}]`). `200 {object: {type, id, workspaceId, label, registered}, verdict: {action, reason, findings}, flag: {id, ref, state, severity, queueId, dueAt, created} \| null, action \| null, labels, providers}`. A new flag is audited `moderation.flagged`, a hide `moderation.action.applied` |
+| `POST /api/moderation/batch` `{items: [check body]}` | B-1901. Up to 100 checks in order; an item that fails is `{ok: false, object, status, detail}` and the rest go on. `200 {items: [{ok, …check result}], flagged}` |
+
+### Reports (`moderation:report`, held by members)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/moderation/reports` `{type, id, reason, note?, severity?: high \| medium \| low}` | B-1902. Only a registered type, and only an object the reporter can see (a message in their own conversation, or a reviewer in its workspace; a knowledge document in a base they can read; media and images their own or in their workspace), within clearance; otherwise `404`. Files a `report` flag (a `reviewer` flag from a reviewer) in the object's workspace, checkpoint `user-report`, routed like any flag. The same reporter reporting the same object while their flag is open gets it back (`200 {duplicate: true}`). Audited `moderation.reported`. `201 {duplicate: false, flag: {id, ref, severity, dueAt, workspaceId, queueId}}` |
+
+### Actions and appeals
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/moderation/flags/:ref/action` `{action: hide, reason}` | `moderation:review`. B-1903. Hides the object behind an open or confirmed flag (an open one is confirmed first); flags that point at no registered object are `409`. The owner is notified. Audited `moderation.action.applied`. `201 {flag, action}` |
+| `GET /api/moderation/actions[?type&id&ownerId]` | `moderation:review`. `{items: [{id, objectType, objectId, workspaceId, ownerId, flagId, action, state: applied \| reversed, source: reviewer \| guardrail \| provider, createdBy, reason, createdAt, reversedBy, reversedAt, appealId}]}` |
+| `GET /api/moderation/mine` | `moderation:appeal`. The caller's own `{sanctions, actions, appeals}` |
+| `POST /api/moderation/appeals` `{actionId \| sanctionId, statement, forUserId?}` | `moderation:appeal` or `moderation:review`. B-1903. The owner of a hidden object, or a sanctioned user, appeals; a reviewer may record the appeal for someone who cannot sign in (`forUserId`). One open appeal per action or sanction (`409`). The statement is sealed. Audited `moderation.appeal.submitted`. `201 {id, ref: "A-3", kind: action \| sanction, actionId, sanctionId, flagId, workspaceId, label, restricted, userId, filedBy, statement, state: pending, …}` |
+| `GET /api/moderation/appeals[?state]` | `moderation:review`. Appeals in the reviewer's workspaces (without statements) |
+| `GET /api/moderation/appeals/:ref` | The appellant, or a reviewer in its workspace; the statement is withheld above the reviewer's clearance |
+| `POST /api/moderation/appeals/:ref/review` | `moderation:review`. Claims it (`reviewing`). Neither the appellant nor whoever took the decision under appeal may review it (`403`, `step: independence`), nor anyone below its label. Audited `moderation.appeal.reviewing` |
+| `POST /api/moderation/appeals/:ref/decide` `{decision: upheld \| denied, note?}` | `moderation:review`, same independence rules; while someone else reviews it, `409`. Upheld, for an action: the object is restored to its previous state (`moderation.action.reversed`), its flag reopened with a fresh timer (event `flag.reopened`) and the AT-Protocol labels made from the flag negated (`atproto.label.negated`); for a sanction: it ends as `reversed`. Audited `moderation.appeal.upheld` or `moderation.appeal.denied` with the effects. `200 {appeal, effects: {restored, flagReopened, labelsNegated} \| {sanctionEnded}}` |
+
+### Sanctions (`moderation:sanction`, a browser session with a recent sign-in)
+
+A `suspend` or `ban` keeps the user out: it revokes their sessions at once (their sockets close over the bus), no new
+session is made for them however they sign in, and every request with any credential (session, API key, OAuth token)
+is `403` (`step: sanction`, `sanction`, `until`). Background work run as them (schedules, plugins) stops. A `warn` only
+notifies. The sweep (`MODERATION_SWEEP_SECONDS`) ends sanctions whose time is up (`expired`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/sanctions[?userId&state]` | `{items: [{id, userId, kind, reason, flagId, state: active \| expired \| lifted \| reversed, startsAt, endsAt, createdBy, createdAt, endedBy, endedAt, endReason}]}` |
+| `POST /api/moderation/sanctions` `{userId, kind: warn \| suspend \| ban, durationMinutes?, reason, flag?}` | B-1904. A suspension needs a duration; a ban without one lasts until lifted. Not yourself; an administrator (a role that requires MFA) only by a tenant admin, a system admin only by a system admin. The user is notified (B-1907). Audited `moderation.sanction.created` (`sessionsRevoked`). Refused sign-ins are audited `moderation.signin.refused`. `201` |
+| `POST /api/moderation/sanctions/:id/lift` `{reason?}` | Ends an active sanction (`lifted`). Audited `moderation.sanction.lifted` |
+
+### Review queues and the dead-letter queue
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/queues` | `moderation:review` or `moderation:manage`. `{items: [{id, name, workspaceId, rules, labels, kinds, priority, slaMinutes, escalateTo, escalationSlaMinutes, enabled, createdAt, updatedAt}]}` |
+| `POST /api/moderation/queues` `{name, workspaceId?, rules?, labels?, kinds?, priority?, slaMinutes, escalateTo: workspace \| tenant \| platform, escalationSlaMinutes?, enabled?}` | `moderation:manage`. B-1905. A new flag goes to the first enabled queue (lowest `priority`) whose workspace, rules (rule ids or names), labels and kinds (flag kind, object type or checkpoint) all match; its timer becomes the queue's SLA. The sweep escalates a routed flag past its timer to `escalateTo` with a fresh `escalationSlaMinutes` timer and notifies that level (event `flag.escalated`, audit `moderation.queue.escalated`). `409` for a name in use. Audited `moderation.queue.created` |
+| `PATCH /api/moderation/queues/:id`, `DELETE /api/moderation/queues/:id` | `moderation:manage`. Audited `moderation.queue.updated`, `moderation.queue.deleted` (its flags become unrouted); `204` on delete |
+| `GET /api/moderation/queues/:id/flags` | `moderation:review`. `{queue, open, overdue, escalated, items: [flag as in /api/flags, queueId, escalatedAt]}`, the flags the reviewer may work |
+| `GET /api/moderation/dead-letters[?state]` | `moderation:manage`. Moderation jobs (`moderation.provider`) that failed their last attempt: `{items: [{id, jobId, type, error, attempts, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveJobId}]}`. Audited `moderation.job.dead_lettered` when one lands |
+| `POST /api/moderation/dead-letters/:id/redrive` | `moderation:manage`. Queues the job again with its payload (texts in it stay sealed); `409` when already redriven. Audited `moderation.job.redriven`. `201 {…, jobId}` |
+
+### External providers (`moderation:manage`)
+
+Off unless `MODERATION_EXTERNAL_PROVIDERS` is set (`403`, `step: disabled`), and each provider only in a zone whose
+egress reaches outside the site (an allow-list with a public range or the external zone; never with
+`ZONES_AIR_GAPPED`; `403`, `step: zone`). A provider is created disabled and in `shadow`. When enabled, each check of a
+type it takes queues a `moderation.provider` job (the text sealed in the payload): `shadow` records the verdict and does
+nothing else; `enforce` files (or reuses) the object's flag on a flagged verdict, hides a registered object and audits
+`moderation.provider.enforced`. A failed call retries, then lands in the dead-letter queue. Wire formats: `json`
+(`POST {input, type}` → `{flagged, score?, categories?}`) and `openai` (the OpenAI moderation shape); the key goes as
+`Authorization: Bearer` and is stored sealed, never shown. Connections go through the service address checks.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/moderation/providers` | `{items: [{id, name, kind, url, hasSecret, zone, mode, enabled, objectTypes, threshold, createdAt, updatedAt}], enabled}` |
+| `POST /api/moderation/providers` `{name, kind?: json \| openai, url, secret?, zone, mode?: shadow \| enforce, enabled?, objectTypes?, threshold?}` | B-1906. The URL passes the service URL checks (`422`, `step: url`). Audited `moderation.provider.created` (host only). `201` |
+| `PATCH /api/moderation/providers/:id`, `DELETE /api/moderation/providers/:id` | The zone is checked again on every change. Audited `moderation.provider.updated`, `moderation.provider.deleted`; `204` on delete |
+| `GET /api/moderation/providers/:id/verdicts` | `{items: [{id, objectType, objectId, mode, flagged, categories, score, acted, flagId, latencyMs, createdAt}]}` |
+
+### Notices (B-1907)
+
+The person concerned is notified in the console and by email (template `moderation-notice`, escaped like the other
+templates, without the moderated content): an action on something of theirs, a sanction (issued, ended, lifted), an
+appeal received and decided.
+
+## Sprint 26a (1.4.0): identity gaps (B-1801 to B-1805) and the secrets and users CLI (B-2103)
+
+Self-registration, email verification, invitations by workspace admins, the tenant MFA policy with trusted devices,
+GitHub sign-in and CSV imports. Every route below answers `Cache-Control: no-store`. New permission: `members:invite`
+(tenant admins and identity admins).
+
+### Sign-up, verification and invitation links (public, under `/api/auth`, behind the sign-in limiter)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/auth/register` `{tenant?, username, displayName, email, password}` | B-1801. Creates a local account under the tenant's signup policy: `403 {reason: closed}` while sign-up is closed (the default), `403 {reason: domain}` for an email domain outside the list (both audited `user.signup.refused`); `409` (the same answer for a taken username or address); `503` when verification is required and email is not configured. The password passes the policy and breached checks. `201 {username, tenant, state: active\|pending, verification: sent\|not_required, detail}`. With `approval` the account is created disabled (`pending`) and tenant and identity admins get a console notice. Throttled per address (`SIGNUP_PER_HOUR`) and per email (3 an hour). Audited `user.signup.created` |
+| `POST /api/auth/email/verify` `{token}` | B-1802. Redeems a verification link (single use, `EMAIL_VERIFY_HOURS`, bound to the address it was sent to): `{verified: true, username, tenant}`; `400 Invalid link` otherwise. Audited `user.email.verified` |
+| `POST /api/auth/email/resend` `{tenant?, identifier}` | B-1802. A new link for a local account whose address is not proven yet. `202` with the same answer whether or not such an account exists; throttled per address and identifier (`PASSWORD_RESET_PER_HOUR`) and per account (3 an hour, silently) |
+| `POST /api/auth/invitations/preview` `{token}` | B-1801. `{tenant {slug, name}, workspace {id, name}\|null, invitedBy, email, roles, clearance, expiresAt}`; `400 Invalid link` for an unknown, used, withdrawn or expired invitation |
+| `POST /api/auth/invitations/accept` `{token, username, displayName, password}` | B-1801. Creates a local account for the invited address (verified by the link), with the invitation's roles and clearance, in its workspace; it does not depend on the signup policy. `409` when an account has that address (accept as that account instead) or the username is taken. `201 {username, tenant}`. Audited `user.created` (`via: invitation`) and `user.invitation.accepted` |
+
+Links are console links with the token in the fragment, like reset links: `#/signin?verify=<token>` and
+`#/signin?invitation=<token>` (plus `&tenant=<slug>` outside the default tenant). Tokens are 256-bit random values,
+stored as SHA-256.
+
+`POST /api/auth/login` now also answers `403 {reason: signup_pending}` or `{reason: signup_rejected}` (after the right
+password) for a sign-up waiting for or refused approval, and `403 {reason: email_unverified}` when the tenant requires
+verified addresses and the local account has an unproven one (a new link is sent, throttled; audited
+`auth.login.refused`). Its session body carries `mfa.enrolBy` during an MFA grace period and `mfa.trustedDevice: true`
+when the second factor was skipped. `POST /api/auth/mfa/totp`, `/mfa/recovery` and `/mfa/webauthn` take
+`rememberDevice: true` (not for recovery codes) and then answer `trustedDevice: {until}` (or `null` when the tenant
+allows no trusted devices). `GET /api/auth/sign-in-options` adds `signup: false | {approval, verifyEmail}`.
+
+### Invitations by workspace admins (`members:invite`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/invitations[?state=pending\|accepted\|revoked]` | Tenant admins see every invitation, other inviters their own (within their clearance): `[{id, email, workspaceId, roles, clearance, invitedBy, state: pending\|accepted\|revoked\|expired, createdAt, expiresAt, acceptedBy, acceptedAt, revokedAt}]` |
+| `POST /api/invitations` `{email, workspaceId?, roles, clearance?}` | Every role must be one the inviter may grant (`403 step: role`), the clearance at most theirs (`step: clearance`); without `tenant:manage` the workspace must be one the inviter belongs to (`step: workspace`). Needs SMTP (`409`). Replaces a pending invitation for the same address and workspace. Valid for `INVITATION_DAYS`. `201` with the invitation and `sent`. Audited `user.invitation.created` |
+| `DELETE /api/invitations/:id` | The inviter or a tenant admin withdraws a pending invitation. `204`. Audited `user.invitation.revoked` |
+| `POST /api/me/invitations/accept` `{token}` | The signed-in account accepts (its address must be the invited one, `403 step: email`): the roles are added to its direct roles, the clearance raised to the invitation's if lower, the workspace joined; the address counts as verified. Audited `user.invitation.accepted` |
+
+### The account's own verification and trusted devices
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/me/email/verify` | Sends a verification link to the account's own unproven address (`202 {verified: false, sent}`); `{verified: true}` when it is proven; `403` for directory accounts or no address |
+| `GET /api/me/trusted-devices` | `{periodDays, thisDevice, devices: [{browser, createdAt, expiresAt}]}` |
+| `DELETE /api/me/trusted-devices` | Forgets every trusted device of the account: `{removed}`. Audited `auth.trusted_device.removed` |
+
+### Tenant identity policy (`identity:manage`) and sign-ups (`users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/identity-policy` | `{signup, mfa: {…, effectiveAt}, updatedBy, updatedAt}` |
+| `PUT /api/admin/identity-policy/signup` `{mode: closed\|open\|approval, domains?, requireEmailVerification?, roles?, clearance?, workspaceId?}` | B-1801, B-1802. `domains` (up to 200): exact domains or `*.example.com` for subdomains; empty allows any. `roles`: `member`, `flag-reviewer`, `knowledge-curator` only. `clearance` at most the caller's. `requireEmailVerification` (default off) also covers other local accounts with an unproven address; accounts created by an admin, imported, or from an invitation count as proven. Audited `identity.signup_policy.updated` |
+| `PUT /api/admin/identity-policy/mfa` `{require: off\|all\|roles, roles?, graceDays?, trustedDeviceDays?}` | B-1803. A second factor for everyone or for listed roles, on top of the roles that always need one. An account the requirement covers may sign in without a factor until `graceDays` after the requirement last widened (or after its creation, if later), then enrols first. `trustedDeviceDays` (0 to 90, default 0) lets a browser skip the factor after "trust this device"; shortening it ends older trust at once. `{…, effectiveAt}`. Audited `identity.mfa_policy.updated` (`graceRestarted` when the requirement widened) |
+| `GET /api/admin/signups[?state=pending\|approved\|rejected\|active]` | `[{userId, username, displayName, email, emailVerified, domain, state, createdAt, decidedBy, decidedAt, reason}]` |
+| `POST /api/admin/signups/:userId/approve`, `…/reject` `{reason?}` | Approval activates the account; rejection keeps it disabled. `409` once decided. The user is told by email. Audited `user.signup.approved`, `user.signup.rejected` |
+
+Trusted devices are keyed by a digest of the user and the B-801 device cookie, and end when their period ends, when
+the user's sessions are revoked (sign out everywhere, a password change or reset, an admin's factor reset, a disabled
+account, a revoked tenant), when that session is revoked on purpose (`DELETE /api/me/sessions/:id`,
+`DELETE /api/admin/sessions/:id`; a plain sign-out keeps it), or when the tenant shortens the period. A session that
+skipped the factor counts as factor-verified (method `…, trusted device`). Upstream (OIDC, SAML, GitHub) and Kerberos
+sign-ins follow the same policy.
+
+### GitHub sign-in (B-1804)
+
+A user store of kind `github` (`POST /api/admin/identity-providers`, `identity:manage`) with config
+`{clientId, clientSecret (secret reference), webUrl? (https://github.com), apiUrl? (https://api.github.com),
+allowedOrgs?, scopes? (read:user user:email read:org), defaultRoles?, defaultClearance?}`. Both URLs pass the service
+URL checks (B-901) when saved (`400 {reason: service_url}`, e.g. a metadata or link-local address) and at every
+connection. Register the OAuth app's callback as `<issuer>/federation/github/callback`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /federation/github/start?provider=<id>` (and `/t/<slug>/…`) | Redirects to GitHub's authorize page with a single-use `state` bound to the browser (`exai_fed` cookie) and PKCE (S256) |
+| `GET /federation/github/callback?code&state` | Exchanges the code, reads `/user`, `/user/emails` (only a verified primary address is kept), `/user/orgs` and `/user/teams` (up to 500 each), then signs in like an upstream OIDC store: JIT provisioning linked by the numeric GitHub id, roles from group mappings, MFA policy. Organisations become groups `org` and teams `org/team-slug`; with `allowedOrgs` an account outside them is refused and other organisations' groups are dropped. The access token is never stored |
+
+The store appears in `GET /api/auth/sign-in-options` and `GET /api/admin/federation/upstream` (`protocol: github`), and
+"Test connection" checks the addresses, the API and the client secret reference.
+
+### CSV imports of users, memberships and group mappings (B-1805, `users:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/user-imports[?dryRun=true][&sendInvites=true]` (body: the CSV, `Content-Type: text/csv`, at most `USER_IMPORT_MAX_BYTES`, `USER_IMPORT_MAX_ROWS` rows) | Stores the CSV sealed with the tenant key and queues job `users.import` (run as the submitter's current roles and clearance). `202 {id, jobId, dryRun}`. A malformed file is `400` at once. Audited `user.import.requested` or `user.import.dry_run` |
+| `GET /api/admin/user-imports` | The tenant's last 100 imports without their reports |
+| `GET /api/admin/user-imports/:id` | `{id, state: queued\|running\|done\|failed, dryRun, rows, summary {rows, create, update, unchanged, conflict, error, applied, dryRun}, report: [{row, kind, key, action: create\|update\|unchanged\|conflict\|error, detail, changes?, outcome?}], …}` |
+
+The CSV has a header row; columns `kind,username,display_name,email,roles,clearance,workspace,provider,group` (any
+order, unknown columns refused). `kind=user` creates a local account (roles separated by `;`; a password nobody knows,
+or with `sendInvites` an invitation link) or updates a local account's name, address, direct roles and clearance (and
+then ends its sessions); an account linked to another store, a username or address used twice or by another account
+is a `conflict`. `kind=membership` adds a direct membership (`workspace` by slug or id). `kind=mapping` adds a group
+mapping (`roles` holds one role; `provider` a store name or id, empty for any) or changes its clearance. Every row is
+checked like the API (roles the importer may grant, clearance at or below theirs, accounts whose roles they may
+manage). The plan only reads; a dry run reports it and changes nothing. A real run applies the accepted rows (accounts,
+then mappings, then memberships), auditing each change (`user.created`, `user.updated`, `user.invited`,
+`workspace.member.added`, `identity.mapping.created`, `identity.mapping.updated`, with `via: import`), then
+`user.import.completed` or `user.import.dry_run_reported`.
+
+### CLI
+
+- `exprsn-ai secrets <command> --as <username> [--tenant <slug>]`: `kv list [<prefix>] [--json]`,
+  `kv get <path> [--version] [--field]`, `kv put <path> <key>=<value>|<key>=@<file>… [--cas] [--label]`,
+  `transit encrypt <key> --plaintext <text> [--base64] [--context]`, `transit decrypt <key> <ciphertext> [--base64]
+  [--context]`, `policy explain <path> --capability <cap> [--group | --workspace]`. Through the vault service under
+  the named account's roles (`secrets:read`, `secrets:write`), policy subjects and clearance; audited with actor
+  `{service: cli, user, username, via: cli}` (values never). `policy explain` is audited `vault.policy.explained`.
+- `exprsn-ai users import <file.csv> [--dry-run] [--send-invites] [--tenant <slug>] [--json]`: the same import, in the
+  process, as the operator (no role ceiling, like `admin:create`); prints the report. Exit codes: 0 done, 1 refused or
+  failed, 3 conflicts or errors in the file, 64 usage.

@@ -498,3 +498,69 @@ filter, private `/tmp`, only the state directory writable.
   record (`app.bsky.labeler.service`) needs a PDS, which Exprsn-AI does not host, so clients only act on the global
   values (`!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`) unless they read this labeler's values some
   other way.
+- AT-Protocol accounts (1.4.0, Sprint 26, B-1807, B-1808): the OAuth client (PAR, PKCE, DPoP with server nonces,
+  `private_key_jwt`, the issuer check through the account's own PDS) has only been run against the local PDS double in
+  `server/test/sprint26b-fakes.ts`, never against bsky.social or another real PDS; treat interoperability as unproven.
+  Real authorization servers require an https `client_id`, so AT-Protocol sign-in needs `FEDERATION_ISSUER` (or
+  `PUBLIC_URL`) on https and reachable from the internet, and outbound https to PDSes, which `SERVICE_INTERNAL_ONLY`
+  blocks unless their hosts are allow-listed. Plain http to loopback addresses is accepted outside production only.
+  Client assertions are signed with the tenant's OIDC signing key (published at its jwks_uri), not a key of their own.
+  Tokens are revoked and discarded after sign-in, so nothing can act on the account's repository; the `atproto` scope
+  only. A DID bound to a user signs in as that user without that user's password: binding needs a recent sign-in, and
+  an admin role still needs its second factor, but an AT-Protocol user without a local factor cannot step up for
+  actions that need a recent sign-in (upstream step-up covers OIDC and SAML only). The profile challenge reads the
+  `app.bsky.actor.profile` record, which accounts outside Bluesky may not have (they can link by signing in instead);
+  whoever runs the account's PDS can also write that record. The handle stored with a binding is checked when it is set,
+  not again later (sign-in checks the handle it uses each time). Handles under `.test` are accepted outside production.
+- File store (1.4.0, Sprint 26d): content is sealed in 64 KiB AES-GCM segments under a random key per version, and
+  that key is sealed with the tenant key, so offboarding crypto-shreds files with the rest of the tenant's content.
+  The quarantine scan reads the whole file twice (type check and classification, then ClamAV); ClamAV refuses streams
+  above its `StreamMaxLength` (25 MB by default), which rejects larger files until the operator raises it to
+  `FILES_MAX_BYTES`. Zip archives are buffered to find out whether they are Office documents, so larger zips than
+  32 MiB are refused; only text, PDF, Word, Excel, PowerPoint, PNG, JPEG, WebP and GIF are accepted. Classification
+  for personal and financial data covers text files only (PDFs and Office files are classified when a knowledge
+  source indexes them, not in the store). Sharing is per file (not per folder) and read-only; a group share matches
+  the groups the reader's identities carried at their last sign-in or directory sync. A link's use is consumed when
+  the download starts, so a download that fails part-way still counts. Anonymous links follow the conversation
+  settings (one tenant switch for both) and have no landing page or metadata route: the holder can only download.
+  Previews are drawn by external tools (ffmpeg, poppler's pdftoppm) on the server, as argument arrays without a
+  shell, from a decrypted temporary copy in `FILES_WORK_DIR` (mode 0600, removed afterwards); run them in a
+  sandboxed host or container if untrusted PDFs are a concern. A folder used as a knowledge source is indexed on the
+  source's schedule, not when a file changes, and only files at or below the knowledge base's label; whoever may read
+  the base reads what it indexed, so the curator adding the folder decides who sees its contents. Storage quotas
+  count every stored and quarantined version (trash included, previews not); two uploads racing at the limit are
+  checked again after they are recorded, so one may be refused that would have fitted after the other failed.
+  Files are not yet moderation objects: `FileService.moderationTarget` and `takeDown` are ready for the moderation
+  object registry (B-1901) to call.
+- Moderation (1.4.0, Sprint 26): a check of a registered object inspects its stored text: a message's content, but
+  only a knowledge document's name, a media asset's name and an image's prompt, unless the caller passes the text
+  (there is no OCR or transcript step, and the image-safety classifier stays separate). Hiding is a state on the
+  object; a knowledge document whose source later syncs changed content goes back to indexing and is no longer
+  hidden, and its next check decides again. A suspended or banned user cannot sign in to appeal: they ask an
+  administrator, and a reviewer files the appeal for them (`forUserId`). Enforcement reads a cached sanction (the
+  short cache tier, cleared over the bus on every change), and a sanction's end is compared at each request, so the
+  sweep only records it. A sanction does not revoke API keys or OAuth grants; they are refused while it lasts and work
+  again after it. Review queues route a flag when it is created (adding a queue does not route older flags) and
+  escalate one level, once; unrouted flags keep the breach notice only. Dead letters are recorded by the instance on
+  which the job failed. External providers receive the object's text (up to 32,000 characters) and its type; the
+  zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
+  rules. Notices carry the moderator's reason, not the moderated content.
+- Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
+  the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
+  (as most registration forms do); they are throttled per client address and per address. Email verification is off
+  until a tenant turns it on; addresses that an admin typed, imported or invited count as proven, and directory
+  accounts' addresses belong to the directory. There is no per-workspace admin role yet: `members:invite` is a
+  tenant-wide permission (tenant and identity admins), limited to the inviter's own workspaces and to roles they may
+  grant. A trusted device skips the second factor for the tenant's `trustedDeviceDays`, but never for accounts whose
+  roles require a second factor (admins) or that are marked as needing one: those are asked for it on every sign-in.
+  For everyone else it is bound to the device cookie, so a stolen cookie together with the password passes until the
+  period ends or the user's sessions are revoked (a plain sign-out keeps the trust). The MFA grace period starts when
+  the requirement last widened, not per user. GitHub sign-in reads organisation and team membership once per sign-in;
+  leaving a team takes effect at the next sign-in (there is no directory sync for GitHub), and an organisation that
+  restricts OAuth app access hides its membership until the app is approved there. Step-up re-authentication through
+  GitHub is not offered (GitHub has no `prompt=login`); GitHub accounts step up with a second factor. CSV imports create accounts with a
+  password nobody knows: the users need an invitation link (`sendInvites`) or a reset by an admin.
+- Gateway slots: a chat turn's own requests (embeddings, guard-model verdicts on the streamed text and on tool results,
+  tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
+  receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and
+  queues them itself. The `/v1` API, agent runs and workflows still lease a separate slot for each call they make.

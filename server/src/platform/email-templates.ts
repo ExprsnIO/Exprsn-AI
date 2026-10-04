@@ -63,10 +63,38 @@ const TEMPLATES = {
     ],
     required: ['name', 'username', 'product', 'event', 'time', 'link']
   },
+  // Sprint 26 (B-1907): moderation decisions, sanctions and appeals. Never the moderated content itself.
+  'moderation-notice': {
+    subject: '{{product}} moderation notice: {{event}}',
+    body: ['Hello {{name}},', '{{event}} (account {{username}}, {{time}}).', '{{detail}}', '{{next}}', '{{link}}'],
+    required: ['name', 'username', 'product', 'event', 'time', 'detail', 'next', 'link']
+  },
   notification: {
     subject: '{{title}}',
     body: ['{{title}}', 'Open the console:', '{{link}}'],
     required: ['title', 'link']
+  },
+  // Sprint 26a (B-1802): email verification, in the same shape as the reset link.
+  'verify-email': {
+    subject: 'Confirm your email address for {{product}}',
+    body: [
+      'Hello {{name}},',
+      'Confirm that {{email}} is the address of the account {{username}} on {{product}} ({{tenant}}). Open this link within {{hours}} hours:',
+      '{{link}}',
+      'The link works once. If you did not sign up, ignore this message: the account stays unconfirmed.'
+    ],
+    required: ['name', 'username', 'product', 'email', 'tenant', 'hours', 'link']
+  },
+  // Sprint 26a (B-1801): an invitation by a workspace admin, with roles; the invitee chooses the username and password.
+  'workspace-invite': {
+    subject: '{{actor}} invited you to {{product}}',
+    body: [
+      'Hello,',
+      '{{actor}} invited {{email}} to {{tenant}} on {{product}}{{workspace}}. Open this link within {{days}} days to accept: you choose your username and password there, or accept as the account you already have.',
+      '{{link}}',
+      'The link works once. If you were not expecting this, ignore this message.'
+    ],
+    required: ['product', 'actor', 'email', 'tenant', 'days', 'link']
   }
 } satisfies Record<string, Template>;
 

@@ -32,7 +32,7 @@ export interface CheckResult {
   parsed?: Record<string, unknown>;
 }
 
-interface PendingUpstream {
+export interface PendingUpstream {
   providerId: string;
   browser: string;
   returnTo: string | null;
@@ -227,18 +227,20 @@ export class Upstream {
 
   // ---------- pending state ----------
 
-  private digest(handle: string): string {
+  /** The digest under which a browser binding is kept (also for the GitHub store). */
+  digest(handle: string): string {
     return hmac(this.s().cfg.SESSION_SECRET, `federation-pending:${handle}`);
   }
 
-  private async savePending(tenantId: string, data: PendingUpstream): Promise<string> {
+  /** Also used by the GitHub store (Sprint 26a). */
+  async savePending(tenantId: string, data: PendingUpstream): Promise<string> {
     const handle = randomToken(24);
     await this.s().db('federation_pending').insert({ id: this.digest(handle), tenant_id: tenantId, kind: 'upstream', data: JSON.stringify(data), expires_at: Date.now() + PENDING_MS });
     return handle;
   }
 
   /** Takes (single use) the pending state for a handle, checking the browser binding. */
-  private async takePending(tenantId: string, handle: string | undefined, browser: string | undefined): Promise<PendingUpstream> {
+  async takePending(tenantId: string, handle: string | undefined, browser: string | undefined): Promise<PendingUpstream> {
     if (!handle || handle.length > 100) throw new UpstreamError('The sign-in response has no state. Start again.');
     const id = this.digest(handle);
     const row = (await this.s().db('federation_pending').where({ id, tenant_id: tenantId, kind: 'upstream' }).first()) as { data: string; expires_at: number } | undefined;
@@ -251,7 +253,7 @@ export class Upstream {
     return data;
   }
 
-  private async provider(tenantId: string, id: string, kind: 'oidc' | 'saml'): Promise<ProviderRow> {
+  async provider(tenantId: string, id: string, kind: 'oidc' | 'saml' | 'github'): Promise<ProviderRow> {
     const row = await this.s().providers.get(tenantId, id);
     if (!row || row.kind !== kind || !row.enabled) throw new UpstreamError('That identity provider is not available.');
     return row;

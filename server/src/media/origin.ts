@@ -23,7 +23,9 @@ export type MediaRef =
   | { kind: 'asset'; id: string }
   | { kind: 'preview'; id: string; i: number }
   | { kind: 'output'; id: string; i: number; download: boolean }
-  | { kind: 'image'; id: string; download: boolean };
+  | { kind: 'image'; id: string; download: boolean }
+  // Sprint 26d (B-2404): a file store preview.
+  | { kind: 'file-preview'; id: string };
 
 interface TokenBody {
   r: MediaRef;
@@ -115,6 +117,10 @@ export function mediaOriginRoutes(s: Services, send: (req: Request, res: Respons
       if (ref.kind === 'output') {
         const out = await s.media.output(p, ref.id, ref.i);
         return send(req, res, out.data, out.type, `${ref.download ? 'attachment' : 'inline'}; filename="${out.name.replace(/[^\w.() -]+/g, '_').slice(0, 120) || 'media'}"`);
+      }
+      if (ref.kind === 'file-preview') {
+        const pv = await s.files.preview(p, ref.id);
+        return send(req, res, pv.data, pv.type, 'inline');
       }
       const out = await s.images.image(p, ref.id);
       return send(req, res, out.data, out.type, ref.download ? `attachment; filename="image-${out.row.id.toLowerCase()}.${out.type === 'image/png' ? 'png' : 'jpg'}"` : 'inline');
