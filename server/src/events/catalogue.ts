@@ -59,7 +59,9 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'file.*', description: 'File store: uploaded, updated, deleted, restored, shared (reserved until B-24)' },
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
-  { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' }
+  { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
+  // 1.4.0, Sprint 25c (B-1704 to B-1706)
+  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' }
 ];
 
 const id26 = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };

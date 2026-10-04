@@ -11,6 +11,7 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { Guardrails } from '../guardrails/types.js';
 import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
 import type { DynamicCredentials } from './dynamic.js';
+import { isVaultRef } from '../vault/policy.js';
 import type { ConnectionSpec, DriverFactory, QueryResult, RoleCheck, SchemaObject } from './drivers.js';
 import type { ReplicationOptions, RowChange } from './replication.js';
 
@@ -41,6 +42,8 @@ export interface ConnectionRow {
   /** Sprint 15: `openbao` takes a short-lived account from OpenBao's database engine for role `bao_role`. */
   credential_source: 'static' | 'openbao';
   bao_role: string | null;
+  /** Sprint 25 (B-1705): who saved a `vault:` password reference; it resolves under their vault policy. */
+  vault_owner: string | null;
   tls: boolean;
   allow_list: string[];
   pii_columns: string[];
@@ -60,6 +63,7 @@ const fromRow = (r: Record<string, unknown>): ConnectionRow => ({
   ...(r as unknown as ConnectionRow),
   credential_source: r.credential_source === 'openbao' ? 'openbao' : 'static',
   bao_role: (r.bao_role as string | null | undefined) ?? null,
+  vault_owner: (r.vault_owner as string | null | undefined) ?? null,
   tls: !!r.tls,
   row_limit: Number(r.row_limit),
   timeout_s: Number(r.timeout_s),
@@ -99,6 +103,7 @@ export const connectionView = (c: ConnectionRow, usedBy: { kbId: string; kb: str
     hasCredential: !!c.credential || c.credential_source === 'openbao',
     credentialSource: c.credential_source,
     baoRole: c.bao_role,
+    passwordFromVault: !!c.vault_owner,
     tls: c.tls,
     allowList: c.allow_list,
     piiColumns: c.pii_columns,
@@ -158,6 +163,12 @@ export class ConnectionService {
     private readonly dynamic: DynamicCredentials | null = null
   ) {}
 
+  /**
+   * Sprint 25 (B-1705): resolves a `vault:` password reference as the user who saved it (set by createServices; a
+   * reference does not resolve without it).
+   */
+  vaultResolver: ((tenantId: string, ownerId: string | null, ref: string, via: string) => Promise<string>) | null = null;
+
   /** Revokes the OpenBao leases this instance holds. */
   async close(): Promise<void> {
     await this.dynamic?.close();
@@ -212,6 +223,7 @@ export class ConnectionService {
       row_limit: input.rowLimit,
       timeout_s: input.timeoutS,
       credential: input.username && !input.baoRole ? await this.sealCredential(p.tenantId, id, input.username, input.password ?? '') : null,
+      vault_owner: input.username && !input.baoRole && isVaultRef(input.password) ? p.userId : null,
       account: input.baoRole ? null : input.username,
       credential_source: input.baoRole ? 'openbao' : 'static',
       bao_role: input.baoRole ?? null,
@@ -255,7 +267,7 @@ export class ConnectionService {
 
   async setCredential(p: Principal, id: string, username: string, password: string): Promise<ConnectionRow> {
     const c = await this.get(p.tenantId, id);
-    await this.db('data_connections').where({ id: c.id }).update({ credential: await this.sealCredential(c.tenant_id, c.id, username, password), account: username, credential_source: 'static', bao_role: null, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
+    await this.db('data_connections').where({ id: c.id }).update({ credential: await this.sealCredential(c.tenant_id, c.id, username, password), account: username, credential_source: 'static', bao_role: null, vault_owner: isVaultRef(password) ? p.userId : null, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
     await this.dynamic?.forget(c.id);
     return this.get(p.tenantId, id);
   }
@@ -265,7 +277,7 @@ export class ConnectionService {
     const c = await this.get(p.tenantId, id);
     if (!this.dynamic) throw conflict('OpenBao dynamic credentials need OPENBAO_ADDR and OPENBAO_TOKEN on the server.');
     if (c.engine === 'opensearch') throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections.');
-    await this.db('data_connections').where({ id: c.id }).update({ credential: null, account: null, credential_source: 'openbao', bao_role: role, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
+    await this.db('data_connections').where({ id: c.id }).update({ credential: null, account: null, credential_source: 'openbao', bao_role: role, vault_owner: null, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
     await this.dynamic.forget(c.id);
     return this.get(p.tenantId, id);
   }
@@ -294,6 +306,11 @@ export class ConnectionService {
       return { engine: c.engine, endpoint: c.endpoint, database: c.database, tls: c.tls, username: d.username, password: d.password };
     }
     const cred = c.credential ? json<{ username: string; password: string }>(await this.keys.open(c.tenant_id, c.credential, `connection:${c.id}`), { username: '', password: '' }) : null;
+    if (cred && isVaultRef(cred.password)) {
+      // B-1705: read at every use, as the user who saved it, so a revoked grant stops the connection at once.
+      if (!this.vaultResolver) throw conflict('This connection takes its password from the vault, which cannot be read here.');
+      cred.password = await this.vaultResolver(c.tenant_id, c.vault_owner, cred.password, `connection:${c.id}`);
+    }
     return { engine: c.engine, endpoint: c.endpoint, database: c.database, tls: c.tls, username: cred?.username ?? null, password: cred?.password ?? null };
   }
 
@@ -417,6 +434,11 @@ export class ConnectionService {
     try {
       r = await (await this.driver(c)).query(cl, text, { limit: c.row_limit, timeoutMs: c.timeout_s * 1000 });
     } catch (err) {
+      // A refusal before anything reached the database (a vault reference the owner may no longer read, B-1705).
+      if (err instanceof HttpProblem && err.status < 500) {
+        await record('connection.query.refused', { reason: (err.detail ?? err.title).slice(0, 300) });
+        throw err;
+      }
       const message = this.scrub(c, err);
       await record('connection.query.failed', { error: message.slice(0, 300) });
       throw new HttpProblem(502, 'Query failed', `${c.name}: ${message}`.slice(0, 500), { extensions: { kind: 'failed' } });

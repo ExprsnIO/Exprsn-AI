@@ -5,6 +5,7 @@ import { LABELS, type Label } from '../../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { conflict } from '../../http/problem.js';
 import { connectionView, ENGINES } from '../../connections/service.js';
+import { isVaultRef } from '../../vault/policy.js';
 import type { Services } from '../../services.js';
 
 const endpoint = z.string().trim().min(3).max(300).regex(/^[A-Za-z0-9.:[\]/_-]+$/, 'host:port, or a URL for OpenSearch');
@@ -61,13 +62,15 @@ export function connectionAdminRoutes(s: Services): Router {
       req.body
     );
     if (!(ENGINES as readonly string[]).includes(body.engine)) throw conflict('That engine is not installed on this platform. Register offers PostgreSQL, MySQL and OpenSearch.');
+    // Sprint 25 (B-1705): a vault password reference must be readable by the admin saving it; it resolves as them.
+    if (body.username && body.password && isVaultRef(body.password)) await s.vault.assertRefsReadable(p, [body.password], { ip: ip(req), traceId: req.traceId });
     try {
       await s.zones.assertMemberFits('connection', body.zone, body.label).catch(async (err: unknown) => {
         await s.audit.append({ tenantId: p.tenantId, action: 'connection.register.refused', kind: 'admin', actor: actorFrom(p, ip(req)), target: { name: body.name }, label: body.label, detail: { zone: body.zone, reason: (err as Error).message }, traceId: req.traceId });
         throw err;
       });
       const row = await c.create(p, { ...body, engine: body.engine as 'postgres' | 'opensearch' | 'mysql' });
-      await audit(req, 'connection.registered', { connection: row.id, name: row.name }, row.label, { engine: row.engine, endpoint: row.endpoint, zone: row.zone, account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role });
+      await audit(req, 'connection.registered', { connection: row.id, name: row.name }, row.label, { engine: row.engine, endpoint: row.endpoint, zone: row.zone, account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role, passwordFromVault: !!row.vault_owner });
       res.status(201).json(await view(p.tenantId, row.id));
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A connection with that name exists.');
@@ -94,8 +97,9 @@ export function connectionAdminRoutes(s: Services): Router {
   r.put('/connections/:id/credential', manage, async (req, res) => {
     const p = principalOf(req);
     const body = parseBody(z.union([z.object({ username: z.string().trim().min(1).max(200), password: z.string().max(1000) }).strict(), z.object({ baoRole: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,128}$/) }).strict()]), req.body);
+    if ('password' in body && isVaultRef(body.password)) await s.vault.assertRefsReadable(p, [body.password], { ip: ip(req), traceId: req.traceId });
     const row = 'baoRole' in body ? await c.setDynamicRole(p, String(req.params.id), body.baoRole) : await c.setCredential(p, String(req.params.id), body.username, body.password);
-    await audit(req, 'connection.credential.rotated', { connection: row.id, name: row.name }, row.label, { account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role, version: row.version });
+    await audit(req, 'connection.credential.rotated', { connection: row.id, name: row.name }, row.label, { account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role, passwordFromVault: !!row.vault_owner, version: row.version });
     res.json(await view(p.tenantId, row.id));
   });
 

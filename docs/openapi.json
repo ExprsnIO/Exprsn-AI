@@ -11143,6 +11143,332 @@
         }
       }
     },
+    "/api/vault/database/creds/{engine}/{role}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Issue a database lease",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read and vault policy read on database/<engine>/<role>. 201 with the username and password; the password is returned only here and is not stored. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "List database lease engines",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Engines within the caller's clearance, with their roles and live lease counts. Never the admin password. See docs/api.md, Sprint 25c."
+      },
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Register a database lease engine",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage, in a zone whose ceiling covers the engine label. The admin password is sealed, or adminPasswordRef names a vault:path#key the caller may read. With check (default) the admin login is tested first. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines/{name}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Remove a database lease engine",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Drops every live lease account first; 409 while any drop fails. See docs/api.md, Sprint 25c."
+      },
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Read a database lease engine",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. See docs/api.md, Sprint 25c."
+      },
+      "patch": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Change a database lease engine",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Zone and label changes pass the zone checks again; state disabled stops issuing. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines/{name}/roles/{role}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Remove a lease role",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. 409 while the role has live leases. See docs/api.md, Sprint 25c."
+      },
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Create or replace a lease role",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. privileges read or readwrite on named schemas (PostgreSQL) or databases (MySQL), with optional TTLs. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/engines/{name}/test": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Test an engine admin login",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. Logs in and reports whether the admin can create accounts. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "List leases",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: the caller's leases; all=1 needs connections:manage or secrets:admin. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases/{id}": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Read a lease",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: the holder, or connections:manage / secrets:admin. Never the password. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases/{id}/renew": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Renew a lease",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: moves the expiry by incrementSeconds (default the role TTL), never past maxExpiresAt. 410 once ended. See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/leases/{id}/revoke": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Revoke a lease",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read: drops the account at once; 502 if the database refuses (the sweeper retries). See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/roles": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Roles the caller may take a lease for",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "secrets:read and the vault policy (list or read on database/<engine>/<role>). See docs/api.md, Sprint 25c."
+      }
+    },
+    "/api/vault/database/sweep": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "summary": "Run the lease expiry sweeper now",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "description": "connections:manage. 202 with the job id. See docs/api.md, Sprint 25c."
+      }
+    },
     "/api/vault/kv": {
       "get": {
         "tags": [

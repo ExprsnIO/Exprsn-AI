@@ -5,6 +5,7 @@ import { clears, highest, LABELS, type Label } from '../../authz/labels.js';
 import { canGrant, isRole } from '../../authz/permissions.js';
 import { LoginThrottle } from '../../identity/lockout.js';
 import { PROVIDER_KINDS, parseProviderConfig, type Step } from '../../identity/providers/types.js';
+import { vaultRefsIn } from '../../identity/secrets.js';
 import { resolveMappings } from '../../repos/users.js';
 import type { ProviderRow } from '../../repos/providers.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
@@ -76,7 +77,10 @@ export function identityAdminRoutes(s: Services): Router {
     try {
       parseProviderConfig(body.kind, body.config);
       if (body.kind === 'local' && (await s.providers.list(p.tenantId)).some((x) => x.kind === 'local')) throw conflict('A tenant has one local user store.');
-      const row = await s.providers.create(p.tenantId, body);
+      // Sprint 25 (B-1705): vault references must be readable by the admin saving them; they resolve as that admin.
+      const refs = vaultRefsIn(body.config);
+      await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
+      const row = await s.providers.create(p.tenantId, { ...body, vaultOwner: refs.length ? p.userId : null });
       await audit(req, 'identity.provider.created', { provider: row.id, name: row.name, kind: row.kind }, { config: row.config });
       res.status(201).json(providerView(row));
     } catch (err) {
@@ -95,8 +99,14 @@ export function identityAdminRoutes(s: Services): Router {
     const body = parseBody(patchSchema, req.body);
     if (current.managed_by === 'config' && (body.config !== undefined || body.name !== undefined)) throw conflict('This store is managed by the configuration file; change it there.');
     if (body.enabled === false && current.enabled) await assertAnotherEnabled(p.tenantId, current.id);
+    let vaultOwner: string | null | undefined;
+    if (body.config !== undefined) {
+      const refs = vaultRefsIn(body.config);
+      await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
+      vaultOwner = refs.length ? p.userId : null;
+    }
     try {
-      const row = await s.providers.update(p.tenantId, current.id, body);
+      const row = await s.providers.update(p.tenantId, current.id, { ...body, ...(vaultOwner !== undefined ? { vaultOwner } : {}) });
       await audit(req, 'identity.provider.updated', { provider: current.id, name: current.name }, { before: { position: current.position, enabled: current.enabled, config: current.config }, after: body });
       res.json(providerView(row!));
     } catch (err) {

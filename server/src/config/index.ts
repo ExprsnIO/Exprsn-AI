@@ -464,7 +464,19 @@ const base = z.object({
     PKI_OCSP_VALIDITY_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(60),
     PKI_OCSP_CACHE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
     PKI_OCSP_SIGNER_DAYS: z.coerce.number().int().min(1).max(365).default(30),
-    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600)
+    PKI_PUBLIC_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600),
+
+    /**
+     * Sprint 25 (B-1704): database leases from the built-in PostgreSQL and MySQL engines. An engine's TTLs default to
+     * VAULT_LEASE_DEFAULT_TTL_SECONDS and may not pass VAULT_LEASE_MAX_TTL_SECONDS; the expiry sweeper looks for ended
+     * leases every VAULT_LEASE_SWEEP_SECONDS (0 turns it off).
+     */
+    VAULT_LEASE_DEFAULT_TTL_SECONDS: z.coerce.number().int().min(1).max(31 * 86_400).default(3600),
+    VAULT_LEASE_MAX_TTL_SECONDS: z.coerce.number().int().min(1).max(366 * 86_400).default(86_400),
+    VAULT_LEASE_SWEEP_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /** Sprint 25 (B-1706): how often rotation schedules are checked (0 turns it off), and how early a notice comes. */
+    VAULT_ROTATION_CHECK_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    VAULT_ROTATION_NOTICE_DAYS: z.coerce.number().int().min(0).max(90).default(7)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
@@ -543,6 +555,9 @@ const schema = base
       for (const p of backendTlsProblems(c)) ctx.addIssue({ code: 'custom', path: [p.path], message: p.message });
     }
     // Sprint 24: a CRL must still be valid when the next scheduled one is signed.
+    if (c.VAULT_LEASE_DEFAULT_TTL_SECONDS > c.VAULT_LEASE_MAX_TTL_SECONDS) {
+      ctx.addIssue({ code: 'custom', path: ['VAULT_LEASE_DEFAULT_TTL_SECONDS'], message: 'VAULT_LEASE_DEFAULT_TTL_SECONDS cannot be longer than VAULT_LEASE_MAX_TTL_SECONDS' });
+    }
     if (c.PKI_CRL_MINUTES > 0 && c.PKI_CRL_MINUTES >= c.PKI_CRL_VALIDITY_HOURS * 60) {
       ctx.addIssue({ code: 'custom', path: ['PKI_CRL_VALIDITY_HOURS'], message: 'PKI_CRL_VALIDITY_HOURS must be longer than PKI_CRL_MINUTES' });
     }

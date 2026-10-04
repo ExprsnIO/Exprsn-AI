@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { isVaultRef } from '../vault/policy.js';
 import { scrubSecrets } from '../platform/diagnostics.js';
 import type { Logger } from 'pino';
 import type { Agent } from 'undici';
@@ -27,6 +28,8 @@ export interface ServerRow {
   auth: 'none' | 'service' | 'user';
   credential: string | null;
   credential_rotated_at: number | null;
+  /** Sprint 25 (B-1705): who saved a `vault:` service token reference; it resolves under their vault policy. */
+  vault_owner?: string | null;
   state: 'active' | 'deregistered';
   health: ServerHealth;
   health_detail: string | null;
@@ -202,7 +205,7 @@ export class McpService {
     if (input.auth === 'service' && !input.credential) throw conflict('A service token is needed for service authorization.');
     const t = Date.now();
     const id = ulid();
-    const row: ServerRow = { id, tenant_id: p.tenantId, name: input.name, description: input.description, url: input.url, zone: input.zone, auth: input.auth, credential: input.auth === 'service' && input.credential ? await this.keys.seal(p.tenantId, input.credential, `mcp-credential:${id}`) : null, credential_rotated_at: input.credential ? t : null, state: 'active', health: 'registering', health_detail: null, protocol_version: null, server_info: null, latency_ms: null, failures: 0, last_checked_at: null, last_ok_at: null, created_by: p.userId, created_at: t, updated_at: t };
+    const row: ServerRow = { id, tenant_id: p.tenantId, name: input.name, description: input.description, url: input.url, zone: input.zone, auth: input.auth, credential: input.auth === 'service' && input.credential ? await this.keys.seal(p.tenantId, input.credential, `mcp-credential:${id}`) : null, credential_rotated_at: input.credential ? t : null, vault_owner: input.auth === 'service' && isVaultRef(input.credential) ? p.userId : null, state: 'active', health: 'registering', health_detail: null, protocol_version: null, server_info: null, latency_ms: null, failures: 0, last_checked_at: null, last_ok_at: null, created_by: p.userId, created_at: t, updated_at: t };
     await this.db('mcp_servers').insert(row);
     await this.event(id, 'Registered', `Streamable HTTP at ${input.url}, zone ${input.zone}.`, '');
     const report = await this.check(row, { asUser: p });
@@ -213,8 +216,18 @@ export class McpService {
     return new McpClient(s.url, { dispatcher: this.agent, allow: this.allow, timeoutMs: this.o.timeoutMs, token });
   }
 
+  /**
+   * Sprint 25 (B-1705): resolves a `vault:` service token reference as the user who saved it (set by createServices;
+   * a reference does not resolve without it).
+   */
+  vaultResolver: ((tenantId: string, ownerId: string | null, ref: string, via: string) => Promise<string>) | null = null;
+
   private async serviceToken(s: ServerRow): Promise<string | null> {
-    return s.auth === 'service' && s.credential ? this.keys.open(s.tenant_id, s.credential, `mcp-credential:${s.id}`) : null;
+    if (s.auth !== 'service' || !s.credential) return null;
+    const token = await this.keys.open(s.tenant_id, s.credential, `mcp-credential:${s.id}`);
+    if (!isVaultRef(token)) return token;
+    if (!this.vaultResolver) throw conflict('This server takes its token from the vault, which cannot be read here.');
+    return this.vaultResolver(s.tenant_id, s.vault_owner ?? null, token, `mcp-server:${s.id}`);
   }
 
   /**
@@ -373,10 +386,10 @@ export class McpService {
     await this.event(s.id, 'Deregistered', 'Tools removed from routing; registry entries deprecated; user tokens deleted.', 'danger');
   }
 
-  async rotateCredential(s: ServerRow, secret: string): Promise<void> {
+  async rotateCredential(s: ServerRow, secret: string, by: string | null = null): Promise<void> {
     if (s.auth !== 'service') throw conflict('This server does not use a service token.');
     const now = Date.now();
-    await this.db('mcp_servers').where({ id: s.id }).update({ credential: await this.keys.seal(s.tenant_id, secret, `mcp-credential:${s.id}`), credential_rotated_at: now, updated_at: now });
+    await this.db('mcp_servers').where({ id: s.id }).update({ credential: await this.keys.seal(s.tenant_id, secret, `mcp-credential:${s.id}`), credential_rotated_at: now, vault_owner: isVaultRef(secret) ? by : null, updated_at: now });
     await this.event(s.id, 'Credentials rotated', 'The service token was replaced.', 'ok');
   }
 

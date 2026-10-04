@@ -46,15 +46,18 @@ export interface Subjects {
 // Lower case only: paths compare the same way on every database (MySQL's default collation ignores case).
 const SEGMENT = /^[a-z0-9._-]{1,100}$/;
 
-/** A vault path: `kv/<segments>` or `transit/<name>`. Segments are lower-case letters, digits, dot, dash and underscore. */
+/**
+ * A vault path: `kv/<segments>`, `transit/<name>` or (Sprint 25, B-1704) `database/<engine>/<role>`. Segments are
+ * lower-case letters, digits, dot, dash and underscore.
+ */
 export function isVaultPath(path: string): boolean {
   if (path.length > 400) return false;
   const parts = path.split('/');
-  if (parts[0] !== 'kv' && parts[0] !== 'transit') return false;
+  if (parts[0] !== 'kv' && parts[0] !== 'transit' && parts[0] !== 'database') return false;
   return parts.slice(1).every((p) => SEGMENT.test(p) && p !== '.' && p !== '..');
 }
 
-/** A grant prefix: `*`, `kv`, `transit`, or a vault path. */
+/** A grant prefix: `*`, `kv`, `transit`, `database`, or a vault path. */
 export const isGrantPath = (path: string): boolean => path === '*' || isVaultPath(path);
 
 /** Does the prefix cover the path, on a segment boundary? */
@@ -121,3 +124,27 @@ export function explainGrants(grants: readonly Grant[], subjects: Subjects, path
 /** Capabilities that apply to each part of the vault, for validating grants and for the explain view. */
 export const KV_CAPABILITIES: readonly Capability[] = ['list', 'read', 'write', 'delete', 'destroy'];
 export const TRANSIT_CAPABILITIES: readonly Capability[] = ['list', 'encrypt', 'decrypt', 'rewrap', 'sign', 'verify', 'manage'];
+/** Sprint 25 (B-1704): `read` issues a database lease for a role, `list` shows the engine's roles. */
+export const DATABASE_CAPABILITIES: readonly Capability[] = ['list', 'read'];
+
+export const kvPolicyPath = (path: string): string => `kv/${path}`;
+export const transitPolicyPath = (name: string): string => `transit/${name}`;
+export const databasePolicyPath = (engine: string, role: string): string => `database/${engine}/${role}`;
+
+/** A KV path as callers write it (without the `kv/` namespace): one to sixteen segments. */
+export function isKvPath(path: string): boolean {
+  const parts = path.split('/');
+  return parts.length >= 1 && parts.length <= 16 && isVaultPath(kvPolicyPath(path));
+}
+
+/** The text form of a reference: `vault:<kv path>#<key>`. */
+export const VAULT_REF = /^vault:([^#]+)#([A-Za-z0-9_.-]{1,128})$/;
+
+/** A `vault:<path>#<key>` reference (B-1705 resolves these against the same policies). */
+export function parseVaultRef(ref: string): { path: string; key: string } | null {
+  const m = VAULT_REF.exec(ref);
+  if (!m || !isKvPath(m[1]!)) return null;
+  return { path: m[1]!, key: m[2]! };
+}
+
+export const isVaultRef = (v: unknown): boolean => typeof v === 'string' && v.startsWith('vault:');

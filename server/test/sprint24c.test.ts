@@ -1,3 +1,4 @@
+import { migrationSource } from '../src/db/migrations/index.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -8,7 +9,6 @@ import { io as ioClient, type Socket } from 'socket.io-client';
 import { Registry } from 'prom-client';
 import { eventsCommand, parseTime, pluginsCommand } from '../src/cli/core.js';
 import { migrateCheck } from '../src/db/schema.js';
-import { migrationSource } from '../src/db/migrations/index.js';
 import { catalogue, EVENT_TYPES, knownPattern, validateEvent, type EventEnvelope } from '../src/events/catalogue.js';
 import { loadPrincipal } from '../src/http/middleware.js';
 import { createLogger } from '../src/observability/index.js';

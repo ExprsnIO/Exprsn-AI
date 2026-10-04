@@ -86,6 +86,9 @@ import { registerOpsMetrics } from './observability/ops-metrics.js';
 import { SchemaGuard } from './db/schema.js';
 import { ZoneCluster } from './zones/cluster.js';
 import { VaultService } from './vault/service.js';
+import { DatabaseLeases } from './vault/leases.js';
+import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
+import { RotationNotices } from './vault/rotation.js';
 import { PkiService } from './pki/service.js';
 
 export interface Services {
@@ -194,6 +197,10 @@ export interface Services {
   plugins: PluginService;
   /** 1.4.0 (B-2003, B-2004): runs plugins: the event fan-out, declarative actions and the broker for script handlers. */
   pluginRuntime: PluginRuntime;
+  /** Sprint 25 (B-1704): database leases from the built-in PostgreSQL and MySQL engines. */
+  dbLeases: DatabaseLeases;
+  /** Sprint 25 (B-1706): rotation schedules and notices for KV secrets and transit keys. */
+  rotation: RotationNotices;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -217,6 +224,8 @@ export interface ServiceOverrides {
   mail?: MailTransport;
   /** Sprint 13: the billing provider (tests use a fake Stripe). */
   billingProvider?: BillingProvider | null;
+  /** Sprint 25 (B-1704): the database engines behind leases (tests use an in-memory fake). */
+  dbAdmins?: DbAdminFactory;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -290,7 +299,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined) });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) } });
   tools.useWorkflows(workflows);
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
@@ -408,6 +417,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     rooms: new RoomRegistry(bus),
     plugins: new PluginService(() => s),
     pluginRuntime: new PluginRuntime(() => s, metrics.registry),
+    // 1.4.0, Sprint 25c: database leases and rotation schedules.
+    dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
+    rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -462,6 +474,15 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
   s.pluginRuntime.registerJobs(); // Sprint 25 (B-2003, B-2004): plugin invocations
   s.pluginRuntime.listen();
+  // Sprint 25 (B-1704 to B-1706): the lease sweeper, rotation checks, and `vault:` references resolved as their owner.
+  s.dbLeases.registerJobs();
+  s.rotation.registerJobs();
+  {
+    const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });
+    s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
+    s.connections.vaultResolver = vaultRead;
+    s.mcp.vaultResolver = vaultRead;
+  }
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -512,4 +533,6 @@ export function startSchedules(s: Services): void {
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
   s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
   s.pki.schedule(s.scheduler); // Sprint 24 (B-1603): CRLs for every live issuer
+  s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
+  s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
 }
