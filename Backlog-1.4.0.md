@@ -27,8 +27,8 @@ repeat them; webhook delivery is dropped from the plugins epic entirely.
 | --- | --- | --- | --- | --- | --- |
 | 24 | Trust foundations: CA issuance, OCSP, secrets, plugin catalogue, core | B-2101–B-2104, B-1601–B-1604, B-1701–B-1703, B-2001–B-2002 | 78 | `026_pki_secrets`, `026b_secrets`, `026c_core` | **Done** |
 | 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_acme`, `027b_atproto`, `027c_leases`, `027d_plugins` | **Done** |
-| 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity_moderation` | Next |
-| 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps` | Planned |
+| 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity`, `028b_atproto_accounts`, `028c_moderation`, `028d_files` | **Done** |
+| 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps` | Next |
 | 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels_social` | Planned |
 
 ### Progress
@@ -76,8 +76,24 @@ WebSocket subscriptions.
 | B-2004 | Done | Script handlers in the container sandbox, platform calls through a per-run scoped token. CI runs handlers as local processes, not containers |
 | B-2005 | Done | Plugins from signed import bundles, re-verified at install; scripts only from signed bundles by default. No CLI import yet |
 
-Still open from Sprint 24: the `secrets` and `users import` CLI commands (B-2103), and the two slot-holding places
-(the guard model screening a stream, chat's tool rounds).
+**Sprint 26: done** (81 points), built as four parallel parts with migrations `028_identity`,
+`028b_atproto_accounts`, `028c_moderation` and `028d_files`. Unit suite 710 passed, console suite 57 passed; the
+PostgreSQL integration tests ran against throwaway servers, MySQL in CI. The Sprint 24 leftovers are closed: the
+`secrets` and `users import` CLI commands, and the two places a chat turn waited for a slot it held (a turn now reuses
+its own slot for guard-model verdicts, tool-result screens and embeddings).
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| B-1801 | Done | Self-registration under a per-tenant policy (closed by default, open, approval, domain list); invitations with `members:invite` |
+| B-1802 | Done | Single-use verification links; sign-in refused with `email_unverified` when required |
+| B-1803 | Done | MFA policy for everyone or chosen roles with a grace period; trusted devices on the device cookie, never for admins (decided at merge) |
+| B-1804 | Done | GitHub and GitHub Enterprise Server as an OAuth 2.0 store; organisations and teams become groups. Team changes apply at the next sign-in |
+| B-1805 | Done | CSV import of users, memberships and group mappings as a job with a dry run |
+| B-1807 | Done | DIDs bound by a profile challenge or a sign-in at the account's server; handles resolved through the service URL checks |
+| B-1808 | Done | AT-Protocol OAuth as a client (PAR, PKCE, DPoP with nonces); tested only against a local PDS double, interop with real PDSes unproven; needs a public https issuer |
+| B-1901 to B-1907 | Done | Checks with one flag per object, a registry of moderated object types (now including files), reports, appeals that restore objects and negate labels, sanctions enforced on the next request, routed queues with SLA escalation and a dead-letter queue, shadow and enforce external providers, notices |
+| B-2401 to B-2405 | Done | Streamed, sealed, scanned files with versions and trash; shares and use-limited links (the platform's BUG-020 fixed); quotas; sandboxed previews; search and folder knowledge sources. Files are moderation objects (wired at merge) |
+
 
 The order follows the dependencies: the event catalogue (B-2001) before record triggers (B-2206); the moderation API
 (B-1901) before the labeler (B-1610), the firehose (B-1908), held replies (B-2302) and the moderation of files,
