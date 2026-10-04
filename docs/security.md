@@ -428,3 +428,23 @@ filter, private `/tmp`, only the state directory writable.
   most its tier's TTL.
 - Realtime rooms (1.4.0): the generic mechanism is in place, but no domain registers an authoriser yet, so every
   `room.join` is refused until messaging, groups, feeds or channels ship.
+- AT-Protocol trust (1.4.0, Sprint 25): DAG-CBOR, CIDs, did:key, did:plc and low-S ECDSA are implemented here and
+  pinned by known-answer tests from the reference libraries, but have not been run against the live PLC directory,
+  Bluesky's AppView or Ozone; treat interoperability as unproven until the interop tests of the Risks table run.
+  secp256k1 keys need the signer (OpenBao transit has no secp256k1 key type); under OpenBao only P-256 is offered.
+  Making or rotating the platform identity needs `platform:manage` and a recent sign-in, not a second admin. A
+  `did:plc` key rotation is applied here only after the directory accepts it; if the directory accepts and this
+  server then fails to record it, the identity must be repaired by hand from the directory's log (no reconciliation
+  job yet), and a rotation that the directory refuses leaves an unused key in the signer's or OpenBao's custody.
+  Labels signed by a retired key are re-signed when next served, so a consumer that cached an old label sees two
+  signatures over the same label. Path-form tenant labelers (`<base>/atproto/<slug>`) have a path in their service
+  endpoint, which some AT-Protocol clients drop; a tenant that needs broad interoperability should use its own host.
+  The `did:web` path is the tenant slug at creation; renaming the tenant does not move it. Tenants that fall back to
+  the platform identity share its labels: a value one tenant put on a subject is in force for all of them, and only
+  that tenant can withdraw it. Inbound labels are read
+  from `subscribeLabels` only (no push), from cursor 0 for a new labeler (a large labeler's history takes several
+  pulls of 5,000 messages); a labeler's negation is stored but does not close the flag its earlier label raised.
+  The verdict-to-label mapping uses a fixed keyword table over rule names and details. The labeler declaration
+  record (`app.bsky.labeler.service`) needs a PDS, which Exprsn-AI does not host, so clients only act on the global
+  values (`!hide`, `!warn`, `porn`, `sexual`, `nudity`, `graphic-media`) unless they read this labeler's values some
+  other way.
