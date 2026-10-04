@@ -26,8 +26,8 @@ repeat them; webhook delivery is dropped from the plugins epic entirely.
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
 | 24 | Trust foundations: CA issuance, OCSP, secrets, plugin catalogue, core | B-2101–B-2104, B-1601–B-1604, B-1701–B-1703, B-2001–B-2002 | 78 | `026_pki_secrets`, `026b_secrets`, `026c_core` | **Done** |
-| 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_atproto` | In progress |
-| 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity_moderation` | Planned |
+| 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_acme`, `027b_atproto`, `027c_leases`, `027d_plugins` | **Done** |
+| 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity_moderation` | Next |
 | 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps` | Planned |
 | 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels_social` | Planned |
 
@@ -53,9 +53,31 @@ servers, MySQL and Redis run in CI.
 | B-2103 | Partial | `plugins` and `events replay` done; `pki` comes with B-1607, `secrets` and `users import` remain |
 | B-2104 | Done | `docs/openapi.json` covers every registered route and is checked by a test |
 
-**Sprint 25: in progress.** Decisions taken for it (open decisions below): a service DID and labeler per tenant with a
-platform fallback; built-in database leases registered only by `connections:manage` holders, in a zone whose ceiling
-covers the target database.
+**Sprint 25: done** (77 points), built as four parallel parts with migrations `027_acme`, `027b_atproto`,
+`027c_leases` and `027d_plugins`. Unit suite 663 passed in one run; the PostgreSQL integration tests (ACME, AT-Protocol,
+leases, plugins) ran against throwaway servers, MySQL in CI. Decisions taken: a service DID and labeler per tenant with
+a platform fallback; built-in database leases registered only by `connections:manage` holders, in a zone whose ceiling
+covers the target database. New dependency: `ws` (already installed through socket.io), for AT-Protocol's plain
+WebSocket subscriptions.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| B-1605 | Done | Per-tenant RFC 8555 directory bound to a server profile; http-01 through the service address checks, dns-01; EAB, key-change, revoke, tenant and account isolation. Exprsn-AI's own ACME client obtains certificates from it (http-01 and a dns-01 wildcard). Gaps: dns identifiers only, no ARI, single-vantage validation |
+| B-1606 | Done | PEM, DER, chain and PKCS#12 export (checked with OpenSSL); renewal with the same or a new key; notices once at 30 and 7 days |
+| B-1607 | Done | `exprsn-ai pki issuers\|list\|issue\|revoke\|crl` and `docs/pki.md` (the `pki` part of B-2103) |
+| B-1608 | Done | secp256k1 (signer only; OpenBao transit has none) and P-256; compact low-S signatures; rotation updates the DID document |
+| B-1609 | Done | Per-tenant `did:web` or `did:plc` with platform fallback; PLC operations accepted by a directory double. Not yet run against the live PLC directory |
+| B-1610 | Done | Signed labeler with `queryLabels` and `subscribeLabels` (cursor replay verified); dismissed flags negate their labels; `negateForFlag` ready for appeals (B-1903) |
+| B-1611 | Done | Trusted labelers resolved through the service URL checks; bad labels dropped and audited, good ones become flags |
+| B-1704 | Done | Built-in PostgreSQL and MySQL engines; on a real PostgreSQL an expired lease's role is gone after the sweep. MySQL accounts rely on the sweeper for expiry |
+| B-1705 | Done | `vault:path#key` in user stores, data connections, MCP tokens and workflow HTTP headers, checked at save and at use. Stores from the configuration file cannot use them |
+| B-1706 | Done | Rotation notices for KV secrets; transit keys can rotate themselves |
+| B-2003 | Done | Declarative actions gated by grants; webhook actions through the outbound host checks; per-plugin rate and concurrency; loop rule with `PLUGIN_MAX_DEPTH` |
+| B-2004 | Done | Script handlers in the container sandbox, platform calls through a per-run scoped token. CI runs handlers as local processes, not containers |
+| B-2005 | Done | Plugins from signed import bundles, re-verified at install; scripts only from signed bundles by default. No CLI import yet |
+
+Still open from Sprint 24: the `secrets` and `users import` CLI commands (B-2103), and the two slot-holding places
+(the guard model screening a stream, chat's tool rounds).
 
 The order follows the dependencies: the event catalogue (B-2001) before record triggers (B-2206); the moderation API
 (B-1901) before the labeler (B-1610), the firehose (B-1908), held replies (B-2302) and the moderation of files,
