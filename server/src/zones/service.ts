@@ -252,7 +252,7 @@ export class ZoneService {
    * zone that is not defined, the external zone in an air-gapped deployment, or (for a labelled member) a zone whose
    * ceiling is below the member's label.
    */
-  async assertMemberFits(kind: 'connection' | 'MCP server', zone: string, label: Label | null): Promise<void> {
+  async assertMemberFits(kind: 'connection' | 'MCP server' | 'database engine', zone: string, label: Label | null): Promise<void> {
     const zones = await this.current();
     if (!zones.size) return;
     const z = zones.get(zone);

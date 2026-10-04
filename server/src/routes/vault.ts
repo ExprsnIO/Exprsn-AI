@@ -21,6 +21,8 @@ const b64 = z.string().max(400_000).regex(/^[A-Za-z0-9+/]*={0,2}$/, 'Base64');
 const ciphertext = z.string().min(1).max(400_000);
 const batchMax = 100;
 const capability = z.enum(CAPABILITIES);
+/** Sprint 25 (B-1706): a rotation period, in days (fractions allowed, down to about fifteen minutes). */
+const rotationDays = z.number().min(0.01).max(3650);
 
 /** The `*path` wildcard of a route as a string. */
 const wildPath = (req: Request): string => {
@@ -56,7 +58,10 @@ export function vaultRoutes(s: Services): Router {
         maxVersions: z.number().int().min(1).max(100).optional(),
         casRequired: z.boolean().optional(),
         customMetadata: z.record(z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/), z.string().max(512)).refine((o) => Object.keys(o).length <= 32, 'At most 32 metadata entries').optional(),
-        label: z.enum(LABELS).optional()
+        label: z.enum(LABELS).optional(),
+        // Sprint 25 (B-1706): rotate every N days (null: no schedule); notices go to the owner (default: the creator).
+        rotationPeriodDays: rotationDays.nullable().optional(),
+        owner: z.string().length(26).nullable().optional()
       }).strict(),
       req.body
     );
@@ -112,7 +117,7 @@ export function vaultRoutes(s: Services): Router {
   });
 
   r.patch('/vault/transit/keys/:name', admin, async (req, res) => {
-    const b = parseBody(z.object({ minDecryptVersion: versionNum.optional(), deletionAllowed: z.boolean().optional() }).strict(), req.body);
+    const b = parseBody(z.object({ minDecryptVersion: versionNum.optional(), deletionAllowed: z.boolean().optional(), rotationPeriodDays: rotationDays.nullable().optional(), autoRotate: z.boolean().optional(), owner: z.string().length(26).nullable().optional() }).strict(), req.body);
     res.json(await v.configureKey(await caller(req), String(req.params.name), b));
   });
 

@@ -1,5 +1,6 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { isVaultRef, parseVaultRef } from '../vault/policy.js';
 
 /**
  * What a secret reference may point at. Tenant admins write references (user stores, upstream IdPs), so the operator
@@ -55,6 +56,10 @@ const insideDirs = (file: string, p: SecretPolicy) => p.dirs.some((d) => file ==
  * at once) and again when it is read (on the real path, so a symlink cannot lead outside the directories).
  */
 export function secretRefProblem(ref: string, p: SecretPolicy = active): string | null {
+  // Sprint 25 (B-1705): a vault reference is checked here for its form only; whether the saving principal (and, at
+  // use, the owner) may read it is the vault policy's decision, made by `VaultService.assertRefsReadable` and
+  // `resolveFor`.
+  if (isVaultRef(ref)) return parseVaultRef(ref) ? null : 'Vault references look like vault:<path>#<key>, with a lower-case path.';
   if (ref.startsWith('env:')) {
     const name = ref.slice(4);
     if (p.envDeny.has(name)) return `${name} is one of the server's own settings and cannot be referenced.`;
@@ -69,11 +74,12 @@ export function secretRefProblem(ref: string, p: SecretPolicy = active): string 
     if (!insideDirs(norm, p)) return `${file} is outside the directories secrets may be read from (SECRET_REF_DIRS).`;
     return null;
   }
-  return 'Secret references must start with env: or file:';
+  return 'Secret references must start with env:, file: or vault:';
 }
 
 /** Resolves an `env:NAME` or `file:/path` reference. Values are read at use time so rotation needs no restart. */
 export function resolveSecret(ref: string, env: NodeJS.ProcessEnv = process.env, p: SecretPolicy = active): string {
+  if (isVaultRef(ref)) throw new Error('A vault reference is resolved for the user who saved it; this store cannot resolve it.');
   const problem = secretRefProblem(ref, p);
   if (problem) throw new Error(`Secret ${ref} is not allowed: ${problem}`);
   if (ref.startsWith('env:')) {
@@ -88,4 +94,35 @@ export function resolveSecret(ref: string, env: NodeJS.ProcessEnv = process.env,
   } catch {
     throw new Error(`Secret ${ref} could not be read`);
   }
+}
+
+/** Resolves a `vault:path#key` reference for the principal that owns it (B-1705). */
+export type VaultRefResolver = (ref: string) => Promise<string>;
+
+/**
+ * Resolves any secret reference: `env:` and `file:` as `resolveSecret` does, `vault:` through the resolver of the
+ * object that holds the reference (which reads it as the user who saved it, under the vault policies).
+ */
+export async function resolveSecretRef(ref: string, vault: VaultRefResolver | null | undefined, env: NodeJS.ProcessEnv = process.env, p: SecretPolicy = active): Promise<string> {
+  if (!isVaultRef(ref)) return resolveSecret(ref, env, p);
+  if (!parseVaultRef(ref)) throw new Error('Vault references look like vault:<path>#<key>.');
+  if (!vault) throw new Error('A vault reference is resolved for the user who saved it; this store has no owner for it.');
+  try {
+    return await vault(ref);
+  } catch (err) {
+    // The problem's own message names the deciding step (policy, owner, clearance), never a value.
+    throw new Error(`Secret ${ref} could not be read from the vault: ${(err as Error).message}`, { cause: err });
+  }
+}
+
+/** Every `vault:` reference among the string values of a configuration object (nested objects and arrays included). */
+export function vaultRefsIn(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') {
+    if (isVaultRef(value)) out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const v of value) vaultRefsIn(v, out);
+  } else if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) vaultRefsIn(v, out);
+  }
+  return out;
 }

@@ -3,7 +3,7 @@ import { isIP, Socket, type TcpSocketConnectOpts } from 'node:net';
 import path from 'node:path';
 import knexFactory, { type Knex } from 'knex';
 import { checkHost, parseAllowList, type AllowList } from '../../mcp/hosts.js';
-import { resolveSecret } from '../secrets.js';
+import { resolveSecretRef, type VaultRefResolver } from '../secrets.js';
 import { burnPasswordCheck, hashScheme, verifyPassword } from '../passwords.js';
 import { timed, type AuthResult, type ExternalUser, type IdentityProvider, type SqlConfig, type Step } from './types.js';
 
@@ -39,7 +39,9 @@ export class SqlProvider implements IdentityProvider {
     readonly id: string,
     readonly name: string,
     private readonly cfg: SqlConfig,
-    private readonly outbound: { allow: AllowList; refusedSqliteFiles: string[] } = { allow: parseAllowList(''), refusedSqliteFiles: [] }
+    private readonly outbound: { allow: AllowList; refusedSqliteFiles: string[] } = { allow: parseAllowList(''), refusedSqliteFiles: [] },
+    /** Sprint 25 (B-1705): resolves a `vault:` connection reference as the user who saved the store. */
+    private readonly vault: VaultRefResolver | null = null
   ) {}
 
   /**
@@ -101,7 +103,7 @@ export class SqlProvider implements IdentityProvider {
 
   private async db(steps?: Step[]): Promise<Knex> {
     if (this.knex) return this.knex;
-    const conn = resolveSecret(this.cfg.connection);
+    const conn = await resolveSecretRef(this.cfg.connection, this.vault);
     // The first check runs now, so a refused host fails the test with its own step before any pool exists; every
     // connection after that is checked again inside its stream (see settings).
     let network: Record<string, unknown> | null = null;

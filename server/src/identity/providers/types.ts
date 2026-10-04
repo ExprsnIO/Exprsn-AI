@@ -48,10 +48,14 @@ export const FEDERATED_KINDS = ['oidc', 'saml'] as const;
 export const isFederatedKind = (k: string): k is 'oidc' | 'saml' => k === 'oidc' || k === 'saml';
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
-/** A secret is referenced, never stored: `env:NAME` or `file:/absolute/path`. */
+/**
+ * A secret is referenced, never stored: `env:NAME`, `file:/absolute/path` or (Sprint 25, B-1705) `vault:path#key`,
+ * read from the tenant's vault as the user who saved the store.
+ */
 export const secretRef = z
   .string()
-  .regex(/^(env:[A-Z_][A-Z0-9_]*|file:\/.+)$/, 'Use a secret reference: env:NAME or file:/absolute/path')
+  .max(600)
+  .regex(/^(env:[A-Z_][A-Z0-9_]*|file:\/.+|vault:[^#]+#[A-Za-z0-9_.-]{1,128})$/, 'Use a secret reference: env:NAME, file:/absolute/path or vault:path#key')
   .superRefine((ref, ctx) => {
     const problem = secretRefProblem(ref);
     if (problem) ctx.addIssue({ code: 'custom', message: problem });

@@ -27,6 +27,7 @@ import * as m025 from './025_integrations3.js';
 import * as m026 from './026_pki_secrets.js';
 import * as m026b from './026b_secrets.js';
 import * as m026c from './026c_core.js';
+import * as m027c from './027c_leases.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -62,7 +63,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '025_integrations3': m025,
   '026_pki_secrets': m026,
   '026b_secrets': m026b,
-  '026c_core': m026c
+  '026c_core': m026c,
+  '027c_leases': m027c
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

@@ -4,7 +4,7 @@ import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
 import { authorize, effectivePermissions, type Principal } from '../authz/policy.js';
 import { actorFrom, isUniqueViolation, type AuditLog } from '../audit/chain.js';
-import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
+import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { TOPICS, type Bus } from '../platform/bus.js';
 import type { DataKeys } from '../platform/datakeys.js';
 import type { JobContext, JobQueue } from '../platform/jobs.js';
@@ -32,6 +32,9 @@ import {
   render,
   renderText,
   renderUrl,
+  graphVaultRefs,
+  headerVaultRef,
+  literalAuthorization,
   sampleOf,
   topoOrder,
   toolOutputPort,
@@ -148,6 +151,11 @@ export interface WorkflowDeps {
   tenantHosts?: (tenantId: string) => Promise<AllowList | null>;
   /** B-1006: a run someone awaits (an agent run) finished; the caller picks the result up. */
   onCallerDone?: (tenantId: string, kind: string, id: string) => Promise<void>;
+  /**
+   * Sprint 25 (B-1705): vault references in HTTP step headers. `check` refuses, at save, a reference the saving
+   * principal could not read; `read` resolves one, at use, as the run's principal.
+   */
+  vault?: { check(p: Principal, refs: string[]): Promise<void>; read(p: Principal, ref: string, via: string): Promise<string> };
 }
 
 const TERMINAL: RunState[] = ['succeeded', 'failed', 'rejected', 'cancelled'];
@@ -327,6 +335,7 @@ export class WorkflowService implements WorkflowToolRunner {
   async create(p: Principal, input: { name: string; description?: string | null; label: Label; graph?: WfGraph }): Promise<WorkflowRow> {
     if (!clears(p.clearance, input.label)) throw forbidden(`Your clearance is ${p.clearance}; a ${input.label} workflow is above it.`, { step: 'clearance' });
     await this.checkWorkspace(p, input.label);
+    if (input.graph) await this.checkRefs(p, input.graph);
     const t = Date.now();
     const row: WorkflowRow = { id: ulid(), tenant_id: p.tenantId, workspace_id: p.workspaceId ?? null, name: input.name, description: input.description ?? null, label: input.label, draft: JSON.stringify(input.graph ?? emptyGraph()), draft_rev: 1, published_version: null, created_by: p.userId, updated_by: p.userId, created_at: t, updated_at: t };
     try {
@@ -336,6 +345,15 @@ export class WorkflowService implements WorkflowToolRunner {
       throw err;
     }
     return row;
+  }
+
+  /** Sprint 25 (B-1705): no literal Authorization in a graph, and every vault reference readable by the saver. */
+  private async checkRefs(p: Principal, g: WfGraph): Promise<void> {
+    const literal = literalAuthorization(g);
+    if (literal) throw badRequest(literal);
+    const refs = graphVaultRefs(g);
+    if (refs.length && !this.d.vault) throw badRequest('Vault references cannot be resolved on this server.');
+    if (refs.length) await this.d.vault!.check(p, refs);
   }
 
   private async checkWorkspace(p: Principal, label: Label): Promise<void> {
@@ -349,7 +367,10 @@ export class WorkflowService implements WorkflowToolRunner {
     const w = await this.workflow(p, id);
     if (input.rev != null && input.rev !== w.draft_rev) throw conflict(`The draft changed since you opened it (revision ${w.draft_rev}, you have ${input.rev}). Reload it and apply your change again.`);
     const upd: Record<string, unknown> = { draft_rev: w.draft_rev + 1, updated_by: p.userId, updated_at: Date.now() };
-    if (input.graph) upd.draft = JSON.stringify(input.graph);
+    if (input.graph) {
+      await this.checkRefs(p, input.graph);
+      upd.draft = JSON.stringify(input.graph);
+    }
     if (input.description !== undefined) upd.description = input.description;
     if (input.label) {
       if (!clears(p.clearance, input.label)) throw forbidden('Above your clearance.', { step: 'clearance' });
@@ -365,6 +386,7 @@ export class WorkflowService implements WorkflowToolRunner {
   async publish(p: Principal, id: string, note: string | null) {
     const w = await this.workflow(p, id);
     const g = this.graphOf(w);
+    await this.checkRefs(p, g);
     const v = await this.validate(scopeOf(w), g, w.label);
     if (!v.ok) {
       throw new HttpProblem(422, 'Workflow invalid', `Publishing failed: ${v.errors[0]!.message}${v.errors.length > 1 ? ` (${v.errors.length - 1} more)` : ''}`, { extensions: { errors: v.errors, warnings: v.warnings } });
@@ -899,7 +921,21 @@ export class WorkflowService implements WorkflowToolRunner {
         const cfg = configOf(n as WfNode & { kind: 'http' });
         const url = renderUrl(cfg.url, c.scope);
         if (dry) return { output: { status: 200, body: null }, detail: { mocked: true, url } };
-        const headers = Object.fromEntries(Object.entries(cfg.headers).map(([k, v]) => [k, renderText(v, c.scope)]));
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(cfg.headers)) {
+          const vr = headerVaultRef(v);
+          if (!vr) {
+            headers[k] = renderText(v, c.scope);
+            continue;
+          }
+          // B-1705: resolved as the run's principal under the vault policies; a denial fails the step.
+          if (!this.d.vault) throw new StepFailed(`${n.title}: vault references cannot be resolved on this server.`);
+          try {
+            headers[k] = vr.prefix + (await this.d.vault.read(p, vr.ref, `workflow:${run.workflow_id}`));
+          } catch (err) {
+            throw new StepFailed(`${n.title}: ${vr.ref} could not be read from the vault: ${(err as Error).message}`);
+          }
+        }
         const body = cfg.body != null ? renderText(cfg.body, c.scope) : undefined;
         const res = await internalRequest({ method: cfg.method, url, headers, ...(body != null ? { body } : {}), timeoutMs: n.timeoutMs ?? 30_000, signal: c.signal, allowHosts: this.d.http.hosts, allowLoopback: this.d.http.allowLoopback, tenantAllow: (await this.d.tenantHosts?.(run.tenant_id)) ?? null });
         if (res.status >= 400) throw new StepFailed(`${cfg.method} ${new URL(url).host} answered ${res.status}.`);

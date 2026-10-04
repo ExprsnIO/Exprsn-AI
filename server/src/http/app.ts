@@ -43,6 +43,7 @@ import { promptRoutes } from '../routes/prompts.js';
 import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
 import { vaultRoutes } from '../routes/vault.js';
+import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import type { Services } from '../services.js';
@@ -207,6 +208,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
   api.use(eventRoutes(s));
   api.use('/admin', pluginAdminRoutes(s));
+  // 1.4.0, Sprint 25c (B-1704): database leases from the built-in engines.
+  api.use(vaultLeaseRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

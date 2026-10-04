@@ -6,6 +6,7 @@ import { resolveMappings } from '../../repos/users.js';
 import { slugify } from '../../repos/tenants.js';
 import { isFederatedKind, parseProviderConfig, secretRef, type OidcUpstreamConfig, type SamlUpstreamConfig, type Step } from '../../identity/providers/types.js';
 import type { ProviderRow } from '../../repos/providers.js';
+import { vaultRefsIn } from '../../identity/secrets.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { badRequest, conflict, forbidden, notFound } from '../../http/problem.js';
 import { CLIENT_TYPES, clientJwks, DEVICE_GRANT, EXCHANGE_GRANT, OAuthError, isConfidential, type ClientRow, type Grant, type TenantCtx } from '../../federation/oidc.js';
@@ -572,9 +573,12 @@ export function federationAdminRoutes(s: Services): Router {
     } catch (err) {
       throw badRequest(`The provider configuration did not validate: ${(err as Error).message}`);
     }
+    // Sprint 25 (B-1705): a vault client secret must be readable by the admin saving it; it resolves as them later.
+    const refs = vaultRefsIn(config);
+    await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
     const position = Math.max(0, ...(await s.providers.list(p.tenantId)).map((x) => x.position)) + 10;
     try {
-      const row = await s.providers.create(p.tenantId, { name: body.name, kind: body.protocol, position: Math.min(position, 10000), enabled: true, config });
+      const row = await s.providers.create(p.tenantId, { name: body.name, kind: body.protocol, position: Math.min(position, 10000), enabled: true, config, vaultOwner: refs.length ? p.userId : null });
       // B-807: SAML metadata given as a URL is fetched again on a schedule; changes wait for approval.
       if (body.protocol === 'saml' && /^https?:\/\//.test(body.source)) await fed().metadata.register(p.tenantId, 'idp', row.id, body.source, idpSnapshot(config as unknown as SamlUpstreamConfig));
       await audit(req, 'identity.provider.created', { provider: row.id, name: row.name, kind: row.kind }, { config: row.config });

@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { isVaultRef } from '../../vault/policy.js';
 import { z } from 'zod';
 import { actorFrom } from '../../audit/chain.js';
 import { labelRank, LABELS } from '../../authz/labels.js';
@@ -55,6 +56,7 @@ export function mcpAdminRoutes(s: Services): Router {
   r.post('/mcp-servers', manage, async (req, res) => {
     const p = principalOf(req);
     const b = parseBody(z.object({ name: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens'), description: z.string().trim().max(500).nullable().default(null), url: urlSchema, zone: z.string().trim().regex(/^[a-z0-9-]{1,63}$/).default('app-internal'), auth: z.enum(['none', 'service', 'user']).default('none'), credential: z.string().min(8).max(4096).nullable().default(null) }), req.body);
+    if (b.auth === 'service' && b.credential && isVaultRef(b.credential)) await s.vault.assertRefsReadable(p, [b.credential], { ip: ip(req), traceId: req.traceId });
     try {
       await s.zones.assertMemberFits('MCP server', b.zone, null);
       const out = await mcp.register(p, b);
@@ -104,7 +106,9 @@ export function mcpAdminRoutes(s: Services): Router {
   r.put('/mcp-servers/:id/credential', manage, async (req, res) => {
     const srv = await load(req);
     const b = parseBody(z.object({ secret: z.string().min(8).max(4096) }), req.body);
-    await mcp.rotateCredential(srv, b.secret);
+    // Sprint 25 (B-1705): a vault reference must be readable by the admin saving it; it resolves as them.
+    if (isVaultRef(b.secret)) await s.vault.assertRefsReadable(principalOf(req), [b.secret], { ip: ip(req), traceId: req.traceId });
+    await mcp.rotateCredential(srv, b.secret, principalOf(req).userId);
     await audit(req, 'mcp.credential.rotated', srv);
     res.json({ ok: true });
   });
