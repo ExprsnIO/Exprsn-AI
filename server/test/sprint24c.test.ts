@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { io as ioClient, type Socket } from 'socket.io-client';
 import { Registry } from 'prom-client';
 import { eventsCommand, parseTime, pluginsCommand } from '../src/cli/core.js';
+import { migrationSource } from '../src/db/migrations/index.js';
 import { migrateCheck } from '../src/db/schema.js';
 import { catalogue, EVENT_TYPES, knownPattern, validateEvent, type EventEnvelope } from '../src/events/catalogue.js';
 import { loadPrincipal } from '../src/http/middleware.js';
@@ -520,7 +521,10 @@ describe('migration discipline (B-2104)', () => {
     const h = await harness();
     try {
       const r = await migrateCheck(h.s.db);
-      expect(r).toMatchObject({ state: 'current', pending: [], database: '026c_core' });
+      // The latest registered migration (later sprints add theirs after 026c_core).
+      const names = (await migrationSource.getMigrations([])) as string[];
+      expect(r).toMatchObject({ state: 'current', pending: [], database: names.at(-1) });
+      expect(names).toContain('026c_core');
       expect(await h.s.db.schema.hasTable('plugins')).toBe(true);
       expect(await h.s.db.schema.hasTable('plugin_transitions')).toBe(true);
     } finally {
