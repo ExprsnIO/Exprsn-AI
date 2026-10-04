@@ -11,7 +11,7 @@ interface TransitKey {
 
 /**
  * An in-process OpenBao transit engine for tests: enough of its HTTP API for the KMS adapter's data keys (keys,
- * encrypt, decrypt, hmac, verify) and for asymmetric signing (ecdsa-p256 and rsa-2048 keys, read of the public
+ * encrypt, decrypt, hmac, verify) and for asymmetric signing (ecdsa-p256, rsa-2048 and, for the CA, rsa-3072 keys, read of the public
  * key, sign with the JWS marshaling or PKCS#1 v1.5), and ed25519 keys (Sprint 20). Private signing keys stay inside this fake, as in OpenBao.
  */
 export class FakeOpenBao {
@@ -54,8 +54,8 @@ export class FakeOpenBao {
               // Like OpenBao, the Ed25519 public key is read back as the base64 of its 32 raw bytes.
               const pair = generateKeyPairSync('ed25519');
               this.keys.set(name!, { type, privateKey: pair.privateKey, publicPem: Buffer.from(String(pair.publicKey.export({ format: 'jwk' }).x), 'base64url').toString('base64') });
-            } else if (type === 'ecdsa-p256' || type === 'rsa-2048') {
-              const pair = type === 'ecdsa-p256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('rsa', { modulusLength: 2048 });
+            } else if (type === 'ecdsa-p256' || type === 'rsa-2048' || type === 'rsa-3072') {
+              const pair = type === 'ecdsa-p256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('rsa', { modulusLength: type === 'rsa-3072' ? 3072 : 2048 });
               this.keys.set(name!, { type, privateKey: pair.privateKey, publicPem: pair.publicKey.export({ type: 'spki', format: 'pem' }).toString() });
             } else this.keys.set(name!, { type, secret: randomBytes(32) });
             return send(204);
