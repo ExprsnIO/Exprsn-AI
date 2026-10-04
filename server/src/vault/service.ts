@@ -597,9 +597,14 @@ export class VaultService {
     return { material: await this.s().keys.openBytes(c.tenantId, v.material_sealed, `vault-transit:${k.id}:${version}`), publicKey: v.public_key };
   }
 
-  private async addVersion(c: VaultCaller, k: Pick<KeyRow, 'id' | 'type'>, version: number, trx = this.db): Promise<void> {
+  /** A new version's row, its material sealed (outside any transaction: sealing may create the tenant's data key). */
+  private async versionRow(c: VaultCaller, k: Pick<KeyRow, 'id' | 'type'>, version: number) {
     const m = generateMaterial(k.type);
-    await trx('vault_transit_versions').insert({ id: ulid(), tenant_id: c.tenantId, key_id: k.id, version, material_sealed: await this.s().keys.sealBytes(c.tenantId, m.material, `vault-transit:${k.id}:${version}`), public_key: m.publicKey, created_at: Date.now() });
+    return { id: ulid(), tenant_id: c.tenantId, key_id: k.id, version, material_sealed: await this.s().keys.sealBytes(c.tenantId, m.material, `vault-transit:${k.id}:${version}`), public_key: m.publicKey, created_at: Date.now() };
+  }
+
+  private async addVersion(c: VaultCaller, k: Pick<KeyRow, 'id' | 'type'>, version: number, trx = this.db): Promise<void> {
+    await trx('vault_transit_versions').insert(await this.versionRow(c, k, version));
   }
 
   private async keyView(k: KeyRow) {
@@ -642,9 +647,11 @@ export class VaultService {
     if (await this.db('vault_transit_keys').where({ tenant_id: c.tenantId, name }).first('id')) throw conflict(`A transit key named ${name} exists.`);
     const now = Date.now();
     const row: KeyRow = { id: ulid(), tenant_id: c.tenantId, name, type: input.type, label, latest_version: 1, min_decrypt_version: 1, min_available_version: 1, deletion_allowed: false, created_by: c.subjects.userId, created_at: now, updated_at: now };
+    // Sprint 26a: sealed before the transaction, which on SQLite holds the only connection the data key would need.
+    const first = await this.versionRow(c, row, 1);
     await this.db.transaction(async (trx) => {
       await trx('vault_transit_keys').insert(row);
-      await this.addVersion(c, row, 1, trx);
+      await trx('vault_transit_versions').insert(first);
     }).catch((err: unknown) => {
       if (err instanceof HttpProblem) throw err;
       throw conflict(`A transit key named ${name} exists.`);
