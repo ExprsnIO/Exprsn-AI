@@ -80,6 +80,7 @@ import { instrumentKnex, parseOtlpHeaders, SpanKind, Tracer, tracesUrl, withSpan
 import { registerOpsMetrics } from './observability/ops-metrics.js';
 import { SchemaGuard } from './db/schema.js';
 import { ZoneCluster } from './zones/cluster.js';
+import { PkiService } from './pki/service.js';
 
 export interface Services {
   cfg: Config;
@@ -173,6 +174,8 @@ export interface Services {
   schema: SchemaGuard;
   /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
   zoneCluster: ZoneCluster;
+  /** Sprint 24 (B-1601 to B-1604): the certificate authority (issuers, profiles, issuance, CRLs, OCSP). */
+  pki: PkiService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -379,6 +382,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
     zoneCluster: new ZoneCluster(() => s),
+    pki: new PkiService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -428,6 +432,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.openai.holds.registerJobs(); // Sprint 21 (B-1301)
   s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
   s.evals.registerJobs(); // Sprint 21 (B-1303)
+  s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
   jobs.register('mcp.poll', async (p, ctx) => mcp.pollTenant(String(p.tenantId ?? ctx.job.tenant_id), ctx.progress, ctx.signal));
   return s;
@@ -477,4 +482,5 @@ export function startSchedules(s: Services): void {
   s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
   s.agentSchedules.schedule(s.scheduler); // Sprint 21 (B-1306)
+  s.pki.schedule(s.scheduler); // Sprint 24 (B-1603): CRLs for every live issuer
 }
