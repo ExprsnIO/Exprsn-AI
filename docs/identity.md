@@ -13,6 +13,7 @@ Each tenant has an ordered chain of user stores. A store is one of:
 | `local` | the application database | Bootstrap and break-glass accounts, created with `exprsn-ai admin:create` or in the console |
 | `oidc` | an upstream OpenID Connect provider (we are the relying party) | Sign-in by redirect; no passwords, no directory sync. See [Upstream federation](#upstream-federation) |
 | `saml` | an upstream SAML 2.0 identity provider (we are the service provider) | Same; signed assertions only |
+| `atproto` | AT-Protocol accounts (we are an OAuth client of each account's own authorization server; 1.4.0) | Sign-in by redirect after the person gives their handle; a DID bound to a user signs in as that user, others are provisioned with their DID as their only group. See `docs/api.md`, Sprint 26b |
 
 SQL stores accept **argon2** and **bcrypt** hashes. Rows with any other format (plain text, unsalted digests) never
 authenticate. Give the store a database account with `SELECT` on the user and group tables only.

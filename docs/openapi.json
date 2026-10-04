@@ -1077,6 +1077,127 @@
           "signature"
         ],
         "description": "A flattened JWS (RFC 7515) signed with ES256, ES384, RS256 or EdDSA"
+      },
+      "AtUserDid": {
+        "type": "object",
+        "required": [
+          "id",
+          "did",
+          "verified",
+          "proof",
+          "handle",
+          "handleCheckedAt",
+          "pds",
+          "challengePending",
+          "challengeExpiresAt",
+          "verifiedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "proof": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "oauth"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handleCheckedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pds": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "challengePending": {
+            "type": "boolean"
+          },
+          "challengeExpiresAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verifiedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "AtCheckStep": {
+        "type": "object",
+        "required": [
+          "title",
+          "ok"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "ms": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
       }
     },
     "responses": {
@@ -1184,6 +1305,195 @@
         ],
         "summary": "Discovery (issuer, endpoints, S256, ES256, grant types). CORS open",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/atproto/accounts": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "identity"
+        ],
+        "summary": "identity:manage. The tenant's AT-Protocol DID claims and bindings",
+        "parameters": [
+          {
+            "name": "verified",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/AtUserDid"
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "userId",
+                          "username"
+                        ],
+                        "properties": {
+                          "userId": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/atproto/accounts/check": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "identity"
+        ],
+        "summary": "identity:manage. Resolves a handle or DID step by step: account, PDS, authorization server and its metadata. Audited atproto.account.checked",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "steps"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtCheckStep"
+                      }
+                    },
+                    "did": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "pds": {
+                      "type": "string"
+                    },
+                    "issuer": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/atproto/accounts/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "identity"
+        ],
+        "summary": "identity:manage. Removes a user's AT-Protocol binding. Audited atproto.did.removed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -10380,6 +10690,288 @@
         }
       }
     },
+    "/api/me/atproto": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. The user's AT-Protocol DID claim or binding (B-1807), or null",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/AtUserDid"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Removes the user's claim or binding. Audited atproto.did.removed",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/claim": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link, recent sign-in. Claims a DID (or the DID a handle names, resolved by DNS TXT or https://<handle>/.well-known/atproto-did through the service URL checks; a link-local or metadata address is refused, 422) and returns the challenge once (stored as a SHA-256). Audited atproto.did.claimed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding",
+                    "challenge"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/components/schemas/AtUserDid"
+                    },
+                    "challenge": {
+                      "type": "object",
+                      "required": [
+                        "token",
+                        "expiresAt",
+                        "instructions"
+                      ],
+                      "properties": {
+                        "token": {
+                          "type": "string",
+                          "pattern": "^exprsn-ai-verify-[0-9a-f]{32}$"
+                        },
+                        "expiresAt": {
+                          "type": "integer"
+                        },
+                        "instructions": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/handle": {
+      "put": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Sets the handle for the bound DID; it must resolve to that DID and be named by its document (422, reason: mismatch). Audited atproto.handle.set",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "handle"
+                ],
+                "properties": {
+                  "handle": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/components/schemas/AtUserDid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/link": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link, recent sign-in. Starts AT-Protocol OAuth (PAR, PKCE, DPoP) for the account in link mode and sets the federation cookie; the callback binds the DID to this user (proof: oauth). Audited atproto.did.link_started",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "account"
+                ],
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300,
+                    "description": "A handle (alice.bsky.social) or a did:plc / did:web"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "url"
+                  ],
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/atproto/verify": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Checks the open challenge in the account's app.bsky.actor.profile record at its own PDS; on success binds the DID (proof: profile). 409 without a challenge or when it is not there. Audited atproto.did.verified or atproto.did.verify_failed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "binding"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/components/schemas/AtUserDid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/me/grants": {
       "get": {
         "tags": [
@@ -14595,6 +15187,179 @@
         }
       }
     },
+    "/federation/atproto/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Completes an AT-Protocol sign-in (B-1808): iss check, code exchange with PKCE and DPoP, a DPoP-bound token whose sub DID's PDS names the same authorization server and whose getSession at the PDS answers for it; tokens revoked, not stored; then JIT provisioning (or the bound user), second factor for admin roles. Redirects (302) to the console, or to Settings in link mode; errors are HTML pages",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Signed in, or linked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/federation/atproto/client-metadata.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "The AT-Protocol OAuth client metadata document; its URL is the client_id (B-1808)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "client_id",
+                    "redirect_uris",
+                    "scope",
+                    "token_endpoint_auth_method",
+                    "jwks_uri",
+                    "dpop_bound_access_tokens"
+                  ],
+                  "properties": {
+                    "client_id": {
+                      "type": "string"
+                    },
+                    "client_name": {
+                      "type": "string"
+                    },
+                    "client_uri": {
+                      "type": "string"
+                    },
+                    "application_type": {
+                      "const": "web"
+                    },
+                    "grant_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "response_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "redirect_uris": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "token_endpoint_auth_method": {
+                      "const": "private_key_jwt"
+                    },
+                    "token_endpoint_auth_signing_alg": {
+                      "const": "ES256"
+                    },
+                    "jwks_uri": {
+                      "type": "string"
+                    },
+                    "dpop_bound_access_tokens": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/federation/atproto/start": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "Without handle, a page asking for it; with it, resolves the account (handle, DID, PDS, authorization server) through the service URL checks, sends a pushed authorization request with PKCE S256 and a DPoP proof (nonce retry) and private_key_jwt, and redirects (302) to the authorization endpoint with client_id and request_uri; browser-binding cookie",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "handle",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "return",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The handle form",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "To the account's authorization server"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
     "/federation/oidc/callback": {
       "get": {
         "tags": [
@@ -15431,6 +16196,205 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/t/{tenant}/federation/atproto/callback": {
+      "get": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Completes an AT-Protocol sign-in (B-1808): iss check, code exchange with PKCE and DPoP, a DPoP-bound token whose sub DID's PDS names the same authorization server and whose getSession at the PDS answers for it; tokens revoked, not stored; then JIT provisioning (or the bound user), second factor for admin roles. Redirects (302) to the console, or to Settings in link mode; errors are HTML pages",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Signed in, or linked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
+      }
+    },
+    "/t/{tenant}/federation/atproto/client-metadata.json": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "The AT-Protocol OAuth client metadata document; its URL is the client_id (B-1808)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "client_id",
+                    "redirect_uris",
+                    "scope",
+                    "token_endpoint_auth_method",
+                    "jwks_uri",
+                    "dpop_bound_access_tokens"
+                  ],
+                  "properties": {
+                    "client_id": {
+                      "type": "string"
+                    },
+                    "client_name": {
+                      "type": "string"
+                    },
+                    "client_uri": {
+                      "type": "string"
+                    },
+                    "application_type": {
+                      "const": "web"
+                    },
+                    "grant_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "response_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "redirect_uris": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "token_endpoint_auth_method": {
+                      "const": "private_key_jwt"
+                    },
+                    "token_endpoint_auth_signing_alg": {
+                      "const": "ES256"
+                    },
+                    "jwks_uri": {
+                      "type": "string"
+                    },
+                    "dpop_bound_access_tokens": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": []
+      }
+    },
+    "/t/{tenant}/federation/atproto/start": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "federation"
+        ],
+        "summary": "Without handle, a page asking for it; with it, resolves the account (handle, DID, PDS, authorization server) through the service URL checks, sends a pushed authorization request with PKCE S256 and a DPoP proof (nonce retry) and private_key_jwt, and redirects (302) to the authorization endpoint with client_id and request_uri; browser-binding cookie",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "handle",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "return",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The handle form",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "To the account's authorization server"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "security": []
       }
     },
     "/t/{tenant}/federation/oidc/callback": {
