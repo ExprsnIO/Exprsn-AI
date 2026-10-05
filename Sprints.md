@@ -45,6 +45,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 33 | Agents, tools and skills in chat (1.5.0) | Chat | Planned |
 | 34 | Chaining agents, skills, tools and workflows; release (1.5.0) | Runs, Registry, Chat | Planned |
 | — | Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (B-43, 1.5.0 or 1.6) | Models | Unscheduled (approved 2026-10-05) |
+| 40–46 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.6.0, which ends at Sprint 39) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
