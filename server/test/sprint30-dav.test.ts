@@ -289,10 +289,18 @@ describe('CardDAV (B-3103)', () => {
     const alice = await davUser(h, 'alice', { clearance: 'internal' });
     const bob = await davUser(h, 'bob', { clearance: 'internal' });
     const carol = await davUser(h, 'carol', { clearance: 'confidential' });
+    // Dan shares no workspace with Alice (owner's decision, 2026-10-05: the directory is scoped to shared workspaces).
+    const dan = await davUser(h, 'dan', { clearance: 'internal' });
+    const team = (await h.s.tenants.createWorkspace(h.tenantId, 'Team', 'confidential')).id;
+    const other = (await h.s.tenants.createWorkspace(h.tenantId, 'Elsewhere', 'internal')).id;
+    for (const u of [alice, bob, carol]) await h.s.tenants.addMember(team, u.user.id);
+    await h.s.tenants.addMember(other, dan.user.id);
     const dir = `/dav/addressbooks/${alice.user.id}/directory`;
     const listed = hrefs((await alice.dav('PROPFIND', `${dir}/`).set('Depth', '1').send(PROPFIND('<d:getetag/>')).expect(207)).text);
     expect(listed).toContain(`${dir}/${bob.user.id}.vcf`);
     expect(listed).not.toContain(`${dir}/${carol.user.id}.vcf`);
+    expect(listed).not.toContain(`${dir}/${dan.user.id}.vcf`);
+    await alice.dav('GET', `${dir}/${dan.user.id}.vcf`).expect(404);
     await alice.dav('GET', `${dir}/${carol.user.id}.vcf`).expect(404);
     const bobCard = await alice.dav('GET', `${dir}/${bob.user.id}.vcf`).expect(200);
     expect(bobCard.text).toContain('EMAIL;TYPE=INTERNET:bob@example.test');

@@ -141,8 +141,10 @@ filter, private `/tmp`, only the state directory writable.
   removal they cannot name, so clients re-fetch the collection then. A time-range query on a recurring object is
   inclusive (the span of all its instances), and a non-IANA TZID is read with its VTIMEZONE's standard offset.
   Directory entries carry their person's clearance as their label; the directory lists the tenant's active users
-  within the caller's clearance (not only those sharing a workspace). The conformance fixtures were written from the
-  clients' request formats, not captured from devices.
+  who share a workspace with the caller (all of them when the caller is in a workspace open to the whole tenant),
+  within the caller's clearance (owner's decision, 2026-10-05). The conformance fixtures were written from the
+  clients' request formats, not captured from devices, so B-3104 counts as partial until real traffic from Apple
+  Calendar and Contacts, Thunderbird and DAVx5 is captured and replayed (owner's decision, 2026-10-05).
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another

@@ -2,7 +2,7 @@
 
 Exprsn-AI speaks the standard calendar and contact protocols, so Apple Calendar and Contacts, Thunderbird, DAVx5 and
 other DAV clients reach the same data the console shows, through the same checks. The protocols are new front doors:
-group events stay B-25 events (with their RSVPs and labels), the directory stays the tenant's users, and every read
+group events stay B-25 events (with their RSVPs and labels), the directory stays the tenant's users (those who share a workspace with you), and every read
 and write goes through the services, policy pipeline and audit chain the API uses.
 
 | Item | What |
@@ -98,7 +98,8 @@ come back as 409 or 403. Moderators and owners may also change the title, locati
 the event (`STATUS:CANCELLED` or DELETE); for others those changes are ignored. The server's version then differs from
 what was sent, so no ETag comes back and the client fetches it again. New events are created in the console.
 
-**CardDAV.** The directory lists the tenant's active users whose clearance is at or below yours: a person's entry
+**CardDAV.** The directory lists the tenant's active users who share a workspace with you (everyone, when you are in a
+workspace open to the whole tenant) and whose clearance is at or below yours: a person's entry
 carries their clearance as its label, so a contact above your clearance is never listed, returned, synced or matched.
 Entries are vCard 3.0 with the name, username, email and the tenant's name. Personal address books take vCard 3.0
 and 4.0 with a UID (unique in the book) and FN. `addressbook-query` supports every operator of RFC 6352 10.5

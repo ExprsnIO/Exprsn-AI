@@ -5,6 +5,7 @@ import type { Permission } from '../authz/permissions.js';
 import { actorFrom } from '../audit/chain.js';
 import type { Access } from '../groups/service.js';
 import type { UserRow } from '../repos/users.js';
+import { workspacesFor } from '../http/middleware.js';
 import type { Services } from '../services.js';
 import type { CollectionRow, ObjectRow } from './store.js';
 import { DavError } from './xml.js';
@@ -205,10 +206,19 @@ function eventNode(ctx: DavCtx, parent: string[], a: Access, e: EventView, st?: 
   });
 }
 
-/** The directory entries the caller may see: active users of the tenant cleared no higher than the caller. */
+/**
+ * The directory entries the caller may see: active users of the tenant cleared no higher than the caller who share a
+ * workspace with them (owner's decision, 2026-10-05), as messaging and groups scope people. A workspace open to the
+ * whole tenant includes every active user, so a caller with one sees everyone the clearance allows.
+ */
 export async function directoryUsers(ctx: DavCtx, ids?: string[]): Promise<UserRow[]> {
   const allowed = LABELS.filter((l) => clears(ctx.p.clearance, l));
+  const mine = await workspacesFor(ctx.s, ctx.p);
   const q = ctx.s.db('users').where({ tenant_id: ctx.p.tenantId, state: 'active' }).whereIn('clearance', allowed);
+  if (!mine.some((w) => w.visibility === 'tenant')) {
+    const members = ctx.s.db('workspace_members').whereIn('workspace_id', mine.length ? mine.map((w) => w.id) : ['-']).select('user_id');
+    q.where((w) => w.whereIn('id', members).orWhere('id', ctx.p.userId));
+  }
   if (ids) q.whereIn('id', ids.length ? ids : ['-']);
   return ((await q.orderBy('display_name').limit(20_000)) as Record<string, unknown>[]).map((r) => ({ ...(r as unknown as UserRow), created_at: Number(r.created_at), updated_at: Number(r.updated_at) }));
 }

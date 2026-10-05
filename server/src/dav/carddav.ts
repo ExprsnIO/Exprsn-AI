@@ -7,7 +7,8 @@ import { DavError } from './xml.js';
 /*
  * CardDAV (RFC 6352), B-3103: the directory as a read-only address book, and personal address books.
  *
- * The directory lists the tenant's active users whose clearance is at or below the caller's: a person's entry
+ * The directory lists the tenant's active users who share a workspace with the caller and whose clearance is at or
+ * below the caller's (see `directoryUsers` in tree.ts): a person's entry
  * carries their clearance as its label, so a contact above the caller's clearance is never returned, listed, synced
  * or matched by a query. Entries hold the name, username and email only (vCard 3.0, which every client reads).
  */

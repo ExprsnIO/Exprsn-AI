@@ -141,7 +141,7 @@ export async function liveValue(pc: PropContext, n: Node, name: string): Promise
         const d = await ctx.s.dav.store.description(n.coll);
         return d == null ? undefined : escText(d);
       }
-      if (n.kind === 'directory' && name === R('addressbook-description')) return escText('People in your organisation you are cleared to see');
+      if (n.kind === 'directory' && name === R('addressbook-description')) return escText('People who share a workspace with you, as far as your clearance allows');
       return undefined;
     }
     case IC('calendar-color'):

@@ -65,6 +65,9 @@ describe('DAV conformance run (B-3104)', () => {
     alice = await davUser(h, 'alice', { clearance: 'internal' });
     const bob = await davUser(h, 'bob', { clearance: 'internal' });
     const carol = await davUser(h, 'carol', { clearance: 'confidential' });
+    // The directory lists people who share a workspace with the caller (owner's decision, 2026-10-05).
+    const team = (await h.s.tenants.createWorkspace(h.tenantId, 'Team', 'confidential')).id;
+    for (const u of [alice, bob, carol]) await h.s.tenants.addMember(team, u.user.id);
     const uid = alice.user.id;
     vars = { uid, bob: bob.user.id, carol: carol.user.id, cal: `/dav/calendars/${uid}/personal`, book: `/dav/addressbooks/${uid}/contacts`, dir: `/dav/addressbooks/${uid}/directory` };
     // The homes are listed first (as every client does), which makes the default calendar and address book.
