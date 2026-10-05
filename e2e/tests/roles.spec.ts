@@ -25,9 +25,16 @@ test.describe('Roles and access', () => {
       else { await cell.focus(); await page.keyboard.press('Enter'); }
       const drawer = page.locator('#overlay .drawer');
       await expect(drawer.locator('[data-explain]')).toBeVisible();
-      await expect(drawer.locator('[data-steps] li')).toHaveCount(5);
-      await expect(drawer.locator('[data-steps]')).toContainText('role');
-      await expect(drawer.locator('[data-steps]')).toContainText('zone ceiling');
+      // An inactive account (a rejected sign-up, say) is refused before the pipeline: no steps, a notice instead.
+      const inactive = /\binactive\b/.test(await matrix.locator('tbody tr').nth(Math.floor(i / perms)).locator('th').innerText());
+      if (inactive) {
+        await expect(drawer.locator('[data-steps] li')).toHaveCount(0);
+        await expect(drawer).toContainText('not active');
+      } else {
+        await expect(drawer.locator('[data-steps] li')).toHaveCount(5);
+        await expect(drawer.locator('[data-steps]')).toContainText('role');
+        await expect(drawer.locator('[data-steps]')).toContainText('zone ceiling');
+      }
       await expect(drawer.locator('.kv')).toContainText(allowed ? 'allow' : 'deny');
       await page.keyboard.press('Escape');
       await expect(page.locator('#overlay')).toHaveCount(0);
