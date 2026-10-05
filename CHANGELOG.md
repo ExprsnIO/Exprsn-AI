@@ -101,6 +101,26 @@
 - A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
   replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
 
+### Import repositories and model import (Sprint 30, B-3801 to B-3803)
+
+- New permissions `imports:run`, `imports:repositories` and `imports:review`, and a fourteenth built-in role,
+  `legal-review` (granted only by a system admin), which decides licence exceptions and keeps the tenant's licence
+  allow-list; tenant admins can request exceptions but not decide them. Migration `033c_imports`.
+- Repository registry under `/api/imports/repositories`: Hugging Face compatible hubs, Ollama compatible registries,
+  CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle and the signed bundle share. A repository is proposed by one admin
+  and confirmed by another before its hosts join the staging-proxy allow-list and it is harvested; credentials are
+  vault references sent only to the repository's own host; harvests run on a schedule and back off when the source
+  rate-limits. `GET /api/imports/proxy-allowlist` exports the allow-list for the staging proxy (B-3801).
+- Catalogue browse with classification, licence, format and other facets from each source's own taxonomy; a facet's
+  count is exactly what its filter returns; live search through the proxy when the source can be searched, the
+  snapshot otherwise and while a source backs off (B-3802).
+- Model import: plan (every check, nothing written), gate acceptance with the recorded token, format and pickle checks
+  by name and by content, digests pinned at request time and checked after resumable downloads, licence policy with
+  exceptions, GGUF conversion or packaging on the training pool (`POST /v1/convert` gains `source`), draft registration
+  with the digest pinned and a signed import manifest; air-gapped instances queue requests for the weekly bundle and
+  continue them when a promoted bundle carries the files. The Imports queue with cancel and resumable retry; a 500 GB
+  dataset import quota per tenant, metered beside model imports (B-3803).
+
 ### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
 
 - New permission `roles:manage` (tenant admins). Migration `031_access`.

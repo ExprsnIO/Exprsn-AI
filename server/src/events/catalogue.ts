@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 7;
+export const CATALOGUE_VERSION = 8;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -80,7 +80,9 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.5.0, Sprint 30 (B-3701 to B-3703)
   { pattern: 'memory.*', description: 'Memory: added, edited, proposed, accepted, rejected, merged, forgotten and exported; proposals refused by the memory checkpoint, extraction fallbacks to the rules, consolidation runs, merge and expiry proposals and their decisions, settings changes and reindexes (audit actions; never the text)' },
   // 1.5.0, Sprint 31 (B-2901 to B-2905, B-3004)
-  { pattern: 'pds.*', description: 'The AT-Protocol PDS: hosting enabled, disabled and its settings; accounts created, deactivated, activated, taken down, restored and their handles; app passwords, sessions, invite codes and service tokens; repo commits and imports (counts, never record content); blobs stored and rejected by the scan; PLC operations signed and submitted; relays asked to crawl; feed generator records published and withdrawn (audit actions)' }
+  { pattern: 'pds.*', description: 'The AT-Protocol PDS: hosting enabled, disabled and its settings; accounts created, deactivated, activated, taken down, restored and their handles; app passwords, sessions, invite codes and service tokens; repo commits and imports (counts, never record content); blobs stored and rejected by the scan; PLC operations signed and submitted; relays asked to crawl; feed generator records published and withdrawn (audit actions)' },
+  // 1.5.0, Sprint 30 (B-3801 to B-3803)
+  { pattern: 'import.*', description: 'Imports: repositories proposed, confirmed, rejected, updated, enabled, disabled, deleted and harvested; gates accepted; imports requested, refused, completed, failed, cancelled and retried; licence exceptions requested, granted and refused; the licence allow-list and the import quota (audit actions; never credentials)' }
 ];
 
 const id26 = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };

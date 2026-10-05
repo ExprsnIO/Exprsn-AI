@@ -682,7 +682,29 @@ const base = z.object({
     FEED_TRENDING_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(72),
     FEED_DIGEST_PROFILE: z.string().trim().max(200).optional(),
     FEED_DIGEST_TOP: z.coerce.number().int().min(1).max(50).default(5),
-    FEED_DIGEST_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
+    FEED_DIGEST_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal'),
+    /**
+     * 1.5.0, Sprint 30 (B-3801 to B-3803): imports from public repositories. IMPORT_CONNECTIVITY `bundle` marks an
+     * air-gapped instance: requests queue for the weekly signed bundle instead of reaching out. Outbound calls go
+     * through IMPORT_PROXY_URL (the staging proxy) when set, and only to the hosts of confirmed repositories plus
+     * IMPORT_ALLOWED_HOSTS (which, like SERVICE_ALLOWED_HOSTS, also admits a link-local host; metadata addresses never).
+     * Downloads are stored in parts of IMPORT_PART_BYTES so an interrupted one resumes; one import fetches at most
+     * IMPORT_MAX_BYTES. A harvest keeps at most IMPORT_HARVEST_MAX_ITEMS items per repository; due harvests are queued
+     * every IMPORT_HARVEST_TICK_MINUTES (0 turns schedules off) and promoted bundles are matched to queued requests
+     * every IMPORT_BUNDLE_POLL_MINUTES. A rate-limited source backs off up to IMPORT_BACKOFF_MAX_MINUTES. Dataset
+     * imports draw on a quota of IMPORT_DATASET_QUOTA_GB per tenant unless a system admin sets another.
+     */
+    IMPORT_CONNECTIVITY: z.enum(['direct', 'bundle']).default('direct'),
+    IMPORT_PROXY_URL: z.string().url().optional(),
+    IMPORT_ALLOWED_HOSTS: z.string().default(''),
+    IMPORT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(60_000),
+    IMPORT_PART_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024).default(64 * 1024 * 1024),
+    IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(10 * 1024 ** 4).default(500 * 1024 ** 3),
+    IMPORT_HARVEST_MAX_ITEMS: z.coerce.number().int().min(10).max(1_000_000).default(20_000),
+    IMPORT_HARVEST_TICK_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(5),
+    IMPORT_BUNDLE_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    IMPORT_BACKOFF_MAX_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(360),
+    IMPORT_DATASET_QUOTA_GB: z.coerce.number().int().min(0).max(1_000_000).default(500)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

@@ -77,6 +77,7 @@ import { publicChannelRoutes } from '../routes/channels-public.js';
 import { authzRoutes } from '../routes/authz.js';
 import { davRoutes } from '../dav/handler.js';
 import { appPasswordRoutes } from '../dav/routes.js';
+import { importRoutes } from '../routes/imports.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -281,6 +282,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(authzRoutes(s));
   // 1.5.0, Sprint 31 (B-2901 to B-2905, B-3004): PDS hosting, accounts, invites, app passwords and feed records.
   api.use(pdsRoutes(s));
+  // 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, catalogue browse and model import
+  api.use(importRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
