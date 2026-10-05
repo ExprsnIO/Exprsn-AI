@@ -65,6 +65,8 @@ import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
 import { fileRoutes, publicFileRoutes } from '../routes/files.js';
 import { appRoutes } from '../routes/apps.js';
 import { publicAppRoutes } from '../routes/apps-public.js';
+import { channelRoutes } from '../routes/channels.js';
+import { publicChannelRoutes } from '../routes/channels-public.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -245,11 +247,15 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(firehoseRoutes(s));
   // Sprint 27c (B-2501 to B-2505): groups, posts, events, RSVPs, reminders and calendar feeds.
   api.use(groupRoutes(s));
+  // Sprint 28a (B-2301 to B-2304): customer-service channels, sessions, held replies, exports.
+  api.use(channelRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
   // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
   // Sprint 26d (B-2402): anonymous file links, on the same rules.
+  // Sprint 28a (B-2301, B-2303): customer sessions and mail webhooks (first: the webhooks read their raw body).
+  app.use('/api/public', publicChannelRoutes(s));
   app.use('/api/public', publicFileRoutes(s));
   app.use('/api/public', publicAppRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));

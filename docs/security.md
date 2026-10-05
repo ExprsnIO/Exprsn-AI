@@ -570,6 +570,39 @@ filter, private `/tmp`, only the state directory writable.
   who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
   default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
   (no edit, no attachments, no threads); the workspace feed is B-27.
+- Customer-service channels (1.4.0, Sprint 28a, B-23). Customer sessions are public by design: the channel's public
+  key is not a secret, so anyone can start an anonymous session on a chat channel that allows them, limited per client
+  address (`CHANNELS_SESSIONS_PER_HOUR` and the channel's own `sessionsPerHour`) and per session
+  (`messagesPerMinute`); behind a proxy the address is only as good as `TRUST_PROXY`. Set the channel's label to what
+  anonymous people may receive (`public` or `internal`): the label limits the profile, agent and pool that answer, not
+  what a customer may type. Channels answer from the profile's or agent's prompt only: no knowledge retrieval, memory
+  or tools (an agent's tools never run for a customer). Session tokens are bearer credentials for one session (HMAC
+  with a key derived from `SESSION_SECRET`, `CHANNELS_SESSION_HOURS`); they cannot be revoked one by one except by
+  closing or hiding the session. Identity assertions are signed by the channel's site with the channel's identity
+  secret (shown once); a leaked secret lets anyone act as any customer of that channel until it is rotated, and
+  assertions carry no audience or nonce, so one is replayable until its `exp` (at most a day). Customers poll for
+  answers released by review; there is no customer socket. Transcripts, customer names, addresses and subjects are
+  sealed; the `customer_key` that threads email is an HMAC (with `SESSION_SECRET`) of the address, so rotating that
+  secret breaks threading for earlier customers (their next mail starts a new session). Email threading trusts
+  `In-Reply-To`/`References` only together with the sender address, which a spoofed `From` can still forge where the
+  receiving mail server does not enforce SPF/DKIM/DMARC; an attacker who knows a customer's address and one of the
+  thread's Message-IDs could add a message to that session (they still never see the replies, which go to the real
+  address). IMAP polls read the mailbox read-only and never mark or move messages; messages over 10 MB are skipped.
+  The imapflow adapter itself is exercised only against a fake fetcher in the unit tests, not a real IMAP server.
+  Mailgun inbound is form-encoded only (routes that forward attachments post multipart, which is refused with `415`);
+  Postmark, SendGrid and others use the generic shape through a relay. Bounces from IMAP are read from RFC 3464
+  delivery reports only (not from free-text bounce mails). Held replies use the flag queue: a reviewer who can see the
+  flag and holds `flags:review` can approve or reject it there; only `channels:review` holders can edit. Retention is
+  per channel on last activity; purged sessions' open review flags are closed as rejected directly (without a flag
+  event). Channel CSV exports are sealed in the blob store until downloaded by the person who asked, and not deleted
+  afterwards, like app exports.
+- Email one-time codes (1.4.0, Sprint 28a, B-1806). An email factor is weaker than TOTP or a passkey: whoever reads
+  the mailbox has the factor, and email travels through servers outside the deployment. It is offered because some
+  users have nothing else; roles that require a second factor accept it too (the MFA policy does not tell factors
+  apart yet). The address is the account's address at enrolment, kept sealed in the factor, so a later change of the
+  account's address does not move the factor (remove and enrol again). Codes are six digits, valid for
+  `MFA_EMAIL_CODE_MINUTES`, single use, bound to the pending session they were sent for, and their wrong guesses count
+  in the same lockout as TOTP codes. Step-up re-authentication does not take email codes yet.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off

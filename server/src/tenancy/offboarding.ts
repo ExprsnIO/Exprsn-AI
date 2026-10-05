@@ -10,7 +10,9 @@ const KNOWLEDGE_TABLES = ['knowledge_bindings', 'knowledge_terms', 'knowledge_ch
 const FILE_TABLES = ['file_shares', 'file_tags', 'file_previews', 'file_versions', 'files', 'file_folders', 'file_quotas'] as const;
 // Sprint 27c: groups and events (posts, titles and descriptions are sealed with the tenant key).
 const GROUP_TABLES = ['calendar_feeds', 'group_event_reminders', 'group_event_rsvps', 'group_events', 'group_posts', 'group_requests', 'group_members', 'social_groups'] as const;
-const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
+// Sprint 28a (B-23): customer-service channels and their sealed transcripts.
+const CHANNEL_TABLES = ['channel_bounces', 'channel_outbox', 'channel_threads', 'channel_imap_cursors', 'channel_messages', 'channel_sessions', 'channels'] as const;
+const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...CHANNEL_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
 const BLOB_PREFIXES = ['exports', 'attachments', 'quarantine', 'knowledge', 'knowledge-quarantine', 'memory-exports', 'files'] as const;
 
 /**

@@ -2809,3 +2809,129 @@ Events: `group.updated`, `group.member.added`, `group.member.removed`, `group.me
 `group.post.deleted`, `group.event.created`, `group.event.updated`, `group.event.cancelled`, `group.event.rsvp`,
 `group.event.check-in` (ids, never content). Removing a member closes their room at once; a visibility or label change
 checks everyone in it again; leaving the workspace closes it.
+
+## Sprint 28a (1.4.0): customer-service channels (B-2301 to B-2304) and email one-time codes (B-1806)
+
+A channel lives in one workspace and answers customers with a published **profile** or **agent** (the agent's profile
+and system prompt; customer channels never run an agent's tools), at the channel's **label**. The label must fit under
+the workspace ceiling, the caller's clearance and the profile's (and agent's) label when the channel is saved, and the
+gateway only leases a pool cleared for it when a customer is answered, so an answer never comes from a model or pool
+below the channel's label. Every customer message passes the `user-input` guardrail checkpoint and every answer the
+`model-output` checkpoint at that label. Transcripts are sealed per row with the tenant key; customer names, addresses
+and subjects too.
+
+`channels:manage` (tenant admins) creates and changes channels; `channels:review` (tenant admins, guardrail admins and
+flag reviewers) works their sessions. Both only within the caller's workspaces and clearance (anything else is `404`).
+Changes are audited under `channel.*`; the catalogue events `channel.session.started`, `channel.session.escalated`,
+`channel.session.closed`, `channel.session.purged`, `channel.message.received`, `channel.reply.held`,
+`channel.reply.sent`, `channel.reply.rejected` and `channel.bounce.recorded` (catalogue version 4) carry ids only.
+Reviewers' consoles get `channels.changed` on the `channels:review` permission room.
+
+### Channels (`channels:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/channels?workspace=` | `channels:manage` or `channels:review`. The channels in the caller's workspaces at or below their clearance |
+| `POST /api/channels` `{workspaceId?, kind: chat \| email, name, label, target: {kind: profile \| agent, name}, instructions?, reviewMode?: escalated, allowAnonymous?: true, messagesPerMinute?: 10, sessionsPerHour?: 10, retentionDays?: 30, greeting?, email?}` | Creates a channel. The binding is checked (`403` with `step: clearance` or `zone`; `422` with `step: target` when the profile or agent cannot answer at the label). `email` (email channels only): `{address, fromName?, imap?: {host, port?: 993, secure?: true, user, passwordRef, mailbox?: INBOX}, smtp?: {host, port?: 465, secure?: true, user, passwordRef}, mailgunKeyRef?}`; credentials are `vault:<path>#<key>` references only (`400` otherwise), checked readable for the caller at save (B-1705) and resolved as them at use; hosts are checked against the service address rules and the tenant's allowed hosts at every connection. `201` with the channel, its `publicKey`, the webhook URLs (email) and, **once**, `secrets: {identitySecret, webhookSecret?}` |
+| `GET /api/channels/:id` | The channel (no secrets) |
+| `PATCH /api/channels/:id` | Any of the create fields but `kind` and `workspaceId`, and `state: active \| paused`. A changed label, target or mail settings is checked again. Pausing refuses new sessions and ends customer tokens until it is active again |
+| `DELETE /api/channels/:id` | Deletes the channel (`state: deleted`) and closes its open sessions |
+| `POST /api/channels/:id/secrets` `{which: identity \| webhook}` | A new secret, shown once; the old one stops working at once |
+| `POST /api/channels/:id/poll` | Polls the channel's IMAP mailbox now (a `channels.imap-poll` job). `202 {jobId}` |
+| `POST /api/channels/:id/purge` | Runs the retention purge now (a `channels.retention` job). `202 {jobId}` |
+
+`reviewMode`: `never` (answers go straight to the customer unless a guardrail holds them), `escalated` (the default:
+once a session is escalated, every answer waits for a reviewer) or `always` (every answer waits).
+
+### Sessions, held replies and exports (`channels:review`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/channels/:id/sessions?state=&before=&limit=` | Newest activity first: `[{id, state: open \| escalated \| closed \| hidden, label, customer: {kind, name, email, externalId}, subject, escalatedAt, escalation, messages, lastActivityAt, …}]` |
+| `GET /api/channels/:id/sessions/:sessionId` | The session with its `transcript` (`[{id, seq, role: customer \| assistant \| agent \| notice, state: delivered \| held \| rejected \| hidden, via, text, original, flag, authorId, …}]`; `original` is the model's text of a reply a reviewer edited) and its email `outbox` (`queued \| sent \| failed \| bounced`) |
+| `POST /api/channels/:id/sessions/:sessionId/messages` `{text}` | A person answers (role `agent`, delivered at once; by email for email sessions) |
+| `POST /api/channels/:id/sessions/:sessionId/close` | Closes the session (the customer's token stops working) |
+| `GET /api/channels/:id/sessions/:sessionId/transcript.csv` | The transcript as CSV (`channel, session, seq, time, role, state, via, label, text, original`; a leading `= + - @` is made inert). Audited `channel.transcript.exported` |
+| `POST /api/channels/:id/exports` `{from?, to?}` | Every session created in the window (ISO 8601; at most 10,000 sessions, those within the caller's clearance) as one CSV, built by a `channels.export` job and sealed in the blob store. `202 {jobId}` |
+| `GET /api/channels/exports/:jobId` | The finished export, for the person who started it. Audited `channel.transcript.exported` |
+| `GET /api/channels/:id/bounces` | `[{id, outboxId, kind: hard \| soft \| complaint, status, reason, source: imap \| generic \| mailgun, createdAt}]` |
+| `GET /api/channels/held` | Held replies in the caller's workspaces and clearance, oldest first, with their flag |
+| `POST /api/channels/held/:messageId/decide` `{decision: approve \| edit \| reject, text?, reason?}` | B-2302. `approve` delivers the reply as written; `edit` delivers `text` instead (the model's text is kept as `original`); `reject` withdraws it and tells the customer a person will follow up. The reply's `hold` flag records the decision (`approved` or `rejected`) through the flag queue (reviewer clearance as there). Email sessions get the delivered reply by email. Audited `channel.reply.sent` (with `edited`), `channel.reply.edited`, `channel.reply.rejected` |
+
+A held reply is a `hold` flag (`source_kind: channel-message`, checkpoint `model-output` when a guardrail held it,
+`channel-review` when the channel's review mode did) in the workspace's flag queue: `GET /api/flags/:ref` shows it
+under `held`, and `POST /api/flags/:ref/decide {decision: approved | rejected}` (`flags:review`) approves or rejects it
+too (audited `channel.hold.approved` / `channel.hold.rejected`); editing needs the channel route. A session escalates
+when the customer asks for a person, a guardrail asks for review of their message (`require-approval` at
+`user-input`), a guardrail blocks an answer or the model cannot answer; reviewers holding `channels:review` in the
+workspace are notified. Sessions (`channel-session`: hiding ends the customer's token) and messages
+(`channel-message`: hiding removes the message from what the customer and the model see) are moderation object types.
+
+### Customers (public, `/api/public/channels`)
+
+No session cookie is read or set; answers carry `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/public/channels/sessions` `{channel: <publicKey>, identity?, name?}` | Starts a session on an active chat channel (`404` otherwise). Anonymous unless the channel requires an identity (`allowAnonymous: false`, `401` without one). `identity` is an assertion the channel's site signs: `<base64url(JSON {sub, name?, email?, exp})>.<base64url(HMAC-SHA256(identitySecret, first part))>`, `exp` in seconds and at most a day ahead; an identified customer comes back to their open session (`resumed: true`). Rate-limited per address: `CHANNELS_SESSIONS_PER_HOUR` across channels and the channel's `sessionsPerHour` (`429`). `201 {token, expiresAt, resumed, session: {id, channel, state, label, escalated}, messages}` |
+| `GET /api/public/channels/session?after=` | `Authorization: Bearer <token>`. The session and its messages after a sequence number: the customer's own, delivered answers, notices; a held answer shows as `{state: pending, text: null}` until a reviewer decides. Poll this for answers released by review |
+| `POST /api/public/channels/session/messages` `{text}` | Up to 8,000 characters; at most `messagesPerMinute` per session (`429`). A guardrail block is `422` (audited `channel.message.refused`). Answers when the reply is ready: `201 {message: {seq}, reply: {seq, role, state: delivered \| pending, text}, session: {state, escalated}}`. When the model cannot answer, the reply is a notice that a person will follow up and the session escalates |
+| `POST /api/public/channels/session/escalate` `{reason?}` | Asks for a person: the session escalates (reviewers are notified) |
+| `POST /api/public/channels/session/close` | Ends the session and its token |
+
+The session token (`cst_…`) is HMAC-signed with a key derived from `SESSION_SECRET` and names one tenant, channel and
+session; it lasts `CHANNELS_SESSION_HOURS` and stops working as soon as the session is closed or hidden or the channel
+is paused or deleted.
+
+### Email channels (B-2303)
+
+Mail arrives by IMAP polling and by provider webhooks (both may be configured for one channel):
+
+- **IMAP**: every `CHANNELS_IMAP_POLL_SECONDS` a `channels.imap-poll` job per channel (one per tick across instances)
+  opens the mailbox read-only, reads up to `CHANNELS_IMAP_BATCH` messages above the last UID seen (another poll
+  follows at once when more wait) and keeps the cursor with the mailbox's UIDVALIDITY (a new UIDVALIDITY reads from
+  the start; Message-IDs keep anything from being taken twice). Implicit TLS, or STARTTLS which is then required.
+  Messages over 10 MB are skipped.
+- **Webhooks** at `POST /api/public/channels/:publicKey/email/generic` and `…/email/mailgun`, rate-limited per channel
+  (`CHANNELS_WEBHOOK_PER_MINUTE`); the signature is checked over the raw body before anything is parsed (`401`), and
+  a replay inside the tolerance window is acknowledged as `duplicate`. Answers `200 {accepted, result: {action:
+  started | joined | duplicate | ignored | bounce, session?}}`.
+  - Generic: headers `X-Exprsn-Timestamp: <unix seconds>` (within `CHANNELS_WEBHOOK_TOLERANCE_SECONDS`) and
+    `X-Exprsn-Signature: v1=<hex HMAC-SHA256(webhookSecret, "<timestamp>.<raw body>")>`; JSON body `{type: message,
+    from, fromName?, subject?, text, messageId, inReplyTo?, references?}`, or `{type: message, raw: "<RFC 5322
+    message>"}`, or `{type: bounce, id?, recipient, messageId?, kind?: hard | soft | complaint, status?, reason?}`.
+  - Mailgun: inbound routes (`forward()` to the URL; `application/x-www-form-urlencoded`, so without attachments) and
+    event webhooks (JSON; `failed` and `complained` become bounces, others are acknowledged), both verified with
+    HMAC-SHA256 of `timestamp + token` under the Mailgun webhook signing key named by `mailgunKeyRef`. Without it the
+    endpoint is `404`.
+
+A message joins a session when its `In-Reply-To` or `References` name a Message-ID of that session (one the customer
+sent or one of our replies) **and** it comes from that session's customer address; a closed session reopens. Anything
+else starts a new session, so a forged `In-Reply-To` from another sender never reads into someone else's thread.
+Automatic mail (`Auto-Submitted`, `Precedence: bulk/list/junk`, `List-Id`, mailer daemons) and mail from the channel's
+own address are ignored. The quoted part of a reply is dropped. Answers are generated by a `channels.reply` job and
+sent from the outbox by a `channels.send` job (five attempts; then `failed`, audited `channel.mail.failed`) through
+the channel's SMTP server, or the server's `SMTP_URL` when it has none, from the channel's address with `In-Reply-To`
+and `References` threading and `Auto-Submitted: auto-replied` on model-written answers. Delivery status reports
+(RFC 3464, by IMAP) and provider bounce events are recorded once each and mark the outbox row `bounced` (audited
+`channel.bounce.recorded`).
+
+### Retention (B-2304)
+
+Each channel has `retentionDays` (default 30, `null` keeps sessions). A `channels.retention` job per tenant every
+`CHANNELS_RETENTION_SWEEP_MINUTES` deletes sessions whose last activity is older than the period, with their
+messages, threads and outbox rows; open review flags of their held replies are closed as rejected. Audited
+`channel.session.purged` per channel with the count, and emitted as the event of the same name.
+
+### Email one-time codes (B-1806)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/me/mfa/email` `{label?}` | Enrolling or active browser sessions. Adds the account's email address as a factor: sends a six-digit code to it (`503` without SMTP, `409` without an address or with an email factor already). `201 {id, sentTo (masked), expiresAt}` |
+| `POST /api/me/mfa/email/:id/confirm` `{code}` | Confirms the factor (a wrong code counts in the account's lockout like a wrong password; `400` with `attempts_remaining`). Like the other factors, the first one completes an enrolling sign-in. `201 {enrolled, stage, recoveryCodes, csrf?}` |
+| `POST /api/auth/mfa/email/send` | A pending (`mfa`) session: sends a code to the confirmed email factor. `200 {sentTo, expiresAt}`. Audited `auth.mfa.email_sent` |
+| `POST /api/auth/mfa/email` `{code, rememberDevice?}` | Completes the second factor like `POST /api/auth/mfa/totp`: wrong codes count in the pending session's lockout, and the fifth wrong code (of any factor) ends the pending session, so the sixth is refused like a sixth wrong TOTP code |
+
+Codes are stored as an HMAC, valid for `MFA_EMAIL_CODE_MINUTES`, work once and only for the session they were sent
+for; a new code replaces the previous one. At most `MFA_EMAIL_SENDS_PER_HOUR` codes are sent per user (`429`). The
+code is in the body of the email, never its subject. `GET /api/auth/session` lists `email` among the `mfa.methods`.

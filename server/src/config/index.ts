@@ -584,7 +584,29 @@ const base = z.object({
     GROUP_INVITE_DAYS: z.coerce.number().int().min(1).max(365).default(7),
     GROUP_REQUEST_DAYS: z.coerce.number().int().min(1).max(365).default(14),
     CALENDAR_FEED_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
-    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
+    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal'),
+    /**
+     * Sprint 28a (B-2301 to B-2304): customer-service channels. New customer sessions are limited per address across
+     * every channel (CHANNELS_SESSIONS_PER_HOUR; each channel also has its own limit); a session token lasts
+     * CHANNELS_SESSION_HOURS. A reply waits at most CHANNELS_REPLY_TIMEOUT_MS for the model. IMAP mailboxes are polled
+     * every CHANNELS_IMAP_POLL_SECONDS (0 turns polling off) and each poll reads at most CHANNELS_IMAP_BATCH messages;
+     * inbound webhooks are limited per channel (CHANNELS_WEBHOOK_PER_MINUTE) and refuse a signature older than
+     * CHANNELS_WEBHOOK_TOLERANCE_SECONDS. Retention purges run every CHANNELS_RETENTION_SWEEP_MINUTES.
+     */
+    CHANNELS_SESSIONS_PER_HOUR: z.coerce.number().int().min(1).max(100_000).default(30),
+    CHANNELS_SESSION_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
+    CHANNELS_REPLY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(60_000),
+    CHANNELS_IMAP_POLL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(60),
+    CHANNELS_IMAP_BATCH: z.coerce.number().int().min(1).max(500).default(50),
+    CHANNELS_WEBHOOK_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(120),
+    CHANNELS_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+    CHANNELS_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(60),
+    /**
+     * Sprint 28a (B-1806): email one-time codes as a second factor. A code is valid for MFA_EMAIL_CODE_MINUTES; a user
+     * is sent at most MFA_EMAIL_SENDS_PER_HOUR codes. Wrong codes count in the same lockout as wrong TOTP codes.
+     */
+    MFA_EMAIL_CODE_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
+    MFA_EMAIL_SENDS_PER_HOUR: z.coerce.number().int().min(1).max(100).default(5)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

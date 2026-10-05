@@ -2,6 +2,35 @@
 
 ## 1.4.0 (in progress)
 
+### Customer-service channels and email one-time codes (Sprint 28a, B-2301 to B-2304, B-1806)
+
+- Chat channels (B-2301): a channel in a workspace answers customers with a published profile or agent (prompt and
+  profile; never its tools) at the channel's label, checked against the workspace ceiling and the profile's and agent's
+  labels when saved and enforced by the gateway's pool ceilings when answering. Customers use the public endpoints at
+  `/api/public/channels` anonymously or with an identity assertion the channel's site signs (an identified customer
+  resumes their open session), with a session token scoped to one session, and rate limits per address and per session.
+  Every customer message passes `user-input` and every answer `model-output`; a model failure tells the customer a
+  person will follow up and escalates the session. New permissions `channels:manage` (tenant admins) and
+  `channels:review` (tenant and guardrail admins, flag reviewers). Migration `030_channels`.
+- Held replies (B-2302): answers wait for a reviewer when the channel reviews every answer, when it reviews escalated
+  sessions (the default) and the customer asked for a person, or when a guardrail requires approval. Each is a `hold`
+  flag; a reviewer approves, edits or rejects it (`/api/channels/held`, or approve and reject in the flag queue), and
+  only then does the customer receive it, as edited (the model's text is kept as the original).
+- Email channels (B-2303): inbound by IMAP polling (one `channels.imap-poll` job per channel per tick, read-only,
+  with a UID cursor) and by signed webhooks (a generic JSON shape with an HMAC header per channel, and Mailgun routes
+  and events); threaded into sessions by Message-ID together with the sender's address; answers from an outbox of
+  `channels.send` jobs over the channel's SMTP server or `SMTP_URL`, with `In-Reply-To`, `References` and
+  `Auto-Submitted`; bounces from delivery reports and provider events recorded once and marked on the outbox. Mail
+  credentials are vault references. New dependencies: `imapflow` and `mailparser` (and `@types/mailparser`).
+- Retention and exports (B-2304): per-channel retention in days with a `channels.retention` purge job; transcripts as
+  CSV per session, or a whole channel through a `channels.export` job sealed in the blob store.
+- Channel sessions and messages are moderation object types (`channel-session`, `channel-message`). Event catalogue
+  version 4: `channel.*` events are emitted. Settings `CHANNELS_*`.
+- Email one-time codes as a second factor (B-1806): enrol the account's address with a code
+  (`POST /api/me/mfa/email`), then `POST /api/auth/mfa/email/send` and `POST /api/auth/mfa/email` at sign-in. Codes
+  are HMAC-stored, single use, bound to the pending session, sent at most `MFA_EMAIL_SENDS_PER_HOUR` times an hour,
+  and wrong codes count in the same lockout as TOTP codes: a sixth wrong code is refused like a sixth wrong TOTP code.
+
 ### AT-Protocol firehose ingest (Sprint 27, B-1908)
 
 - AT-Protocol firehose ingest (B-1908, Sprint 27): per-tenant subscriptions to a Jetstream or a relay's
