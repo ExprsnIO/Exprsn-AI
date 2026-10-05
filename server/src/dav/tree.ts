@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { clears, LABELS, type Label } from '../authz/labels.js';
+import { clears, labelRank, LABELS, type Label } from '../authz/labels.js';
 import { authorize, type Principal } from '../authz/policy.js';
 import type { Permission } from '../authz/permissions.js';
+import type { FileRow, FolderRow } from '../files/service.js';
+import { workspacesFor } from '../http/middleware.js';
+import type { Workspace } from '../repos/tenants.js';
 import { actorFrom } from '../audit/chain.js';
 import type { Access } from '../groups/service.js';
 import type { UserRow } from '../repos/users.js';
-import { workspacesFor } from '../http/middleware.js';
 import type { Services } from '../services.js';
 import type { CollectionRow, ObjectRow } from './store.js';
 import { DavError } from './xml.js';
@@ -22,11 +24,14 @@ import { DavError } from './xml.js';
  *   /dav/addressbooks/<user>/                 address book home: the directory and personal address books
  *   /dav/addressbooks/<user>/directory/<user>.vcf  a directory entry (read-only, clearance-filtered)
  *   /dav/addressbooks/<user>/<book>/<name>.vcf     a personal contact
+ *   /dav/files/                               the workspaces the caller may act in, and ~shared (shared with them)
+ *   /dav/files/<workspace>/<folder>/…/<file>  the file store (B-24, B-32)
  *
  * Paths name the caller's own homes only: another user's id answers 404, so nothing tells ids apart.
  */
 
 export const BASE = '/dav';
+export const SHARED = '~shared';
 export const DIRECTORY = 'directory';
 export const GROUP_PREFIX = 'group-';
 
@@ -54,7 +59,12 @@ export type Kind =
   | 'book'
   | 'directory'
   | 'card'
-  | 'dir-card';
+  | 'dir-card'
+  | 'files'
+  | 'workspace'
+  | 'shared'
+  | 'folder'
+  | 'file';
 
 export type EventView = Awaited<ReturnType<Services['calendar']['eventView']>>;
 
@@ -82,6 +92,9 @@ export interface Node {
   access?: Access;
   event?: EventView;
   user?: UserRow;
+  ws?: Workspace;
+  folder?: FolderRow | null;
+  file?: FileRow;
 }
 
 const encodeSeg = (s: string): string => encodeURIComponent(s).replace(/%40/g, '@').replace(/%2B/gi, '+').replace(/%3A/gi, ':').replace(/%7E/gi, '~');
@@ -229,6 +242,86 @@ export function dirCardNode(parent: string[], u: UserRow): Node {
   return base('dir-card', [...parent, `${u.id}.vcf`], { collection: false, types: [], etag: hash('dc1', u.id, u.updated_at, u.display_name, u.email ?? ''), modified: u.updated_at, created: u.created_at, contentType: 'text/vcard; charset=utf-8', label: contactLabel(u), user: u });
 }
 
+// ---------- files ----------
+
+/** The workspaces the caller may act in, by href segment (slug, else id). */
+export async function workspacesBySeg(ctx: DavCtx): Promise<Map<string, Workspace>> {
+  const out = new Map<string, Workspace>();
+  for (const w of await workspacesFor(ctx.s, ctx.p)) if (w.state === 'active') out.set(w.slug || w.id, w);
+  return out;
+}
+
+const fileFrom = (r: Record<string, unknown>): FileRow => ({ ...(r as unknown as FileRow), current_version: r.current_version == null ? null : Number(r.current_version), size: Number(r.size), created_at: Number(r.created_at), updated_at: Number(r.updated_at), trashed_at: r.trashed_at == null ? null : Number(r.trashed_at), purge_after: null });
+const folderFrom = (r: Record<string, unknown>): FolderRow => ({ ...(r as unknown as FolderRow), created_at: Number(r.created_at), updated_at: Number(r.updated_at), trashed_at: null, purge_after: null });
+
+export const fileEtag = (f: FileRow): string => (f.current_version != null ? hash('f1', f.id, f.current_version, f.size) : hash('fp', f.id, f.updated_at));
+
+export function fileNode(ctx: DavCtx, parent: string[], f: FileRow, o: { name?: string; shared?: boolean } = {}): Node {
+  return base('file', [...parent, o.name ?? f.name], {
+    collection: false,
+    types: [],
+    displayName: f.name,
+    etag: fileEtag(f),
+    modified: f.updated_at,
+    created: f.created_at,
+    contentType: f.type ?? 'application/octet-stream',
+    length: f.size,
+    deadKey: `file:${f.id}`,
+    writable: !o.shared && can(ctx, 'files:write', f.label),
+    label: f.label,
+    file: f
+  });
+}
+
+export function folderNode(ctx: DavCtx, parent: string[], ws: Workspace, f: FolderRow): Node {
+  return base('folder', [...parent, f.name], { displayName: f.name, modified: f.updated_at, created: f.created_at, deadKey: `folder:${f.id}`, writable: can(ctx, 'files:write'), ws, folder: f });
+}
+
+export function workspaceNode(ctx: DavCtx, seg: string, ws: Workspace): Node {
+  return base('workspace', ['files', seg], { displayName: ws.name, modified: ws.updated_at ?? ws.created_at, created: ws.created_at, writable: can(ctx, 'files:write'), ws, folder: null });
+}
+
+/** A folder's (or the workspace root's) folders and readable files, in name order. */
+export async function folderChildren(ctx: DavCtx, n: Node): Promise<Node[]> {
+  const ws = n.ws!;
+  const parentId = n.folder?.id ?? null;
+  const folders = ((await ctx.s.db('file_folders').where({ tenant_id: ctx.p.tenantId, workspace_id: ws.id, parent_id: parentId }).whereNull('trashed_at').orderBy('name')) as Record<string, unknown>[]).map(folderFrom);
+  const files = ((await ctx.s.db('files').where({ tenant_id: ctx.p.tenantId, workspace_id: ws.id, folder_id: parentId }).whereNull('trashed_at').whereNot({ state: 'rejected' }).whereIn('label', LABELS.filter((l) => clears(ctx.p.clearance, l))).orderBy('name_lower')) as Record<string, unknown>[]).map(fileFrom);
+  return [...folders.map((f) => folderNode(ctx, n.segs, ws, f)), ...files.map((f) => fileNode(ctx, n.segs, f))];
+}
+
+/** A folder by name (names are unique without regard to case among a folder's folders and files). */
+export async function folderByName(ctx: DavCtx, ws: Workspace, parentId: string | null, name: string): Promise<FolderRow | null> {
+  const rows = (await ctx.s.db('file_folders').where({ tenant_id: ctx.p.tenantId, workspace_id: ws.id, parent_id: parentId }).whereNull('trashed_at').whereRaw('lower(name) = ?', [name.toLowerCase()]).limit(2)) as Record<string, unknown>[];
+  const exact = rows.find((r) => r.name === name) ?? rows[0];
+  return exact ? folderFrom(exact) : null;
+}
+
+export async function fileByName(ctx: DavCtx, ws: Workspace, folderId: string | null, name: string): Promise<FileRow | null> {
+  const r = await ctx.s.db('files').where({ tenant_id: ctx.p.tenantId, workspace_id: ws.id, folder_id: folderId, name_lower: name.toLowerCase() }).whereNull('trashed_at').whereNot({ state: 'rejected' }).first();
+  return r ? fileFrom(r) : null;
+}
+
+/** Files shared with the caller, under unique names (a second file of the same name gets " (2)"). */
+export async function sharedNodes(ctx: DavCtx): Promise<Node[]> {
+  const list = await ctx.s.files.sharedWithMe(ctx.p);
+  const seen = new Map<string, number>();
+  const out: Node[] = [];
+  for (const v of list) {
+    const row = await ctx.s.db('files').where({ tenant_id: ctx.p.tenantId, id: v.id }).first();
+    if (!row) continue;
+    const f = fileFrom(row);
+    if (f.state !== 'ready') continue;
+    const k = f.name.toLowerCase();
+    const i = (seen.get(k) ?? 0) + 1;
+    seen.set(k, i);
+    const dot = f.name.lastIndexOf('.');
+    const name = i === 1 ? f.name : dot > 0 ? `${f.name.slice(0, dot)} (${i})${f.name.slice(dot)}` : `${f.name} (${i})`;
+    out.push(fileNode(ctx, ['files', SHARED], f, { name, shared: true }));
+  }
+  return out;
+}
+
 // ---------- resolution ----------
 
 export interface Homes {
@@ -352,6 +445,33 @@ export async function resolve(ctx: DavCtx, segs: string[]): Promise<Node | null>
     const o = await s.dav.store.object(c, fourth);
     return o ? objectNode(ctx, coll, o) : null;
   }
+  if (top === 'files') {
+    await need(ctx, 'files:read');
+    if (!owner) return base('files', ['files'], { displayName: 'Files' });
+    if (owner === SHARED) {
+      const shared = base('shared', ['files', SHARED], { displayName: 'Shared with me' });
+      if (!third) return shared;
+      if (fourth) return null;
+      return (await sharedNodes(ctx)).find((n) => n.segs[2]!.toLowerCase() === third.toLowerCase()) ?? null;
+    }
+    const ws = (await workspacesBySeg(ctx)).get(owner);
+    if (!ws) return null;
+    let node = workspaceNode(ctx, owner, ws);
+    const names = segs.slice(2);
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i]!;
+      const f = await folderByName(ctx, ws, node.folder?.id ?? null, name);
+      if (f) {
+        node = folderNode(ctx, node.segs, ws, f);
+        continue;
+      }
+      if (i !== names.length - 1) return null;
+      const file = await fileByName(ctx, ws, node.folder?.id ?? null, name);
+      if (!file || !clears(ctx.p.clearance, file.label)) return null;
+      return fileNode(ctx, node.segs, file);
+    }
+    return node;
+  }
   return null;
 }
 
@@ -361,7 +481,7 @@ export async function children(ctx: DavCtx, n: Node): Promise<Node[]> {
   const me = ctx.p.userId;
   switch (n.kind) {
     case 'root':
-      return [base('principals', ['principals'], { displayName: 'Principals' }), base('calendars', ['calendars'], { displayName: 'Calendars' }), base('addressbooks', ['addressbooks'], { displayName: 'Address books' })];
+      return [base('principals', ['principals'], { displayName: 'Principals' }), base('calendars', ['calendars'], { displayName: 'Calendars' }), base('addressbooks', ['addressbooks'], { displayName: 'Address books' }), ...(can(ctx, 'files:read') ? [base('files', ['files'], { displayName: 'Files' })] : [])];
     case 'principals':
       return [base('principal', ['principals', me], { types: ['{DAV:}collection', '{DAV:}principal'], displayName: ctx.p.displayName })];
     case 'calendars':
@@ -383,7 +503,22 @@ export async function children(ctx: DavCtx, n: Node): Promise<Node[]> {
       return groupEventNodes(ctx, n.segs, n.access!);
     case 'directory':
       return (await directoryUsers(ctx)).map((u) => dirCardNode(n.segs, u));
+    case 'files': {
+      const out = [...(await workspacesBySeg(ctx)).entries()].map(([seg, w]) => workspaceNode(ctx, seg, w));
+      out.push(base('shared', ['files', SHARED], { displayName: 'Shared with me' }));
+      return out;
+    }
+    case 'shared':
+      return sharedNodes(ctx);
+    case 'workspace':
+    case 'folder':
+      return folderChildren(ctx, n);
     default:
       return [];
   }
+}
+
+/** The label a new file gets: internal, or lower when the uploader's clearance or the workspace ceiling is lower. */
+export function defaultFileLabel(p: Principal, ws: Workspace): Label {
+  return LABELS.filter((l) => labelRank(l) <= labelRank('internal') && clears(p.clearance, l) && labelRank(l) <= labelRank(ws.label_ceiling)).pop() ?? 'public';
 }

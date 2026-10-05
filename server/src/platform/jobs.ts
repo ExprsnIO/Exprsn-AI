@@ -230,6 +230,16 @@ export class JobQueue {
     this.offCancel();
   }
 
+  /**
+   * 1.5.0 (B-3201): claims one queued, due job and runs it here, now, waiting for it to finish (database mode). False
+   * when another worker claimed it first, or in BullMQ mode, where only the worker runs jobs: the caller then waits for
+   * the job's effect instead.
+   */
+  async runNow(id: string): Promise<boolean> {
+    if (this.opts.mode !== 'db') return false;
+    return this.claimAndRun(id);
+  }
+
   /** Claims and runs due jobs until none are left (or `max` ran). Used by the poller and by tests. */
   async runDue(max = 100): Promise<number> {
     let n = 0;

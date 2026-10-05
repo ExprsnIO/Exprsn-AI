@@ -559,8 +559,31 @@ export class FileService {
       await s.blobs.delete(blobKey).catch(() => undefined);
       throw quotaExceeded(after.scope, after.used - bytes, after.max, bytes);
     }
-    await s.jobs.enqueue({ tenantId: file.tenant_id, type: 'file.scan', payload: { versionId: v.id }, createdBy: userId, maxAttempts: 3 });
+    await s.jobs.enqueue({ tenantId: file.tenant_id, type: 'file.scan', payload: { versionId: v.id }, createdBy: userId, maxAttempts: 3, dedupeKey: `file.scan:${v.id}` });
     return v;
+  }
+
+  /**
+   * 1.5.0 (B-3201): finishes a version's quarantine scan before answering (a WebDAV PUT, whose client reads the file
+   * back at once). The scan is still the `file.scan` job: it is claimed and run here when this instance can (database
+   * queue), otherwise the worker's result is awaited. Returns the version as it then is; still quarantined or scanning
+   * when the scan did not finish within `waitMs` (it carries on as a job, and the file stays unreadable until then).
+   */
+  async scanNow(versionId: string, waitMs = 30_000): Promise<VersionRow | null> {
+    const job = (await this.db('jobs').where({ dedupe_key: `file.scan:${versionId}` }).first('id', 'state')) as { id: string; state: string } | undefined;
+    if (job?.state === 'queued') await this.s().jobs.runNow(job.id);
+    const until = Date.now() + waitMs;
+    for (;;) {
+      const r = await this.db('file_versions').where({ id: versionId }).first();
+      if (!r) return null;
+      const v = versionFrom(r);
+      if (v.state === 'ready' || v.state === 'rejected' || Date.now() >= until) return v;
+      // Only a running scan is worth waiting for: one that failed waits for its retry, in the background.
+      const now = job ? ((await this.db('jobs').where({ id: job.id }).first('state')) as { state: string } | undefined) : undefined;
+      if (now && now.state !== 'running' && now.state !== 'queued') return v;
+      if (now?.state === 'queued' && job?.state === 'queued' && !(await this.db('jobs').where({ id: job.id }).andWhere('run_at', '<=', Date.now()).first('id'))) return v;
+      await new Promise((res) => setTimeout(res, 100));
+    }
   }
 
   private async versionByNumber(file: FileRow, number: number): Promise<VersionRow> {

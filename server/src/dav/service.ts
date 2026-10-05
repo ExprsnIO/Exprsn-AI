@@ -1,6 +1,7 @@
 import { clears, type Label } from '../authz/labels.js';
 import type { Db } from '../db/knex.js';
 import type { Services } from '../services.js';
+import { LockManager } from './locks.js';
 import { AppPasswordService } from './passwords.js';
 import { DavStore, type CollectionKind, type CollectionRow } from './store.js';
 import { audit, can, type DavCtx } from './tree.js';
@@ -19,10 +20,13 @@ const DEFAULTS: Record<CollectionKind, { slug: string; name: string; components:
 export class DavService {
   readonly passwords: AppPasswordService;
   readonly store: DavStore;
+  /** B-32: WebDAV locks on the file store. */
+  readonly locks: LockManager;
 
   constructor(s: () => Services, db: Db, secret: string) {
     this.passwords = new AppPasswordService(db, secret);
     this.store = new DavStore(s);
+    this.locks = new LockManager(s);
   }
 
   /** The caller's own calendars or address books, creating the default one the first time a home is listed. */

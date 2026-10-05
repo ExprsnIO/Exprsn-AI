@@ -5,15 +5,17 @@ import { HttpProblem } from '../http/problem.js';
 import { Limiter } from '../platform/ratelimit.js';
 import type { Services } from '../services.js';
 import { davAuthenticate, REALM } from './auth.js';
+import { copyFileNode, deleteFileNode, folderParent, mkcolFile, moveFileNode, putFile, quotaOf, readFile } from './files.js';
+import { parseTimeout } from './locks.js';
 import { busyOf, deleteGroupEvent, freeBusy, groupEventBusy, putCalendarObject, putGroupEvent, renderGroupEvent, CAL_COMPONENTS } from './caldav.js';
 import { addressData, directoryCard, putCard } from './carddav.js';
 import { calendarFilterMatches, cardFilterMatches, checkFilter, filterComponent, filterRange, type TimeRange } from './filters.js';
 import { MAX_OBJECT_BYTES, parseObject, parseUtc, prop, type IcsComponent } from './ics.js';
 import { parseIf, submittedTokens, type IfList } from './if.js';
-import { COLLECTION_SETTABLE, liveNames, liveValue, PROTECTED, reportsFor, supportsSync, type PropContext } from './props.js';
+import { activeLock, COLLECTION_SETTABLE, isFileNode, liveNames, liveValue, PROTECTED, reportsFor, supportsSync, type PropContext } from './props.js';
 import { personalLabel } from './service.js';
 import { currentToken, sync } from './sync.js';
-import { audit, BASE, children, destinationSegs, GROUP_PREFIX, DIRECTORY, hrefFor, hrefOf, need, pathOf, resolve, segmentsOf, type DavCtx, type Node } from './tree.js';
+import { audit, BASE, children, defaultFileLabel, destinationSegs, GROUP_PREFIX, DIRECTORY, SHARED, hrefFor, hrefOf, need, pathOf, resolve, segmentsOf, type DavCtx, type Node } from './tree.js';
 import { clark, clarkOf, DavError, doc, el, escText, innerXml, isEl, kid, kids, multistatus, NS, parseBody, statusLine, textOf, type MsResponse, type PropStat, type XmlElement } from './xml.js';
 
 /*
@@ -33,8 +35,9 @@ import { clark, clarkOf, DavError, doc, el, escText, innerXml, isEl, kid, kids, 
  * them) a lock-token condition never holds.
  */
 
-export const DAV_METHODS = ['options', 'get', 'head', 'put', 'delete', 'propfind', 'proppatch', 'mkcol', 'mkcalendar', 'report', 'copy', 'move'] as const;
-export const DAV_HEADER = '1, 3, calendar-access, addressbook, extended-mkcol';
+export const DAV_METHODS = ['options', 'get', 'head', 'put', 'delete', 'propfind', 'proppatch', 'mkcol', 'mkcalendar', 'report', 'copy', 'move', 'lock', 'unlock'] as const;
+// Class 2 (locks) for the file store (B-3202).
+export const DAV_HEADER = '1, 2, 3, calendar-access, addressbook, extended-mkcol';
 
 type Handler = (ctx: DavCtx, req: Request, res: Response, segs: string[]) => Promise<void>;
 
@@ -123,6 +126,20 @@ export async function preconditions(ctx: DavCtx, req: Request, segs: string[], n
   throw new DavError(412, 'No list in the If header holds.');
 }
 
+// ---------- locks (B-3202) ----------
+
+const inFiles = (segs: string[]) => segs[0] === 'files';
+
+/** A change to a file-store path needs the tokens of the locks on it (and, with `below`, under it). */
+async function unlocked(ctx: DavCtx, segs: string[], o: { below?: boolean } = {}): Promise<void> {
+  if (inFiles(segs)) await ctx.s.dav.locks.assertUnlocked(ctx.p.tenantId, ctx.p.userId, pathOf(segs), ctx.submitted, o);
+}
+
+/** An If-header lock-token condition holds when the token names a live lock on that path. */
+const LOCK_EXT: DavExtensions = {
+  tokenMatches: async (ctx, path, token) => (await ctx.s.dav.locks.around(ctx.p.tenantId, path.replace(/\/+$/, ''))).some((l) => l.token === token)
+};
+
 // ---------- properties ----------
 
 interface PropRequest {
@@ -144,6 +161,8 @@ function propContext(ctx: DavCtx): PropContext {
   const tokens = new Map<string, Promise<string>>();
   return {
     ctx,
+    locks: (n) => ctx.s.dav.locks.around(ctx.p.tenantId, pathOf(n.segs)),
+    quota: (n) => quotaOf(ctx, n),
     syncToken: (n) => {
       const k = hrefOf(n);
       if (!tokens.has(k)) tokens.set(k, currentToken(ctx, n));
@@ -221,7 +240,7 @@ const propfind: Handler = async (ctx, req, res, segs) => {
 const proppatch: Handler = async (ctx, req, res, segs) => {
   const node = await resolve(ctx, segs);
   if (!node) throw new DavError(404, 'Not found.');
-  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), {});
+  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), LOCK_EXT);
   const body = parseBody(await readBody(req, 1024 * 1024));
   if (!body || !isEl(body, NS.dav, 'propertyupdate')) throw new DavError(400, 'The body is not a propertyupdate.');
   const ops: { set: boolean; prop: XmlElement }[] = [];
@@ -231,6 +250,11 @@ const proppatch: Handler = async (ctx, req, res, segs) => {
   }
   const personal = node.kind === 'calendar' || node.kind === 'book';
   if (personal) await need(ctx, node.kind === 'calendar' ? 'calendars:write' : 'contacts:write', node.label);
+  if (isFileNode(node)) {
+    if (!node.writable) throw new DavError(403, 'You cannot change this file’s properties.', '{DAV:}need-privileges');
+    await need(ctx, 'files:write', node.label);
+    await unlocked(ctx, segs);
+  }
   const failures = new Map<string, { status: number; error?: string }>();
   for (const { set, prop: p } of ops) {
     const name = clarkOf(p);
@@ -324,6 +348,15 @@ const mkcalendar: Handler = async (ctx, req, res, segs) => {
 };
 
 const mkcol: Handler = async (ctx, req, res, segs) => {
+  if (inFiles(segs)) {
+    if ((await readBody(req, 64 * 1024)).length) throw new DavError(415, 'MKCOL in the file store takes no body.');
+    if (await resolve(ctx, segs)) throw new DavError(405, 'Something exists at that path.');
+    await unlocked(ctx, segs.slice(0, -1));
+    await mkcolFile(ctx, await resolve(ctx, segs.slice(0, -1)), segs[segs.length - 1]!);
+    res.status(201).setHeader('Content-Length', '0');
+    res.end();
+    return;
+  }
   const body = parseBody(await readBody(req, 256 * 1024));
   if (!body) throw new DavError(403, 'Plain collections cannot be made here; create a calendar (MKCALENDAR) or an address book (extended MKCOL).', '{DAV:}valid-resourcetype');
   if (!isEl(body, NS.dav, 'mkcol')) throw new DavError(415, 'The body is not an extended MKCOL.');
@@ -347,6 +380,14 @@ const get: Handler = async (ctx, req, res, segs) => {
     res.end(req.method === 'HEAD' ? undefined : text);
     return;
   }
+  if (node.kind === 'file') {
+    const inm = req.header('if-none-match');
+    if (inm && node.etag && (inm.trim() === '*' || inm.split(',').map(unquote).includes(node.etag))) {
+      res.status(304).end();
+      return;
+    }
+    return readFile(ctx, req, res, node);
+  }
   if (node.etag) res.setHeader('ETag', quoted(node.etag));
   if (node.modified != null) res.setHeader('Last-Modified', new Date(node.modified).toUTCString());
   const inm = req.header('if-none-match');
@@ -364,10 +405,18 @@ const get: Handler = async (ctx, req, res, segs) => {
 const put: Handler = async (ctx, req, res, segs) => {
   const node = await resolve(ctx, segs);
   if (node?.collection) throw new DavError(405, 'PUT does not replace a collection.');
-  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), {});
+  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), LOCK_EXT);
   const parent = segs.length ? await resolve(ctx, segs.slice(0, -1)) : null;
   if (!parent) throw new DavError(409, 'The parent collection does not exist.');
   const name = segs[segs.length - 1]!;
+  if (inFiles(segs)) {
+    await unlocked(ctx, segs);
+    const r = await putFile(ctx, req, parent, name, node);
+    if (r.etag) res.setHeader('ETag', quoted(r.etag));
+    res.status(r.status).setHeader('Content-Length', '0');
+    res.end();
+    return;
+  }
   const type = (req.header('content-type') ?? '').toLowerCase();
   const text = (await readBody(req, MAX_OBJECT_BYTES)).toString('utf8');
   let out: { created: boolean; etag: string | null };
@@ -393,7 +442,13 @@ const put: Handler = async (ctx, req, res, segs) => {
 const del: Handler = async (ctx, req, res, segs) => {
   const node = await resolve(ctx, segs);
   if (!node) throw new DavError(404, 'Not found.');
-  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), {});
+  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), LOCK_EXT);
+  if (inFiles(segs)) {
+    await unlocked(ctx, segs, { below: true });
+    await deleteFileNode(ctx, node);
+    res.status(204).end();
+    return;
+  }
   if (node.kind === 'cal-object' || node.kind === 'card') {
     await need(ctx, node.kind === 'cal-object' ? 'calendars:write' : 'contacts:write', node.label);
     await ctx.s.dav.store.deleteObject(node.coll!, node.obj!);
@@ -412,8 +467,9 @@ const copyMove: Handler = async (ctx, req, res, segs) => {
   const move = req.method === 'MOVE';
   const src = await resolve(ctx, segs);
   if (!src) throw new DavError(404, 'Not found.');
+  if (inFiles(segs)) return copyMoveFiles(ctx, req, res, segs, src);
   if (src.kind !== 'cal-object' && src.kind !== 'card') throw new DavError(403, `Only calendar objects and contacts can be ${move ? 'moved' : 'copied'} here.`);
-  await preconditions(ctx, req, segs, src, parseIf(req.header('if')), {});
+  await preconditions(ctx, req, segs, src, parseIf(req.header('if')), LOCK_EXT);
   const dsegs = destinationSegs(req.header('destination'));
   if (dsegs.join('/') === segs.join('/')) throw new DavError(403, 'The source and the destination are the same.');
   const parent = await resolve(ctx, dsegs.slice(0, -1));
@@ -439,6 +495,96 @@ const copyMove: Handler = async (ctx, req, res, segs) => {
   await audit(ctx, move ? 'dav.object.moved' : 'dav.object.copied', { collection: src.coll!.id, object: src.obj!.id, to: parent.coll!.id }, { name }, src.label);
   res.status(existing ? 204 : 201).setHeader('Content-Length', '0');
   res.end();
+};
+
+/** COPY and MOVE in the file store (B-3202). */
+async function copyMoveFiles(ctx: DavCtx, req: Request, res: Response, segs: string[], src: Node): Promise<void> {
+  const move = req.method === 'MOVE';
+  await preconditions(ctx, req, segs, src, parseIf(req.header('if')), LOCK_EXT);
+  const dsegs = destinationSegs(req.header('destination'));
+  if (!inFiles(dsegs)) throw new DavError(403, 'Files are copied and moved within the file store.');
+  const d = dsegs.join('/').toLowerCase();
+  const sp = segs.join('/').toLowerCase();
+  if (d === sp) throw new DavError(403, 'The source and the destination are the same.');
+  if (src.collection && d.startsWith(`${sp}/`)) throw new DavError(403, 'A folder cannot go inside itself.');
+  const depth = depthOf(req, 'infinity');
+  if (depth === '1' || (move && depth !== 'infinity')) throw new DavError(400, move ? 'MOVE takes Depth: infinity.' : 'COPY takes Depth 0 or infinity.');
+  const parent = await resolve(ctx, dsegs.slice(0, -1));
+  if (!parent) throw new DavError(409, 'The destination folder does not exist.');
+  const existing = await resolve(ctx, dsegs);
+  const overwrite = (req.header('overwrite') ?? 'T').trim().toUpperCase() !== 'F';
+  if (existing && !overwrite) throw new DavError(412, 'The destination exists and Overwrite is F.');
+  if (move) await unlocked(ctx, segs, { below: true });
+  await unlocked(ctx, dsegs, { below: true });
+  if (existing) await deleteFileNode(ctx, existing);
+  const name = dsegs[dsegs.length - 1]!;
+  if (move) await moveFileNode(ctx, src, parent, name);
+  else await copyFileNode(ctx, src, parent, name, depth === '0' ? '0' : 'infinity');
+  res.status(existing ? 204 : 201).setHeader('Content-Length', '0');
+  res.end();
+}
+
+const lockHandler: Handler = async (ctx, req, res, segs) => {
+  if (!inFiles(segs) || segs.length < 2 || segs[1] === SHARED) throw new DavError(405, 'Only the file store takes locks.');
+  const path = pathOf(segs);
+  const locks = ctx.s.dav.locks;
+  if (Math.random() < 0.05) await locks.prune();
+  const body = parseBody(await readBody(req, 64 * 1024));
+  const timeout = parseTimeout(req.header('timeout'));
+  let node = await resolve(ctx, segs);
+  if (!body) {
+    // A refresh: the If header names the lock.
+    const mine = (await locks.around(ctx.p.tenantId, path)).find((l) => ctx.submitted.has(l.token) && l.user_id === ctx.p.userId);
+    if (!mine) throw new DavError(412, 'Name the lock to refresh in the If header.', '{DAV:}lock-token-matches-request-uri');
+    const l = await locks.refresh(mine, timeout);
+    sendXml(res.setHeader('Lock-Token', `<${l.token}>`), 200, doc(D('prop'), el(D('lockdiscovery'), activeLock(l, hrefFor(l.root.slice(BASE.length + 1).split('/'), false)))));
+    return;
+  }
+  if (!isEl(body, NS.dav, 'lockinfo')) throw new DavError(400, 'The body is not a lockinfo.');
+  await need(ctx, 'files:write', node?.label);
+  if (node && !node.writable) throw new DavError(403, 'You cannot lock this.', '{DAV:}need-privileges');
+  const scope = kid(kid(body, NS.dav, 'lockscope'), NS.dav, 'shared') ? 'shared' : 'exclusive';
+  if (!kid(kid(body, NS.dav, 'locktype'), NS.dav, 'write')) throw new DavError(422, 'Only write locks exist.');
+  const ownerEl = kid(body, NS.dav, 'owner');
+  const depth = depthOf(req, 'infinity');
+  if (depth === '1') throw new DavError(400, 'LOCK takes Depth 0 or infinity.');
+  await preconditions(ctx, req, segs, node, parseIf(req.header('if')), LOCK_EXT);
+  const lock = await locks.lock({ tenantId: ctx.p.tenantId, userId: ctx.p.userId, root: path, depth: node?.collection ? depth : '0', scope, owner: ownerEl ? innerXml(ownerEl) : null, timeoutS: timeout });
+  let status = 200;
+  if (!node) {
+    // A lock on an unmapped URL makes an empty file (RFC 4918 9.10.4), through the same upload path.
+    try {
+      const parent = await resolve(ctx, segs.slice(0, -1));
+      await putEmpty(ctx, parent, segs[segs.length - 1]!);
+      node = await resolve(ctx, segs);
+      status = 201;
+    } catch (err) {
+      await locks.unlock(lock);
+      throw err;
+    }
+  }
+  await audit(ctx, 'dav.lock.created', { path: pathOf(segs), ...(node?.file ? { file: node.file.id } : node?.folder ? { folder: node.folder.id } : {}) }, { scope, depth: lock.depth, timeout }, node?.label);
+  res.setHeader('Lock-Token', `<${lock.token}>`);
+  sendXml(res, status, doc(D('prop'), el(D('lockdiscovery'), activeLock(lock, hrefOf(node ?? { segs, collection: false })))));
+};
+
+async function putEmpty(ctx: DavCtx, parent: Node | null, name: string): Promise<void> {
+  const { ws, folderId } = folderParent(parent);
+  const { file, version } = await ctx.s.files.upload(ctx.p, { workspaceId: ws.id, folderId, name, label: defaultFileLabel(ctx.p, ws), declaredType: null, declaredBytes: 0 }, (async function* (): AsyncGenerator<Buffer> {})());
+  await audit(ctx, 'file.upload.received', { file: file.id, version: version.number, workspace: file.workspace_id }, { name: file.name, size: 0, sha256: version.sha256, folder: file.folder_id, dav: true, lockNull: true }, version.label);
+  await ctx.s.files.scanNow(version.id);
+}
+
+const unlockHandler: Handler = async (ctx, req, res, segs) => {
+  const m = /^<([^>]+)>$/.exec((req.header('lock-token') ?? '').trim());
+  if (!m) throw new DavError(400, 'UNLOCK takes a Lock-Token header.');
+  const l = await ctx.s.dav.locks.byToken(ctx.p.tenantId, m[1]!);
+  const path = pathOf(segs);
+  if (!l || !(l.root === path || (l.depth === 'infinity' && path.startsWith(`${l.root}/`)))) throw new DavError(409, 'That lock is not on this resource.', '{DAV:}lock-token-matches-request-uri');
+  if (l.user_id !== ctx.p.userId) throw new DavError(403, 'Only the lock’s owner can release it.', '{DAV:}need-privileges');
+  await ctx.s.dav.locks.unlock(l);
+  await audit(ctx, 'dav.lock.released', { path: l.root });
+  res.status(204).end();
 };
 
 // ---------- reports ----------
@@ -611,7 +757,7 @@ const options: Handler = async (_ctx, _req, res) => {
   res.end();
 };
 
-export const HANDLERS: Record<string, Handler> = { OPTIONS: options, GET: get, HEAD: get, PUT: put, DELETE: del, PROPFIND: propfind, PROPPATCH: proppatch, MKCOL: mkcol, MKCALENDAR: mkcalendar, REPORT: report, COPY: copyMove, MOVE: copyMove };
+export const HANDLERS: Record<string, Handler> = { OPTIONS: options, GET: get, HEAD: get, PUT: put, DELETE: del, PROPFIND: propfind, PROPPATCH: proppatch, MKCOL: mkcol, MKCALENDAR: mkcalendar, REPORT: report, COPY: copyMove, MOVE: copyMove, LOCK: lockHandler, UNLOCK: unlockHandler };
 
 /** Answers a DavError (and the API's problems, mapped) in DAV terms. */
 export function davErrors(err: unknown, req: Request, res: Response, next: NextFunction): void {
