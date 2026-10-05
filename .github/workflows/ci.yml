@@ -319,7 +319,7 @@ jobs:
         run: for f in deploy/observability/grafana/*.json; do jq -e '.uid and .title and (.panels | length > 0)' "$f" >/dev/null || { echo "$f"; exit 1; }; done
 
   loadtest:
-    name: Streaming load test (in-process)
+    name: Load tests (in-process)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -339,9 +339,19 @@ jobs:
         run: |
           npx tsx loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instances 4 --sentence-words 12 \
             --max-error-rate 0 --max-p95-ttft-ms 500 --max-p99-ttft-ms 1000 --json | tee loadtest-summary.json
+      # B-2105: webhook fan-out, record writes, OCSP and firehose against the application in its own process (SQLite in
+      # memory, the signer as a process). The ci target set is the reference targets in docs/loadtest.md with latencies
+      # times three and rates divided by three, for shared runners.
+      - name: Run the platform scenarios
+        working-directory: server
+        shell: bash
+        run: |
+          npx tsx loadtest/platform.ts --duration 10 --posts 10000 --targets ci --json | tee loadtest-platform.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: loadtest-summary
-          path: server/loadtest-summary.json
+          path: |
+            server/loadtest-summary.json
+            server/loadtest-platform.json
           if-no-files-found: ignore

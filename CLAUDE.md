@@ -57,6 +57,7 @@ npm run test:integration -w server           # each block runs when its variable
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
+npm run loadtest:platform -- --help        # webhook, records, OCSP and firehose load test (docs/loadtest.md)
 helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
 cd e2e && npm ci && CHROME=/opt/pw-browsers/chromium npx playwright test   # console end-to-end suite across every screen
                                            # (starts its own server on SQLite with the test fakes; see e2e/README.md)
