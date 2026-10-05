@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 2;
+export const CATALOGUE_VERSION = 3;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -59,7 +59,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records: created, updated, deleted, transitioned (reserved until B-22)' },
   { pattern: 'file.*', description: 'File store (Sprint 26d): uploaded, updated, deleted (to the trash), restored, shared; and audit actions for uploads received, versions ready or rejected, downloads, shares, trash, purges and quotas' },
-  { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },
+  { pattern: 'group.*', description: 'Groups (Sprint 27c): created, updated, deleted; members added and removed; posts created and deleted; events created, updated and cancelled; and audit actions for requests, invitations, roles, RSVPs, check-ins and reminders' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
   { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
@@ -74,6 +74,7 @@ const nullable = (s: JsonSchema) => ({ anyOf: [s, { type: 'null' }] });
 const obj = (properties: Record<string, JsonSchema>, required: string[] = Object.keys(properties), extra = false): JsonSchema => ({ type: 'object', properties, required, additionalProperties: extra });
 const label = { type: 'string', enum: [...LABELS] };
 const ms = { type: 'integer', minimum: 0 };
+const isoTime = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$' };
 
 const job = obj({ id: str(64), type: str(120), state: { type: 'string', enum: ['succeeded', 'failed', 'cancelled'] }, error: nullable({ type: 'string' }) });
 const flag = obj({ flag: { type: 'string', pattern: '^F-\\d+$' }, id: str(64), action: str(40), severity: str(40), checkpoint: str(60) });
@@ -83,7 +84,7 @@ const approval = {
     obj({ kind: { const: 'agent' }, run: str(64), agent: str(200) })
   ]
 };
-// Domain events (files emitted since Sprint 26d, the others reserved): ids and names only; content stays in the
+// Domain events (files emitted since Sprint 26d, groups since Sprint 27c, the others reserved): ids and names only; content stays in the
 // tenant, sealed, and is fetched through the API.
 const record = (extra: Record<string, JsonSchema> = {}) => obj({ app: id26, entity: str(120), record: id26, workspace: nullable(id26), actor: nullable(id26), ...extra });
 const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folder: nullable(id26), workspace: id26, version: { type: 'integer', minimum: 1 }, actor: nullable(id26), ...extra });
@@ -118,11 +119,17 @@ export const EVENT_TYPES: EventType[] = [
   { type: 'file.deleted', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file went to the trash', data: file() },
   { type: 'file.restored', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file version was restored (and scanned again)', data: file({ from: { type: 'integer', minimum: 1 } }) },
   { type: 'file.shared', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file was shared with a user, group, workspace or link', data: file({ with: { type: 'string', enum: ['user', 'group', 'workspace', 'link'] } }) },
-  { type: 'group.created', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A group was created', data: group() },
-  { type: 'group.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A group was changed', data: group() },
-  { type: 'group.deleted', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A group was deleted', data: group() },
-  { type: 'group.member.added', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A user joined a group', data: group({ user: id26, role: str(40) }) },
-  { type: 'group.member.removed', group: 'group.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A user left or was removed from a group', data: group({ user: id26 }) },
+  { type: 'group.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group was created', data: group() },
+  { type: 'group.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group was changed', data: group() },
+  { type: 'group.deleted', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group was deleted', data: group() },
+  { type: 'group.member.added', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A user joined a group', data: group({ user: id26, role: str(40) }) },
+  { type: 'group.member.removed', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A user left or was removed from a group', data: group({ user: id26 }) },
+  // Sprint 27c (B-2502, B-2505)
+  { type: 'group.post.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was written in a group', data: group({ post: id26 }) },
+  { type: 'group.post.deleted', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group post was deleted by its author or a moderator', data: group({ post: id26 }) },
+  { type: 'group.event.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An event was planned in a group', data: group({ event: id26, startsAt: isoTime }) },
+  { type: 'group.event.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group event was changed', data: group({ event: id26, startsAt: isoTime }) },
+  { type: 'group.event.cancelled', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group event was cancelled and its attendees told', data: group({ event: id26, attendees: { type: 'integer', minimum: 0 } }) },
   { type: 'message.sent', group: 'message.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A message was sent', data: message({ thread: nullable(id26) }) },
   { type: 'message.edited', group: 'message.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A message was edited', data: message() },
   { type: 'message.deleted', group: 'message.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A message was deleted', data: message() },

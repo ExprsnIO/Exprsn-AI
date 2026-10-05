@@ -100,6 +100,8 @@ import { FileService } from './files/service.js';
 import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
 import { ModerationService } from './moderation/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
+import { GroupService } from './groups/service.js';
+import { CalendarService } from './groups/calendar.js';
 
 export interface Services {
   cfg: Config;
@@ -225,6 +227,10 @@ export interface Services {
   signup: SignupService;
   /** 1.4.0, Sprint 26a (B-1805): users, memberships and group mappings imported from CSV as a job. */
   userImports: UserImportService;
+  /** 1.4.0, Sprint 27c (B-2501, B-2505): groups in workspaces, members, requests, invitations, posts and their moderation. */
+  groups: GroupService;
+  /** 1.4.0, Sprint 27c (B-2502 to B-2504): group events, RSVPs, check-in, reminders and signed iCalendar feeds. */
+  calendar: CalendarService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -464,6 +470,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     identityPolicy: new IdentityPolicies(() => s),
     signup: new SignupService(() => s),
     userImports: new UserImportService(() => s),
+    // 1.4.0, Sprint 27c: groups and events.
+    groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
+    calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -550,6 +559,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       restore: (o) => s.files.undoTakeDown(o.tenantId, o.id, MODERATION)
     });
   }
+  // Sprint 27c (B-2501 to B-2505): the group room authoriser, group content as moderation objects, reminder jobs.
+  s.groups.init();
+  s.calendar.registerJobs();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
