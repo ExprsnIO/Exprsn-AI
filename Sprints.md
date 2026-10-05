@@ -44,6 +44,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | Planned |
 | 33 | Agents, tools and skills in chat (1.5.0) | Chat | Planned |
 | 34 | Chaining agents, skills, tools and workflows; release (1.5.0) | Runs, Registry, Chat | Planned |
+| — | Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (B-43, 1.5.0 or 1.6) | Models | Unscheduled (approved 2026-10-05) |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
