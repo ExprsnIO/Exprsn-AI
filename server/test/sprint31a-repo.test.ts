@@ -131,7 +131,7 @@ describe('commits and CAR files (B-2902)', () => {
     expect(() => verifyRepoCar(missing)).toThrow(/missing/);
     // Flip a byte inside a block.
     const tampered = Buffer.from(car);
-    tampered[tampered.length - 3] ^= 0xff;
+    tampered[tampered.length - 3]! ^= 0xff;
     expect(() => readCarVerified(tampered)).toThrow(/hash/);
     // A truncated file, an empty header, a CIDv0-shaped block.
     expect(() => readCarVerified(car.subarray(0, car.length - 5))).toThrow(/truncated/);

@@ -67,7 +67,11 @@ export const PERMISSIONS = [
   'roles:manage',
   // 1.5.0 (Sprint 30, B-31): personal calendars (CalDAV; group events stay under groups:*) and contacts (the directory
   // as an address book within one's clearance, and personal address books). read: list and fetch; write: change them.
-  'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write'
+  'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write',
+  // 1.5.0 (Sprint 31, B-29): the tenant's AT-Protocol personal data server: its settings, the accounts it hosts
+  // (deactivate, take down, restore), invite codes and published feed generator records. Hosting itself is switched
+  // on per tenant by a platform admin (platform:manage). Members keep their own PDS account with atproto:link.
+  'pds:manage'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -89,7 +93,7 @@ const MEMBER: readonly Permission[] = [
   'tools:invoke', 'agents:run', 'memory:write', 'knowledge:read', 'models:read',
   // Sprint 24: only the vault paths a policy grants them (none by default).
   'secrets:read',
-  // Sprint 26 (B-1807): one's own AT-Protocol DID
+  // Sprint 26 (B-1807): one's own AT-Protocol DID; since 1.5.0 (B-2901) also one's own account on the PDS
   'atproto:link',
   // Sprint 26d: the file store in their workspaces.
   'files:read', 'files:write',
@@ -117,7 +121,7 @@ const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage', 'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage', 'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write', 'pds:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage', 'channels:review'], requiresMfa: true, grantableBy: ADMINS },

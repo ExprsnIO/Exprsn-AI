@@ -50,6 +50,8 @@ import { atprotoRoutes } from '../routes/atproto.js';
 import { firehoseRoutes } from '../routes/firehose.js';
 import { identityPolicyRoutes, signupPublicRoutes } from '../routes/signup.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
+import { pdsXrpcRoutes } from '../routes/pds-xrpc.js';
+import { pdsRoutes } from '../routes/pds.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
@@ -167,6 +169,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(pluginBrokerRoutes(s));
   // Sprint 25 (B-1609, B-1610): DID documents, handle resolution and queryLabels (public, rate-limited).
   app.use(atprotoPublicRoutes(s));
+  // 1.5.0, Sprint 31 (B-2901 to B-2905): the PDS's XRPC endpoints (public reads; writes with the PDS's own tokens).
+  app.use(pdsXrpcRoutes(s));
   // Sprint 27c (B-2504): signed iCalendar feeds (public; the URL's signature is the credential, rate-limited).
   app.use(calendarPublicRoutes(s));
   // 1.5.0, Sprint 30 (B-3101 to B-3103): CalDAV and CardDAV at /dav, with /.well-known discovery. App passwords over
@@ -268,6 +272,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(feedRoutes(s));
   // 1.5.0, Sprint 29 (B-3301 to B-3305): role and effective-access matrices, custom roles and access reviews.
   api.use(authzRoutes(s));
+  // 1.5.0, Sprint 31 (B-2901 to B-2905, B-3004): PDS hosting, accounts, invites, app passwords and feed records.
+  api.use(pdsRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

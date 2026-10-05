@@ -454,6 +454,31 @@ export class ModerationService {
     return { flag: s.guard.flags.view(flag, p), action: actionView(action) };
   }
 
+  /**
+   * 1.5.0 (B-2905): an admin takes an object down directly, without a flag (an AT-Protocol repo hosted by the PDS).
+   * The action is recorded and audited as a reviewer's is, and its owner is told and may appeal it (B-1903).
+   */
+  async takeDown(ctx: ModCtx & { principal: Principal }, type: string, id: string, reason: string) {
+    const obj = await this.resolve(ctx, type, id);
+    return actionView(await this.applyHide(ctx, obj, null, 'reviewer', reason));
+  }
+
+  /** 1.5.0 (B-2905): an admin reverses an action outside an appeal; the object's state is put back. */
+  async reverse(ctx: ModCtx & { principal: Principal }, actionId: string, reason: string) {
+    const s = this.s();
+    const r = await s.db('moderation_actions').where({ tenant_id: ctx.tenantId, id: actionId }).first();
+    if (!r) throw notFound('Action');
+    const action = actionFrom(r);
+    if (action.state !== 'applied') throw conflict('This action was already reversed.');
+    const h = this.registry.get(action.object_type);
+    const obj = h ? await h.resolve(action.tenant_id, action.object_id) : null;
+    const restored = !!(obj && h?.restore && action.prev_state && (await h.restore(obj, action.prev_state)));
+    const at = Date.now();
+    await s.db('moderation_actions').where({ id: action.id, state: 'applied' }).update({ state: 'reversed', reversed_by: ctx.principal.userId, reversed_at: at });
+    await this.audit(ctx, 'moderation.action.reversed', { action: action.id, object: action.object_type, id: action.object_id.slice(0, 200) }, { restored, prevState: action.prev_state, reason: reason.slice(0, 500) }, obj?.label);
+    return { action: actionView({ ...action, state: 'reversed', reversed_by: ctx.principal.userId, reversed_at: at }), restored };
+  }
+
   async actions(p: Principal, q: { type?: string | undefined; id?: string | undefined; ownerId?: string | undefined }) {
     const ws = (await this.workspaces(p))!;
     const qb = this.s().db('moderation_actions').where({ tenant_id: p.tenantId });
