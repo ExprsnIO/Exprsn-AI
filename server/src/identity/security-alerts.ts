@@ -17,6 +17,8 @@ export type SecurityEvent =
   | 'api_key.created'
   | 'api_key.revoked'
   | 'api_key.changed'
+  | 'app_password.created'
+  | 'app_password.revoked'
   | 'session.revoked'
   | 'sessions.revoked'
   | 'grant.added'
@@ -34,6 +36,8 @@ const TITLES: Record<SecurityEvent, string> = {
   'api_key.created': 'An API key was created',
   'api_key.revoked': 'An API key was revoked',
   'api_key.changed': 'An API key\'s request signing changed',
+  'app_password.created': 'An app password for calendar and contact apps was created',
+  'app_password.revoked': 'An app password was revoked',
   'session.revoked': 'A session was signed out',
   'sessions.revoked': 'Your other sessions were signed out',
   'grant.added': 'An application can now act as you',

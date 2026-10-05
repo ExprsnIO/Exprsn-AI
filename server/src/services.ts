@@ -104,6 +104,7 @@ import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
+import { DavService } from './dav/service.js';
 import { ChannelService } from './channels/service.js';
 import type { ChannelIo, ChannelMailer } from './channels/mail.js';
 import nodemailer from 'nodemailer';
@@ -263,6 +264,8 @@ export interface Services {
   access: AccessService;
   /** 1.5.0, Sprint 29 (B-3305): access review campaigns. */
   accessReviews: AccessReviewService;
+  /** 1.5.0, Sprint 30 (B-31): DAV app passwords, personal calendars and address books, dead properties. */
+  dav: DavService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -525,6 +528,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
     accessReviews: new AccessReviewService(() => s),
+    // 1.5.0, Sprint 30: CalDAV and CardDAV.
+    dav: new DavService(() => s, db, cfg.SESSION_SECRET),
     close: async () => {
       s.schema.stop();
       scheduler.stop();

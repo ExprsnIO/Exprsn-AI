@@ -3305,3 +3305,36 @@ all required; `{anyOf}` when one of several suffices), `authenticated` (any sign
 entry for a route that is gone, or a route whose `requireAuth`, `requirePermission` or `requireAnyPermission`
 middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
 their middleware implies, for review.
+
+## Sprint 30 (1.5.0): CalDAV and CardDAV (B-3101 to B-3104)
+
+New permissions `calendars:read`, `calendars:write` (personal calendars), `contacts:read`, `contacts:write` (the
+directory address book and personal address books); members and tenant admins hold them. Group events stay under
+`groups:read` and `groups:write`. The protocols themselves are at `/dav` and are described in `docs/dav.md`; only
+app passwords are JSON API routes. Migration `032_dav`.
+
+### App passwords (B-3101)
+
+An app password authenticates DAV clients (HTTP Basic, with the account's username) at `/dav` and nowhere else:
+`/api`, `/v1` and the console refuse it. It carries DAV scopes (`caldav`, `carddav`, `webdav`), narrowed on every
+request to what the owner's roles grant then. Roles that require MFA may have them, but creating one needs a browser
+session whose second factor was confirmed within `STEPUP_WINDOW_SECONDS` (signing in with a factor, or
+`POST /me/step-up` with a TOTP code or a passkey; a password step-up does not count): `401` with `step_up: true` and
+`factor: true` otherwise, and `403` (`step: mfa`) for an account with no second factor. Created and revoked passwords
+send a security notice and are audited (`dav.app_password.created`, `dav.app_password.revoked`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/app-passwords` | The caller's app passwords: `[{id, name, prefix, scopes, state, createdAt, expiresAt, lastUsedAt, lastUsedIp, lastUsedAgent, revokedAt}]`; `state` is active, expired or revoked (kept listed 30 days) |
+| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`). At most 50 active per user |
+| `DELETE /api/me/app-passwords/:id` | Revokes it: the next DAV request with it is refused (`204`) |
+
+### DAV endpoints
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/caldav`, `GET /.well-known/carddav` | `301` to `/dav/` (RFC 6764; also `HEAD`, `OPTIONS` and `PROPFIND`). Public |
+| `GET /dav/:path` | A calendar object (`text/calendar`) or vCard (`text/vcard`) with its `ETag`; `If-None-Match` answers `304`. Also `HEAD` |
+| `PUT /dav/:path` | Stores a calendar object or contact, or answers a group event (the caller's `PARTSTAT` becomes their RSVP). `If-Match` with a stale ETag is `412` |
+| `DELETE /dav/:path` | Deletes a personal object or collection; cancels a group event (moderators and owners) |
+| `OPTIONS /dav/:path` | `DAV: 1, 3, calendar-access, addressbook, extended-mkcol` and the methods allowed |

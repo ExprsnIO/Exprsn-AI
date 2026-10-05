@@ -192,7 +192,7 @@ export function meRoutes(s: Services): Router {
       throw new HttpProblem(400, 'Not confirmed', method === 'password' ? 'That password is wrong.' : 'That did not match. Try again.', { extensions: { attempts_remaining: remaining } });
     }
     await attempt.ok();
-    const at = await s.sessions.markAuthenticated(req.authSession!.id);
+    const at = await s.sessions.markAuthenticated(req.authSession!.id, { mfa: method !== 'password' });
     await audit(req, 'auth.step_up', {}, { method }, 'auth');
     res.json({ authAt: at, windowSeconds: s.cfg.STEPUP_WINDOW_SECONDS, method });
   });
