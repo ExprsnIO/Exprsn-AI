@@ -86,7 +86,7 @@
         + notice
         + UI.tabs([{ id: 'tools', label: 'Tools', count: tools.length }, { id: 'authorization', label: 'Authorization' }, { id: 'health', label: 'Health' }, { id: 'changes', label: 'Changes', count: s.changes.length }], st.tab)
         + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       if (st.openRegister) { st.openRegister = false; setTimeout(() => registerModal(ctx), 30); }
       if (bound) return; bound = true;
@@ -95,7 +95,6 @@
       on('click', '[data-server]', (e, t) => { cur.st.sel = t.dataset.server; cur.st.tool = null; cur.ctx.rerender(); });
       on('input', '[data-search]', (e, t) => { cur.st.query = t.value; const v = t.value; cur.ctx.rerender(); const i = cur.ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       on('click', '[data-tab]', (e, t) => { cur.st.tab = t.dataset.tab; cur.ctx.rerender(); });
-      on('click', '.state-card', (e, t) => cur.ctx.app.applyState(+t.dataset.state));
       on('click', 'tr.row[data-tool]', (e, t) => { if (e.target.closest('button')) return; cur.st.tool = t.dataset.tool; cur.ctx.rerender(); openTool(cur.ctx, t.dataset.tool); });
       on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); cur.ctx.navigate('profiles', { profile: t.dataset.goprofile === 'coder-32b' ? 'coder' : t.dataset.goprofile }); });
       on('click', '[data-diff]', () => {

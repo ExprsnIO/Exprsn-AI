@@ -131,7 +131,7 @@
         + '<div class="hstack"><div class="eyebrow grow">Jobs</div>' + UI.btn('Open in Runs', { kind: 'ghost', size: 'sm', attrs: 'data-goruns' }) + '</div>'
         + jobNotices
         + UI.table(['Job', 'Preset', { label: 'Progress', width: '32%' }, 'Encoder', 'State'], jobRows, { attrs: 'style="flex-shrink:0"', emptyTitle: 'No jobs for this asset', emptyText: 'Pick a preset and run it. Every job is probed first and runs in the media sandbox with no network.' })
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>';
 
       // ---- events ----
@@ -173,7 +173,6 @@
         } });
       };
       ctx.on('click', '[data-run]', openRun);
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.openRun) { st.openRun = false; setTimeout(openRun, 50); }
 
       // progress ticker for queued and running jobs

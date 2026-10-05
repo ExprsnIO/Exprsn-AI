@@ -148,10 +148,9 @@
         + '</style>'
         + (rv ? rv.left : '') + '<div class="page">' + UI.pagehead('Roles and access', 'Every answer here comes from the one policy pipeline (role, scopes, tenant, clearance, zone ceiling). Custom roles are defined by the tenant only; access reviews go to the workspace admin by default.', UI.btn('Export matrix', { size: 'sm', icon: 'download', attrs: 'data-export' }) + UI.btn('Who can…', { size: 'sm', icon: 'search', attrs: 'data-whocan' }))
         + tabs + body
-        + '<div style="margin-top:auto;padding-top:12px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       ctx.on('click', '.tabs [data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-export]', (e, t) => openMenu(ctx, t, [['csv', 'CSV (GET /api/authz/matrix?format=csv)'], ['json', 'JSON (GET /api/authz/matrix)'], ['md', 'docs/permissions.md (generated)']], null, (v) => ctx.toast(v === 'md' ? 'docs/permissions.md is generated from the catalogue; the test fails when it drifts.' : 'Matrix exported as ' + v.toUpperCase() + ': ' + PERMS.length + ' permissions × ' + (ROLES.length + st.custom.filter((r) => r.state === 'active').length) + ' roles.', 'ok')));
       ctx.on('click', '[data-whocan]', () => { st.tab = 'effective'; st.whoCan = true; ctx.rerender(); });
       wireMatrix(ctx, st); wireCustom(ctx, st); wireEffective(ctx, st); wireReviews(ctx, st);

@@ -110,7 +110,7 @@
         + '<div class="cmp-est"><span class="relative">' + UI.chip('Conversation label: ' + esc(st.label), false, 'data-labelpick') + '</span><span>Before sending: ' + sendable.length + ' of ' + cols.length + ' columns run, about ' + fmt(estTokens) + ' tokens and ' + estGpu.toFixed(1) + ' GPU-s, ' + sendable.length + ' usage rows. Each column is guardrailed and metered on its own.</span>' + (st.metered ? '' : '<a href="#" class="right" data-showusage>Show usage rows</a>') + '</div></div>'
         + '<div class="cmp-grid" data-n="' + cols.length + '" style="--n:' + cols.length + '">' + cols.map(column).join('') + '</div>'
         + usage
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div></div>';
 
       ctx.on('input', '#cmp-input', (e, t) => { st.prompt = t.value; });
@@ -141,7 +141,6 @@
         host.appendChild(d);
         d.addEventListener('click', (ev) => { const b = ev.target.closest('[data-lbl]'); if (!b) return; st.label = b.dataset.lbl; d.remove(); ctx.rerender(); const off = st.cols.map(byId).filter((p) => !available(p, st.label)); if (off.length) ctx.toast(off.map((p) => p.id).join(', ') + ' disabled: zone ceiling below ' + st.label + '.', 'warn'); });
       });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.focusPrompt) { st.focusPrompt = false; setTimeout(() => { const i = ctx.$('#cmp-input'); if (i) { i.focus(); i.select(); } }, 30); }
     }
   });

@@ -95,7 +95,7 @@
         + '<div class="vstack gap12" style="width:420px;max-width:100%">' + UI.panel('SSO diagnostics', UI.table(['Check', 'Result'], checks, { clickable: false, cls: 'bare', minWidth: '0' }) + '<div class="muted" style="font-size:12px">The browser did not present a service ticket. Ask the desktop team to add ai.northwind.local to the intranet zone, or sign in with your password.</div>')
         + UI.panel('Sign-in options for this tenant', UI.table(['Store', 'Protocol', 'Notes'], OPTIONS.map((o) => [esc(o[0]), '<span class="mono">' + esc(o[1]) + '</span>', esc(o[2])]), { clickable: false, cls: 'bare', minWidth: '0' }) + '<div class="muted" style="font-size:12px">From <span class="mono">GET /api/auth/sign-in-options</span>: the chain of user stores, plus <span class="mono">signup: {approval, verifyEmail}</span>. Admin roles need their second factor whichever store signs them in.</div>')
         + UI.panel('Prototype', '<div class="fg2">Any password signs you in as <b>Mara Okafor</b>, a Finance Ops member who also holds admin roles, so every console area is visible. Press <span class="mono">?</span> anywhere for the prototype map.</div>') + '</div></div>'
-        + '<div style="width:100%;max-width:900px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
       ctx.on('click', '[data-signin]', () => { if (st.error && st.error !== 'ldap') { ctx.toast('Refused: ' + esc(st.error) + '. The notice explains what to do.', 'warn'); return; } st.error = null; ctx.toast('Bound to OpenLDAP as mokafor. Session cookie issued.', 'ok'); ctx.app.signIn(); });
       ctx.on('click', '[data-go]', () => ctx.app.signIn());
       ctx.on('click', '[data-verify]', () => { ctx.toast(st.factor === 'email' ? 'Email code accepted.' + (st.trust ? ' This browser is trusted until 19 Oct 2026.' : '') : 'Second factor verified.' + (st.trust ? ' This browser is trusted until 19 Oct 2026.' : ''), 'ok'); ctx.app.signIn(); });
@@ -124,7 +124,6 @@
       });
       ctx.on('click', '[data-why]', (e) => { e.preventDefault(); ctx.modal({ title: 'Why single sign-on did not complete', body: '<p style="margin:0" class="fg2">Kerberos SSO needs the browser to send a Negotiate ticket for <span class="mono">HTTP/ai.northwind.local</span>. This browser sent nothing, which usually means the site is not in its trusted intranet zone, or the machine is not domain-joined.</p><p style="margin:0" class="fg2">Password sign-in binds the same directory account, so roles and clearance are identical.</p>', actions: UI.btn('Close', { attrs: 'data-close' }) }); });
       ctx.on('click', '[data-diag]', (e) => { e.preventDefault(); ctx.toast('Diagnostics are shown on the right.'); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

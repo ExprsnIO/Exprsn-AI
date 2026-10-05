@@ -96,7 +96,7 @@
 
       const nav = '<div class="hstack" style="margin-bottom:4px">' + UI.seg([{ id: 'messages', label: 'Messages' }, { id: 'feed', label: 'Feed' }, { id: 'people', label: 'People' }], st.view, 'data-view') + '</div>';
       const body = st.view === 'messages' ? renderMessages(ctx, st) : st.view === 'feed' ? renderFeed(ctx, st) : renderPeople(ctx, st);
-      const tail = '<div style="margin-top:auto;padding-top:12px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>';
+      const tail = '';
 
       root.innerHTML = '<style>'
         + '#main .messages-list{display:flex;flex-direction:column;gap:2px}'
@@ -114,7 +114,6 @@
         + '</style>' + body.replace('%NAV%', nav).replace('%TAIL%', tail);
 
       ctx.on('click', '[data-view]', (e, t) => { const b = e.target.closest('[data-seg]'); if (b) { st.view = b.dataset.seg; ctx.rerender(); } });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       wireMessages(ctx, st); wireFeed(ctx, st); wirePeople(ctx, st);
     }
   });

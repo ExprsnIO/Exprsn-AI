@@ -16,7 +16,7 @@ Sign in with any password. You land as **Mara Okafor**, a Finance Ops member who
 | --- | --- |
 | Go anywhere | Sidebar, or `Ctrl K` for the command palette |
 | See every screen | Press `?` for the prototype map |
-| Show a board's design states | **States** button in the header (each board's "States to design from this page" section is wired up) |
+| Show a board's design states | `Ctrl K`, then the "Design states" group lists the states of the screen you are on (each board's "States to design from this page" section is wired up; nothing is drawn on the page itself) |
 | Theme | Sun/moon button in the header; follows the system by default |
 | Narrow layout | Resize below 900px; the sidebar becomes a drawer |
 

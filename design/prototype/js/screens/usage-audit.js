@@ -160,7 +160,7 @@
         + '<div class="page">' + UI.pagehead('Usage and audit', 'Metering per tenant, user, model and agent; a hash-chained audit log per tenant', UI.btn('Export CSV', { icon: 'download', attrs: 'data-export' }) + UI.btn('Verify chain', { kind: 'primary', attrs: 'data-verify' }))
         + '<div class="ua-top">' + chartPanel + chainCard + '</div>'
         + tabs + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector w300">' + insp + '</aside>';
 
       // ----- deferred actions from commands / states -----
@@ -217,7 +217,6 @@
       ctx.on('click', '[data-editquota]', (e, t) => {
         ctx.modal({ title: 'Edit limits, ' + esc(t.dataset.editquota), body: '<div class="formgrid">' + UI.field('Tokens per day', UI.input('5,000,000')) + UI.field('GPU-seconds per month', UI.input('18,000')) + UI.field('Training GPU-hours', UI.input('200')) + UI.field('Over quota', UI.select(['Return 429 with Retry-After', 'Fall back to fast profile', 'Allow with warning'], 'Return 429 with Retry-After')) + '</div>' + UI.notice('Changes take effect on the next request and are written to the audit chain.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save limits', { kind: 'primary', attrs: 'data-savequota' }), onMount(m) { m.querySelector('[data-savequota]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Limits saved for ' + esc(t.dataset.editquota) + '. Audit event written.', 'ok'); }); } });
       });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

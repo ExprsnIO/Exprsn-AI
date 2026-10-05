@@ -87,7 +87,7 @@
         + batch
         + UI.tabs([{ id: 'definition', label: 'Definition' }, { id: 'thresholds', label: 'Thresholds' }, { id: 'evaluation', label: 'Evaluation' }, { id: 'usage', label: 'Usage', count: c.usage.length }], st.tab)
         + (st.tab === 'definition' ? definition : st.tab === 'thresholds' ? thresholds : st.tab === 'usage' ? usage : evalTab)
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       if (st.openTest) { st.openTest = false; openTest(ctx, c); }
       if (st.startBatch) { st.startBatch = false; startBatch(ctx, c); }
@@ -116,7 +116,6 @@
       ctx.on('click', '[data-goknowledge]', () => ctx.navigate('knowledge'));
       ctx.on('click', '[data-gotraining]', (e) => { e.preventDefault(); ctx.navigate('training'); });
       ctx.on('click', '[data-new]', () => ctx.modal({ title: 'New classifier', body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example Supplier risk' })) + UI.field('Engine', UI.select([{ value: 'deterministic', label: 'Deterministic detectors (regex, checksums, entropy), negligible cost' }, { value: 'embedding', label: 'Embedding plus trained linear head, very low cost' }, { value: 'guard', label: 'Guard model (llama-guard3, shieldgemma, granite3-guardian), medium cost' }, { value: 'llm', label: 'General LLM with JSON-schema output, high cost' }], 'embedding')) + UI.field('Labels', UI.input('', { placeholder: 'comma separated' })) + UI.field('Eval dataset', UI.select(['Create from confirmed flags', 'Pick in Training'], 'Create from confirmed flags')) + '</div>' + UI.notice('New classifiers start as drafts. They publish only after an eval run with at least 200 samples per label.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }), onMount(m) { m.querySelector('[data-create]').addEventListener('click', () => { const name = m.querySelector('input').value || 'New classifier'; App.closeOverlay(); CLASSIFIERS.push({ id: 'new-' + Date.now(), name, engine: 'embedding + linear head', sub: 'embedding plus linear head', status: 'draft', cost: 'Very low', desc: 'Draft. Add an eval dataset and labels, then train the head.', version: 1, owner: 'Mara Okafor', dataset: 'none yet', labels: [{ label: 'positive', p: 0, r: 0, thr: 0.5, n: 0, note: 'small sample' }, { label: 'negative', p: 0, r: 0, thr: 0.5, n: 0, note: 'small sample' }], usage: [] }); st.sel = CLASSIFIERS[CLASSIFIERS.length - 1].id; st.tab = 'definition'; ctx.rerender(); ctx.toast('Draft classifier created.', 'ok'); }); } }));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 

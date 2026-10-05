@@ -155,10 +155,9 @@
         + '#main .files-tags{display:flex;flex-wrap:wrap;gap:4px}'
         + '</style>'
         + left + '<div class="page">' + main
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>' + inspector;
+        + '</div>' + inspector;
 
       // ----- events -----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-folder]', (e, t) => { e.preventDefault(); st.folder = t.dataset.folder; st.view = 'folder'; st.query = ''; st.tagFilter = null; st.problem = null; ctx.rerender(); });
       ctx.on('click', '[data-view]', (e, t) => { st.view = t.dataset.view; st.problem = null; ctx.rerender(); });
       ctx.on('click', '[data-file]', (e, t) => { if (e.target.closest('a')) return; st.sel = t.dataset.file; st.rejectedNote = false; st.linkNote = false; st.previewNote = false; ctx.rerender(); });

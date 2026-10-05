@@ -149,7 +149,7 @@
         + '<div class="hstack"><div class="eyebrow">' + esc(CHECKPOINTS.find((c) => c.id === st.cp).label) + ' checkpoint</div><span class="muted" style="font-size:12px">' + UI.pill(profile.status === 'published' ? 'v' + profile.version + ' published' : 'v' + profile.version + ' draft') + '</span><span class="right muted" style="font-size:12px">Precedence: platform baseline, tenant, workspace, agent. The most restrictive result wins.</span></div>'
         + UI.table(cols, rows, { minWidth: '760px', emptyTitle: 'No rules at this checkpoint', emptyText: 'Add a rule or pick another checkpoint.' })
         + editor + replay
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       if (st.focusTest) { st.focusTest = false; const p = ctx.$('[data-testpane]'); if (p) { p.scrollIntoView({ block: 'center' }); p.style.outline = '2px solid var(--accent)'; setTimeout(() => { p.style.outline = ''; }, 1600); } ctx.toast('Live test runs the draft rule on the sample. Edit the sample to try your own text.'); }
 
@@ -184,7 +184,6 @@
       ctx.on('click', '[data-addrule]', () => ctx.modal({ title: 'Add rule to ' + esc(CHECKPOINTS.find((c) => c.id === st.cp).label), body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example flag-customer-ids-on-transfer' })) + UI.field('Type', UI.select(['pattern', 'PII', 'topic policy', 'safety', 'prompt injection', 'grounding', 'budget'], 'PII')) + UI.field('Action', UI.select(['allow', 'log', 'warn', 'redact', 'flag', 'block', 'require-approval', 'reroute'], 'flag')) + UI.field('Severity', UI.select(['low', 'medium', 'high'], 'medium')) + '</div>' + UI.notice('New rules start as drafts in shadow mode. They enforce only after a test run and a replay.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }), onMount(m) { m.querySelector('[data-create]').addEventListener('click', () => { App.closeOverlay(); const id = 'new-' + Date.now(); RULES.push({ id, name: m.querySelector('input').value || 'New rule', cp: st.cp, type: m.querySelectorAll('select')[0].value, action: m.querySelectorAll('select')[1].value, stage: 'shadow', triggers: '0.0%', fp: '0.0%', latency: '0 ms', onError: 'allow', mechanism: 'detector pii.*', threshold: '0.80' }); st.rule = id; st.profile = 'finance-v13'; ctx.rerender(); ctx.toast('Draft rule created in Finance baseline v13. It runs in shadow.', 'ok'); }); } }));
       ctx.on('click', '[data-goflags]', (e) => { e.preventDefault(); ctx.navigate('flags', { id: 'F-2291' }); });
       ctx.on('click', '[data-gopools]', (e) => { e.preventDefault(); ctx.navigate('pools'); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

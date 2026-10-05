@@ -111,7 +111,7 @@
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(u.name) + ' in ' + esc(DATA.tenant.workspace))
         + '<div class="grid2"><div class="vstack gap12" style="gap:14px">' + profile + appearance + notifs + '</div><div class="vstack" style="gap:14px">' + security + accounts + keys + atproto + '</div></div>'
         + sessions
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---- events ----
       ctx.on('click', '[data-goidentity]', () => ctx.navigate('identity'));
@@ -171,7 +171,6 @@
       ctx.on('click', '[data-atverify]', () => { if (!st.atproto.tries) { st.atproto.tries = 1; ctx.toast('Not verified (409): the profile description does not contain the challenge yet. Save your profile on the PDS, then try again.', 'warn', 5000); return; } st.atproto = Object.assign({}, st.atproto, { verified: true, proof: 'profile', verifiedAt: 'just now', challengePending: false, handleCheckedAt: 'just now' }); ctx.rerender(); ctx.toast('DID verified from the profile record. Handle checked both ways. Audited atproto.did.verified.', 'ok', 4500); });
       ctx.on('click', '[data-athandle]', () => ctx.modal({ title: 'Change the handle shown', body: UI.field('Handle', UI.input(st.atproto.handle, { attrs: 'data-newhandle' }), 'Must resolve to ' + esc(st.atproto.did) + ' and be named by its DID document; otherwise 422 reason mismatch.'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-savehandle' }), onMount(m) { m.querySelector('[data-savehandle]').addEventListener('click', () => { const h = m.querySelector('[data-newhandle]').value.trim(); if (!/northwind\.social$/.test(h)) { ctx.toast('Refused (422 reason: mismatch): ' + esc(h || 'that handle') + ' does not resolve to your DID.', 'danger', 4500); return; } App.closeOverlay(); st.atproto.handle = h; st.atproto.handleCheckedAt = 'just now'; ctx.rerender(); ctx.toast('Handle set. Audited atproto.handle.set.', 'ok'); }); } }));
       ctx.on('click', '[data-atremove]', async () => { const ok = await ctx.confirm({ title: 'Remove the AT-Protocol binding?', tone: 'danger', body: '<div class="fg2">The DID no longer signs you in. Labels already signed by the tenant\'s labeler are unaffected.</div>', kv: [['DID', '<span class="mono">' + esc(st.atproto.did) + '</span>'], ['Handle', esc(st.atproto.handle)]], ok: 'Remove' }); if (!ok) return; st.atproto = null; ctx.rerender(); ctx.toast('Binding removed (204). Audited atproto.did.removed.', 'ok'); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.openCreate) { st.openCreate = false; setTimeout(openCreate, 50); }
     }
   });

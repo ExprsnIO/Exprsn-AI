@@ -8,9 +8,10 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 37 items, 214 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 37, P2 60. At about
-78 points a sprint (roughly five engineers) that is Sprints 29 to 31. With fewer, P2 (the PDS and feed generator)
-moves to 1.6 first, then WebDAV (B-32).
+**Size.** 48 items, 277 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 98, P2 60. At about
+78 points a sprint (roughly five engineers) that is Sprints 29 to 32. With fewer, P2 (the PDS and feed generator)
+moves to 1.6 first, then WebDAV (B-32), then Workflows 2 (B-37, added 2026-10-05 from the Sprint 29 prototype roll-up
+`design/prototype/rollup-1.5.html`).
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -24,7 +25,8 @@ the same policy pipeline.
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203 | 73 | `032_dav` | Planned |
-| 31 | AT-Protocol PDS and feed generator, release | B-2901–B-2906, B-3001–B-3004, B-3406, B-3501 | 65 | `033_pds_feeds` | Planned |
+| 31 | AT-Protocol PDS and feed generator | B-2901–B-2906, B-3001–B-3004, B-3406 | 65 | `033_pds_feeds` | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling, release | B-3701–B-3710, B-3415, B-3501 | 63 | `034_workflows2` | Planned |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
@@ -50,7 +52,7 @@ permission: `roles:manage`.
 | B-3304 | Route permission registry: every route declares its permission in one table; the matrix lists routes per permission | A route registered without a declared permission fails the test suite | 3 |
 | B-3305 | Access reviews: scheduled certification campaigns over the matrix; reviewers confirm or revoke each grant; overdue reviews escalate; results in the audit chain | A revoked grant is gone on the member's next request | 5 |
 
-### B-34 Console screens (88 points)
+### B-34 Console screens (90 points)
 
 Screens for everything 1.4.0 and 1.5.0 add, starting from prototype boards. B-3401 landed on `sprint-29` (2026-10-05): the
 boards for every screen below plus the B-3413 additions are in `design/prototype/` (see `Sprints.md`, Sprint 29). Each live screen joins the Playwright
@@ -72,6 +74,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3412 | Roles and access: the role matrix, custom roles with diff, the effective-access matrix with `explain`, access reviews | Every cell's `explain` opens from the matrix | 5 |
 | B-3413 | Identity additions to existing screens: self-registration policy, MFA policy and trusted devices, GitHub stores, CSV import, DID binding | The registration policy changes from Settings | 3 |
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
+| B-3415 | Settings: app passwords for DAV clients (scoped keys with device names, last use, revoke) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
 
 ### B-36 Carried over from 1.4.0 (5 points)
 
@@ -101,6 +104,33 @@ CalDAV had broken filter operators: B-3104 states the fixed behaviour as its tes
 | B-3201 | B-24 folders and files as WebDAV collections; `PUT` through the attachment quarantine, type check and ClamAV; versions kept | An upload over WebDAV is scanned before it can be read | 5 |
 | B-3202 | `COPY` and `MOVE` for files and folders (the platform returned 501), `LOCK` and `UNLOCK` (class 2) for Finder and Office | Moving a folder over WebDAV keeps its versions and shares | 5 |
 | B-3203 | Quota properties (RFC 4331), shares honoured, the `litmus` suite in CI | `litmus` passes its basic, copymove and locks groups | 3 |
+
+### B-37 Workflows 2 (61 points)
+
+Added 2026-10-05 from the Sprint 29 prototype roll-up (`design/prototype/rollup-1.5.html`), approved by the owner. The
+realigned Workflows board (`design/prototype/js/screens/workflows.js`) already shows every step and trigger below as a
+"1.5 proposal" that refuses to publish with error code `unavailable`; each item removes that refusal. Everything
+follows the 1.4.0 workflow patterns: a step is a kind in `NODE_KINDS` with a zod config in `CONFIGS` and a port schema
+(`server/src/workflows/graph.ts`), validated at publish with the existing error codes (`structure`, `cycle`, `config`,
+`schema`, `label`, `limit`, `reference`, `unavailable`, `unreachable`), run as durable checkpointed jobs (each output
+sealed with the tenant key, resumable after a restart), paused without holding a worker, dry-runnable with mocks,
+replayable from a step, audited under `workflow.*`, and bounded by the run limits (40 steps, fan-out 10, 30 min a
+step, 2 h and 200k tokens a run). Labels propagate along every path; nothing runs below the run's label or above a
+step's ceiling. Trigger chains carry on: app triggers stop at `APPS_TRIGGER_MAX_DEPTH`, plugins at `PLUGIN_MAX_DEPTH`,
+and sub-workflows at `WORKFLOW_MAX_DEPTH` (new).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3701 | Sub-workflow step (`sub`): a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; `workflow.*` tools stay refused in tool steps, chaining goes through this step; depth capped by `WORKFLOW_MAX_DEPTH` | A parent run resumes with the child's output after the child's approval is decided | 8 |
+| B-3702 | Agent step (`agent`) and skills on model steps: a registry agent runs within its budgets and is awaited like B-1006 in reverse; `skills[]` on a `model` step loads published skills' instructions and tools through the dispatcher | A model step with a skill calls one of the skill's tools and the call passes the `tool-call` checkpoint | 8 |
+| B-3703 | Triggers on the workflow itself: source `event` (a catalogue event with the plugin fan-out rules: workspace, label, rate, loop chain) and source `schedule` (a five-field UTC cron claimed once across instances, no app entity needed) | A `file.uploaded` event starts a run without a plugin; a cron run starts once with two instances | 8 |
+| B-3704 | Domain steps as built-in registry tools (`impl: builtin`, shared by chat, agents and workflows): send a message, post to a feed, write a file version, create a group event, answer a channel session; the plugin broker's `records.*`, `files.read`, `groups.read` and `posts.write` calls confirmed live | A workflow posts to a workspace feed under its label and the post carries the run as its source | 8 |
+| B-3705 | `map` (fan-out over a list with a parallelism cap) and `loop` (bounded iteration) whose items and iterations count toward the run limits | A map over 200 items runs 20 at a time and a loop stops at its cap | 8 |
+| B-3706 | Per-step retry policy, an on-failure edge (`branch: failure`) and a dead-letter view of failed runs with redrive, like moderation's | A failed HTTP step takes the on-failure edge instead of failing the run | 5 |
+| B-3707 | Approval with a form: the step names an app form whose answers (validated like a submission) become the step's output | An approver's answers reach the next step and are audited with the decision | 5 |
+| B-3708 | `notify` and `webhook` steps: in-app and email notices to cleared recipients; outbound webhooks through the tenant's allowed hosts, signed with the tenant's webhook keys | A webhook step is refused at save for a host outside the tenant's list | 5 |
+| B-3709 | Workflow bundles: signed export and import (`exprsn-workflow/1`, like `exprsn-app/1`) with tool, profile and trigger references re-bound on import | A bundle changed after signing is refused with `422 Bundle refused` | 3 |
+| B-3710 | Console: the live Workflows screen matches the realigned board (Triggers and callers tab, record and vault editors, decision-edge labels, the new kinds as they land) and joins the Playwright suite | Every control on the screen is backed by the server | 3 |
 
 ## P2
 
@@ -132,7 +162,7 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 | ID | Item | Pts |
 | --- | --- | --- |
-| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands | — |
+| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 32) | — |
 
 ---
 

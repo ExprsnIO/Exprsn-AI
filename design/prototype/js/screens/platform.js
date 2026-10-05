@@ -107,7 +107,7 @@
 
       root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}</style><div class="page">' + UI.pagehead('Imports and platform', 'Everything that runs here arrived through one signed import path', UI.btn('Run restore drill', { attrs: 'data-drill' }) + UI.btn('Start expedited import', { kind: 'primary', attrs: 'data-expedited' }))
         + strip + tabs + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector">' + insp + '</aside>';
 
       // ----- actions -----
@@ -159,7 +159,6 @@
       ctx.on('click', '[data-rotate]', (e, t) => ctx.confirm({ title: 'Rotate ' + esc(t.dataset.rotate), tag: t.dataset.rotate.indexOf('dek') > 0 ? 're-wraps data keys' : 'publishes new key', tone: 'info', body: '<p class="fg2" style="margin:0">Creates a new key version in transit. Old versions stay for decryption and verification; nothing is rewritten in place.</p>', ok: 'Rotate' }).then((ok) => { if (!ok) return; st.rotated = st.rotated || {}; st.rotated[t.dataset.rotate] = true; ctx.rerender(); ctx.toast(esc(t.dataset.rotate) + ' rotated. Audit event written.', 'ok'); }));
       ctx.on('click', '[data-ack]', () => { st.missed = false; ctx.rerender(); ctx.toast('Alert acknowledged. MinIO replication is catching up.', 'ok'); });
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

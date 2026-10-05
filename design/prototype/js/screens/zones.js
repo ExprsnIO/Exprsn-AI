@@ -86,7 +86,7 @@
         + '<div class="hstack wrap">' + UI.search('Search zones', 'data-q', st.q) + '<span class="muted" style="font-size:12px">Every pool, tool egress rule and external provider belongs to exactly one zone.</span></div>'
         + table
         + UI.notice('CI exposure check passed 19 Sep 13:40: no Ollama port answers from outside the inference zone.', 'ok', UI.btn('Audit event', { size: 'sm', kind: 'ghost', attrs: 'data-audit="13fd77b0"' }))
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector w360">' + insp + '</aside>';
 
       // ----- modals -----
@@ -133,7 +133,6 @@
       ctx.on('click', '[data-gopools]', (e) => { e.preventDefault(); ctx.navigate('pools'); });
       ctx.on('click', '[data-goprofile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.goprofile }); });
       ctx.on('click', '[data-audit]', (e, t) => ctx.navigate('usage-audit', { event: t.dataset.audit }));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

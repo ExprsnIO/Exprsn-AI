@@ -162,7 +162,7 @@
       }
 
       root.innerHTML = left + '<div class="page">' + head + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ----- modals -----
       function mappingModal(existing) {
@@ -225,7 +225,6 @@
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
       ctx.on('click', '[data-goclient]', (e, t) => ctx.navigate('identity', { client: t.dataset.goclient }));
       ctx.on('click', '[data-audit]', (e, t) => ctx.navigate('usage-audit', { event: t.dataset.audit }));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
 
       const style = document.createElement('style');
       style.textContent = '.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.tn-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;max-height:260px;overflow:auto;padding:4px 0}.tn-role{display:flex;gap:8px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px}.tn-role:hover{background:var(--sel)}.tn-role input{margin:3px 0 0;accent-color:var(--accent)}';

@@ -172,10 +172,9 @@
         + '#main .dt td > .mono:first-child{white-space:nowrap}'
         + '</style>'
         + left + '<div class="page">' + head + tabs + body
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---- events ----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); if (i) { i.focus(); i.value = v; } });
       ctx.on('click', '[data-fkind]', (e, t) => menu(ctx, t, [['all', 'Any kind'], ['chat', 'Chat'], ['email', 'Email']], st.fkind, (v) => { st.fkind = v; ctx.rerender(); }));

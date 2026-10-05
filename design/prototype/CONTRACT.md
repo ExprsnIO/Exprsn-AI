@@ -14,7 +14,7 @@ The shell (`js/app.js`) owns the sidebar, header, breadcrumb, command palette (C
     crumb: ['Admin', 'Models'],      // optional; string[] or (state, params) => string[]
     label: 'confidential',           // optional classification badge in the header; string or (state, params) => string|null
     commands: [ { label: 'Request model import', sub: 'Models', run(app) { ... } } ],  // optional palette commands (screen is navigated to first)
-    states: [                        // the "States to design from this page" cards from the board, each clickable
+    states: [                        // the "States to design from this page" cards from the board; applied from the command palette and by the smoke run
       { title: 'Pickle rejected', tone: 'danger', text: 'Import refused: ...', apply(ctx) { ctx.state.problem = 'pickle'; ctx.rerender(); } }
     ],
     render(root, ctx) { ... }        // build DOM inside root (the #main element, class "main")
@@ -47,7 +47,7 @@ Inside `.page`, stack: `UI.pagehead(title, subtitle, actionsHtml)`, a `.toolbar`
 - `UI.table(cols, rows, {selected, clickable, cls, attrs, minWidth, emptyTitle, emptyText})` — `cols`: strings or `{label, right, width}`; `rows`: arrays of cell HTML, or `{cells, attrs, selected}`; rows get `data-row="i"` and class `row` (hover) — wire `ctx.on('click', 'tr.row', …)`
 - `UI.tabs([{id,label,count}|string], activeId, attrs)` — buttons with `data-tab`; `UI.seg(items, activeId, attrs)` — `data-seg`
 - `UI.field(label, controlHtml, hint)`, `UI.input(value, {type, placeholder, attrs, readonly})`, `UI.textarea(value, {placeholder, attrs, rows})`, `UI.select(options, value, attrs)`, `UI.toggle(label, on, attrs)` (toggles itself on click unless `data-manual`), `UI.check(label, on, attrs)`, `UI.search(placeholder, attrs, value)`
-- `UI.meter(label, valueText, pct, tone:'warn'|'accent'|'danger')`, `UI.notice(html, kind, actionHtml)`, `UI.empty(title, text, actionHtml)`, `UI.problem(title, text, traceId)`, `UI.ctx(title, bodyText, level)` (context block), `UI.code(text, lang)`, `UI.reviewbar(html, actionsHtml)`, `UI.stat(nHtml, label, detailHtml)`, `UI.spark([values], hiIndex)`, `UI.timeline([{title, text, meta, tone}])`, `UI.listItem(titleHtml, subHtml, {active, attrs, right})`, `UI.states(list)` (renders the state cards strip; clicking card i calls the state's apply — wire with `ctx.on('click','.state-card', (e,t)=>ctx.app.applyState(+t.dataset.state))`)
+- `UI.meter(label, valueText, pct, tone:'warn'|'accent'|'danger')`, `UI.notice(html, kind, actionHtml)`, `UI.empty(title, text, actionHtml)`, `UI.problem(title, text, traceId)`, `UI.ctx(title, bodyText, level)` (context block), `UI.code(text, lang)`, `UI.reviewbar(html, actionsHtml)`, `UI.stat(nHtml, label, detailHtml)`, `UI.spark([values], hiIndex)`, `UI.timeline([{title, text, meta, tone}])`, `UI.listItem(titleHtml, subHtml, {active, attrs, right})`. (`UI.states(list)` now returns an empty string: the prototype no longer renders a state strip.)
 
 ## Rules
 
@@ -57,7 +57,7 @@ Inside `.page`, stack: `UI.pagehead(title, subtitle, actionsHtml)`, a `.toolbar`
 4. Persist UI state in `ctx.state` so navigating away and back keeps the selection. Re-render with `ctx.rerender()` after state changes (cheap, whole screen).
 5. Everything must work in dark theme: only use CSS variables (never literal colours) in inline styles. `var(--fg) --fg2 --muted --faint --line --line2 --panel --panel2 --bg --sel --accent --accent-tint --warn-bg/--warn-fg --danger-bg/--danger-fg --info-bg/--info-fg --ok-bg/--ok-fg --meter`.
 6. Cross-link where the board implies it: e.g. a model row's "profile" link → `ctx.navigate('profiles', {profile:'analyst'})`; a flag → `ctx.navigate('flags', {id:'F-2291'})`. Read `ctx.params` on render to preselect.
-7. Board sections named "States to design from this page" become the `states` array (title, tone from the heading colour: `#A01E18`→danger, `#7A5200`→warn, `#1C6A38`→ok, `#1B4C8C`→info, else neutral) with an `apply` that makes the screen actually show that state (a notice, a problem panel, a disabled button, a changed pill). Also render `UI.states(list)` at the bottom of the page under an eyebrow "States to design from this page", wired to apply.
+7. Board sections named "States to design from this page" become the `states` array (title, tone from the heading colour: `#A01E18`→danger, `#7A5200`→warn, `#1C6A38`→ok, `#1B4C8C`→info, else neutral) with an `apply` that makes the screen actually show that state (a notice, a problem panel, a disabled button, a changed pill). Do not render them on the page: since Sprint 29 the prototype, like the console, has no header "States" button and no strip at the foot of the page. States are applied with `App.applyState(i)`, which the command palette (Ctrl K, group "Design states") and `npm run smoke` drive.
 8. No external libraries. Inline SVG is fine for graphs and small charts. Keep each file self-contained; do not touch app.js or app.css (ask instead, or add a `<style>` block inside root for screen-only rules, prefixed with the screen id).
 9. Escape any text that comes from data with `UI.esc`. Use `type="button"` on buttons.
 10. Test by opening `shell.html` in a browser, or run `node build.mjs` and open `index.html`; every file must parse with `node --check`, and `npm run smoke` (after `npm install`) must report no errors.

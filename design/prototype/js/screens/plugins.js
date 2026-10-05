@@ -167,7 +167,7 @@
         + '</style>'
         + '<div class="page">' + UI.pagehead('Plugins and events', 'The event catalogue every webhook and plugin delivery follows, the tenant\'s plugins with their grants and lifecycle, and their runs.', UI.pill(enabled + ' enabled', 'ok') + UI.btn('Install plugin', { kind: 'primary', icon: 'plus', attrs: 'data-goinstall' }))
         + tabs + body
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + (insp ? '<aside class="inspector w360 plugins-insp" aria-label="Inspector">' + insp + '</aside>' : '');
 
       // ---- events ----
@@ -248,7 +248,6 @@
       ctx.on('click', '[data-fulllog]', () => { const i = st.invocations.find((x) => x.id === st.selInv); if (!i) return; ctx.drawer({ title: 'Log of ' + esc(i.id), body: '<div class="muted" style="font-size:12px">GET /admin/plugins/' + esc(i.plugin) + '/logs?invocation=' + esc(i.id) + ', newest first, opened from the sealed log.</div>' + (i.logs.length ? UI.code(i.logs.slice().reverse().map((l) => l.at + ' ' + l.level.toUpperCase().padEnd(5) + ' ' + l.message).join('\n'), 'log') : UI.empty('No log lines', 'The handler has not written anything yet.')), actions: UI.btn('Close', { attrs: 'data-close' }) }); });
       ctx.on('click', '[data-replay]', () => replayModal(ctx));
       if (st.openReplay) { st.openReplay = false; setTimeout(() => replayModal(ctx), 50); }
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 

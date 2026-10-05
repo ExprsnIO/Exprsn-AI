@@ -40,7 +40,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
 | 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **In progress** (B-3401 boards done) |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new) | Planned |
-| 31 | AT-Protocol PDS and feed generator, release (1.5.0) | AT-Protocol (new) | Planned |
+| 31 | AT-Protocol PDS and feed generator (1.5.0) | AT-Protocol (new) | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; release (1.5.0) | Workflows, Settings | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -55,7 +56,7 @@ signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a 
 `1.4.0` (Sprints 24 to 28, the [1.4.0 backlog](Backlog-1.4.0.md), server-only); before it, `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
 [1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
 planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
-identity work. Sprints 29 to 31 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
+identity work. Sprints 29 to 32 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
 features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, and an AT-Protocol PDS and feed generator.
 
 ---
@@ -1121,6 +1122,14 @@ Delivered so far on `sprint-29`:
     (GitHub and AT-Protocol user stores, the sign-up and MFA policy, sign-ups, invitations, CSV imports, DID bindings).
   - The shell gained the eleven NAV entries and icons; `node build.mjs` and `npm run smoke` (38 screens, light and dark,
     every state) run clean.
+  - The Workflows board was rebuilt on the server's step kinds (trigger sources manual, api, record and schedule; model,
+    transform, branch with labelled true and false edges, guardrail, approval, HTTP with vault references, calc, wait,
+    tool, record), with a Triggers and callers tab (app triggers, plugins' `call:workflow`, agent tool calls, chat) and
+    the 1.5 proposals (sub-workflow, agent, skills, event trigger, map, loop, media, query, script, plugin action) shown
+    dashed and refused at publish. The roll-up `design/prototype/rollup-1.5.html` lists what 1.5.0 was missing; the
+    owner approved rolling it into the backlog as B-37 Workflows 2 (Sprint 32) and B-3415.
+  - The design-state controls (header "States" button, the strip at the foot of each page) were removed from the
+    prototype as from the console; states are applied from the command palette and by the smoke run.
 
 Open on `sprint-29a` and `sprint-29b` (another session): B-3301 to B-3305 (`031_access`) and B-3601; then the live
 screens B-3402 to B-3404, B-3407, B-3408 and B-3413 in `web/`.
@@ -1133,7 +1142,7 @@ features in Exprsn-AI: the certificate authority with OCSP and an ACME server, t
 catalogue and plugins; AT-Protocol keys, DIDs, labeler, sign-in and firehose ingest; moderation actions and appeals,
 the file store, low-code data apps, groups and events, customer-service channels, messaging and the workspace feed.
 They are server-only: no console screen changed, and the screens are planned in [Backlog-1.5.0.md](Backlog-1.5.0.md)
-(Sprints 29 to 31). Migrations `026_pki_secrets` to `030c_feed`. The suite at release: 794 passed and 1 skipped across 66 files; the PostgreSQL
+(Sprints 29 to 32). Migrations `026_pki_secrets` to `030c_feed`. The suite at release: 794 passed and 1 skipped across 66 files; the PostgreSQL
 integration suite against throwaway servers (22 files), MySQL and Redis in CI. The platform load test (B-2105,
 [docs/loadtest.md](docs/loadtest.md)): every target met with the `ci` targets on SQLite, and on PostgreSQL every target but one: the records query p95 (732 ms against 250 ms; the query path sorts every matching record, fix planned for 1.5.0). The known gaps of each sprint are in [docs/security.md](docs/security.md).
 Tagging `v1.4.0` and publishing the image and chart remain with the maintainers.
