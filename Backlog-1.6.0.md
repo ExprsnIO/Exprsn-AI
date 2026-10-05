@@ -6,14 +6,17 @@ platform's administration surface (the five admin screens designed in `design/pl
 remaining exprsn-platform gaps that Exprsn-AI wants (groups depth, tenant templates, blob deduplication, vault
 extras, capability tokens, quote posts), closes two 1.4.0 known gaps and the industry gaps found by the 2026-10-05
 research (prompt-injection defence, red-teaming, MCP server and authorization, SCIM, an AI inventory and seven P2
-epics). Rules as before: everything follows
+epics) and the low-code gaps from the same day (row and field permissions, app environments and promotion, data
+model generation, AI field upgrades, outside database sync). Rules as before: everything follows
 `docs/PLAN.md` and `CLAUDE.md`; screens follow `design/prototype/CONTRACT.md` (prototype board first, then live when
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 43 items, 224 points (1 point ≈ half a day for one engineer, tests included): P1 128, P2 96. The industry
+**Size.** 54 items, 283 points (1 point ≈ half a day for one engineer, tests included): P1 165, P2 118. The industry
 gaps (B-69 to B-80, 23 items, 121 points) were added on 2026-10-05 and need a fourth sprint, 38, which now carries
-the release. Sprints 35 and 36 are at 69 points, under the 78-point pace.
+the release. The low-code gaps
+(B-81 to B-85, 11 items, 59 points) followed the same day. Sprints 35 to 38 are at 69, 69, 71 and 74 points, under
+the 78-point pace.
 
 **Builds on.** The B-4201 boards (Overview, Jobs and queues, Storage, Configuration, Social and messaging) and the
 sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `JobQueue`, `Scheduler` and tenant cache
@@ -25,15 +28,16 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; prompt-injection defence; SCIM | B-4202–B-4207, B-4501, B-6901–B-6903, B-7201–B-7202 | 69 | Planned |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; MCP server and authorization; AI inventory | B-4401–B-4405, B-4601, B-4701, B-4803, B-7101–B-7103, B-7301–B-7302 | 69 | Planned |
-| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; red-team harness; usage and cost analytics; compliance log export; agent identities | B-4901, B-5001, B-4801, B-4802, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701 | 55 | Planned |
-| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; release | B-7601–B-7603, B-7801, B-7901, B-8001, B-5201 | 31 | Planned |
+| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions | B-4901, B-5001, B-4801, B-4802, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103 | 71 | Planned |
+| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; release | B-7601–B-7603, B-7801, B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-5201 | 74 | Planned |
 
 The order follows the dependencies: the Storage screen (B-4204) before blob deduplication shows its savings (B-4601);
 the Social and messaging screen (B-4206) before group categories are managed from it (B-4405); vault anomaly detection
 (B-4803) before secret sharing widens who reads a secret (B-4801); injection trust marking and its corpus (B-6901,
 B-6903) before the red-team suites reuse the corpus (B-7001); MCP server authorization (B-7102) in the same sprint
 as the server (B-7101); capability tokens (B-5001) before agent identities use them (B-7701); chaining (B-41,
-1.5.0) before agent handoffs (B-7801).
+1.5.0) before agent handoffs (B-7801); record queries (B-3601, 1.5.0) before policies add row conditions to them
+(B-8101); policies (B-81) before packages carry them (B-8201).
 
 ---
 
@@ -246,6 +250,72 @@ LibreChat's artifacts have version control and show in shared conversations. Exp
 | --- | --- | --- | --- |
 | B-8001 | Code, documents and HTML that an answer produces open in a side panel with versions across turns, rendered sandboxed, visible to share readers | Editing an artifact in a later turn adds a version and the earlier one stays viewable | 8 |
 
+## Low-code gaps (research 2026-10-05)
+
+From a second deep-research pass on 2026-10-05 of the low-code apps against Power Platform and Dataverse, Retool,
+Baserow and Directus. The baseline already leads Baserow on workflow automation (approval, guardrail and
+sub-workflow steps) and Retool on self-hosted AI (local models instead of customer-managed keys), and meets the SSO
+bar. None of the workbench mockups (provisional B-63 to B-68) closes the two P1 gaps below.
+
+### P1
+
+### B-81 Row and field permissions (16 points)
+
+Clearance labels and org or group scope already filter some rows on the server. Peers set the bar higher: Dataverse
+gives privileges per table with a scope, and column security with masking. Directus 11 has reusable policies with
+per-field and conditional rules. Baserow has field permissions and restricted views (2.2, April 2026).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8101 | Policies: reusable rule sets per app entity with row conditions (record fields compared with the user's attributes, groups and roles), combined with labels and enforced in records queries, `/api` and `/v1` tools, forms, exports and workflows | A user whose policy allows rows where `region = user.region` sees only those rows through the screen, the API and an export | 8 |
+| B-8102 | Field permissions per policy (read, read unmasked, create, update) with masking formats (last four, hash, hidden) | A masked field shows `***-**-1234` to a policy without read unmasked and the full value to one with it | 5 |
+| B-8103 | A permissions editor on the Apps screen with an explain view (which policy grants a row or field to a user) | Explain names the policy that lets a user see a row | 3 |
+
+### B-82 App packages, environments and promotion (21 points)
+
+There is no version control, environments or governed promotion. Power Platform Pipelines move one fixed package
+through stages with approvals before production, backups and rollback. Retool links instances to git and has
+multi-instance releases (GA January 2026, Enterprise). The in-product pipeline model is chosen here, because tenants
+may share one instance (open decision below); git export is an extra.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8201 | App packages: export and import an app (entities, fields, formulas, forms, state machines, triggers, workflows, policies) as a versioned, signed package, data optional | A package imported into an empty workspace runs the app the same way, and a tampered package is refused | 5 |
+| B-8202 | Environments and promotion: each app has development, test and production stages (workspaces or app slots); promotion moves the same package from stage to stage, cannot skip one, and needs approval through the Workflows approval step before production; audited `app.package.promoted` | A promotion to production waits for an approver and lands the exact package that passed test | 8 |
+| B-8203 | Automatic backup before each deployment, a deployment history on the Apps screen (source, target, version, who, status, 365 days) and rollback from it | Rolling back restores the previous version's schema and behaviour, and the rollback is audited | 5 |
+| B-8204 | Git export and import of a package to a repository (one file per object, readable diffs) | Committing the package and importing it on another instance gives the same app | 3 |
+
+### P2
+
+### B-83 Data model generation from a description (8 points)
+
+Baserow 2.2's assistant builds tables, formulas, automations and whole apps; Power Apps Plans (GA May 2025)
+generates Dataverse models. Generating whole apps waits for an app builder (workbench mockup B-63); generating the
+data model works on today's entity model, with the local models.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8301 | Describe an app and get a draft: entities, fields, relations, formulas, state machines and triggers, shown as a diff to accept or edit, through the profile's guardrails | A description of a leave-request app gives a draft with a request entity and an approval state machine that can be accepted in one step | 8 |
+
+### B-84 AI field upgrades (6 points)
+
+Baserow 2.0's AI fields regenerate when the fields they read change, take references and functions as input, and
+fill every row in one action. Check the 1.4.0 AI fields against these first; drop what already works.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8401 | AI field prompts built from field references and formula functions, regenerated when a referenced field changes (debounced, metered) | Editing a referenced field regenerates the AI value once | 3 |
+| B-8402 | Fill or refresh an AI field for every row as a job, with progress, a cost estimate first and a cancel | A fill over 1,000 rows runs as one job and can be cancelled midway | 3 |
+
+### B-85 External database sync (8 points)
+
+Baserow (1.35) syncs two ways with an outside PostgreSQL database. Exprsn-AI apps store records only in their own
+database. The database management mockup (B-68) would cover this only if it includes outside connections.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8501 | Attach a table in an outside PostgreSQL or MySQL database as an app entity, with credentials from the vault (dynamic leases where available), writes through to the source and a scheduled pull | A row changed in the outside table appears in the app after the next pull, and an app edit reaches the outside table at once | 8 |
+
 ## Release
 
 | ID | Item | Pts |
@@ -277,6 +347,10 @@ LibreChat's artifacts have version control and show in shared conversations. Exp
   move to 1.7?
 - [ ] Injection classifier (B-6902): a guard model through the existing guard-model path, or a trained classifier
   (weak below 200 labels a class, a 1.4.0 known gap)?
+- [ ] App promotion (B-82): an in-product pipeline with fixed packages and approvals, like Power Platform (assumed),
+  or git-backed releases across instances, like Retool?
+- [ ] Workbench mockups (provisional B-63 to B-68): schedule them in 1.6.0 or 1.7? Whole-app generation and the
+  visual builder wait for B-63.
 
 ## Risks
 
@@ -286,4 +360,5 @@ LibreChat's artifacts have version control and show in shared conversations. Exp
 | Blob deduplication | A shared blob deleted with one reference loses another tenant's or user's file | Dedup within a tenant only, reference counts in the same transaction as the file row, the integrity job (B-4204) checks counts |
 | Injection trust marking | Marking every chunk as untrusted lowers answer quality on some models | Per-profile switch, measured with the B-6903 corpus and the profile's evaluations before it becomes default |
 | MCP server | A published tool reachable from outside widens the attack surface | OAuth resource server with audience checks, tools filtered by permission and label, every call through the guardrails and audited |
+| Row policies | Row conditions slow records queries further (p95 732 ms against 250 ms in 1.4.0) | Record queries (B-3601) land first; policies compile to indexed SQL filters and the load test covers a policy-filtered query |
 | Vault sharing | A share widens who reads a secret beyond its policy | Shares are policy grants, explain names them, anomaly detection (B-4803) ships first |

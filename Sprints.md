@@ -47,8 +47,8 @@ from prototype data to live only when every control on it is backed by the serve
 | — | Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (B-43, 1.5.0 or 1.6) | Models | Unscheduled (approved 2026-10-05) |
 | 35 | Platform administration live screens; tenant provisioning templates; prompt-injection defence; SCIM (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants, Guardrails, Identity | Planned |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; MCP server and authorization; AI inventory (1.6.0) | Groups and events, Storage, Apps, Vault, Tools, Catalogue | Planned |
-| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; red-team harness; usage and cost analytics; compliance log export; agent identities (1.6.0) | Messages and feed, Settings, Identity, Vault, Evaluations, Analytics (new), Agents | Planned |
-| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; release (1.6.0) | Settings, Agents, Chat, Images | Planned |
+| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions (1.6.0) | Messages and feed, Settings, Identity, Vault, Evaluations, Analytics (new), Agents, Apps | Planned |
+| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; release (1.6.0) | Settings, Agents, Chat, Images, Apps | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -70,7 +70,8 @@ with workflows, user profiles and presence. Sprints 35 to 38 are planned in the 
 platform administration screens, groups depth, tenant templates, blob deduplication, vault extras and capability tokens
 (groomed 2026-10-05 with `design/grooming/groom.mjs`), and the industry gaps from the 2026-10-05 research:
 prompt-injection defence, red-teaming, MCP server and authorization, SCIM, an AI inventory, usage analytics,
-compliance export, DLP and eDiscovery, agent identities and handoffs, image provenance and versioned artifacts.
+compliance export, DLP and eDiscovery, agent identities and handoffs, image provenance and versioned artifacts; and the low-code gaps: row and field permissions, app environments and
+promotion, data model generation, AI field upgrades and outside database sync.
 
 ---
 
