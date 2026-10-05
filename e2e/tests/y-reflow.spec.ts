@@ -1,5 +1,5 @@
 import { test, expect, open } from './support/fixtures';
-import { SCREENS } from './support/sweep';
+import { SWEEP } from './support/sweep';
 
 // B-1102 (WCAG 1.4.10 Reflow): at 320 CSS pixels (1280 px at 400 % zoom) and 640 (200 % zoom) no screen scrolls in
 // two dimensions. The page never scrolls sideways; the only things that may are tables, code and the workflow canvas
@@ -11,7 +11,7 @@ for (const width of [320, 640]) {
     test.setTimeout(300_000);
     await page.setViewportSize({ width, height: 800 });
     const failures: string[] = [];
-    for (const route of [...SCREENS, 'settings']) {
+    for (const route of SWEEP) {
       await open(page, route);
       // Let the a11y pass mark scrolling tables after the resize and render.
       await page.waitForTimeout(250);

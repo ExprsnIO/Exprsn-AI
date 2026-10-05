@@ -1,5 +1,5 @@
 import { test, expect, open, settle, type Page } from './support/fixtures';
-import { SCREENS } from './support/sweep';
+import { SCREENS, SWEEP } from './support/sweep';
 
 // B-1507 (WCAG 1.4.10 Reflow) for dialogs and drawers: at 320 CSS pixels (400 % zoom) and 640 (200 % zoom), each
 // screen's dialogs and drawers, opened through its design states (the boards' "States to design from this page",
@@ -109,8 +109,8 @@ async function clickCandidate(page: Page, i: number): Promise<boolean> {
  * Screens whose dialogs and drawers the sweep reaches with the suite's data. If it stopped opening them, the check
  * would pass vacuously; every other screen is measured whenever it opens one.
  */
-const MODALS = SCREENS.filter((r) => !['memory', 'flags'].includes(r)).concat('settings');
-const DRAWERS = ['knowledge', 'memory', 'scripts', 'media', 'models', 'pools', 'training'];
+const MODALS = SCREENS.filter((r) => !['memory', 'flags'].includes(r)).concat('settings').filter((r) => SWEEP.includes(r));
+const DRAWERS = ['knowledge', 'memory', 'scripts', 'media', 'models', 'pools', 'training'].filter((r) => SWEEP.includes(r));
 
 for (const width of [320, 640]) {
   test(`dialogs and drawers reflow at ${width} px`, async ({ page, watch }) => {
@@ -120,7 +120,7 @@ for (const width of [320, 640]) {
     await page.setViewportSize({ width, height: 800 });
     const failures: string[] = [];
     const opened: Record<string, Set<string>> = {};
-    for (const route of [...SCREENS, 'settings']) {
+    for (const route of SWEEP) {
       await test.step(route, async () => {
         await open(page, route);
         const seen = (opened[route] = new Set());

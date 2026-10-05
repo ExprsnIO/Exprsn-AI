@@ -51,7 +51,10 @@ npx playwright show-report           # the HTML report, with traces of failed te
 
 `E2E_SCREENSHOTS=1` saves a light and a dark screenshot of every screen under `test-results/` (not committed).
 `E2E_SERVER_LOG=1` echoes the server's output; `E2E_LOG_LEVEL=info` makes it chattier. `E2E_ENV_<NAME>=value` passes
-`<NAME>=value` to the server's configuration.
+`<NAME>=value` to the server's configuration. `E2E_PORT` fixes the server's port (a free one otherwise),
+`E2E_STATE_DIR` moves the state file and the signed-in sessions out of `e2e/.state/` (so two runs on one machine keep
+apart), and `E2E_ONLY=groups,roles` limits the accessibility and reflow specs to those routes while writing a screen
+(the full run walks every screen).
 
 To keep a server up while writing a spec, start it yourself and point the suite at it (the state file is the same):
 

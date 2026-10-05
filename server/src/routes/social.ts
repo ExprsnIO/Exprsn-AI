@@ -31,6 +31,12 @@ export function socialRoutes(s: Services): Router {
     res.json(await so.setContactRule(ctx(req), body.contactRule));
   });
 
+  // B-3411: people who share a workspace with the caller, for the console's person picker.
+  r.get('/social/people', read, async (req, res) => {
+    const q = parseBody(z.object({ q: z.string().max(100).optional(), limit: z.coerce.number().int().min(1).max(500).default(200) }), req.query);
+    res.json(await so.directory(principalOf(req), q.q, q.limit));
+  });
+
   r.get('/social/users/:id', read, async (req, res) => {
     res.json(await so.relation(principalOf(req), idOf(req)));
   });

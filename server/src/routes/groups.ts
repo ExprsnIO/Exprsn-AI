@@ -118,6 +118,11 @@ export function groupRoutes(s: Services): Router {
     res.status(201).json(await g.invite(ctx(req), idOf(req), body.userId, body.role));
   });
 
+  r.get('/groups/:id/candidates', read, async (req, res) => {
+    const q = parseBody(z.object({ q: z.string().trim().max(100).optional() }), req.query);
+    res.json(await g.candidates(principalOf(req), idOf(req), q.q || undefined));
+  });
+
   r.get('/groups/:id/requests', read, async (req, res) => {
     const q = parseBody(z.object({ state: z.enum(['pending', 'accepted', 'declined', 'cancelled', 'expired']).optional() }), req.query);
     res.json(await g.requests(principalOf(req), idOf(req), q.state));

@@ -210,6 +210,22 @@ describe('groups and events (Sprint 27c)', () => {
     expect((await dave.get(`/api/groups/${g.id}`).expect(200)).body.role).toBe('member');
   });
 
+  it('Sprint 30: invitation candidates are people of the group\'s workspace, not members or pending, for moderators only', async () => {
+    const dave = await memberOf(h, 'dave', [wsA]);
+    const g = await group(alice, { name: 'Board', visibility: 'private', joinMode: 'invite' });
+    const names = async (q = '') => ((await alice.get(`/api/groups/${g.id}/candidates${q}`).expect(200)).body as { username: string }[]).map((u) => u.username).sort();
+    // carol is in another workspace, alice already a member
+    expect(await names()).toEqual(['bob', 'dave']);
+    expect(await names('?q=DA')).toEqual(['dave']);
+    await alice.post(`/api/groups/${g.id}/invites`, { userId: dave.user.id }).expect(201);
+    expect(await names()).toEqual(['bob']);
+    // a member without the invite right, or someone outside the workspace, may not list them
+    const open = await group(alice, { name: 'Open studio', visibility: 'public', joinMode: 'open' });
+    await bob.post(`/api/groups/${open.id}/join`).expect(200);
+    await bob.get(`/api/groups/${open.id}/candidates`).expect(403);
+    await carol.get(`/api/groups/${g.id}/candidates`).expect(404);
+  });
+
   it('B-2501: the group label bounds who joins and reads; rooms follow membership (B-2101)', async () => {
     const boss = await memberOf(h, 'boss', [wsA], ['member'], 'confidential');
     const high = await group(boss, { name: 'Restricted plans', visibility: 'public', joinMode: 'open', label: 'confidential' });

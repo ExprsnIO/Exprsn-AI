@@ -30427,6 +30427,67 @@
         }
       }
     },
+    "/api/groups/{id}/candidates": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "Sprint 30, moderators. People the caller may invite: active members of the group's workspace cleared for its label, not members and without a pending request or invitation (at most 50)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "username",
+                      "displayName"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/groups/{id}/members": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -34502,6 +34563,89 @@
                     "userId",
                     "muted"
                   ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/social/people": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "Sprint 30. People who share a workspace with the caller (active, without the caller), optionally matching q in the username or display name: names and shared workspaces only",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "workspaces": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "username",
+                      "displayName",
+                      "workspaces"
+                    ]
+                  }
                 }
               }
             }

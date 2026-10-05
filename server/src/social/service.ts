@@ -502,6 +502,27 @@ export class SocialService {
     return { userId: targetId, blocking, muting, following: blocked ? false : following, followedBy: blocked ? false : followedBy, canMessage: contact.ok };
   }
 
+  /**
+   * The people the caller shares a workspace with now (B-3411: the console's person picker for conversations, blocks,
+   * follows and lists), active, without the caller, optionally matching `q` in the username or display name. Names
+   * and shared workspaces only; whether someone accepts the caller is decided when they act (`mayContact`).
+   */
+  async directory(p: Principal, q: string | undefined, limit: number) {
+    const s = this.s();
+    const needle = (q ?? '').trim().toLowerCase();
+    const by = new Map<string, { userId: string; username: string; displayName: string; workspaces: { id: string; name: string }[] }>();
+    for (const w of await workspacesFor(s, p)) {
+      for (const m of await s.tenants.members(w.id)) {
+        if (m.user_id === p.userId || m.state !== 'active') continue;
+        if (needle && !m.username.toLowerCase().includes(needle) && !(m.display_name ?? '').toLowerCase().includes(needle)) continue;
+        const e = by.get(m.user_id) ?? { userId: m.user_id, username: m.username, displayName: m.display_name, workspaces: [] };
+        e.workspaces.push({ id: w.id, name: w.name });
+        by.set(m.user_id, e);
+      }
+    }
+    return [...by.values()].sort((a, b) => (a.displayName || a.username).localeCompare(b.displayName || b.username)).slice(0, limit);
+  }
+
   // ---------- administration (`social:manage`) ----------
 
   /** A user's relations for a tenant admin (counts, and the people in each), audited as a read of private data. */
