@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const STATE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.state');
+// E2E_STATE_DIR keeps a second hand-started server's state apart (several servers on one checkout, with E2E_URL).
+export const STATE_DIR = process.env.E2E_STATE_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.state');
 export const SERVER_STATE = path.join(STATE_DIR, 'server.json');
 
 export type User = 'root' | 'root2' | 'ops' | 'mladmin' | 'member' | 'enrol';
