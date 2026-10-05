@@ -8,7 +8,8 @@ import type { SessionRow } from '../identity/sessions.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { estimateStrength, passwordRules } from '../identity/passwords.js';
 import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
-import { forbidden, HttpProblem, tooManyRequests, unauthorized } from '../http/problem.js';
+import { conflict, forbidden, HttpProblem, tooManyRequests, unauthorized } from '../http/problem.js';
+import { admitSend, emailCodeTtlMs, maskAddress, requireEmail, sendCode } from '../identity/email-otp.js';
 import type { Services } from '../services.js';
 import { securityAlert } from '../identity/security-alerts.js';
 import { signedOutPage } from './federation-public.js';
@@ -217,6 +218,28 @@ export function authRoutes(s: Services): Router {
     await reserveMfa(req, res);
     if (await s.mfa.useRecoveryCode(req.authSession!.user_id, code)) return completeMfa(req, res, 'recovery code');
     await failMfa(req, res, 'recovery code');
+  });
+
+  // Sprint 28a (B-1806): a one-time code by email. Sending is limited per user (MFA_EMAIL_SENDS_PER_HOUR); a wrong code
+  // counts in the pending session's lockout exactly like a wrong TOTP code.
+  r.post('/mfa/email/send', pending, async (req, res) => {
+    const session = req.authSession as SessionRow;
+    const factor = await s.mfa.emailFactor(session.user_id);
+    if (!factor) throw conflict('This account has no email factor.');
+    requireEmail(s);
+    await admitSend(s, session.user_id);
+    const user = await s.users.get(session.tenant_id, session.user_id);
+    const { code, expiresAt } = await s.mfa.issueEmailCode(session.user_id, factor.id, 'signin', session.id, emailCodeTtlMs(s));
+    await sendCode(s, { address: factor.address, name: user?.display_name ?? '', username: user?.username ?? '' }, code, 'signin');
+    await s.audit.append({ tenantId: session.tenant_id, action: 'auth.mfa.email_sent', kind: 'auth', actor: actorFrom(req.principal, ip(req)), target: { factor: factor.id }, traceId: req.traceId });
+    res.json({ sentTo: maskAddress(factor.address), expiresAt });
+  });
+
+  r.post('/mfa/email', pending, async (req, res) => {
+    const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/), rememberDevice: z.boolean().optional() }), req.body);
+    await reserveMfa(req, res);
+    if (await s.mfa.verifyEmailCode(req.authSession!.user_id, req.authSession!.id, code)) return completeMfa(req, res, 'email code');
+    await failMfa(req, res, 'email code');
   });
 
   r.post('/mfa/webauthn/options', pending, async (req, res) => {
