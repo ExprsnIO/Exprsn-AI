@@ -451,14 +451,16 @@ filter, private `/tmp`, only the state directory writable.
   Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
   retention yet).
 - Event catalogue (1.4.0): an emitted event that does not match its schema is still delivered (counted and logged),
-  so a receiver must still validate what it gets. The `record`, `file`, `group`, `message` and `post` types are
-  reserved, not emitted.
+  so a receiver must still validate what it gets. The `post` types are reserved, not emitted (the `record`, `file`,
+  `group` and `message` types are emitted since their domains shipped).
 - Read-through cache (1.4.0): with Redis, cached values sit in Redis unsealed, so only ids and settings are cached,
   never tenant content (today: each tenant's list of enabled plugins). A Redis failure makes reads go to the database
   (`exprsn_cache_errors_total`); a cached value can outlive a change on an instance that missed the bus message by at
   most its tier's TTL.
-- Realtime rooms (1.4.0): the generic mechanism is in place, but no domain registers an authoriser yet, so every
-  `room.join` is refused until messaging, groups, feeds or channels ship.
+- Realtime rooms (1.4.0): groups (`group`) and messaging (`conversation`) register authorisers; a `room.join` for a
+  kind nobody registered (`feed`, `channel` until they ship) is refused. Client signals into a room (`room.signal`:
+  typing and receipts) are accepted only from a socket in that room, capped per socket (`ROOM_SIGNALS_PER_MINUTE`),
+  and relayed only as the domain decides.
 - Database leases (1.4.0, B-1704): the built-in engines hold an admin login to each target database (sealed, or a
   `vault:` reference read as the user who registered the engine), so whoever can act as that user's vault policy can
   make accounts there; registration needs `connections:manage` and a zone whose ceiling covers the engine. Only
@@ -603,6 +605,30 @@ filter, private `/tmp`, only the state directory writable.
   account's address does not move the factor (remove and enrol again). Codes are six digits, valid for
   `MFA_EMAIL_CODE_MINUTES`, single use, bound to the pending session they were sent for, and their wrong guesses count
   in the same lockout as TOTP codes. Step-up re-authentication does not take email codes yet.
+- Social relations (1.4.0, Sprint 28b, B-2606). Blocks, mutes, follows and lists are stored in the clear (user ids
+  only) and audited under `social.*`, so tenant auditors and `social:manage` holders can see who blocked or follows
+  whom (an admin's view of one user's relations is itself audited). A block is checked when a message, post or socket
+  event is raised: events already relayed before the block are not withdrawn, and a socket already in a room keeps
+  receiving other people's events there (only the blocked pair's events to each other are left out). The contact rule
+  applies when a conversation is started or a person added; a conversation that already exists keeps working until
+  one of the two blocks the other.
+- Messaging (1.4.0, Sprint 28b, B-26). Messages and conversation titles are sealed with the tenant key (the row id as
+  associated data); there is no end-to-end encryption, by design, so the server (and so a tenant's operators with the
+  key) can read them, which is what lets search, summaries and moderation work. The keyword index holds keyed hashes
+  of words (as knowledge does), which reveal which messages share a word to someone with database access but not the
+  word; vectors for semantic search (`MESSAGING_EMBED_MODEL`) are stored unsealed in the vector store, like knowledge
+  vectors, and are approximately invertible. A deleted message keeps its row as a tombstone (author, times, edit count)
+  and loses its body, attachments list, terms, vector and reactions; earlier sealed bodies of an edited message are
+  overwritten, not kept, and backups taken before the delete still hold them until they expire. Attachments are file
+  ids from the file store: a file must have passed its scan and lie in a workspace every member can read it through,
+  but trashing, re-labelling or taking down the file later is the file store's business (the message shows its state).
+  Direct conversations have no workspace: they need the two people to share one now, so losing that common workspace
+  hides the conversation from both. A member added to a group conversation reads from the moment they were added.
+  Receipts, typing and presence are not audited (they are not changes to content); presence is the time a socket last
+  joined or left the room, not a live status, and reflects only sockets in that conversation's room. Summaries and
+  digests send the visible messages (up to `MESSAGING_SUMMARY_MAX_MESSAGES`, each cut to 2,000 characters) to the
+  profile's model through the gateway and meter it like workflow model calls; they run in the request, not as a job.
+  Notifications name the sender (and that it was a group conversation), never the text or the title.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off

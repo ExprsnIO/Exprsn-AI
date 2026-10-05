@@ -12,7 +12,9 @@ const FILE_TABLES = ['file_shares', 'file_tags', 'file_previews', 'file_versions
 const GROUP_TABLES = ['calendar_feeds', 'group_event_reminders', 'group_event_rsvps', 'group_events', 'group_posts', 'group_requests', 'group_members', 'social_groups'] as const;
 // Sprint 28a (B-23): customer-service channels and their sealed transcripts.
 const CHANNEL_TABLES = ['channel_bounces', 'channel_outbox', 'channel_threads', 'channel_imap_cursors', 'channel_messages', 'channel_sessions', 'channels'] as const;
-const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...CHANNEL_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
+// Sprint 28b: messaging (bodies and titles sealed) and social relations (blocks, mutes, follows, lists, contact rules).
+const SOCIAL_TABLES = ['dm_terms', 'dm_reactions', 'dm_messages', 'dm_members', 'dm_conversations', 'social_list_members', 'social_lists', 'social_settings', 'social_follows', 'social_mutes', 'social_blocks'] as const;
+const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...CHANNEL_TABLES, ...SOCIAL_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
 const BLOB_PREFIXES = ['exports', 'attachments', 'quarantine', 'knowledge', 'knowledge-quarantine', 'memory-exports', 'files'] as const;
 
 /**

@@ -98,7 +98,7 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
   });
 
   // 1.4.0 (B-2101): the generic domain rooms, decided by the server like shared watches.
-  const domainRooms = attachRooms(io as unknown as Parameters<typeof attachRooms>[0], s.rooms, s.bus, rooms.user, s.log);
+  const domainRooms = attachRooms(io as unknown as Parameters<typeof attachRooms>[0], s.rooms, s.bus, rooms.user, s.log, { signalsPerMinute: s.cfg.ROOM_SIGNALS_PER_MINUTE });
 
   io.on('connection', (socket: Socket) => {
     const d = socket.data as SocketData;
