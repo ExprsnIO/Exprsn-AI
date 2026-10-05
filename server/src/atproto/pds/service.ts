@@ -747,6 +747,7 @@ export class PdsService {
   async activate(by: PdsActor, a: PdsAccountRow): Promise<PdsAccountRow> {
     if (a.state === 'takendown') throw new XrpcError(400, 'AccountTakedown', 'Account has been taken down');
     if (a.state === 'active') return a;
+    if (!(await this.hosting(a.tenant_id))?.enabled) throw new XrpcError(400, 'InvalidRequest', 'This tenant no longer hosts AT-Protocol accounts.');
     if (a.migrating) await this.migration.assertReady(a);
     const after = await this.setState(by, a, 'active', { from: ['deactivated'] });
     if (!after) throw new XrpcError(409, 'Conflict', 'The account changed meanwhile; try again.');
