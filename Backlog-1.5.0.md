@@ -8,7 +8,7 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 37 items, 214 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 37, P2 60. At about
+**Size.** 40 items, 227 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 50, P2 60. At about
 78 points a sprint (roughly five engineers) that is Sprints 29 to 31. With fewer, P2 (the PDS and feed generator)
 moves to 1.6 first, then WebDAV (B-32).
 
@@ -23,7 +23,7 @@ the same policy pipeline.
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | Planned |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203 | 73 | `032_dav` | Planned |
+| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703 | 86 | `032_dav` | Planned |
 | 31 | AT-Protocol PDS and feed generator, release | B-2901–B-2906, B-3001–B-3004, B-3406, B-3501 | 65 | `033_pds_feeds` | Planned |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
@@ -100,6 +100,18 @@ CalDAV had broken filter operators: B-3104 states the fixed behaviour as its tes
 | B-3201 | B-24 folders and files as WebDAV collections; `PUT` through the attachment quarantine, type check and ClamAV; versions kept | An upload over WebDAV is scanned before it can be read | 5 |
 | B-3202 | `COPY` and `MOVE` for files and folders (the platform returned 501), `LOCK` and `UNLOCK` (class 2) for Finder and Office | Moving a folder over WebDAV keeps its versions and shares | 5 |
 | B-3203 | Quota properties (RFC 4331), shares honoured, the `litmus` suite in CI | `litmus` passes its basic, copymove and locks groups | 3 |
+
+### B-37 Model-based memory management (13 points)
+
+Today memory proposals come from rules over a chat turn (`extractProposals`) and the only model memory uses is the
+embedding model, chosen as the first approved one by name. This adds a model where judgement helps, always as
+proposals a person accepts, with the rules kept as the fallback.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3701 | A tenant `memory` profile that extracts proposals from chat turns and agent runs; the rules run when no profile is set or the model fails; proposals still pass the `memory` checkpoint, the credential ban and the rejection list | A model error still yields the rules' proposals, and a rejected text is never proposed again | 5 |
+| B-3702 | A consolidation job: near-duplicates found by embedding similarity and confirmed by the profile become one merge proposal; stale or contradicted memories get an expiry proposal; nothing changes until accepted | Two near-duplicate memories produce one merge proposal and both stay unchanged until it is accepted | 5 |
+| B-3703 | The memory embedding model as a tenant setting (instead of the first approved embedding model by name), with a reindex job and recall by recency while it runs | Switching the model reindexes every memory and recall keeps answering during the reindex | 3 |
 
 ## P2
 
