@@ -2,7 +2,8 @@
  * The server the end-to-end suite drives: the real application (services, routes, Socket.io, job workers, the
  * gateway poller and the static console from web/) on a temporary SQLite file, with the test fakes from server/test
  * standing in for Ollama, the MCP server, the script sandbox, ffmpeg, the image workers, the safety classifier, the
- * GPU trainer and the ACME directory. Nothing here changes server code; it only wires what the unit tests use.
+ * GPU trainer and the ACME directory; an in-process signer holds the keys. Nothing here changes server code; it only
+ * wires what the unit tests use.
  *
  *   npx tsx e2e/server.ts [--port 0] [--state e2e/.state/server.json]
  *
@@ -34,6 +35,7 @@ import { FakeRunner } from '../server/test/fake-runner.js';
 import { FakeImageBackend, FakeMediaRunner, FakeSafety } from '../server/test/sprint8-fakes.js';
 import { FakeTrainer } from '../server/test/fake-trainer.js';
 import { startFakeAcme } from '../server/test/fake-acme.js';
+import { startSigner } from '../server/src/signer/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const { values: opt } = parseArgs({ options: { port: { type: 'string', default: process.env.E2E_PORT ?? '0' }, state: { type: 'string', default: path.join(here, '.state', 'server.json') } } });
@@ -64,6 +66,10 @@ async function main() {
     { name: 'lookup_invoice', description: 'Looks up an invoice by number.', inputSchema: { type: 'object', properties: { number: { type: 'string' } }, required: ['number'] }, annotations: { readOnlyHint: true }, run: (a) => ({ invoice: a.number, total: 1200 }) },
     { name: 'send_reminder', description: 'Sends a payment reminder.', inputSchema: { type: 'object', properties: { to: { type: 'string' } } }, annotations: { destructiveHint: true }, run: () => ({ sent: true }) }
   ];
+  // The signer process (Sprint 20) in-process: it holds the key-encryption key and the certificate authority's issuer
+  // keys, so the Certificates screen can create issuers and issue (without it key-making routes answer 409 custody).
+  const signerToken = randomBytes(24).toString('base64url') + 'e2e-signer';
+  const signer = await startSigner({ socketPath: path.join(dir, 'signer', 's.sock'), key: randomBytes(32).toString('base64'), token: signerToken });
   let baseUrl = url;
   const acme = await startFakeAcme(async (_domain, token) => {
     const r = await fetch(`${baseUrl}/.well-known/acme-challenge/${token}`);
@@ -81,7 +87,8 @@ async function main() {
     DB_CLIENT: 'sqlite',
     SQLITE_FILENAME: path.join(dir, 'exprsn.sqlite'),
     SESSION_SECRET: randomBytes(32).toString('hex'),
-    DATA_KEY: randomBytes(32).toString('base64'),
+    SIGNER_SOCKET: signer.socketPath,
+    SIGNER_TOKEN: signerToken,
     BLOB_DIR: path.join(dir, 'blobs'),
     MEDIA_WORK_DIR: path.join(dir, 'media'),
     PLATFORM_DRILL_DIR: path.join(dir, 'drills'),
@@ -220,6 +227,7 @@ async function main() {
       await ollama.stop();
       await mcp.stop();
       await acme.close();
+      await signer.close();
     } catch {
       /* best effort */
     }
