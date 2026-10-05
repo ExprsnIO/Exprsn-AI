@@ -560,6 +560,36 @@ filter, private `/tmp`, only the state directory writable.
   restricts OAuth app access hides its membership until the app is approved there. Step-up re-authentication through
   GitHub is not offered (GitHub has no `prompt=login`); GitHub accounts step up with a second factor. CSV imports create accounts with a
   password nobody knows: the users need an invitation link (`sendInvites`) or a reset by an admin.
+- Low-code apps (1.4.0, Sprint 27, B-22). Records are sealed with the tenant key (the record id as associated data),
+  but sealed values cannot be filtered in SQL, so the design is deliberate: a designer marks the fields that may be
+  filtered, sorted, searched and aggregated `indexed`, and those values (lower-cased text, numbers, dates as epoch
+  milliseconds, booleans) are also stored **in clear** in `app_record_values`, readable by anyone with database
+  access. Mark only fields that are not sensitive; everything else (notes, JSON, unindexed text, AI fields unless
+  marked) stays only in the sealed record. A `unique` field stores an unkeyed SHA-256 of the entity, field and
+  normalised value in `app_unique_values`; a low-entropy value (a small number, a common word) can be guessed from
+  it by someone with database access. Indexed text is compared lower-cased after Unicode NFC, byte-wise (no accent
+  folding, no locale collation: `é` sorts after `z`), and is at most 255 characters, so an indexed text field has a
+  `maxLength` of at most 255; uniqueness is case-insensitive. Filters cover a tested subset (`eq`, `ne`, `gt`, `gte`,
+  `lt`, `lte`, `in`, `contains`, `startsWith`, `exists`, with `and`, `or`, `not`); there is no PostgreSQL-only fast
+  path. Offset pagination stops at 100,000. An existing field cannot become unique while the entity has records, and
+  a field's type cannot change then. Formulas are parsed and walked (no `eval`), read only the entity's own non-computed
+  fields, and give null on any error; they are computed on write (and by the reindex job), so `today()` and `now()`
+  are the time of the last write. AI fields are filled by a job after the write, fail soft (an error leaves the field
+  empty, recorded in `aiError` and audited) and are cleared when their inputs change until the job fills them again; a
+  record written by a public form is filled with no person behind it (only the profile's label is checked). Public
+  forms take only listed, visible fields, never files, references or user, workspace or record lookups, are limited per
+  address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form, and screen every text value at `user-input`; a held value is
+  refused rather than held for review. A form's link token is shown once and stored as an HMAC with `SESSION_SECRET`,
+  so rotating that secret ends every public form link. Triggers run as their owner with what the owner holds when they
+  fire; chains stop at `APPS_TRIGGER_MAX_DEPTH`, and a workflow's own record steps never fire its own triggers, but two
+  workflows that update each other's entities stop only at that depth. A trigger's run input holds the record's values,
+  sealed in the run like any workflow input. App bundles are signed with an HMAC key in the KMS
+  (`<OPENBAO_KEY_PREFIX>app-bundles`), so they verify only on installations that share that key (the same `DATA_KEY`
+  or OpenBao transit key); bundles between unrelated installations would need the offline-signed import bundles
+  (B-2005), which do not carry apps yet. Bundles carry the design only (no records, triggers or form links). CSV
+  exports are sealed in the blob store until downloaded by the person who asked, and are not deleted afterwards; the
+  CSV of an import is dropped from its row once the job has run. A CSV import travels in the JSON body, so it is at
+  most `APPS_IMPORT_MAX_BYTES` (200 kB by default, under the API's 256 kB limit).
 - Gateway slots: a chat turn's own requests (embeddings, guard-model verdicts on the streamed text and on tool results,
   tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
   receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and

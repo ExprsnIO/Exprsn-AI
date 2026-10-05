@@ -167,7 +167,7 @@ describe('Sprint 26: moderation actions and appeals', () => {
     await alice.post('/api/moderation/check', { type: 'message', id: m.messageId }).expect(403);
     const hidden = await message(ids.bob, 'SPAMLINK', other);
     await flagReviewer.agent.get('/api/moderation/types').expect(403);
-    expect((await alice.get('/api/moderation/types').expect(200)).body.items.map((x: { type: string }) => x.type)).toEqual(['conversation', 'file', 'image', 'knowledge-document', 'media-asset', 'message']);
+    expect((await alice.get('/api/moderation/types').expect(200)).body.items.map((x: { type: string }) => x.type)).toEqual(['conversation', 'file', 'image', 'knowledge-document', 'media-asset', 'message', 'record']); // records since Sprint 27 (B-22)
     const r2 = await localUser(h, 'checker', ['guardrail-admin'], 'internal');
     void r2;
     const checker = wrap(await loginAdmin(h, 'checker'));

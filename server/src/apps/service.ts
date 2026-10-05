@@ -995,12 +995,12 @@ export class AppService {
     const fields = entity.definition.fields;
     const lines = [['id', 'state', 'label', 'createdAt', 'updatedAt', ...fields.map((f) => f.name)].map(csvCell).join(',')];
     let offset = 0;
-    let labels: Label[] = [];
+    let label: Label = entity.label;
     for (;;) {
       const page = await this.query(p, app.id, entity.id, { ...(input.filter ? { filter: input.filter } : {}), ...(input.q ? { q: input.q } : {}), sort: input.sort ?? [], limit: 500, offset });
       for (const r of page.records) {
         lines.push([r.id, r.state, r.label, new Date(r.createdAt).toISOString(), new Date(r.updatedAt).toISOString(), ...fields.map((f) => r.values[f.name])].map(csvCell).join(','));
-        labels.push(r.label);
+        label = highest(label, r.label);
       }
       offset += page.records.length;
       await ctx.progress(page.total ? Math.min(99, Math.round((offset * 100) / page.total)) : 99, `${offset} of ${page.total} records`);
@@ -1010,8 +1010,6 @@ export class AppService {
         return { error: 'too many' };
       }
     }
-    const label = highest(entity.label, ...labels);
-    labels = [];
     const body = Buffer.from(`${lines.join('\r\n')}\r\n`, 'utf8');
     const key = `apps/${tenantId}/exports/${transferId}.csv.sealed`;
     await s.blobs.put(key, Buffer.from(await s.keys.sealBytes(tenantId, body, transferAad(transferId)), 'utf8'), 'application/octet-stream');
