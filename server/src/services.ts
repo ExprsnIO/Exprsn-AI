@@ -100,6 +100,7 @@ import { FileService } from './files/service.js';
 import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
 import { ModerationService } from './moderation/service.js';
 import { FirehoseService } from './atproto/firehose.js';
+import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 
 export interface Services {
@@ -228,6 +229,8 @@ export interface Services {
   userImports: UserImportService;
   /** 1.4.0, Sprint 27 (B-1908): AT-Protocol firehose subscriptions and their single-instance consumers. */
   firehose: FirehoseService;
+  /** 1.4.0, Sprint 27 (B-2201 to B-2208): low-code apps: entities, sealed records, forms, triggers, AI fields, bundles. */
+  apps: AppService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -469,6 +472,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     userImports: new UserImportService(() => s),
     // 1.4.0, Sprint 27: the firehose.
     firehose: new FirehoseService(() => s, { tickMs: cfg.FIREHOSE_TICK_MS, checkpointMs: cfg.FIREHOSE_CHECKPOINT_MS, queueMax: cfg.FIREHOSE_QUEUE_MAX, backoffMaxMs: cfg.FIREHOSE_BACKOFF_MAX_MS, idleMs: cfg.FIREHOSE_IDLE_MS, maxPerTenant: cfg.FIREHOSE_MAX_PER_TENANT }),
+    apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -557,6 +561,24 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       restore: (o) => s.files.undoTakeDown(o.tenantId, o.id, MODERATION)
     });
   }
+  // Sprint 27 (B-2201 to B-2208): AI fills, reindexing, CSV imports and exports, triggers; workflows' record steps;
+  // records as moderation objects (a takedown hides the record from every list and read; an upheld appeal shows it).
+  s.apps.registerJobs();
+  s.workflows.useRecords(s.apps.triggers);
+  if (!s.moderation.registry.get('record')) {
+    s.moderation.registry.register({
+      type: 'record',
+      description: 'A record of a low-code app (a taken-down record is hidden from every list and read)',
+      resolve: async (tenantId, id) => {
+        const r = await s.apps.moderationTarget(tenantId, id);
+        return r ? { type: 'record', id: r.id, tenantId, workspaceId: r.workspaceId, label: r.label, ownerId: r.ownerId, state: r.hidden ? 'hidden' : 'visible' } : null;
+      },
+      canRead: async (p, o, workspaces) => clears(p.clearance, o.label) && effectivePermissions(p).has('records:read') && (!o.workspaceId || workspaces.includes(o.workspaceId)),
+      text: (o) => s.apps.moderationText(o.tenantId, o.id),
+      hide: async (o) => (o.state === 'hidden' || !(await s.apps.setHidden(o.tenantId, o.id, true)) ? null : 'visible'),
+      restore: (o) => s.apps.setHidden(o.tenantId, o.id, false)
+    });
+  }
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -615,4 +637,5 @@ export function startSchedules(s: Services): void {
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
+  s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
 }

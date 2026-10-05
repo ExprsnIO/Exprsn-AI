@@ -62,6 +62,8 @@ import { eventRoutes } from '../routes/events.js';
 import { pluginAdminRoutes } from '../routes/admin/plugins.js';
 import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
 import { fileRoutes, publicFileRoutes } from '../routes/files.js';
+import { appRoutes } from '../routes/apps.js';
+import { publicAppRoutes } from '../routes/apps-public.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -232,6 +234,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(fileRoutes(s));
   // Sprint 26 (B-1901 to B-1907): moderation checks, reports, actions, appeals, sanctions, queues and providers.
   api.use(moderationRoutes(s));
+  // 1.4.0, Sprint 27: low-code apps (B-2201 to B-2208)
+  api.use(appRoutes(s));
   // Sprint 26a (B-1801 to B-1803, B-1805): invitations, trusted devices, signup and MFA policies, CSV imports.
   api.use(identityPolicyRoutes(s));
   // Sprint 27 (B-1908): AT-Protocol firehose subscriptions.
@@ -242,6 +246,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
   // Sprint 26d (B-2402): anonymous file links, on the same rules.
   app.use('/api/public', publicFileRoutes(s));
+  app.use('/api/public', publicAppRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 

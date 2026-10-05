@@ -62,7 +62,7 @@ describe('event catalogue (B-2001)', () => {
     expect(res.body.version).toBeGreaterThanOrEqual(2);
     expect(res.body.groups.map((g: { pattern: string }) => g.pattern)).toEqual(expect.arrayContaining(['record.*', 'file.*', 'group.*', 'message.*', 'post.*', 'plugin.*', 'flag.*', 'job.*']));
     const rec = res.body.types.find((t: { type: string }) => t.type === 'record.created');
-    expect(rec).toMatchObject({ group: 'record.*', version: 1, status: 'reserved', since: '1.4.0' });
+    expect(rec).toMatchObject({ group: 'record.*', version: 1, status: 'emitted', since: '1.4.0' }); // emitted since Sprint 27 (B-22)
     expect(rec.schema.required).toContain('record');
     expect(res.body.types.find((t: { type: string }) => t.type === 'job.failed')).toMatchObject({ status: 'emitted' });
     expect(res.body.auditActions.schema.required).toEqual(expect.arrayContaining(['action', 'seq', 'hash']));

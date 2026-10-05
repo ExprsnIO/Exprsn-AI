@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased (1.4.0)
+## 1.4.0 (in progress)
 
-### Added
+### AT-Protocol firehose ingest (Sprint 27, B-1908)
 
 - AT-Protocol firehose ingest (B-1908, Sprint 27): per-tenant subscriptions to a Jetstream or a relay's
   `com.atproto.sync.subscribeRepos` under `/api/atproto/firehose` (new permission `firehose:manage`, held by tenant and
@@ -11,6 +11,29 @@
   one worker instance through a lease, stores its cursor periodically and at shutdown and resumes from it after a
   restart, pauses its socket when its queue is full, and reconnects with backoff. Migration `029b_firehose`; settings
   `FIREHOSE_*`; metrics `exprsn_firehose_*`; audit actions `atproto.firehose.*`.
+
+### Low-code data apps (Sprint 27, B-2201 to B-2208)
+
+- Apps per tenant or workspace with entities of typed fields (string, number, boolean, date, enum, reference, lookup,
+  file, JSON, formula, AI), validation and uniqueness; a duplicate unique value is refused on SQLite, PostgreSQL and
+  MySQL (`server/test/integration/apps.test.ts`). New permissions `apps:design` (workflow and tenant admins),
+  `records:read` and `records:write` (members and tenant admins). Migration `029_apps`.
+- Records sealed with the tenant key, with CRUD, filters, sorts, search, pagination, aggregation, all-or-nothing bulk
+  writes, and CSV import and export as jobs. Fields a designer marks `indexed` are also kept in a normalised clear
+  index, so the same filter returns the same rows in the same order on all three databases; the choice and what it
+  exposes are in `docs/security.md`.
+- Lookups (static, entity, user, workspace) and formula fields from a parser that walks a tree (no `eval`, no
+  property access, a fixed list of functions), so a formula cannot reach a global.
+- A state machine per entity: illegal transitions are refused, transitions are audited and emitted as
+  `record.transitioned`. The `record.*` events are now emitted (catalogue version 3).
+- Forms with conditional fields; public forms (a link token, at `/api/public/forms`) keep only the fields they list
+  and show, are rate-limited per address and per form, and pass the `user-input` guardrail.
+- Record-event and schedule triggers start published workflows as their owner, and workflows have a `record` step that
+  creates, updates or moves records; chains stop at `APPS_TRIGGER_MAX_DEPTH`.
+- AI fields filled from a profile prompt by a job, failing soft (a model error leaves the field empty and the record
+  saved), and natural-language drafts of entities and workflows from a local model, validated and never saved.
+- Apps export and import as bundles signed with a KMS HMAC key; a tampered bundle is refused. Records are moderation
+  objects.
 
 ## Unreleased
 
