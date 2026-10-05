@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-05T19:43:50.787Z",
+  "answers": {
+    "Q12": {
+      "choice": "s35",
+      "answer": "Sprint 35, the first of 1.6.0",
+      "note": "",
+      "at": "2026-10-05T19:37:09.304Z"
+    },
+    "Q11": {
+      "choice": "tenants",
+      "answer": "Add Create from template to the Tenants screen",
+      "note": "",
+      "at": "2026-10-05T19:40:47.855Z"
+    },
+    "Q8": {
+      "choice": "other",
+      "answer": "other",
+      "note": "",
+      "at": "2026-10-05T19:42:33.483Z"
+    },
+    "Q7": {
+      "choice": "other",
+      "answer": "other",
+      "note": "",
+      "at": "2026-10-05T19:43:50.787Z"
+    }
+  }
+}
