@@ -8,13 +8,13 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 77 items, 419 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 count in 1.6.0): P0 132, P1 227, P2 60.
+**Size.** 71 items, 387 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 count in 1.6.0): P0 134, P1 193, P2 60.
 At about 78 points a sprint (roughly five engineers) that is Sprints 29 to 34. Groomed by the owner on 2026-10-05 with
 `design/grooming/groom.mjs` (state in `design/grooming/grooming.json`, summary in `design/grooming/GROOMING.md`):
 WebDAV (B-32) moved to Sprint 34, the import wizard split between Sprints 31 and 33, Sprint 31 accepted at 93 points,
 the platform administration live screens (B-4202 to B-4207) moved to 1.6.0, and four 1.4.0 gaps, MongoDB connections,
-user profiles and presence added (B-58). Model servers beyond Ollama (B-43, 34 points) were approved after the
-grooming and are not yet placed. Sprint 33 (chat invocation, B-40, and the import wizard's dataset half, B-3804 to
+user profiles and presence added (B-58). Model servers beyond Ollama (B-43, 34 points), approved after the grooming,
+went to 1.6.0's Sprint 35. Sprint 33 (chat invocation, B-40, and the import wizard's dataset half, B-3804 to
 B-3807) moved to 1.7.0 on 2026-10-05. With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
@@ -32,8 +32,7 @@ the same policy pipeline.
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `032b_imports`, `033_pds_feeds` | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
 | 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
-| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3501 | 64 | `036_chains`, `036b_profiles` | Planned |
-| — | Model servers beyond Ollama (B-43): approved 2026-10-05 after the grooming and not yet placed: a Sprint 35 before the release (B-3501 moves with it) or the first sprint of 1.6 | B-4301–B-4307 | 34 | `037_model_servers` | Unscheduled |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3606, B-3501 | 66 | `036_chains`, `036b_profiles` | Planned |
 
 The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
 
@@ -45,8 +44,7 @@ covers the PDS and feeds; Workflows 2's agent step and skill loading (B-3902) an
 before agents, tools and skills in chat (B-40, 1.7.0), which reuse them; the chain context (B-4101) with Workflows 2, so
 sub-workflows (B-3901) and agent steps (B-3902) are chained from the start, and before the rest of chaining (B-4102 to
 B-4109); the repository registry (B-3801) before any import (model import here; dataset import and the Import screen,
-B-3804 to B-3807, in 1.7.0); the gateway interface (B-4301) before any `openai`
-instance (B-4302), and both before the Models screen changes (B-4307).
+B-3804 to B-3807, in 1.7.0).
 
 ---
 
@@ -90,7 +88,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
 | B-3415 | Settings: app passwords for DAV clients (DAV-only scope, device names, last use, revoke; creating one needs a fresh MFA step-up, per the decision below) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
 
-### B-36 Carried over from 1.4.0 (18 points)
+### B-36 Carried over from 1.4.0 (20 points)
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
@@ -99,6 +97,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3603 | RSVP capacity race (B-2502 known gap): a conditional update or row lock on the remaining places (Sprint 31) | Fifty concurrent RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL | 2 |
 | B-3604 | Verify relay commit signatures on the firehose (B-1908 known gap) against the repo's DID key; bad commits dropped and audited, as inbound labels are (Sprint 31) | A commit with a bad signature is dropped and audited; a good one becomes a label as before | 5 |
 | B-3605 | The IMAP channel adapter (B-2303) against a containerised IMAP server in CI instead of a mocked fetcher (Sprint 34) | A message delivered to the test mailbox becomes a channel thread in CI | 3 |
+| B-3606 | Capture real DAV client traffic (B-3104 is partial): record Apple Calendar and Contacts, Thunderbird and DAVx5 against a test server and replace the written fixtures with the captured exchanges, replayed in CI (Sprint 34) | Every filter operator in the captured run returns the expected items | 2 |
 
 ## P1
 
@@ -231,36 +230,6 @@ every link: the principal never changes (a chain acts as the person or service t
 | B-4108 | Prototype boards: the chain tree in Runs (linked from workflow runs; chat's run cards link to it in 1.7.0), the registry editor's delegates, skill dependencies and workflows fields, and the "used by" view; the smoke run clean | The boards pass the prototype smoke run in light and dark | 3 |
 | B-4109 | Console: the live chain tree and registry fields from B-4108, joining the Playwright suite with axe-core and the reflow checks | A three-level chain opens as a tree from its run in Runs with no axe or reflow finding | 5 |
 
-### B-43 Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (34 points)
-
-Added 2026-10-05 at the owner's request, approved for a later sprint. Only the gateway talks to a model server, and
-today that server is Ollama: an instance is an Ollama URL, the catalogue is keyed by Ollama tags, placements load and
-unload through `/api/ps`, and import pulls a blob whose digest is pinned. macOS 27 ships Apple's on-device Foundation
-Model with a `fm serve` command that speaks the Chat Completions API (`/v1/chat/completions`, `/v1/models`, `/health`)
-on a port or a Unix socket, and the same API is what MLX (`mlx_lm.server`), llama.cpp (`llama-server`) and vLLM
-offer. This epic gives an instance a `kind` (`ollama`, the default, or `openai`), so a Chat Completions server joins
-a pool like an Ollama node, with the parts Ollama does for free (tags, show, load, unload, pull, embeddings, digests)
-either mapped onto what the server offers or marked as not available on that instance, and nothing else in the
-server, the guardrails, metering, profiles or the OpenAI-compatible API the server itself exposes changes. Apple's
-Private Cloud Compute model (`pcc`) is out of scope: `fm` refuses it outside Apple's own clients, and it would leave
-the tenant's network. Models on these servers follow the same catalogue rules: a recorded licence, a conformance run,
-dual-control approval, a label ceiling; the digest check is replaced by the server's reported model id and, where the
-server exposes it, the file's hash.
-
-| ID | Item | Done when | Pts |
-| --- | --- | --- | --- |
-| B-4301 | The gateway client behind an interface: `ModelServer` with `version`, `models`, `loaded`, `show`, `load`, `unload`, `chat` (streaming, tools, thinking where supported) and `embed`; `OllamaClient` implements it unchanged; each method reports `unsupported` for what a server cannot do, and the gateway, placements and the catalogue treat `unsupported` as "skip", never as an error | The suite passes with `OllamaClient` behind the interface and no gateway test changed | 5 |
-| B-4302 | `kind: openai` instances: `instances.kind` (`ollama` default, migration `037_model_servers`), a URL or a Unix socket path, an optional bearer token in the vault, the same mTLS and egress policy; health from `GET /health` or `GET /v1/models`; `/v1/models` lists the server's models as catalogue candidates; load and unload are no-ops recorded as `unsupported`; the instance's settings carry what the server reports (context length, whether tools and JSON schema output work) | An `fm serve` socket and a `llama-server` port register as instances, show healthy, and list their models in the catalogue's import picker | 8 |
-| B-4303 | Chat Completions mapped onto the gateway's chat: messages, system prompt, tools and tool calls, streaming deltas, `response_format` JSON schema, stop, temperature, max tokens and usage; Ollama-only options (`num_ctx`, `keep_alive`, `think`) dropped with a recorded note; the server-side tool loop, guardrail checkpoints, labels and metering unchanged | A conversation on a profile backed by Apple's on-device model streams, calls a read-only tool and is metered like an Ollama turn; the fake server in `server/test/fake-openai-server.ts` covers the suite | 8 |
-| B-4304 | Catalogue entries without a pull: a model on a `kind: openai` instance is registered from `/v1/models` with `source` the instance and model id, `format` `server`, no `expected_digest` (the licence, evaluation and dual-control approval still apply); the conformance run executes on that instance; placements on such a pool are `warm` only; retiring the entry does not delete anything on the server | Apple's on-device model is approved, evaluated and placed with the same audit events as an Ollama model, and a second approval attempt by its requester is refused | 5 |
-| B-4305 | Embeddings and guard models: an `openai` instance that offers `/v1/embeddings` serves embedding models; otherwise the pool's profile for memory, knowledge and the guard falls back to an Ollama pool in the same zone, chosen as the fallback profile is today | A knowledge base whose chat profile is on Apple's model still embeds on `qwen3-embedding:0.6b` and the guard still runs, with no change to the knowledge or guardrail code | 3 |
-| B-4306 | Operator docs and a reference layout: `docs/deploy.md` on running `fm serve --socket` under launchd beside Ollama on an Apple silicon node, `mlx_lm.server` and `llama-server` as alternatives, the pool as `accelerator: metal`; `docs/security.md` on what the digest check cannot cover for server-held models; `docs/api.md` and `docs/openapi.json` for the instance's new fields | A fresh macOS 27 node follows the doc to a healthy `openai` instance with Apple's model approved and answering in chat | 2 |
-| B-4307 | Console: the Models screen's instance form gets the kind, the socket path and the token; the catalogue's import picker lists server-held models; the model card shows "held by the server, no digest" and the capabilities the server reported; the prototype board and the live screen, in the Playwright suite with axe-core and the reflow checks | Registering an `openai` instance and approving one of its models works end to end in the e2e suite with no axe or reflow finding | 3 |
-
-Not in this epic: converting Apple's open-weight models (OpenELM, DCLM) to GGUF for Ollama, which the import wizard's
-GGUF conversion (B-3803) already covers; Private Cloud Compute; MLX or llama.cpp as managed runtimes the server
-starts and stops (they are external instances here, as Ollama is).
-
 ### B-58 Profiles and presence (11 points)
 
 Added at grooming (2026-10-05): exprsn-platform's users had avatars, bios and a status; Exprsn-AI users have a display
@@ -345,10 +314,14 @@ All six resolved by the owner on 2026-10-05.
   the live screens open 1.6.0 in Sprint 35; icons are added when the screens go live; instances drain from the
   console with a confirm and a recent sign-in; alerts are acknowledged tenant-wide; blob store migration is designed
   as proposed. Logs wait for 1.7 and live streaming is dropped.
-- [ ] Model servers beyond Ollama (B-43): which sprint. A Sprint 35 inside 1.5.0 (the release B-3501 moves from
-  Sprint 34 to 35) or the first sprint of 1.6; and whether Apple's on-device model is also offered as a `classify`
-  fallback beside TEV on Apple silicon nodes.
-
+- [x] Model servers beyond Ollama (B-43): 1.6.0's first sprint, Sprint 35 (decided 2026-10-05); whether Apple's
+  on-device model is also a `classify` fallback beside TEV stays open in [Backlog-1.6.0.md](Backlog-1.6.0.md).
+- [x] Model import screen (B-3803): none in 1.5.0; model import is reached through the API until the Import screen
+  (B-3807) in 1.7.0 (decided 2026-10-05).
+- [x] DAV conformance (B-3104): partial, because the fixtures were written from the clients' documented requests;
+  real traffic from Apple Calendar and Contacts, Thunderbird and DAVx5 is captured later (B-3606, decided 2026-10-05).
+- [x] CardDAV directory (B-3103): people who share a workspace with the caller, within the caller's clearance, as
+  messaging and groups scope people; a workspace open to the whole tenant includes everyone (decided 2026-10-05).
 ## Risks
 
 | Risk | Effect | Mitigation |

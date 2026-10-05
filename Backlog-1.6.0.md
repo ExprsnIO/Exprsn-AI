@@ -9,7 +9,7 @@ extras, capability tokens, quote posts) and closes two 1.4.0 known gaps. Rules a
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 20 items, 103 points (1 point ≈ half a day for one engineer, tests included): P1 61, P2 42. At about 78
+**Size.** 27 items, 137 points (1 point ≈ half a day for one engineer, tests included): P1 95, P2 42. At about 78
 points a sprint that is under two sprints of work spread over three, leaving room for what 1.5.0 carries over (Sprint
 31 was accepted at 93 points) and for new requests.
 
@@ -21,17 +21,48 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
-| 35 | Platform administration live screens; tenant provisioning templates | B-4202–B-4207, B-4501 | 42 | Planned |
+| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | Planned |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies | B-4401–B-4405, B-4601, B-4701, B-4803 | 40 | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release | B-4901, B-5001, B-4801, B-4802, B-5101 | 21 | Planned |
 
 The order follows the dependencies: the Storage screen (B-4204) before blob deduplication shows its savings (B-4601);
 the Social and messaging screen (B-4206) before group categories are managed from it (B-4405); vault anomaly detection
-(B-4803) before secret sharing widens who reads a secret (B-4801).
+(B-4803) before secret sharing widens who reads a secret (B-4801); the gateway interface (B-4301) before any `openai`
+instance (B-4302), and both before the Models screen changes (B-4307).
 
 ---
 
 ## P1
+
+### B-43 Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (34 points)
+
+Added 2026-10-05 at the owner's request; placed in 1.6.0's first sprint (Sprint 35) by the owner the same day. Only the gateway talks to a model server, and
+today that server is Ollama: an instance is an Ollama URL, the catalogue is keyed by Ollama tags, placements load and
+unload through `/api/ps`, and import pulls a blob whose digest is pinned. macOS 27 ships Apple's on-device Foundation
+Model with a `fm serve` command that speaks the Chat Completions API (`/v1/chat/completions`, `/v1/models`, `/health`)
+on a port or a Unix socket, and the same API is what MLX (`mlx_lm.server`), llama.cpp (`llama-server`) and vLLM
+offer. This epic gives an instance a `kind` (`ollama`, the default, or `openai`), so a Chat Completions server joins
+a pool like an Ollama node, with the parts Ollama does for free (tags, show, load, unload, pull, embeddings, digests)
+either mapped onto what the server offers or marked as not available on that instance, and nothing else in the
+server, the guardrails, metering, profiles or the OpenAI-compatible API the server itself exposes changes. Apple's
+Private Cloud Compute model (`pcc`) is out of scope: `fm` refuses it outside Apple's own clients, and it would leave
+the tenant's network. Models on these servers follow the same catalogue rules: a recorded licence, a conformance run,
+dual-control approval, a label ceiling; the digest check is replaced by the server's reported model id and, where the
+server exposes it, the file's hash.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-4301 | The gateway client behind an interface: `ModelServer` with `version`, `models`, `loaded`, `show`, `load`, `unload`, `chat` (streaming, tools, thinking where supported) and `embed`; `OllamaClient` implements it unchanged; each method reports `unsupported` for what a server cannot do, and the gateway, placements and the catalogue treat `unsupported` as "skip", never as an error | The suite passes with `OllamaClient` behind the interface and no gateway test changed | 5 |
+| B-4302 | `kind: openai` instances: `instances.kind` (`ollama` default, migration `037_model_servers`), a URL or a Unix socket path, an optional bearer token in the vault, the same mTLS and egress policy; health from `GET /health` or `GET /v1/models`; `/v1/models` lists the server's models as catalogue candidates; load and unload are no-ops recorded as `unsupported`; the instance's settings carry what the server reports (context length, whether tools and JSON schema output work) | An `fm serve` socket and a `llama-server` port register as instances, show healthy, and list their models in the catalogue's import picker | 8 |
+| B-4303 | Chat Completions mapped onto the gateway's chat: messages, system prompt, tools and tool calls, streaming deltas, `response_format` JSON schema, stop, temperature, max tokens and usage; Ollama-only options (`num_ctx`, `keep_alive`, `think`) dropped with a recorded note; the server-side tool loop, guardrail checkpoints, labels and metering unchanged | A conversation on a profile backed by Apple's on-device model streams, calls a read-only tool and is metered like an Ollama turn; the fake server in `server/test/fake-openai-server.ts` covers the suite | 8 |
+| B-4304 | Catalogue entries without a pull: a model on a `kind: openai` instance is registered from `/v1/models` with `source` the instance and model id, `format` `server`, no `expected_digest` (the licence, evaluation and dual-control approval still apply); the conformance run executes on that instance; placements on such a pool are `warm` only; retiring the entry does not delete anything on the server | Apple's on-device model is approved, evaluated and placed with the same audit events as an Ollama model, and a second approval attempt by its requester is refused | 5 |
+| B-4305 | Embeddings and guard models: an `openai` instance that offers `/v1/embeddings` serves embedding models; otherwise the pool's profile for memory, knowledge and the guard falls back to an Ollama pool in the same zone, chosen as the fallback profile is today | A knowledge base whose chat profile is on Apple's model still embeds on `qwen3-embedding:0.6b` and the guard still runs, with no change to the knowledge or guardrail code | 3 |
+| B-4306 | Operator docs and a reference layout: `docs/deploy.md` on running `fm serve --socket` under launchd beside Ollama on an Apple silicon node, `mlx_lm.server` and `llama-server` as alternatives, the pool as `accelerator: metal`; `docs/security.md` on what the digest check cannot cover for server-held models; `docs/api.md` and `docs/openapi.json` for the instance's new fields | A fresh macOS 27 node follows the doc to a healthy `openai` instance with Apple's model approved and answering in chat | 2 |
+| B-4307 | Console: the Models screen's instance form gets the kind, the socket path and the token; the catalogue's import picker lists server-held models; the model card shows "held by the server, no digest" and the capabilities the server reported; the prototype board and the live screen, in the Playwright suite with axe-core and the reflow checks | Registering an `openai` instance and approving one of its models works end to end in the e2e suite with no axe or reflow finding | 3 |
+
+Not in this epic: converting Apple's open-weight models (OpenELM, DCLM) to GGUF for Ollama, which the import wizard's
+GGUF conversion (B-3803) already covers; Private Cloud Compute; MLX or llama.cpp as managed runtimes the server
+starts and stops (they are external instances here, as Ollama is).
 
 ### B-42 Platform administration live screens (37 points)
 
@@ -127,6 +158,8 @@ workspace.
 - [ ] Capability tokens (B-5001): do share links and scoped API keys migrate onto the new mechanism in 1.6.0, or keep
   their own tables with the token model added beside them?
 - [ ] Group locations (B-4403): is a location visible to every member who can see the group, or only to members?
+- [ ] Model servers (B-43): is Apple's on-device model also offered as a `classify` fallback beside TEV on Apple
+  silicon nodes?
 
 ## Risks
 
