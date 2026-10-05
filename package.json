@@ -13,6 +13,8 @@
     "lint": "npm run lint -w server",
     "typecheck": "npm run typecheck -w server",
     "test": "npm test -w server",
+    "loadtest": "npm run loadtest -w server --",
+    "loadtest:platform": "npm run loadtest:platform -w server --",
     "test:e2e": "npm ci --prefix e2e && npm test --prefix e2e"
   }
 }

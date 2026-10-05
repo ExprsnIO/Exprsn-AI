@@ -454,7 +454,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     account: new AccountService(() => s),
     // Sprint 13 services read their collaborators through `s`.
     integrations: new TenantIntegrations(db),
-    webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS }),
+    webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS, endpointConcurrency: Math.max(1, Math.floor(cfg.JOB_CONCURRENCY / 2)) }),
     prompts: new PromptService(() => s),
     sharing: new ConversationSharing(() => s),
     billing: new BillingService(

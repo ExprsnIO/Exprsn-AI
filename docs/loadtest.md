@@ -5,9 +5,13 @@
 as `chat.status`, `chat.chunk` and `chat.done` events. Each simulated user has its own session and socket and sends its
 messages one after another, so the number of users is the number of concurrent streams.
 
-The script lives outside `server/src` and `server/test`: it is not built into the image and not part of `npm test`,
-`npm run lint` or `npm run typecheck`. It uses only packages already in the workspace (`socket.io-client`, `otplib`,
-`tsx`) and the test helpers.
+The script lives outside `server/src` and `server/test`: it is not built into the image and not part of `npm test` or
+`npm run lint` (CI lints `server/loadtest` separately; `npm run typecheck` covers it). It uses only packages already in
+the workspace (`socket.io-client`, `otplib`, `tsx`) and the test helpers. `npm run loadtest -- <options>` runs it from
+the repository root.
+
+Since 1.4.0 a second script, `server/loadtest/platform.ts`, measures the event and data paths: webhook fan-out,
+low-code record writes, the OCSP responder and firehose ingest. See [Platform scenarios](#platform-scenarios-140).
 
 ## What it reports
 
@@ -172,8 +176,137 @@ smooth; `CHAT_GUARD_STREAM_CONCURRENCY` caps the background checks one instance 
 | `--max-error-rate`, `--max-p95-ttft-ms`, `--max-p99-ttft-ms`, `--max-p95-total-ms`, `--min-tokens-per-s` | error rate 0.01 | Thresholds |
 | `--json` | | Summary as JSON |
 
+## Platform scenarios (1.4.0)
+
+`server/loadtest/platform.ts` (B-2105) loads the paths 1.4.0 added or made busier: plugin and record events fanned out
+to webhooks, low-code records, the certificate authority's OCSP responder and AT-Protocol firehose ingest (the "Event
+volume" risk in `Backlog-1.4.0.md`). The application runs in a process of its own, `server/loadtest/platform-server.ts`,
+started the way `src/index.ts` starts it: configuration from the environment, migrations, bootstrap, the HTTP app, the
+job workers and every schedule. Next to it runs the signer (`exprsn-ai signer`, its own process, holding the
+key-encryption key, the CA keys and the labeler key). The script itself is the outside world: a webhook receiver, a
+Jetstream, OCSP relying parties and the users of a low-code app. It seeds a workspace, users, an app with an entity of
+indexed and unique fields, a root and a tenant intermediate (P-256) with 40 leaf certificates (4 revoked), a
+moderation rule set and the tenant's labeler, then runs the scenarios in order. The application is asked for counts it
+cannot be observed for from outside (breaker state, the firehose queue, moderation objects) over the `fork` IPC channel.
+
+```sh
+npm run loadtest:platform                                   # every scenario, SQLite in memory, a free port
+npm run loadtest:platform -- --db postgres://postgres@127.0.0.1:55478/load --port 55471
+npm run loadtest:platform -- --scenarios ocsp,firehose --duration 10 --json
+```
+
+`--db` takes `sqlite` (the default, in memory) or a `postgres://` or `mysql://` URL of an **empty** database (the run
+seeds a fresh tenant; drop and create the database between runs). Exit codes: `0` every target met, `1` a target
+missed, `2` the setup failed.
+
+| Scenario | What happens | What is measured |
+| --- | --- | --- |
+| Webhook fan-out | `--endpoints` webhooks (default 10) subscribe to `record.*`; `record.created` events are emitted at `--events-per-s` (default 10) for `--duration` seconds, so 100 deliveries a second. Phase 1: every endpoint answers at once. Phase 2: the last endpoint answers after `--slow-ms` (3 s), past `WEBHOOK_TIMEOUT_MS` (1 s in the run) | Latency from the delivery being queued to the receiver having it, for the healthy endpoints; deliveries a second; lost and duplicate deliveries; HMAC signatures checked on every delivery; in phase 2 how many attempts reach the slow endpoint and whether its breaker opened (once) |
+| Record writes | `--concurrency` clients (16) over `--users` signed-in members (64, so the per-user API limit is not what is measured). Phase 1 creates records (one in 25 reuses an existing title in another case, which must be refused as a duplicate); phase 2 updates the indexed `amount` and `stage`; phase 3 runs filtered, sorted, paged queries on indexed fields (an `and` of an enum and a number range, a title prefix, a date range with an offset) | Requests a second and latency per phase; duplicates refused and accepted; records stored against records created |
+| OCSP | `--concurrency` relying parties post requests for the 40 serials to `/pki/ocsp`, each from its own documentation address (the public limit is per address). Phase 1 sends a nonce, so every answer is built and signed by the delegated responder key in the signer; phase 2 sends none, so the responder's cache answers | Signed answers a second and latency; every answer is parsed and its status (good or revoked) checked |
+| Firehose | A fake Jetstream holds `--posts` posts (20,000, one in ten with a pattern the moderation rule flags) and sends them as fast as the socket takes them. A third of the way it drops the connection (as a relay drops a slow consumer); two thirds of the way the subscription is stopped and started (as a restart does). Every post goes through the moderation check | Posts checked a second from the first connection to the last cursor; posts lost and checked twice (from `moderation_objects`); the consumer queue's maximum against `FIREHOSE_QUEUE_MAX` (1000), how often the socket was paused, and that every reconnection asked for a cursor |
+
+The run sets `WEBHOOK_TIMEOUT_MS=1000`, `WEBHOOK_RETRY_BASE_MS=1000`, a breaker cool-down of four times `--duration`
+(so the open breaker stays open through the phase), `FIREHOSE_TICK_MS=1000`, `FIREHOSE_CHECKPOINT_MS=1000` and
+`FIREHOSE_BACKOFF_MAX_MS=1000`; everything else, including `JOB_CONCURRENCY` (4) and `JOB_POLL_MS` (1000), keeps the
+application's defaults (`--job-concurrency` and `--job-poll-ms` change them). `JOB_QUEUE=db`: the reference setup has no
+Redis.
+
+### Reference setup
+
+The targets are judged on this setup, which is a developer workstation rather than a server, and the numbers below
+come from it:
+
+- Apple M2 Max (12 cores), 32 GB, macOS. The project, its `node_modules` and Node 24 live on an external USB drive;
+  start-up and the first module loads are slow there (seeding took from 2 to 250 s between runs), but the measured
+  phases run from memory.
+- PostgreSQL 18.6 from the project toolchain, a throwaway cluster (`initdb`, `pg_ctl`) with its data on the internal
+  disk under `/private/tmp`, default settings except `max_connections=100`; the application's pool is the default
+  `DB_POOL_MAX=10`.
+- The load generator, the application, the signer and PostgreSQL on the same machine, over loopback. The machine was
+  shared with other builds and test runs while measuring, so single runs vary (see the records query below); the
+  table gives a representative run.
+
+A CI or reference server (Linux, 4 or more dedicated cores, PostgreSQL on its own SSD, the generator on another host)
+is expected to do at least as well on latency; throughput there is bounded by the database for records and the
+firehose, and by the job slots for webhooks. CI runs the scenarios on SQLite in memory on a shared runner with the
+`ci` target set (`--targets ci`: latencies times three, rates divided by three).
+
+### Targets for 1.4.0 and results
+
+PostgreSQL, the reference setup, default options (15 s per phase), two full runs on fresh databases (each run
+delivers 2850 webhooks, writes about 32,000 records, answers about 320,000 OCSP requests and checks 20,000 posts):
+
+| Target | Reference | Run 1 | Run 2 |
+| --- | --- | --- | --- |
+| Webhooks: healthy endpoints, p95 queued to received | below 500 ms | 6 ms | 7 ms |
+| Webhooks: healthy endpoints while one hangs, p95 | below 2 s | 108 ms (p99 636) | 111 ms (p99 644) |
+| Webhooks: deliveries a second (100 offered) | at least 90 | 100 | 100 |
+| Webhooks: lost deliveries | none | 0 of 2850 | 0 of 2850 |
+| Webhooks: attempts reaching the hanging endpoint | at most 8 (the breaker threshold of 5, plus attempts in flight when it opens) | 6, breaker opened once | 6, breaker opened once |
+| Records: p95 create, p95 update | below 100 ms | 17.5 ms, 18.1 ms | 17.4 ms, 17.7 ms |
+| Records: writes a second | at least 300 | 1045 (create 1086) | 1063 (create 1092) |
+| Records: p95 filtered query (about 16,000 records, 50 a page) | below 250 ms | 121 ms | **758 ms, missed** (106 ms in a records-only run) |
+| Records: errors (a duplicate accepted, a failed request, a record missing) | none | 0 (678 duplicates refused) | 0 (681 duplicates refused) |
+| OCSP: signed answers a second, p95 | at least 1000, below 50 ms | 6645, 3.9 ms | 6533, 4.0 ms |
+| OCSP: cached answers a second | at least 3000 | 14836 | 14913 |
+| OCSP: wrong or failed answers | none | 0 | 0 |
+| Firehose: posts checked a second | at least 300 | 1183 | 1062 |
+| Firehose: posts lost, posts checked twice | none | 0, 0 | 0, 0 |
+| Firehose: queue above `FIREHOSE_QUEUE_MAX` | at most 250 (one socket read) | 92 (max 1092, paused 23 times) | 103 (max 1103, paused 22 times) |
+
+The rates are well above today's needs on purpose: Bluesky's whole network creates on the order of tens of posts a
+second, and a tenant's webhooks see the events of its own users. The targets leave room for a slower server.
+
+**Status.** Every target was met in run 1; run 2 missed the records query target while the machine was busy with other
+builds (a records-only run on a fresh database right after measured p95 106 ms; see the query note below). A third,
+confirming full run on PostgreSQL was started but **not yet measured: drive stalled** (the USB drive the project lives
+on stopped serving reads, at a few operations a second, and the run never got past loading its modules). SQLite runs
+(the `ci` set's database) also measured: webhooks p95 8 ms at 100 deliveries a second, records about 1000 writes a
+second with p95 27 ms and filtered queries p95 353 ms (SQLite answers one query at a time), OCSP 6200 signed answers a
+second, the firehose 2590 posts a second on 3000 posts. A full SQLite run with `--targets ci`, as CI runs it, is **not
+yet measured: drive stalled**. MySQL is not measured.
+
+A heavier webhook run (`--events-per-s 50`, 500 deliveries a second, PostgreSQL) delivered 5000 of 5000 at 496 a
+second with p95 4 ms, and while one endpoint hung 4500 of 4500 with p95 847 ms (the one-timeout dip described
+below), 6 attempts on the hanging endpoint.
+
+### What the load test found and fixed
+
+- **The database job queue ran at most `JOB_CONCURRENCY` jobs per `JOB_POLL_MS`.** Each poll claimed up to four jobs
+  and waited for all of them to finish before the next poll a second later, so every webhook delivery, export and
+  other job queued behind it, and one slow job held the other slots idle. The first run measured 2.9 deliveries a
+  second and a p95 of 21.7 s (4 endpoints, 4 events a second). The queue (`platform/jobs.ts`) now starts claimed jobs
+  without waiting for them, fills a slot again as soon as a job finishes, and starts a job queued on this worker at
+  once when a slot is free; the poll only finds jobs that became due later or were queued elsewhere. BullMQ mode is
+  unchanged.
+- **Concurrent failures of one endpoint were lost and the breaker opened late and more than once.** Each attempt wrote
+  the failure count it had read before sending, so four attempts timing out together counted as one; the breaker
+  opened after about 20 attempts and each straggler announced it again (audit event and admin notice). The count now
+  goes up in the database, only the attempt that moves the breaker from closed to open announces it, and only the one
+  that finds it open closes it.
+- **A failing endpoint could take every job slot.** While its breaker is still closed, an endpoint whose last attempt
+  failed now gets at most half the job slots (`JOB_CONCURRENCY / 2`, at least one) from an instance; its other
+  deliveries wait until the oldest attempt has had its timeout. Healthy endpoints are not limited.
+
+Not fixed, and why:
+
+- When an endpoint starts hanging, its first attempts can still hold every job slot for one `WEBHOOK_TIMEOUT_MS` before
+  the first failure marks it (the dip in phase 2: p99 about 640 ms with a 1 s timeout). With the default 10 s timeout
+  the other endpoints' deliveries can wait up to 10 s once. Lower `WEBHOOK_TIMEOUT_MS`, or raise `JOB_CONCURRENCY`, where
+  that matters; a per-endpoint queue is the real fix and is left for a later release.
+- Record queries count every match and check each condition with an `EXISTS` over the value index, so a query reads
+  the entity's records in full: about 40 ms of PostgreSQL CPU per query at 16,000 records, growing with the entity.
+  At 16 concurrent queries PostgreSQL used about nine cores, so the result depends on what else the machine runs:
+  on the shared machine p95 was 106, 121 and 758 ms in three runs. Keyset pagination and an estimated total are the fix for large
+  entities.
+- The firehose queue can pass `FIREHOSE_QUEUE_MAX` by the messages of the socket read under way when it pauses (about
+  100 to 200 posts); it stays bounded.
+
 ## Limits of the measurement
 
+- The platform scenarios run the load generator, the application, the signer and the database on one machine; the
+  generator competes for CPU with what it measures. Run it from another host against a staging stack before sizing.
 - The in-process harness uses SQLite in memory and the local KMS. PostgreSQL or MySQL, OpenBao and Redis add network
   round trips to every sealed chunk and every bus message; measure a staging stack before sizing production.
 - A single load-generator process tops out at a few thousand sockets; start several with different account lists for

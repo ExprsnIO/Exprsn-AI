@@ -106,6 +106,10 @@ export class JobQueue {
   private queue: Queue | null = null;
   private worker: Worker | null = null;
   private readonly offCancel: () => void;
+  /** Database mode: jobs this worker has claimed or is claiming, and the fill in progress (B-2105). */
+  private inflight = 0;
+  private filling: Promise<void> | null = null;
+  private refill = false;
   /** B-1401: when set, each job runs in a span that joins the trace of the request that queued it. */
   tracer: Tracer | null = null;
   /**
@@ -157,6 +161,8 @@ export class JobQueue {
     }
     await this.dispatch(row.id, row.run_at);
     this.emit(fromRow(row));
+    // Database mode: a job due now starts at once on this worker when it has a free slot, not at the next poll.
+    if (this.opts.mode === 'db' && !this.stopped && row.run_at <= Date.now()) void this.fill();
     return fromRow(row);
   }
 
@@ -203,7 +209,8 @@ export class JobQueue {
       try {
         await this.recoverStale();
         // In BullMQ mode the (slower) poll only catches jobs whose dispatch was lost, for example when Redis restarted.
-        await this.pollOnce();
+        if (this.opts.mode === 'db') await this.fill();
+        else await this.pollOnce();
       } catch (err) {
         this.log.warn({ err }, 'job poll failed');
       }
@@ -247,6 +254,48 @@ export class JobQueue {
       })
     );
     return ran;
+  }
+
+  /**
+   * Database mode (B-2105): claims due jobs up to the free slots and starts them without waiting for them to finish;
+   * each job that finishes fills its slot again at once. The poll only finds jobs that became due meanwhile (a retry,
+   * a deferred webhook delivery) or were queued by another instance. Before 1.4.0 the poll waited for the whole batch,
+   * so one slow job held every other slot idle and the queue ran at most JOB_CONCURRENCY jobs per JOB_POLL_MS.
+   */
+  private fill(): Promise<void> {
+    if (this.filling) {
+      this.refill = true;
+      return this.filling;
+    }
+    this.filling = (async () => {
+      do {
+        this.refill = false;
+        const limit = this.opts.concurrency - this.inflight;
+        if (this.stopped || limit <= 0 || this.gate?.()) return;
+        const types = [...this.handlers.keys()];
+        if (!types.length) return;
+        const due = (await this.db('jobs').where({ state: 'queued' }).whereIn('type', types).andWhere('run_at', '<=', Date.now()).orderBy('run_at').limit(limit).select('id')) as { id: string }[];
+        for (const d of due) {
+          this.inflight++;
+          void this.claimAndRun(d.id)
+            .catch((err: unknown) => {
+              this.log.warn({ err, job: d.id }, 'job run failed');
+              return false;
+            })
+            .then((ran) => {
+              this.inflight--;
+              if (ran) void this.fill();
+            });
+        }
+      } while (this.refill && !this.stopped);
+    })()
+      .catch((err: unknown) => this.log.warn({ err }, 'job poll failed'))
+      .finally(() => {
+        this.filling = null;
+        // A job finished after the last pass looked: look again for its slot.
+        if (this.refill && !this.stopped) void this.fill();
+      });
+    return this.filling;
   }
 
   private async recoverStale(): Promise<void> {
