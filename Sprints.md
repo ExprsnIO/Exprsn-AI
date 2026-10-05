@@ -37,8 +37,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | **Done** |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | **Done** |
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
-| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | Next |
-| 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | Planned |
+| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
+| 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | Next |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new) | Planned |
 | 31 | AT-Protocol PDS and feed generator, release (1.5.0) | AT-Protocol (new) | Planned |
 
@@ -52,7 +52,7 @@ web site, and fake mail, HIBP range, webhook, Stripe, DNS, Harbor, Verdaccio and
 suite against PostgreSQL, MySQL, OpenLDAP and Redis; 57 Playwright tests across the console, including axe-core, the
 in-page accessibility checker and the reflow checks for screens, dialogs and drawers; a Helm chart with an optional
 signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a streaming load test. The version is
-`1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
+`1.4.0` (Sprints 24 to 28, the [1.4.0 backlog](Backlog-1.4.0.md), server-only); before it, `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
 [1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
 planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
 identity work. Sprints 29 to 31 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
@@ -1091,6 +1091,19 @@ refunded with the amount (`server/test/sprint23-knowledge.test.ts`, 6 tests,
 `integration/webhooks.test.ts` against PostgreSQL); the suite fails on any axe-core WCAG 2.2 A/AA violation and on AAA
 contrast in Enhanced, and each screen's dialogs and drawers open at 320 px without sideways scrolling
 (`e2e/tests/y-accessibility.spec.ts`, `e2e/tests/y-reflow-overlays.spec.ts`).
+
+## Release 1.4.0
+
+The workspace, the server and the chart are versioned `1.4.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
+the backlog in [Backlog-1.4.0.md](Backlog-1.4.0.md). Sprints 24 to 28 re-implemented exprsn-platform's server
+features in Exprsn-AI: the certificate authority with OCSP and an ACME server, the secrets vault with leases, the event
+catalogue and plugins; AT-Protocol keys, DIDs, labeler, sign-in and firehose ingest; moderation actions and appeals,
+the file store, low-code data apps, groups and events, customer-service channels, messaging and the workspace feed.
+They are server-only: no console screen changed, and the screens are planned in [Backlog-1.5.0.md](Backlog-1.5.0.md)
+(Sprints 29 to 31). Migrations `026_pki_secrets` to `030c_feed`. The suite at release: 794 passed and 1 skipped across 66 files; the PostgreSQL
+integration suite against throwaway servers (22 files), MySQL and Redis in CI. The platform load test (B-2105,
+[docs/loadtest.md](docs/loadtest.md)): every target met with the `ci` targets on SQLite, and on PostgreSQL every target but one: the records query p95 (732 ms against 250 ms; the query path sorts every matching record, fix planned for 1.5.0). The known gaps of each sprint are in [docs/security.md](docs/security.md).
+Tagging `v1.4.0` and publishing the image and chart remain with the maintainers.
 
 ## Release 1.3.0
 

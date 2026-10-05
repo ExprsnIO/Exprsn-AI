@@ -33,7 +33,9 @@ describe('channel tokens (B-2301)', () => {
     const [head, mac] = t.split('.');
     const forged = Buffer.from(JSON.stringify({ t: 'T', c: 'C', s: 'OTHER', e: Date.now() + 60_000 })).toString('base64url');
     expect(verifySession(key, `cst_${forged}.${mac}`)).toBeNull();
-    expect(verifySession(key, `${head}.${mac!.slice(0, -1)}A`)).toBeNull();
+    // Changes the MAC's first character, which is always a different one (the last character of a base64url MAC carries
+    // only 4 bits, and replacing it with a fixed letter left it unchanged one time in 16).
+    expect(verifySession(key, `${head}.${mac![0] === 'A' ? 'B' : 'A'}${mac!.slice(1)}`)).toBeNull();
     expect(verifySession(key, signSession(key, { tenantId: 'T', channelId: 'C', sessionId: 'S', exp: Date.now() - 1 }))).toBeNull();
   });
 

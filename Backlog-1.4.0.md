@@ -29,7 +29,7 @@ repeat them; webhook delivery is dropped from the plugins epic entirely.
 | 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_acme`, `027b_atproto`, `027c_leases`, `027d_plugins` | **Done** |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity`, `028b_atproto_accounts`, `028c_moderation`, `028d_files` | **Done** |
 | 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps`, `029b_firehose`, `029c_groups` | **Done** |
-| 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels_social` | Next |
+| 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels`, `030b_social`, `030c_feed` | **Done** |
 
 ### Progress
 
@@ -118,6 +118,36 @@ group posts are moderation object types.
 | B-2503 | Done | `calendar.reminder` queue jobs; two instances on one database send a reminder once (SQLite and PostgreSQL) |
 | B-2504 | Done | RFC 5545 feeds per event, group and user (UTC, no VTIMEZONE, no recurrence) at `/calendar/feeds/<id>/<sig>.ics`; HMAC signatures from a derived key, revocable; a bad signature is refused |
 | B-2505 | Done | Small sealed group posts; a report on a group post makes a flag and a case |
+
+**Sprint 28: done** (84 points), built as four parallel parts with migrations `030_channels`, `030b_social` and
+`030c_feed`; the feed part started from the social-relations commit of the messaging part, so messaging and the feed
+share one module of blocks, mutes, follows, lists and contact rules. Unit suite 794 passed and 1 skipped across 66 files; the PostgreSQL integration
+tests ran against throwaway servers, MySQL and Redis in CI. Event catalogue version 5: `message.*` and `post.*` are now
+emitted, with the new `channel.*`, `social.*`, `messaging.*` and `feed.*` groups. New permissions: `channels:manage`,
+`channels:review`, `social:read`, `social:write`, `social:manage`, `messages:read`, `messages:write`, `feed:read`,
+`feed:write`, `feed:manage`. New dependencies: `imapflow` and `mailparser` (B-2303). Channel sessions and messages,
+direct messages, feed posts and comments are moderation object types.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| B-2301 | Done | Chat channels bound to a published profile or agent, with their own label, rate limits and retention; anonymous or identified customers on `/api/public/channels` with session-scoped signed tokens; answers through the gateway within the channel's label. Customers poll for answers released by review (no customer socket) |
+| B-2302 | Done | Held replies as `hold` flags; approve, edit or reject; an edited reply reaches the customer as edited, and the model's text is kept |
+| B-2303 | Done | IMAP polling and signed provider webhooks (generic JSON and Mailgun), threaded by Message-ID and sender; SMTP outbox; bounces recorded once. The IMAP adapter itself is exercised only through a mocked fetcher |
+| B-2304 | Done | Per-channel retention purge jobs; CSV transcripts per session or per channel as a job |
+| B-1806 | Done | Email one-time codes: HMAC-stored, single use, bound to the pending session, rate-limited, counted in the TOTP lockout; accepted for admin roles that require a second factor (decided at merge), not for step-up |
+| B-2601 | Done | Direct and group conversations with roles; one direct conversation per pair, also under a race (SQLite and PostgreSQL) |
+| B-2602 | Done | Send, edit, delete, reply, one-level threads, reactions, pins, forwards; edits and deletes audited without the text |
+| B-2603 | Done | Delivery and read receipts, typing and presence over sockets; a blocked user receives none of them (checked with real sockets). Presence is the last join or leave, not a live status |
+| B-2604 | Done | Attachments from the file store after quarantine; per-member mute with notification rules |
+| B-2605 | Done | Keyword search, semantic search when `MESSAGING_EMBED_MODEL` is set, summaries and catch-up digests citing only what the reader can see |
+| B-2606 | Done | Blocks and contact rules in the shared `s.social` module; a block in messaging also hides posts |
+| B-2701 | Done | Posts with media from the file store, threaded comments, reactions, reposts, bookmarks, sealed; a comment on a deleted post is refused |
+| B-2702 | Done | Follows, blocks, mutes and lists from the shared module; a muted author leaves the home feed |
+| B-2703 | Done | Home, workspace, group, user, list, hashtag and bookmark feeds with cursor paging; a `feed` room delivers new posts live, filtered by blocks and labels. Group feeds are feed posts aimed at a group; Sprint 27's group posts stay the group's notice board |
+| B-2704 | Done | Posts pass the `user-input` guardrail; a held post is invisible until approved. Edits and comments a rule would hold are refused rather than held |
+| B-2705 | Done | Hashtags and trending by job; a weekly digest per workspace written by a profile, keeping the ranked list if the model fails |
+| B-2105 | Done | Partial. Webhook fan-out, record writes, OCSP and firehose scenarios (`npm run loadtest:platform`, in CI with the `ci` targets); targets and results in `docs/loadtest.md`. Every `ci` target met on SQLite; on PostgreSQL every target but the records query p95 (732 ms against 250 ms in the confirming run). The test found and fixed two bugs: the database job queue waited for its whole batch at each poll, and concurrent webhook failures were lost, so breakers opened late and were announced up to four times |
+| B-2801 | Done | Version `1.4.0`, CHANGELOG, README, CLAUDE.md, the chart and the known-gaps sections |
 
 The order follows the dependencies: the event catalogue (B-2001) before record triggers (B-2206); the moderation API
 (B-1901) before the labeler (B-1610), the firehose (B-1908), held replies (B-2302) and the moderation of files,
@@ -333,6 +363,8 @@ open sockets and dev-only token bypasses.
 - [x] Built-in dynamic database credentials need an admin login to each target database: only `connections:manage`
   holders register one, in a zone whose ceiling covers the target database (Sprint 25).
 - [x] Customer-service email (B-2303): both IMAP polling and provider webhooks.
+- [x] Email one-time codes (B-1806) count as the second factor for admin roles that require one (decided at the Sprint 28
+  merge; a known gap in `docs/security.md`).
 
 ## Risks
 

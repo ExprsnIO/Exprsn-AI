@@ -258,14 +258,14 @@ delivers 2850 webhooks, writes about 32,000 records, answers about 320,000 OCSP 
 The rates are well above today's needs on purpose: Bluesky's whole network creates on the order of tens of posts a
 second, and a tenant's webhooks see the events of its own users. The targets leave room for a slower server.
 
-**Status.** Every target was met in run 1; run 2 missed the records query target while the machine was busy with other
-builds (a records-only run on a fresh database right after measured p95 106 ms; see the query note below). A third,
-confirming full run on PostgreSQL was started but **not yet measured: drive stalled** (the USB drive the project lives
-on stopped serving reads, at a few operations a second, and the run never got past loading its modules). SQLite runs
-(the `ci` set's database) also measured: webhooks p95 8 ms at 100 deliveries a second, records about 1000 writes a
-second with p95 27 ms and filtered queries p95 353 ms (SQLite answers one query at a time), OCSP 6200 signed answers a
-second, the firehose 2590 posts a second on 3000 posts. A full SQLite run with `--targets ci`, as CI runs it, is **not
-yet measured: drive stalled**. MySQL is not measured.
+**Status.** One target is not met: the records query p95 on PostgreSQL. Run 1 met every target; run 2 missed it
+while the machine was busy with other builds; a third, confirming full run (2026-10-05, the project moved to the
+internal SSD, nothing else running) missed it again with **732 ms** against 250 ms, every other target met (webhooks
+p95 7 ms and 106 ms while one endpoint hung, 0 lost; records 1059 writes a second, create and update p95 17.5 and
+17.7 ms; OCSP 6592 signed answers a second, p95 3.9 ms; firehose 1138 posts a second, 0 lost, 0 checked twice). So the
+miss is the query path, not the machine: see the query note below; the fix is planned for 1.5.0. The full SQLite run
+with `--targets ci`, as CI runs it, met every target (webhooks p95 14 ms and 261 ms, 0 lost; records query p95 359 ms
+against 750 ms; OCSP 6884 signed answers a second; firehose 2701 posts a second, 0 lost). MySQL is not measured.
 
 A heavier webhook run (`--events-per-s 50`, 500 deliveries a second, PostgreSQL) delivered 5000 of 5000 at 496 a
 second with p95 4 ms, and while one endpoint hung 4500 of 4500 with p95 847 ms (the one-timeout dip described

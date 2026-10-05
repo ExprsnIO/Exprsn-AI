@@ -8,7 +8,7 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 36 items, 209 points (1 point ≈ half a day for one engineer, tests included): P0 112, P1 37, P2 60. At about
+**Size.** 37 items, 214 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 37, P2 60. At about
 78 points a sprint (roughly five engineers) that is Sprints 29 to 31. With fewer, P2 (the PDS and feed generator)
 moves to 1.6 first, then WebDAV (B-32).
 
@@ -22,7 +22,7 @@ the same policy pipeline.
 
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
-| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413 | 71 | `031_access` | Planned |
+| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | Planned |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203 | 73 | `032_dav` | Planned |
 | 31 | AT-Protocol PDS and feed generator, release | B-2901–B-2906, B-3001–B-3004, B-3406, B-3501 | 65 | `033_pds_feeds` | Planned |
 
@@ -71,6 +71,12 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3412 | Roles and access: the role matrix, custom roles with diff, the effective-access matrix with `explain`, access reviews | Every cell's `explain` opens from the matrix | 5 |
 | B-3413 | Identity additions to existing screens: self-registration policy, MFA policy and trusted devices, GitHub stores, CSV import, DID binding | The registration policy changes from Settings | 3 |
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
+
+### B-36 Carried over from 1.4.0 (5 points)
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3601 | Low-code record queries that PostgreSQL can answer from an index: `NULLS LAST` instead of the `case` sort keys, indexes on `app_record_values` with `collate "C"` for text, a plan that filters and orders on one indexed field before joining the others, and keyset paging; the same rows on SQLite, MySQL and PostgreSQL as today (Sprint 27's 19-query proof) | The 1.4.0 load test's records query p95 is below 250 ms on PostgreSQL (732 ms at release) | 5 |
 
 ## P1
 

@@ -1,24 +1,6 @@
 # Changelog
 
-## 1.4.0 (in progress)
-
-### Load test of the event and data paths (Sprint 28, B-2105)
-
-- `server/loadtest/platform.ts` (`npm run loadtest:platform`): webhook fan-out with a hanging endpoint, low-code record
-  writes and queries, OCSP (signed and cached) and firehose ingest from a fake Jetstream with a dropped connection and
-  a restart, against the application in its own process with the signer as a process, on SQLite or an empty
-  PostgreSQL or MySQL database. Targets, the reference setup and the measured results are in `docs/loadtest.md`; CI
-  runs the scenarios with the looser `ci` targets next to the streaming load test. `npm run loadtest` runs the
-  streaming load test.
-- Fixed: the database job queue (`JOB_QUEUE=db`) waited for its whole batch at every poll, so it ran at most
-  `JOB_CONCURRENCY` jobs per `JOB_POLL_MS` and one slow job held the other slots idle (webhooks measured 2.9 deliveries
-  a second with p95 21.7 s). It now fills a slot as soon as a job finishes and starts a job queued on the worker at
-  once when a slot is free (100 deliveries a second, p95 under 10 ms on the reference setup).
-- Fixed: webhook attempts failing at the same time each wrote the failure count they had read, so the breaker opened
-  late, could be closed again by a stale failure, and announced its opening more than once. The count now goes up in
-  the database and only the attempt that changes the breaker's state announces it. While its breaker is still closed,
-  an endpoint whose last attempt failed gets at most half the job slots of an instance, so it cannot starve the
-  other endpoints.
+## 1.4.0
 
 ### AT-Protocol firehose ingest (Sprint 27, B-1908)
 
@@ -70,7 +52,7 @@
 - Migration `029c_groups`; new settings `GROUP_INVITE_DAYS`, `GROUP_REQUEST_DAYS`, `CALENDAR_FEED_PER_MINUTE`,
   `CALENDAR_FEED_MAX_LABEL`.
 
-### Customer-service channels and email one-time codes (Sprint 28a, B-2301 to B-2304, B-1806)
+### Customer-service channels and email one-time codes (Sprint 28, B-2301 to B-2304, B-1806)
 
 - Chat channels (B-2301): a channel in a workspace answers customers with a published profile or agent (prompt and
   profile; never its tools) at the channel's label, checked against the workspace ceiling and the profile's and agent's
@@ -149,6 +131,24 @@
   Settings `FEED_*`.
 - Group feeds are feed posts targeted at the group; the group notices of Sprint 27 (`/api/groups/:id/posts`) stay as
   they are.
+
+### Load test of the event and data paths (Sprint 28, B-2105)
+
+- `server/loadtest/platform.ts` (`npm run loadtest:platform`): webhook fan-out with a hanging endpoint, low-code record
+  writes and queries, OCSP (signed and cached) and firehose ingest from a fake Jetstream with a dropped connection and
+  a restart, against the application in its own process with the signer as a process, on SQLite or an empty
+  PostgreSQL or MySQL database. Targets, the reference setup and the measured results are in `docs/loadtest.md`; CI
+  runs the scenarios with the looser `ci` targets next to the streaming load test. `npm run loadtest` runs the
+  streaming load test.
+- Fixed: the database job queue (`JOB_QUEUE=db`) waited for its whole batch at every poll, so it ran at most
+  `JOB_CONCURRENCY` jobs per `JOB_POLL_MS` and one slow job held the other slots idle (webhooks measured 2.9 deliveries
+  a second with p95 21.7 s). It now fills a slot as soon as a job finishes and starts a job queued on the worker at
+  once when a slot is free (100 deliveries a second, p95 under 10 ms on the reference setup).
+- Fixed: webhook attempts failing at the same time each wrote the failure count they had read, so the breaker opened
+  late, could be closed again by a stale failure, and announced its opening more than once. The count now goes up in
+  the database and only the attempt that changes the breaker's state announces it. While its breaker is still closed,
+  an endpoint whose last attempt failed gets at most half the job slots of an instance, so it cannot starve the
+  other endpoints.
 
 ## Unreleased
 
