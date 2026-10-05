@@ -25,7 +25,7 @@ the same policy pipeline.
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | Planned |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703, B-3801–B-3803 | 107 | `032_dav`, `032b_imports` | Planned |
-| 31 | AT-Protocol PDS and feed generator, release; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406,, B-3804–B-3807, B-3501 | 94 | `033_pds_feeds` | Planned |
+| 31 | AT-Protocol PDS and feed generator, release; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807, B-3501 | 94 | `033_pds_feeds` | Planned |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
@@ -184,13 +184,21 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 ## Open decisions
 
-- [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
-  tenant's own domain).
-- [ ] Custom roles: can a workspace define roles, or only the tenant?
-- [ ] Access reviews: who reviews by default (the workspace admin, the member's manager from the directory, or both)?
-- [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
-- [ ] Import quota (B-38): 500 GB per tenant for datasets as in the mockup, or per workspace?
-- [ ] Licence exceptions (B-3803, B-3804): granted by legal only, or by the tenant admin as well?
+All six resolved by the owner on 2026-10-05.
+
+- [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant
+  subdomain (`<handle>.<tenant>.<pds domain>`). A tenant's own handle domain is deferred to 1.6 (B-2901).
+- [x] Custom roles: tenant only. Workspaces assign roles but do not define them; the matrix stays one table per
+  tenant (B-3302, B-3412).
+- [x] Access reviews: both the workspace admin (tenant admin for tenant-level roles) and the member's directory
+  manager are assigned; the first decision stands. When the manager attribute is empty only the admin is assigned
+  (B-3305).
+- [x] DAV app passwords: allowed for roles that require MFA, but creating one needs a fresh MFA step-up and the
+  password carries a DAV-only scope (CalDAV, CardDAV, WebDAV; never the API or console) (B-3101).
+- [x] Import quota (B-38): 500 GB per tenant for datasets, metered and shown beside the existing tenant quotas; any
+  workspace's import draws from it (B-3804).
+- [x] Licence exceptions (B-3803, B-3804): granted or refused by a reviewer holding a new `legal-review` role; tenant
+  admins request but cannot grant. The import waits in the queue until the decision.
 
 ## Risks
 
