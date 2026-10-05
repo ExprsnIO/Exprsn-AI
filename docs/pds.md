@@ -164,6 +164,20 @@ back and must name the DID. `PdsFeeds.publishRecord(by, tenantId, target, rkey, 
 as the feed generator service builds it (`feedGenerators.recordFor(row, generatorDid)`), after which the caller records
 the publication (`feedGenerators.markPublished`).
 
+A feed defined under `/api/atproto/feeds` (B-3001 to B-3003) is published with `feedId` in place of the metadata:
+`{target, feedId}`. The record is the generator's own for that feed (its record key, display name and description,
+and `did` the tenant's AT-Protocol identity, the feed generator's service DID; `409` while the tenant has none), and
+the feed then records the publication (`published: {did, uri, cid, at}`, audited `atproto.feed.published`), so its
+`at://` URI is the published record's. Withdrawing the record (`POST /api/admin/pds/feed-generators/:id/withdraw`)
+forgets the publication on every feed published as it (audited `atproto.feed.unpublished`); the feed's URI falls back
+to the generator's DID. In code (`PdsFeeds.publishFeed`):
+
+```ts
+const g = await s.feedGenerators.generator(tenantId);
+const out = await s.pds.feeds.publishRecord(by, tenantId, target, row.rkey, s.feedGenerators.recordFor(row, g.did));
+await s.feedGenerators.markPublished(by, row, { did: out.repo, uri: out.uri, cid: out.cid });
+```
+
 ## Labels, clearance and zones
 
 - AT-Protocol content is public by protocol. Everything a PDS repository holds is labelled `public` in Exprsn-AI's

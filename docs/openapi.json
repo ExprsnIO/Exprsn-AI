@@ -42961,7 +42961,7 @@
         "tags": [
           "admin/pds"
         ],
-        "summary": "pds:manage. Publishes (or replaces) an app.bsky.feed.generator record naming the generator's service DID, into a repo the PDS hosts for the tenant or an external account (its app password is used once, never stored; addresses go through the service URL checks). Audited pds.feed.published",
+        "summary": "pds:manage. Publishes (or replaces) an app.bsky.feed.generator record naming the generator's service DID, into a repo the PDS hosts for the tenant or an external account (its app password is used once, never stored; addresses go through the service URL checks). With feedId instead of the metadata, publishes the record of a feed defined under /api/atproto/feeds (the generator's own, naming its service DID) and records the publication on the feed (audited atproto.feed.published). Audited pds.feed.published",
         "requestBody": {
           "required": true,
           "content": {
@@ -43014,6 +43014,10 @@
                       }
                     ]
                   },
+                  "feedId": {
+                    "type": "string",
+                    "description": "A feed defined under /api/atproto/feeds; excludes serviceDid, rkey, displayName, description, acceptsInteractions and contentMode"
+                  },
                   "serviceDid": {
                     "type": "string"
                   },
@@ -43039,10 +43043,21 @@
                   }
                 },
                 "required": [
-                  "target",
-                  "serviceDid",
-                  "rkey",
-                  "displayName"
+                  "target"
+                ],
+                "oneOf": [
+                  {
+                    "required": [
+                      "feedId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "serviceDid",
+                      "rkey",
+                      "displayName"
+                    ]
+                  }
                 ]
               }
             }
@@ -43054,7 +43069,20 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PdsFeedRecord"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PdsFeedRecord"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "feedId": {
+                          "type": "string",
+                          "description": "The feed published (with feedId)"
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -43071,7 +43099,7 @@
         "tags": [
           "admin/pds"
         ],
-        "summary": "pds:manage. Deletes a published generator record (an external one needs its identifier and an app password again). Audited pds.feed.withdrawn",
+        "summary": "pds:manage. Deletes a published generator record (an external one needs its identifier and an app password again); a feed published as it forgets the publication. Audited pds.feed.withdrawn",
         "parameters": [
           {
             "name": "id",
