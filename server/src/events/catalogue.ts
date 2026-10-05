@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 5;
+export const CATALOGUE_VERSION = 6;
 
 export type JsonSchema = Record<string, unknown>;
 
