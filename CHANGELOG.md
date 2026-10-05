@@ -2,6 +2,32 @@
 
 ## 1.5.0 (in progress)
 
+### Custom feed generators, relay commit verification and the RSVP race (Sprint 31b, B-3001 to B-3003, B-3604, B-3603)
+
+- Feed generators (B-3001): a tenant's feeds are served by its own AT-Protocol identity, whose DID document gains a
+  `#bsky_fg` `BskyFeedGenerator` service (did:web computed; did:plc through a signed PLC operation, audited
+  `atproto.identity.service-added`). Public XRPC `app.bsky.feed.describeFeedGenerator` and
+  `app.bsky.feed.getFeedSkeleton` at `/xrpc/…` and `/atproto/<key>/xrpc/…`; an inter-service JWT (ES256K or ES256)
+  is verified against the issuer's `#atproto` key, its audience, expiry and `lxm`, and a bad one is refused with `401`.
+- Feeds as rules over the firehose (B-3002) under `/api/atproto/feeds` (`firehose:manage`, audited
+  `atproto.feed.*`): authors, collections, keywords and labels (in force from the tenant's labeler and trusted
+  labelers, or the check's verdict; `!hide` excluded by default), checked again when served; optional ranking by
+  embedding similarity through a gateway profile or by a classifier's score. Posts reach the feeds after the
+  moderation check; deletes leave them.
+- The feed index (B-3003): keyset cursor pagination by (sort, id), retention and a size cap pruned by
+  `atproto.feeds.prune` every `FEED_PRUNE_MINUTES`, and a per-feed rate limit on getFeedSkeleton. Migration
+  `033b_feeds` (`atproto_feeds`, `atproto_feed_items`, `firehose_subscriptions.rejected`). New settings
+  `FEEDS_MAX_PER_TENANT`, `FEED_ITEMS_MAX`, `FEED_PRUNE_MINUTES`, `FIREHOSE_REJECT_AUDITS`.
+- B-3004 (publishing the `app.bsky.feed.generator` record) has its interface: the feed view's `record` (naming the
+  generator's service DID) and `PUT`/`DELETE /api/atproto/feeds/{id}/publication`.
+- Relay commit verification (B-3604): subscribeRepos commits are checked against the repo's `#atproto` key (DID
+  documents through the service URL checks, cached, refreshed once on a failed signature) and each record used is
+  proven against the signed Merkle search tree; a commit that fails is dropped, counted (`counts.rejected`) and
+  audited `atproto.firehose.commit.rejected` (rate-limited). Tested against the AT-Protocol interop vectors (MST key
+  layers, commit proofs, signature fixtures) in `server/test/fixtures/atproto/`.
+- RSVP capacity (B-3603): the event row is locked (`SELECT … FOR UPDATE` on PostgreSQL and MySQL) while the places are
+  counted; fifty simultaneous RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL.
+
 ### Model-based memory management (Sprint 30, B-3701 to B-3703)
 
 - Per-tenant memory settings under `GET`/`PUT /api/memory/settings` (`knowledge:manage`, audited as

@@ -17,7 +17,9 @@ import { FirehoseService, streamUrl, type FirehoseOptions } from '../src/atproto
 import { Cid } from '../src/atproto/encoding.js';
 import { startSigner } from '../src/signer/server.js';
 import { harness, localUser, login, loginAdmin, type Client, type Harness } from './helpers.js';
+import { FakePlcDirectory } from './sprint25b-fakes.js';
 import { car, FakeFirehose, jetCommit, repoCommit, repoFrame } from './sprint27-firehose-fakes.js';
+import { FakeRepo } from './sprint31b-fakes.js';
 
 const POST = 'app.bsky.feed.post';
 const ALICE = 'did:plc:aliceaaaaaaaaaaaaaaaaaaa';
@@ -82,6 +84,10 @@ describe('B-1908: firehose frames', () => {
 describe('B-1908: firehose ingest through the moderation check into the labeler', () => {
   let h: Harness;
   let jet: FakeFirehose;
+  // Since Sprint 31 (B-3604) relay commits are verified against the repo's DID key: the repos sign theirs.
+  let plc: FakePlcDirectory;
+  let bobRepo: FakeRepo;
+  let aliceRepo: FakeRepo;
   let signerDir: string;
   let signer: Awaited<ReturnType<typeof startSigner>>;
   let admin: ReturnType<typeof wrap>;
@@ -103,7 +109,11 @@ describe('B-1908: firehose ingest through the moderation check into the labeler'
     signer = await startSigner({ socketPath, key: randomBytes(32).toString('base64'), token });
     jet = new FakeFirehose();
     await jet.start();
-    h = await harness({ DATA_KEY: '', SIGNER_SOCKET: socketPath, SIGNER_TOKEN: token, ATPROTO_PUBLIC_URL: 'https://fh.example.test', MODERATION_SWEEP_SECONDS: '0', FIREHOSE_TICK_MS: '200', FIREHOSE_CHECKPOINT_MS: '100', FIREHOSE_BACKOFF_MAX_MS: '200', FIREHOSE_IDLE_MS: '20000' });
+    plc = new FakePlcDirectory();
+    await plc.start();
+    bobRepo = new FakeRepo(BOB).publish(plc);
+    aliceRepo = new FakeRepo(ALICE).publish(plc);
+    h = await harness({ DATA_KEY: '', SIGNER_SOCKET: socketPath, SIGNER_TOKEN: token, ATPROTO_PUBLIC_URL: 'https://fh.example.test', ATPROTO_PLC_URL: plc.url, MODERATION_SWEEP_SECONDS: '0', FIREHOSE_TICK_MS: '200', FIREHOSE_CHECKPOINT_MS: '100', FIREHOSE_BACKOFF_MAX_MS: '200', FIREHOSE_IDLE_MS: '20000' });
     ws = (await h.s.tenants.createWorkspace(h.tenantId, 'Bluesky watch', 'confidential', { visibility: 'members' })).id;
     await localUser(h, 'fhadmin', ['tenant-admin', 'guardrail-admin'], 'confidential');
     await localUser(h, 'fhmember', ['member'], 'internal');
@@ -129,6 +139,7 @@ describe('B-1908: firehose ingest through the moderation check into the labeler'
     for (const m of managers) await m.close();
     await h?.close();
     await jet?.stop();
+    await plc?.stop();
     await signer?.close();
     rmSync(signerDir, { recursive: true, force: true });
   });
@@ -295,7 +306,7 @@ describe('B-1908: firehose ingest through the moderation check into the labeler'
     expect(conn.url.pathname).toBe('/xrpc/com.atproto.sync.subscribeRepos');
     expect(conn.url.search).toBe('');
     jet.send(repoFrame({ op: 1, t: '#info' }, { name: 'OutdatedCursor' }));
-    jet.send(repoCommit(1, BOB, [
+    jet.send(bobRepo.commit(1, [
       { collection: POST, rkey: 'r1', record: { text: 'relay SPAMLINK post', createdAt: '2026-10-04T00:00:00Z' } },
       { collection: 'app.bsky.feed.like', rkey: 'r2', record: { subject: { uri: uri(ALICE, 'a1') } } },
       { collection: 'app.bsky.actor.profile', rkey: 'self', record: { displayName: 'Bob', description: 'clean profile' } }
@@ -320,7 +331,7 @@ describe('B-1908: firehose ingest through the moderation check into the labeler'
     await m.tick();
     const resampled = await until(() => (jet.connections.length > conns + 1 ? jet.latest : null), 'the restart with the new sample');
     expect(resampled.url.searchParams.get('cursor')).toBe('2');
-    jet.send(repoCommit(3, ALICE, [{ collection: POST, rkey: 'z1', record: { text: 'SPAMLINK not sampled' } }]));
+    jet.send(aliceRepo.commit(3, [{ collection: POST, rkey: 'z1', record: { text: 'SPAMLINK not sampled' } }]));
     await until(() => m.local(id)?.cursor === 3, 'the relay cursor to reach 3');
     expect(await checks(uri(ALICE, 'z1'))).toBe(0);
   });

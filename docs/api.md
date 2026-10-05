@@ -2588,6 +2588,9 @@ for other records) goes through the moderation check (B-1901) as an `atproto-pos
 with the subscription's workspace and label: a verdict of flag or worse raises the post's one flag in that workspace's
 queue, and a verdict of warn or worse becomes signed labels on the post's URI from the tenant's labeler (B-1610; the
 platform's when the tenant has none). Deletes and records without text advance the cursor and are not checked.
+Since 1.5.0 (B-3604) a subscribeRepos commit is believed only when it verifies against the repo's DID key (see
+[Sprint 31](#sprint-31-150-custom-feed-generators-b-3001-to-b-3003-and-relay-commit-verification-b-3604)); posts that pass
+the check also go on to the tenant's feed generators.
 
 The consumer runs on one worker instance at a time: every `FIREHOSE_TICK_MS` each instance claims or renews a lease on
 the running subscriptions, and only the holder connects (a lease lasts three ticks; a stopping instance gives its leases
@@ -2604,7 +2607,7 @@ at every connection. Metrics: `exprsn_firehose_events_total{result}`, `exprsn_fi
 
 A subscription is `{id, name, protocol: jetstream | subscribe-repos, endpoint, collections, dids, sampleRate, workspaceId,
 label, state: running | stopped, status: idle | waiting | connecting | streaming | backoff | error, held, cursor,
-cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed}, reconnects, rev, live,
+cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed, rejected}, reconnects, rev, live,
 createdAt, updatedAt}`. `held` says whether an instance holds its lease now (`waiting`: running but not yet taken);
 `live` is `{connected, paused, queue, pauses, cursor}` when the instance answering is the holder, else null. Counts are
 stored with the cursor. Subscriptions labelled above the caller's clearance are not shown (`404`).
@@ -2828,7 +2831,7 @@ daylight-saving gap moves forward by the gap. Events last at most 31 days. Reade
 | `GET /api/calendar/events/:id` | With `attendance {going, maybe, guests, checkedIn}` and the caller's `myRsvp` |
 | `PATCH /api/calendar/events/:id` | Moderators; the event fields, all optional. A change attendees see moves `sequence`; a new time or reminder list reschedules the reminders |
 | `POST /api/calendar/events/:id/cancel` `{reason?}` | Moderators. Stops the reminders and notifies **every attendee** (going or maybe), in the console (`event.cancelled`) and by email (`event-notice`: the time and a link, never the event's title or the reason). `200` with the event and `notified` |
-| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`) |
+| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`); since 1.5.0 (B-3603) the event row is locked while the places are counted, so simultaneous answers for the last place take turns and only one gets it |
 | `GET /api/calendar/events/:id/attendees` | Readers see who is going or maybe; moderators also the declined and check-ins |
 | `POST /api/calendar/events/:id/check-in` `{userId, checkedIn?: true}` | Moderators. Someone without an RSVP is added as going (if they can read the event) |
 | `GET /api/calendar/events/:id/reminders` | Moderators. `[{id, minutesBefore, fireAt, state: scheduled \| sending \| sent \| cancelled \| skipped, recipients, sentAt}]` |
@@ -3433,3 +3436,81 @@ send a security notice and are audited (`dav.app_password.created`, `dav.app_pas
 | `PUT /dav/:path` | Stores a calendar object or contact, or answers a group event (the caller's `PARTSTAT` becomes their RSVP). `If-Match` with a stale ETag is `412` |
 | `DELETE /dav/:path` | Deletes a personal object or collection; cancels a group event (moderators and owners) |
 | `OPTIONS /dav/:path` | `DAV: 1, 3, calendar-access, addressbook, extended-mkcol` and the methods allowed |
+
+## Sprint 31 (1.5.0): custom feed generators (B-3001 to B-3003) and relay commit verification (B-3604)
+
+### Relay commit verification (B-3604)
+
+A subscribeRepos `#commit` is believed only when it verifies (`server/src/atproto/commit.ts`): every block used hashes
+to its CID; the commit object (`{did, version: 3, data, rev, prev, sig}`) names the frame's repo and rev; `sig` is a
+compact low-S ECDSA-SHA256 signature over the DAG-CBOR of the commit without `sig`, by the `#atproto` key of the repo's
+DID document (resolved through the service URL checks, cached five minutes; fetched once more, at most once a minute
+per DID, when the signature fails, in case the key rotated); and each operation the subscription uses is proven against
+the signed tree root `data`: a create or update by walking the Merkle search tree to its path and finding exactly the
+operation's CID (with the record block hashing to it), a delete by finding nothing there. A commit that fails is
+dropped whole (none of its posts are checked, labelled or indexed; the cursor moves past it), counted in the
+subscription's `counts.rejected` and `exprsn_firehose_events_total{result="rejected"}`, and audited
+`atproto.firehose.commit.rejected` `{subscription, did}` with `{reason: commit | repo | resolve | document | signature |
+proof | too-big, detail, seq, posts, deletes, more?}`: at most `FIREHOSE_REJECT_AUDITS` a minute per subscription, the
+rest counted in `more` on the next one. Jetstream carries no signatures; a Jetstream endpoint is trusted as the
+operator's choice.
+
+### Feed generators
+
+A tenant's feeds are served by the tenant's own AT-Protocol identity (Sprint 25) as a feed generator: its DID document
+gains a `#bsky_fg` service of type `BskyFeedGenerator` at the identity's endpoint when the first feed is made (computed
+for did:web; for did:plc a signed PLC operation adds it, audited `atproto.identity.service-added`). The platform's
+identity serves no feeds. Each post the tenant's firehose subscriptions take, and that the moderation check passed, is
+indexed by every active feed whose rules all hold:
+
+- `authors`: DIDs (null: anyone); `collections`: NSIDs or `prefix.*` (default `[app.bsky.feed.post]`);
+- `keywords`: any of them, case-insensitive, not inside a longer word (null: any text);
+- `labels`: any of these in force on the post (from the tenant's labeler, its trusted external labelers, or the
+  check's own verdict: block is `!hide`, warn or flag `!warn`); `excludeLabels`: none of these (default `[!hide]`).
+
+Authors, collections and labels are checked again when a page is served, so a post outside the current rules, or
+labelled later, is never served. Narrowing authors or collections deletes what no longer matches; changing the keywords
+or the ranking empties the index (the post text is not kept). A delete seen on the firehose takes the post out of every
+feed.
+
+Ranking (optional) orders a feed by a score instead of newest first, and `minScore` drops posts below it:
+`{kind: embedding, profile, query, minScore?}` is the cosine similarity of the post to `query`, both embedded through
+the gateway by the embedding model the profile routes to (the profile must handle the subscription's label);
+`{kind: classifier, classifier, label, minScore?}` is a guardrail classifier's score for one of its labels. A post whose
+ranking fails is not indexed (`counts.rankFailed`, `lastError`).
+
+The index keeps the post URI, author, collection and a sort key (the time indexed, or the score × 1e9). Pages run by
+(sort, id) descending; the cursor is the last row's `<sort>::<id>` and the next page starts strictly after it, so a
+cursor never repeats a post however many arrive meanwhile. Rows older than `retentionHours` are not served and, with
+anything beyond `maxItems`, are pruned every `FEED_PRUNE_MINUTES` (job `atproto.feeds.prune`).
+
+A feed is `{id, rkey, uri, displayName, description, subscriptionId, rules, ranking, retentionHours, maxItems,
+ratePerMinute, auth: optional | required, state: active | paused, rev, record, published, counts: {indexed, served,
+rankFailed, items?}, lastError, createdAt, updatedAt}`. `uri` is `at://<publisher or generator DID>/app.bsky.feed.generator/<rkey>`;
+`record` is the `app.bsky.feed.generator` record to publish (B-3004): `{$type, did: <the generator's service DID>,
+displayName, description?, createdAt}`; `published` is `{did, uri, cid, at}` once recorded, after which only that URI
+names the feed. The generator is `{ready, reason, did, method, endpoint, serviceId: '#bsky_fg', serviceType:
+'BskyFeedGenerator', advertised}`.
+
+### Feeds (`firehose:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/feeds` | `{generator, feeds: [feed]}` (each with `counts.items`) |
+| `POST /api/atproto/feeds` `{rkey, displayName, description?, subscriptionId?, rules?, ranking?, retentionHours?, maxItems?, ratePerMinute?, auth?, state?}` | B-3002. `rkey` 1 to 15 letters, digits or hyphens; `displayName` at most 24 characters, `description` 300; `retentionHours` 1 to 8760 (72); `maxItems` 10 to `FEED_ITEMS_MAX` (10,000); `ratePerMinute` 1 to 100,000 (300). A ranking whose profile does not route to an embedding model, or whose classifier lacks the label, is `400` with `step: ranking`. Without the tenant's own identity `409` with `step: identity`; a key in use or more than `FEEDS_MAX_PER_TENANT` feeds `409`. Audited `atproto.feed.created`. `201` |
+| `GET /api/atproto/feeds/:id` | The feed |
+| `PATCH /api/atproto/feeds/:id` `{displayName?, description?, subscriptionId?, rules?, ranking?, retentionHours?, maxItems?, ratePerMinute?, auth?, state?}` | Rules are merged field by field. Audited `atproto.feed.updated` (with `removed` when the index shrank) |
+| `DELETE /api/atproto/feeds/:id` | The feed and its index. Audited `atproto.feed.deleted`. `204` |
+| `GET /api/atproto/feeds/:id/skeleton?limit=1-100 (50)&cursor` | A preview page, as getFeedSkeleton serves it (not counted as served) |
+| `PUT /api/atproto/feeds/:id/publication` `{did, uri, cid?}` | B-3004 records where the generator record was published (or an admin who published it from an external account); `uri` must be `at://<did>/app.bsky.feed.generator/<rkey>`. Audited `atproto.feed.published` |
+| `DELETE /api/atproto/feeds/:id/publication` | Forgets it. Audited `atproto.feed.unpublished` |
+
+### Public XRPC (no session; `ATPROTO_PUBLIC_RATE_PER_MINUTE` per address, shared with the labeler routes)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /xrpc/app.bsky.feed.describeFeedGenerator`, `GET /atproto/:key/xrpc/app.bsky.feed.describeFeedGenerator` | `{did, feeds: [{uri}]}`: the active feeds of the tenant identity for this host (or path). `404 NotFound` where no identity is served |
+| `GET /xrpc/app.bsky.feed.getFeedSkeleton`, `GET /atproto/:key/xrpc/app.bsky.feed.getFeedSkeleton` `?feed=<at-uri>&limit=1-100 (50)&cursor` | B-3001, B-3003. `{cursor?, feed: [{post}]}`. `Authorization: Bearer <service JWT>` from the AppView: `alg` ES256K or ES256, signed by the issuer's `#atproto` key (its DID document through the service URL checks), `aud` the generator DID or `<did>#bsky_fg`, `exp` in the future and at most an hour away, `lxm` (when given) `app.bsky.feed.getFeedSkeleton`. A token that does not verify is `401` (`BadJwt`, `BadJwtSignature`, `BadJwtAudience`, `JwtExpired`, `BadJwtLexiconMethod`) whatever the feed; a feed with `auth: required` answers a request without one `401 AuthenticationRequired`. `400 UnknownFeed`, `InvalidRequest`, `BadCursor`; `429 RateLimitExceeded` over the feed's `ratePerMinute` (shared counters, with `Retry-After`). Metric `exprsn_feed_requests_total{method, result}` |
+
+Audit actions are in the event catalogue's `atproto.*` group. Configuration: `FIREHOSE_REJECT_AUDITS` (20),
+`FEEDS_MAX_PER_TENANT` (20), `FEED_ITEMS_MAX` (50,000), `FEED_PRUNE_MINUTES` (15; 0 never).

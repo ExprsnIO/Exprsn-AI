@@ -2771,6 +2771,10 @@
               },
               "failed": {
                 "type": "integer"
+              },
+              "rejected": {
+                "type": "integer",
+                "description": "Since 1.5.0 (B-3604): relay commits dropped because their signature or proof did not verify"
               }
             }
           },
@@ -7186,6 +7190,226 @@
           "grant",
           "decision"
         ]
+      },
+      "FeedGenerator": {
+        "type": "object",
+        "description": "The tenant's feed generator: its service DID (the tenant's own AT-Protocol identity) and the #bsky_fg endpoint an AppView calls",
+        "required": [
+          "ready",
+          "reason",
+          "did",
+          "method",
+          "endpoint",
+          "serviceId",
+          "serviceType",
+          "advertised"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "did": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "method": {
+            "enum": [
+              "web",
+              "plc",
+              null
+            ]
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serviceId": {
+            "const": "#bsky_fg"
+          },
+          "serviceType": {
+            "const": "BskyFeedGenerator"
+          },
+          "advertised": {
+            "type": "boolean",
+            "description": "Whether the DID document carries the #bsky_fg service now"
+          }
+        }
+      },
+      "AtprotoFeed": {
+        "type": "object",
+        "required": [
+          "id",
+          "rkey",
+          "uri",
+          "displayName",
+          "description",
+          "subscriptionId",
+          "rules",
+          "ranking",
+          "retentionHours",
+          "maxItems",
+          "ratePerMinute",
+          "auth",
+          "state",
+          "rev",
+          "record",
+          "published",
+          "counts",
+          "lastError",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rkey": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9-]{1,15}$"
+          },
+          "uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "at://<publisher or generator DID>/app.bsky.feed.generator/<rkey>"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subscriptionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rules": {
+            "type": "object"
+          },
+          "ranking": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "retentionHours": {
+            "type": "integer"
+          },
+          "maxItems": {
+            "type": "integer"
+          },
+          "ratePerMinute": {
+            "type": "integer"
+          },
+          "auth": {
+            "enum": [
+              "optional",
+              "required"
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ]
+          },
+          "rev": {
+            "type": "integer"
+          },
+          "record": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The app.bsky.feed.generator record to publish (B-3004): { $type, did: <generator DID>, displayName, description?, createdAt }"
+          },
+          "published": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "did",
+                  "uri",
+                  "cid",
+                  "at"
+                ],
+                "properties": {
+                  "did": {
+                    "type": "string"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "cid": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "at": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "required": [
+              "indexed",
+              "served",
+              "rankFailed"
+            ],
+            "properties": {
+              "indexed": {
+                "type": "integer"
+              },
+              "served": {
+                "type": "integer"
+              },
+              "rankFailed": {
+                "type": "integer"
+              },
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
       }
     },
     "responses": {
@@ -14697,6 +14921,745 @@
                       ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/feeds": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. The tenant's feed generator (service DID, #bsky_fg endpoint, whether it is ready) and its feeds with their index sizes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "generator",
+                    "feeds"
+                  ],
+                  "properties": {
+                    "generator": {
+                      "$ref": "#/components/schemas/FeedGenerator"
+                    },
+                    "feeds": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AtprotoFeed"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Creates a feed: rules over the tenant's firehose posts, optional ranking through the gateway, retention, a per-feed rate limit. Needs the tenant's own AT-Protocol identity (409 step identity); for a did:plc the #bsky_fg service is added by a signed PLC operation. Audited atproto.feed.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "rkey",
+                  "displayName"
+                ],
+                "properties": {
+                  "rkey": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9-]{1,15}$"
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 300
+                  },
+                  "subscriptionId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Only posts from this firehose subscription (null: every one)"
+                  },
+                  "rules": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "All must hold. authors: DIDs (null: anyone); collections: NSIDs or prefix.* (default [app.bsky.feed.post]); keywords: any, case-insensitive, on word boundaries (null: any text); labels: any of these in force on the post (null: no condition); excludeLabels: none of these (default [!hide])",
+                    "properties": {
+                      "authors": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 10000,
+                            "items": {
+                              "type": "string",
+                              "pattern": "^did:(plc:[a-z2-7]{24}|web:[A-Za-z0-9.%:-]{3,250})$"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "collections": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-zA-Z][a-zA-Z0-9-]{0,62}(\\.[a-zA-Z0-9-]{1,63})+(\\.\\*)?$"
+                        }
+                      },
+                      "keywords": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 200,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "labels": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 50,
+                            "items": {
+                              "type": "string",
+                              "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "excludeLabels": {
+                        "type": "array",
+                        "maxItems": 50,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                        }
+                      }
+                    }
+                  },
+                  "ranking": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "profile",
+                          "query"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "embedding"
+                          },
+                          "profile": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100,
+                            "description": "A published gateway profile routing to an embedding model"
+                          },
+                          "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "minScore": {
+                            "type": "number",
+                            "minimum": -1,
+                            "maximum": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "classifier",
+                          "label"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "classifier"
+                          },
+                          "classifier": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100,
+                            "description": "A guardrail classifier id or slug"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                          },
+                          "minScore": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "retentionHours": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8760,
+                    "default": 72
+                  },
+                  "maxItems": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "description": "At most FEED_ITEMS_MAX; default 10,000 (or FEED_ITEMS_MAX if lower)"
+                  },
+                  "ratePerMinute": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000,
+                    "default": 300
+                  },
+                  "auth": {
+                    "enum": [
+                      "optional",
+                      "required"
+                    ],
+                    "default": "optional"
+                  },
+                  "state": {
+                    "enum": [
+                      "active",
+                      "paused"
+                    ],
+                    "default": "active"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtprotoFeed"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/feeds/{id}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. One feed, with the record to publish and its index size",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtprotoFeed"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Changes a feed. Narrowed authors or collections delete what no longer matches; new keywords or a new ranking empty the index. Audited atproto.feed.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 300
+                  },
+                  "subscriptionId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Only posts from this firehose subscription (null: every one)"
+                  },
+                  "rules": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "All must hold. authors: DIDs (null: anyone); collections: NSIDs or prefix.* (default [app.bsky.feed.post]); keywords: any, case-insensitive, on word boundaries (null: any text); labels: any of these in force on the post (null: no condition); excludeLabels: none of these (default [!hide])",
+                    "properties": {
+                      "authors": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 10000,
+                            "items": {
+                              "type": "string",
+                              "pattern": "^did:(plc:[a-z2-7]{24}|web:[A-Za-z0-9.%:-]{3,250})$"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "collections": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-zA-Z][a-zA-Z0-9-]{0,62}(\\.[a-zA-Z0-9-]{1,63})+(\\.\\*)?$"
+                        }
+                      },
+                      "keywords": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 200,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "labels": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 50,
+                            "items": {
+                              "type": "string",
+                              "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "excludeLabels": {
+                        "type": "array",
+                        "maxItems": 50,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^!?[a-z0-9][a-z0-9-]{0,127}$"
+                        }
+                      }
+                    }
+                  },
+                  "ranking": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "profile",
+                          "query"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "embedding"
+                          },
+                          "profile": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100,
+                            "description": "A published gateway profile routing to an embedding model"
+                          },
+                          "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "minScore": {
+                            "type": "number",
+                            "minimum": -1,
+                            "maximum": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "classifier",
+                          "label"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "classifier"
+                          },
+                          "classifier": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100,
+                            "description": "A guardrail classifier id or slug"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                          },
+                          "minScore": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "retentionHours": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8760,
+                    "default": 72
+                  },
+                  "maxItems": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "description": "At most FEED_ITEMS_MAX; default 10,000 (or FEED_ITEMS_MAX if lower)"
+                  },
+                  "ratePerMinute": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000,
+                    "default": 300
+                  },
+                  "auth": {
+                    "enum": [
+                      "optional",
+                      "required"
+                    ],
+                    "default": "optional"
+                  },
+                  "state": {
+                    "enum": [
+                      "active",
+                      "paused"
+                    ],
+                    "default": "active"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtprotoFeed"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Deletes a feed and its index. Audited atproto.feed.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/feeds/{id}/skeleton": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. A preview page of the feed, as getFeedSkeleton serves it (not counted as served)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "feed"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string",
+                      "description": "<sort>::<id> of the last row scanned; the next page starts strictly after it"
+                    },
+                    "feed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "post"
+                        ],
+                        "properties": {
+                          "post": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/feeds/{id}/publication": {
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Records where the app.bsky.feed.generator record was published (B-3004, or by hand from an external account); the feed is then named only by that URI. Audited atproto.feed.published",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "did",
+                  "uri"
+                ],
+                "properties": {
+                  "did": {
+                    "type": "string",
+                    "pattern": "^did:(plc:[a-z2-7]{24}|web:[A-Za-z0-9.%:-]{3,250})$"
+                  },
+                  "uri": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "at://<did>/app.bsky.feed.generator/<the feed rkey>"
+                  },
+                  "cid": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtprotoFeed"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Forgets the publication. Audited atproto.feed.unpublished",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtprotoFeed"
                 }
               }
             }
@@ -25640,6 +26603,158 @@
         }
       }
     },
+    "/atproto/{key}/xrpc/app.bsky.feed.describeFeedGenerator": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "app.bsky.feed.describeFeedGenerator for a tenant's path-form identity. XRPC errors {error, message}",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "did",
+                    "feeds"
+                  ],
+                  "properties": {
+                    "did": {
+                      "type": "string"
+                    },
+                    "feeds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "uri"
+                        ],
+                        "properties": {
+                          "uri": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/atproto/{key}/xrpc/app.bsky.feed.getFeedSkeleton": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "app.bsky.feed.getFeedSkeleton for a tenant's path-form identity (as /xrpc/app.bsky.feed.getFeedSkeleton). XRPC errors {error, message}",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,63}$"
+            }
+          },
+          {
+            "name": "feed",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 3000
+            },
+            "description": "at://<did>/app.bsky.feed.generator/<rkey>"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bearer <inter-service JWT> signed by the caller's #atproto key, aud the generator DID (or <did>#bsky_fg), lxm app.bsky.feed.getFeedSkeleton"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "feed"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string",
+                      "description": "<sort>::<id> of the last row scanned; the next page starts strictly after it"
+                    },
+                    "feed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "post"
+                        ],
+                        "properties": {
+                          "post": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/atproto/{key}/xrpc/com.atproto.label.queryLabels": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -28197,6 +29312,139 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/xrpc/app.bsky.feed.describeFeedGenerator": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "app.bsky.feed.describeFeedGenerator for the tenant identity on this host: its DID and active feeds. XRPC errors {error, message}",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "did",
+                    "feeds"
+                  ],
+                  "properties": {
+                    "did": {
+                      "type": "string"
+                    },
+                    "feeds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "uri"
+                        ],
+                        "properties": {
+                          "uri": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/xrpc/app.bsky.feed.getFeedSkeleton": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "app.bsky.feed.getFeedSkeleton: one page of a feed. A service JWT that does not verify is refused (401 BadJwt, BadJwtSignature, BadJwtAudience, JwtExpired, BadJwtLexiconMethod); a feed with auth required refuses a request without one (401 AuthenticationRequired). Per-address and per-feed rate limits (429 RateLimitExceeded). XRPC errors {error, message} (400 UnknownFeed, InvalidRequest, BadCursor)",
+        "parameters": [
+          {
+            "name": "feed",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 3000
+            },
+            "description": "at://<did>/app.bsky.feed.generator/<rkey>"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bearer <inter-service JWT> signed by the caller's #atproto key, aud the generator DID (or <did>#bsky_fg), lxm app.bsky.feed.getFeedSkeleton"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "feed"
+                  ],
+                  "properties": {
+                    "cursor": {
+                      "type": "string",
+                      "description": "<sort>::<id> of the last row scanned; the next page starts strictly after it"
+                    },
+                    "feed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "post"
+                        ],
+                        "properties": {
+                          "post": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -34325,8 +35573,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Created",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
@@ -34352,8 +35600,8 @@
               }
             }
           },
-          "200": {
-            "description": "OK",
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {
@@ -34709,8 +35957,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Created",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
@@ -34736,8 +35984,8 @@
               }
             }
           },
-          "200": {
-            "description": "OK",
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {
@@ -35094,8 +36342,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Created",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
@@ -35122,8 +36370,8 @@
               }
             }
           },
-          "200": {
-            "description": "OK",
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {
@@ -35433,8 +36681,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Created",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
@@ -35443,8 +36691,8 @@
               }
             }
           },
-          "200": {
-            "description": "OK",
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {

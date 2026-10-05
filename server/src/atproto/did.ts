@@ -176,7 +176,8 @@ export class DidResolver {
   constructor(
     private readonly http: GuardedFetch,
     private readonly plcUrl: () => string,
-    private readonly ttlMs = 5 * 60_000
+    private readonly ttlMs = 5 * 60_000,
+    private readonly maxEntries = 1000
   ) {}
 
   async resolve(did: string, fresh = false): Promise<unknown> {
@@ -188,7 +189,7 @@ export class DidResolver {
     else throw new Error('Only did:plc and did:web are resolved');
     const r = await this.http.request(url);
     if (r.status !== 200 || !r.json) throw new Error(`${did} did not resolve (${r.status})`);
-    if (this.cache.size > 1000) this.cache.delete(this.cache.keys().next().value!);
+    if (this.cache.size > this.maxEntries) this.cache.delete(this.cache.keys().next().value!);
     this.cache.set(did, { at: Date.now(), doc: r.json });
     return r.json;
   }

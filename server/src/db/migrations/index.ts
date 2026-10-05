@@ -45,6 +45,7 @@ import * as m031 from './031_access.js';
 import * as m031b from './031b_record_queries.js';
 import * as m032 from './032_dav.js';
 import * as m032c from './032c_memory.js';
+import * as m033b from './033b_feeds.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -98,7 +99,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '031_access': m031,
   '031b_record_queries': m031b,
   '032_dav': m032,
-  '032c_memory': m032c
+  '032c_memory': m032c,
+  '033b_feeds': m033b
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

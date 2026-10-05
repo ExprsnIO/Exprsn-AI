@@ -56,7 +56,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0 (B-2001)
   { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants; since Sprint 25 also plugin.audited, plugin.action.refused, plugin.call.refused and plugin.throttled (audit actions)' },
   // 1.4.0, Sprint 25 (B-1608 to B-1611)
-  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels; since Sprint 27 firehose subscriptions created, updated, started, stopped and deleted (atproto.firehose.*) (audit actions)' },
+  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels; since Sprint 27 firehose subscriptions created, updated, started, stopped and deleted (atproto.firehose.*); since 1.5.0 relay commits rejected (atproto.firehose.commit.rejected), feed generators created, updated, deleted, published and unpublished (atproto.feed.*) and DID services added (atproto.identity.service-added) (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records (Sprint 27): created, updated, deleted, transitioned' },
   // 1.4.0, Sprint 27 (B-2201 to B-2208)
   { pattern: 'app.*', description: 'Low-code apps: apps, entities, record changes, imports and exports, forms and public submissions, triggers fired and skipped, AI fields, bundles and drafts (audit actions; never record values)' },

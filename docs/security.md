@@ -119,6 +119,24 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Feed generators and relay commit verification (1.5.0, Sprint 31, B-3001 to B-3003, B-3604). Relay commits are
+  verified one at a time in the consumer's order: each repo DID new to the cache costs a DID resolution (up to five
+  seconds), so a subscription to the whole network over subscribeRepos falls behind where a Jetstream would not; use
+  author allow-lists. A DID that cannot be resolved, a `tooBig` commit and an operation whose tree nodes are missing
+  from the CAR are dropped, not retried. Commit `rev` order and `prev`/`prevData` chaining are not checked (a relay
+  could replay an old, validly signed commit), and `#sync` and `#account` frames are not acted on (a deactivated or
+  taken-down repo's posts are still taken until its relay stops sending them). Feeds index only what the firehose
+  subscriptions take (their collections, authors and sample) and what passed the moderation check; a post without text
+  is never indexed. Keyword matching is on the post text at ingest only; changing keywords or the ranking empties the
+  index, which refills from new posts (there is no backfill). A ranked feed orders by score alone, so an old post with
+  a high score stays at the top until its retention runs out. Rankings call the gateway for every post that passes the
+  rules (two embeddings per post: the query's is cached per feed version), without tenant quota metering. The service
+  JWT's `jti` is not remembered, so a captured token can be replayed until it expires (at most an hour); the viewer's
+  DID is not used for personalisation and not stored. A feed's rules and index are not labelled: feeds are built from
+  public AT-Protocol posts and served publicly, and any `firehose:manage` holder manages every feed of the tenant. A
+  feed is named, until B-3004 records its publication, by any `at://` authority with its record key. The feed
+  generator needs the tenant's own identity; the platform identity serves none.
+
 - Model-based memory management (1.5.0, Sprint 30): the tenant's memory profile reads the user's chat messages and
   agent runs' tasks and answers (through the gateway, within the profile's label and the pool's ceiling). The text is
   sent as JSON data with an instruction to treat it as such, and only a strictly valid JSON answer is used, but a
@@ -616,9 +634,10 @@ filter, private `/tmp`, only the state directory writable.
   zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
   rules. Notices carry the moderator's reason, not the moderated content.
 - Firehose ingest (1.4.0, Sprint 27, B-1908): tested against a local Jetstream and relay double only, not yet against
-  the public Jetstream or a live relay. Records from subscribeRepos are read from the commit's CAR blocks without
-  verifying the commit signature or the repository's Merkle tree against the author's DID document, so a relay could
-  hand over records an author never wrote; Jetstream carries no proofs at all. Trust the endpoint you subscribe to.
+  the public Jetstream or a live relay. Since 1.5.0 (B-3604) a subscribeRepos commit is verified against the repo's
+  DID key and each record used is proven against its signed Merkle tree, and a commit that fails is dropped and
+  audited (see the Sprint 31 entry above); Jetstream still carries no proofs at all, so trust a Jetstream endpoint you
+  subscribe to.
   Ingested posts are an unregistered moderation type (`atproto-post`): they are checked with their text and get a flag
   and labels, but cannot be reported, hidden or appealed through the object registry (Exprsn-AI does not store them),
   and a deleted post's labels are not withdrawn. Images and video are not fetched; only text and alt text are checked.
@@ -637,8 +656,9 @@ filter, private `/tmp`, only the state directory writable.
   per-feed key rotation other than revoking and creating a new one). Feed fetches are not audited one by one (they
   record `lastUsedAt`); creation and revocation are. Events have no recurrence and no VTIMEZONE (times are UTC, which
   RFC 5545 allows); a wall-clock time in a daylight-saving gap moves forward by the gap. Reminders go to attendees
-  who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
-  default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
+  who said going or maybe, not to every member. Capacity is checked under a lock on the event row (since 1.5.0,
+  B-3603), so simultaneous RSVPs for the last place take turns; a check-in at the door still adds an attendee past the
+  capacity, on purpose. Group posts are small discussion content
   (no edit, no attachments, no threads); the workspace feed is B-27.
 - Customer-service channels (1.4.0, Sprint 28a, B-23). Customer sessions are public by design: the channel's public
   key is not a secret, so anyone can start an anonymous session on a chat channel that allows them, limited per client
