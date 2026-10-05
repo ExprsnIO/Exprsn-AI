@@ -8,8 +8,8 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 58 items, 340 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 161, P2 60. At about
-78 points a sprint (roughly five engineers) that is Sprints 29 to 32 with Sprints 30 and 31 over the guide; with fewer,
+**Size.** 66 items, 380 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 201, P2 60. At about
+78 points a sprint (roughly five engineers) that is Sprints 29 to 33 with Sprints 30 and 31 over the guide; with fewer,
 P2 (the PDS and feed generator) moves to 1.6 first, then WebDAV (B-32), then the import wizard's dataset half
 (B-3804 to B-3807), then Workflows 2 (B-39, added 2026-10-05 from the Sprint 29 prototype roll-up
 `design/prototype/rollup-1.5.html`).
@@ -27,13 +27,15 @@ the same policy pipeline.
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703, B-3801–B-3803 | 107 | `032_dav`, `032b_imports` | Planned |
 | 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807 | 94 | `033_pds_feeds` | Planned |
-| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; release | B-3901–B-3910, B-3415, B-3501 | 63 | `034_workflows2` | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords | B-3901–B-3910, B-3415 | 63 | `034_workflows2` | Planned |
+| 33 | Agents, tools and skills in chat; release | B-4001–B-4008, B-3501 | 40 | `035_chat_invocation` | Planned |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
 the file-store mount (B-3102, B-3103, B-32); the PDS repository (B-2902) before the outbound firehose (B-2904) and
 before a feed generator publishes its record into a tenant repo (B-3004); the AT-Protocol screen (B-3406) last, so it
-covers the PDS and feeds; the repository registry (B-3801) before any import, and model and dataset import (B-3803,
+covers the PDS and feeds; Workflows 2's agent step and skill loading (B-3902) and the built-in domain tools (B-3904)
+before agents, tools and skills in chat (B-40), which reuse them; the repository registry (B-3801) before any import, and model and dataset import (B-3803,
 B-3804) before the Import screen (B-3807) goes live.
 
 ---
@@ -169,6 +171,28 @@ and sub-workflows at `WORKFLOW_MAX_DEPTH` (new).
 | B-3908 | `notify` and `webhook` steps: in-app and email notices to cleared recipients; outbound webhooks through the tenant's allowed hosts, signed with the tenant's webhook keys | A webhook step is refused at save for a host outside the tenant's list | 5 |
 | B-3909 | Workflow bundles: signed export and import (`exprsn-workflow/1`, like `exprsn-app/1`) with tool, profile and trigger references re-bound on import | A bundle changed after signing is refused with `422 Bundle refused` | 3 |
 | B-3910 | Console: the live Workflows screen matches the realigned board (Triggers and callers tab, record and vault editors, decision-edge labels, the new kinds as they land) and joins the Playwright suite | Every control on the screen is backed by the server | 3 |
+
+### B-40 Agents, tools and skills in chat (40 points)
+
+Added 2026-10-05 at the owner's request. Chat today offers only the tools on its profile's list, read-only ones whose
+`confirm` is `never`, and only when the model decides to call them; write and destructive tools are left out because
+their approval exists only in agent runs; agents run only from the Runs screen; skills reach a model only through an
+agent's definition. This epic lets a person call each of them from a conversation, and reuses what already decides
+them: the registry's publish and label rules, the dispatcher with the tool-call guardrail and its approvals, agent runs
+with their budgets, and skill instructions as agents load them (and as model steps will, B-3902). Every invocation is
+audited, metered to the conversation, sealed with the tenant key and labelled at the higher of the conversation's and
+the entry's label; nothing runs above the conversation's ceiling or the caller's clearance.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-4001 | What a conversation may call: `GET /api/conversations/:id/capabilities` lists the published agents, tools and skills the caller may use there (tenant, workspace, clearance, the conversation's ceiling, the profile's allow-list), with each tool's input schema and side-effect class | An entry above the conversation's ceiling is never listed, and calling it by name is refused the same way | 3 |
+| B-4002 | A person calls a tool: the composer's `/tool` sends arguments (a form from the tool's JSON schema, or text the profile turns into arguments) through the dispatcher and the tool-call guardrail; the call and its result join the conversation as a tool turn the model sees next | A call the guardrail holds shows as held, and runs only when a reviewer approves it in the flag queue | 5 |
+| B-4003 | Write and destructive tools in chat, user- or model-proposed, behind an in-chat approval card: write tools run on the caller's own approval, destructive ones and `confirm: always` ones also need the guardrail's approver when a rule says so; denied and expired cards are recorded | A write tool runs only after its card is approved, and a denied card leaves no side effect | 5 |
+| B-4004 | `@agent` in a conversation starts an agent run bound to it: input is the message plus, when the person allows it, the recent turns within the agent's label; the run's steps stream into a run card; its answer becomes an assistant turn attributed to the agent; budgets, approvals and cancel as in Runs | A run started from chat shows in Runs with a link back, and cancelling it from the chat stops it | 8 |
+| B-4005 | Skills on a conversation: `+skill` adds a published skill's instructions to the conversation's system prompt (sticky until removed, or for one turn), shown as chips; the profile can restrict which skills apply | Removing a skill leaves its instructions out of the very next turn | 3 |
+| B-4006 | The model may hand a turn to an agent: agents on a profile's list are offered as tools (`agent:<name>`), run as in B-4004 with a depth limit (`CHAT_AGENT_MAX_DEPTH`) and the caller's budgets | An agent offered as a tool cannot start itself again past the depth limit | 5 |
+| B-4007 | Prototype board for the Chat screen additions: the `/` and `@` and `+` pickers, tool, approval and run cards, skill chips, their states and copy; the smoke run clean | The board passes the prototype smoke run in light and dark | 3 |
+| B-4008 | Console: the live Chat screen gets the pickers and cards from B-4007, keyboard-first, with the run card linking to Runs; joins the Playwright suite with axe-core and the reflow checks | An agent run, a held tool call and a skill chip work end to end in the e2e suite with no axe or reflow finding | 8 |
 
 ## P2
 

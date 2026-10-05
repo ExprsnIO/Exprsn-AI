@@ -41,7 +41,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **In progress** (B-3401 boards done) |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Models | Planned |
 | 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen (1.5.0) | AT-Protocol, Import (new); Training, Classifiers, Knowledge | Planned |
-| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; release (1.5.0) | Workflows, Settings | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords (1.5.0) | Workflows, Settings | Planned |
+| 33 | Agents, tools and skills in chat; release (1.5.0) | Chat | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -56,8 +57,9 @@ signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a 
 `1.4.0` (Sprints 24 to 28, the [1.4.0 backlog](Backlog-1.4.0.md), server-only); before it, `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
 [1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
 planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
-identity work. Sprints 29 to 32 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
-features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, and an AT-Protocol PDS and feed generator.
+identity work. Sprints 29 to 33 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
+features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, model-based memory management, the model
+and dataset import wizard, an AT-Protocol PDS and feed generator, Workflows 2, and agents, tools and skills in chat.
 
 ---
 
