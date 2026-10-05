@@ -3441,7 +3441,8 @@ send a security notice and are audited (`dav.app_password.created`, `dav.app_pas
 
 ### Relay commit verification (B-3604)
 
-A subscribeRepos `#commit` is believed only when it verifies (`server/src/atproto/commit.ts`): every block used hashes
+A subscribeRepos `#commit` is believed only when it verifies (`server/src/atproto/commit.ts`, over the PDS's repository
+code: the MST walk in `pds/mst.ts`, the CAR reader in `pds/car.ts`, the signed bytes in `pds/repo.ts`): every block used hashes
 to its CID; the commit object (`{did, version: 3, data, rev, prev, sig}`) names the frame's repo and rev; `sig` is a
 compact low-S ECDSA-SHA256 signature over the DAG-CBOR of the commit without `sig`, by the `#atproto` key of the repo's
 DID document (resolved through the service URL checks, cached five minutes; fetched once more, at most once a minute

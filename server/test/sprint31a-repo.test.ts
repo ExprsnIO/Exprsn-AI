@@ -14,7 +14,7 @@ import { cborEncode } from '../src/atproto/cbor.js';
 import { compressPublicKey, normaliseLowS, parseDidKey } from '../src/atproto/crypto.js';
 import { Cid, CODEC_RAW, sha256 } from '../src/atproto/encoding.js';
 import { carBlock, carHeader, readCarVerified, writeCar } from '../src/atproto/pds/car.js';
-import { buildMst, coveringProof, decodeNode, keyHeight, loadMst, mstGet, mstPath } from '../src/atproto/pds/mst.js';
+import { buildMst, coveringProof, decodeNode, keyHeight, loadMst, mstGet, mstLookup, mstPath } from '../src/atproto/pds/mst.js';
 import { commitSigningBytes, decodeCommit, recordProofCar, repoCar, signCommit, verifyCommit, verifyRepoCar } from '../src/atproto/pds/repo.js';
 import { nextTid, TID_RE, tidFrom, tidMicros } from '../src/atproto/pds/tid.js';
 import { keyFromScalar } from './sprint25b-fakes.js';
@@ -49,6 +49,9 @@ describe('Merkle search tree (B-2902)', () => {
       const proof = new Map<string, Buffer>();
       for (const k of [...f.adds, ...f.dels]) coveringProof(after, k, proof);
       expect([...proof.keys()].sort(), f.comment).toEqual([...f.blocksInProof].sort());
+      // The relay's walk (B-3604) proves every operation from the covering proof alone.
+      for (const k of f.adds) expect(mstLookup(proof, after.root.cid, k), `${f.comment}: ${k}`).toEqual({ found: v });
+      for (const k of f.dels) expect(mstLookup(proof, after.root.cid, k), `${f.comment}: ${k}`).toEqual({ absent: true });
       // Reading the tree back from its blocks gives the same keys and refuses nothing.
       expect(loadMst(after.blocks, after.root.cid).leaves.map((l) => l.key)).toEqual([...keys].sort());
     }

@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cborEncode } from '../src/atproto/cbor.js';
-import { collectionAllowed, parseJetstream, parseRepoFrame, readCar, recordText, sampled } from '../src/atproto/firehose-frames.js';
+import { collectionAllowed, parseJetstream, parseRepoFrame, recordText, sampled } from '../src/atproto/firehose-frames.js';
+import { readCarBlocks } from '../src/atproto/pds/car.js';
 import { FirehoseService, streamUrl, type FirehoseOptions } from '../src/atproto/firehose.js';
 import { Cid } from '../src/atproto/encoding.js';
 import { startSigner } from '../src/signer/server.js';
@@ -54,7 +55,7 @@ describe('B-1908: firehose frames', () => {
     expect(parseJetstream(JSON.stringify({ kind: 'commit' }))).toHaveProperty('error');
 
     const block = cborEncode({ $type: POST, text: 'from a relay' });
-    const blocks = readCar(car([block]));
+    const blocks = readCarBlocks(car([block]));
     expect(blocks.get(Cid.ofCbor(block).toString())).toEqual(block);
     const f = parseRepoFrame(repoCommit(42, BOB, [{ collection: POST, rkey: 'r1', record: { text: 'from a relay' } }, { collection: POST, rkey: 'r0', record: null, action: 'delete' }]));
     expect(f).toMatchObject({ message: { cursor: 42, ops: [{ did: BOB, collection: POST, rkey: 'r1', action: 'create', record: { text: 'from a relay' } }, { rkey: 'r0', action: 'delete', record: null }] } });

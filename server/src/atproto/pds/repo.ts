@@ -32,10 +32,17 @@ export interface SignedCommit extends UnsignedCommit {
 
 export class RepoError extends Error {}
 
-export const commitSigningBytes = (c: UnsignedCommit): Buffer => cborEncode({ did: c.did, version: c.version, data: c.data, rev: c.rev, prev: c.prev });
+/**
+ * The bytes a commit's signature covers: the commit object without `sig`, as DAG-CBOR. Every other field is signed as
+ * it is, so the relay check (B-3604, `../commit.ts`) verifies a foreign commit (version 2, or with fields this server
+ * does not write) exactly as it was made; this server's commits pass the five fields of `UnsignedCommit`.
+ */
+export const commitSigningBytes = (c: UnsignedCommit | Record<string, unknown>): Buffer => cborEncode({ ...(c as Record<string, CborValue>), sig: undefined });
+
+const unsigned = (c: UnsignedCommit): UnsignedCommit => ({ did: c.did, version: c.version, data: c.data, rev: c.rev, prev: c.prev });
 
 export async function signCommit(c: UnsignedCommit, sign: (bytes: Buffer) => Promise<Buffer>): Promise<{ commit: SignedCommit; bytes: Buffer; cid: Cid }> {
-  const sig = await sign(commitSigningBytes(c));
+  const sig = await sign(commitSigningBytes(unsigned(c)));
   const commit: SignedCommit = { ...c, sig };
   const bytes = cborEncode({ did: c.did, version: c.version, data: c.data, rev: c.rev, prev: c.prev, sig });
   return { commit, bytes, cid: Cid.ofCbor(bytes) };
@@ -54,7 +61,7 @@ export function decodeCommit(bytes: Uint8Array): SignedCommit {
   return { did: v.did, version: 3, data: v.data, rev: v.rev, prev: (v.prev as Cid | null | undefined) ?? null, sig: v.sig };
 }
 
-export const verifyCommit = (c: SignedCommit, curve: Curve, key: KeyObject): boolean => verifySignature(curve, key, commitSigningBytes(c), c.sig);
+export const verifyCommit = (c: SignedCommit, curve: Curve, key: KeyObject): boolean => verifySignature(curve, key, commitSigningBytes(unsigned(c)), c.sig);
 
 export interface VerifiedRepo {
   did: string;

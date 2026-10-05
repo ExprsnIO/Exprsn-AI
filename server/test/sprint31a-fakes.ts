@@ -5,7 +5,7 @@ import { cborDecode, type CborValue } from '../src/atproto/cbor.js';
 import { parseMultikey } from '../src/atproto/crypto.js';
 import type { Cid } from '../src/atproto/encoding.js';
 import { readCarVerified } from '../src/atproto/pds/car.js';
-import { decodeNode } from '../src/atproto/pds/mst.js';
+import { mstLookup } from '../src/atproto/pds/mst.js';
 import { decodeCommit, verifyCommit } from '../src/atproto/pds/repo.js';
 import { readFrame } from '../src/atproto/stream.js';
 
@@ -22,23 +22,10 @@ export interface RelayEvent {
   body: Record<string, unknown>;
 }
 
-/** Looks a key up in an MST using only the blocks given; `missing` when the proof lacks a node on the path. */
+/** Looks a key up in an MST using only the blocks given (the server's relay walk, `mstLookup`); `missing` when the proof lacks a node on the path. */
 export function proveKey(blocks: Map<string, Buffer>, root: Cid, key: string): { found: Cid | null } | { missing: string } {
-  let cid: Cid | null = root;
-  while (cid) {
-    const bytes = blocks.get(cid.toString());
-    if (!bytes) return { missing: cid.toString() };
-    const n = decodeNode(bytes);
-    let next: Cid | null = n.left;
-    for (const e of n.entries) {
-      const c = Buffer.compare(Buffer.from(key), Buffer.from(e.key));
-      if (c === 0) return { found: e.value };
-      if (c < 0) break;
-      next = e.right;
-    }
-    cid = next;
-  }
-  return { found: null };
+  const r = mstLookup(blocks, root, key);
+  return 'missing' in r ? r : { found: 'found' in r ? r.found : null };
 }
 
 export class FakeRelay {

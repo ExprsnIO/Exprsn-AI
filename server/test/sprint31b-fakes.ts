@@ -1,13 +1,14 @@
 import { cborEncode } from '../src/atproto/cbor.js';
-import { commitSigningBytes, keyHeight } from '../src/atproto/commit.js';
 import type { Curve } from '../src/atproto/crypto.js';
 import { didDocument } from '../src/atproto/did.js';
 import { Cid } from '../src/atproto/encoding.js';
+import { buildMst as buildPdsMst, mstPath } from '../src/atproto/pds/mst.js';
+import { commitSigningBytes } from '../src/atproto/pds/repo.js';
 import { testKey, type FakePlcDirectory } from './sprint25b-fakes.js';
 
 /*
- * Test doubles for Sprint 31b (B-3604, B-3001): a Merkle search tree writer (checked against the reference
- * implementation's vectors in `fixtures/atproto/`), a repo that signs its commits and emits subscribeRepos `#commit`
+ * Test doubles for Sprint 31b (B-3604, B-3001): the server's Merkle search tree (checked against the reference
+ * implementation's vectors in `fixtures/atproto/`) in the shape these tests use, a repo that signs its commits and emits subscribeRepos `#commit`
  * frames, and a service-JWT issuer (an AppView or a user's PDS) whose DID document the fake PLC directory serves.
  */
 
@@ -19,74 +20,10 @@ export interface MstTree {
   path(key: string): string[];
 }
 
-interface Node {
-  l: Node | null;
-  e: { key: Buffer; v: Cid; t: Node | null }[];
-  cid?: Cid;
-  bytes?: Buffer;
-}
-
-function layerNode(items: { key: Buffer; v: Cid; h: number }[], layer: number): Node {
-  const node: Node = { l: null, e: [] };
-  let run: typeof items = [];
-  const sub = (list: typeof items): Node | null => (list.length ? layerNode(list, layer - 1) : null);
-  for (const it of items) {
-    if (it.h === layer) {
-      const left = sub(run);
-      if (node.e.length) node.e.at(-1)!.t = left;
-      else node.l = left;
-      node.e.push({ key: it.key, v: it.v, t: null });
-      run = [];
-    } else run.push(it);
-  }
-  const rest = sub(run);
-  if (node.e.length) node.e.at(-1)!.t = rest;
-  else node.l = rest;
-  return node;
-}
-
-function serialise(n: Node, out: Map<string, Buffer>): Cid {
-  const l = n.l ? serialise(n.l, out) : null;
-  let prev: Buffer = Buffer.alloc(0);
-  const e = n.e.map((x) => {
-    let p = 0;
-    while (p < prev.length && p < x.key.length && prev[p] === x.key[p]) p++;
-    const entry = { p, k: x.key.subarray(p), v: x.v, t: x.t ? serialise(x.t, out) : null };
-    prev = x.key;
-    return entry;
-  });
-  const bytes = cborEncode({ l, e });
-  const cid = Cid.ofCbor(bytes);
-  n.cid = cid;
-  out.set(cid.toString(), bytes);
-  return cid;
-}
-
-/** Builds the MST for a set of keys and value CIDs, as the reference implementation lays it out. */
+/** The MST for a set of keys and value CIDs: the server's own tree (`pds/mst.ts`), in the shape these tests use. */
 export function buildMst(entries: Map<string, Cid> | [string, Cid][]): MstTree {
-  const items = [...entries].map(([k, v]) => ({ key: Buffer.from(k, 'utf8'), v, h: keyHeight(k) })).sort((a, b) => Buffer.compare(a.key, b.key));
-  const top = items.reduce((m, i) => Math.max(m, i.h), 0);
-  const tree = items.length ? layerNode(items, top) : { l: null, e: [] };
-  const nodes = new Map<string, Buffer>();
-  const root = serialise(tree, nodes);
-  const path = (key: string): string[] => {
-    const target = Buffer.from(key, 'utf8');
-    const out: string[] = [];
-    let n: Node | null = tree;
-    while (n) {
-      out.push(n.cid!.toString());
-      let next: Node | null = n.l;
-      for (const x of n.e) {
-        const c = Buffer.compare(target, x.key);
-        if (c === 0) return out;
-        if (c < 0) break;
-        next = x.t;
-      }
-      n = next;
-    }
-    return out;
-  };
-  return { root, nodes, path };
+  const tree = buildPdsMst([...entries].map(([key, value]) => ({ key, value })), { checkKeys: false });
+  return { root: tree.root.cid, nodes: tree.blocks, path: (key) => mstPath(tree, key).map((n) => n.cid.toString()) };
 }
 
 export interface RepoOp {
