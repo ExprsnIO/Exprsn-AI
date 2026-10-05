@@ -403,6 +403,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
   agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
+  agents.memoryExtract = (e) => memory.onRun(e);
+  memory.runTexts = (t, id) => agents.runTexts(t, id);
   chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
@@ -688,6 +690,7 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
   s.knowledge.replication.start(); // Sprint 19: logical replication streams for PostgreSQL knowledge sources
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
+  s.scheduler.every('memory.consolidate', 24 * 60 * 60_000, activeTenants); // Sprint 30 (B-3702)
   s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
   s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);
   s.training.schedule(s.scheduler, activeTenants);

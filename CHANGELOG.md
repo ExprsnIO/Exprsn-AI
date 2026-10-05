@@ -2,6 +2,26 @@
 
 ## 1.5.0 (in progress)
 
+### Model-based memory management (Sprint 30, B-3701 to B-3703)
+
+- Per-tenant memory settings under `GET`/`PUT /api/memory/settings` (`knowledge:manage`, audited as
+  `memory.settings.updated`). Migration `032c_memory` (`memory_settings`; `memories.superseded_by` and
+  `memories.expiry_proposal`).
+- A tenant `memory` profile extracts proposals from chat turns and, under an agent's memory policy, from succeeded
+  agent runs (`memory.extract`). The text goes to the model as JSON data and its answer must be one JSON object that
+  a zod schema accepts; with no profile, or when the model fails or answers anything else, the rules extract as before
+  (`memory.extraction.fallback` records why). Every proposal still passes the `memory` checkpoint, the credential ban
+  and the rejection list, and carries its source's label (B-3701).
+- Consolidation (`memory.consolidate`, daily and `POST /api/memory/consolidate`): near-duplicates found by embedding
+  similarity and confirmed by the profile become one merge proposal (keeping both sources); stale and contradicted
+  memories get expiry proposals, decided with `POST /api/memory/{id}/expiry/accept|reject`. Nothing changes until a
+  person accepts; accepting a merge activates the new memory and retires both (`superseded`, `supersededBy`, audited
+  as `memory.merged`) (B-3702).
+- The memory embedding model is a tenant setting (unset: the first approved embedding model by name, as before).
+  Changing it starts `memory.reindex` (also `POST /api/memory/reindex`), which re-embeds every active memory; recall is
+  by recency while it runs, and only vectors of the query's model are compared (B-3703).
+- The event catalogue lists a `memory.*` group for the memory audit actions.
+
 ### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
 
 - New permission `roles:manage` (tenant admins). Migration `031_access`.

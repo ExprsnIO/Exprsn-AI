@@ -5,7 +5,7 @@ import type { JobQueue } from '../platform/jobs.js';
 import type { SessionService } from '../identity/sessions.js';
 
 /** Tables holding data derived from a tenant's content, purged after its key is destroyed. Order respects FKs. */
-const KNOWLEDGE_TABLES = ['knowledge_bindings', 'knowledge_terms', 'knowledge_chunks', 'knowledge_access', 'knowledge_documents', 'knowledge_sources', 'knowledge_indexes', 'knowledge_bases', 'embedding_cache', 'knowledge_keys', 'vectors', 'vectors_pg', 'memory_versions', 'memories', 'memory_rejections', 'memory_exports', 'data_connections'] as const;
+const KNOWLEDGE_TABLES = ['knowledge_bindings', 'knowledge_terms', 'knowledge_chunks', 'knowledge_access', 'knowledge_documents', 'knowledge_sources', 'knowledge_indexes', 'knowledge_bases', 'embedding_cache', 'knowledge_keys', 'vectors', 'vectors_pg', 'memory_versions', 'memories', 'memory_rejections', 'memory_exports', 'memory_settings', 'data_connections'] as const;
 // Sprint 26d: the file store (its rows go with the tenant key; versions, previews and tags cascade from files).
 const FILE_TABLES = ['file_shares', 'file_tags', 'file_previews', 'file_versions', 'files', 'file_folders', 'file_quotas'] as const;
 // Sprint 27c: groups and events (posts, titles and descriptions are sealed with the tenant key).

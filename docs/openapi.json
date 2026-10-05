@@ -38,6 +38,182 @@
       }
     },
     "schemas": {
+      "MemorySettings": {
+        "type": "object",
+        "required": [
+          "profile",
+          "embedModel",
+          "effectiveEmbedModel",
+          "similarity",
+          "staleDays",
+          "reindex",
+          "embeddingModels"
+        ],
+        "properties": {
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The memory profile: extracts proposals from chat turns and agent runs, judges consolidation pairs. Null: the rules extract and nothing is merged"
+          },
+          "embedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The memory embedding model. Null: the first approved embedding model by name"
+          },
+          "effectiveEmbedModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "similarity": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 0.99
+          },
+          "staleDays": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reindex": {
+            "type": "object",
+            "required": [
+              "state",
+              "model",
+              "jobId",
+              "done",
+              "total",
+              "error",
+              "startedAt",
+              "finishedAt"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "idle",
+                  "running",
+                  "done",
+                  "failed"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "jobId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "done": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "embeddingModels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "label",
+                "state"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "label": {
+                  "enum": [
+                    "public",
+                    "internal",
+                    "confidential",
+                    "restricted"
+                  ]
+                },
+                "state": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "MemorySettingsUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "embedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "similarity": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 0.99
+          },
+          "staleDays": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 3650
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "properties": {
@@ -19778,6 +19954,212 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/memory/consolidate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. Queues a consolidation run now (memory.consolidate; it also runs daily): merge proposals for near-duplicates the memory profile confirms, expiry proposals for stale or contradicted memories. Nothing changes until accepted",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "jobId"
+                  ],
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/reindex": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. Re-embeds every active memory with the tenant's embedding model (memory.reindex); recall is by recency while it runs. 409 without an embedding model",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/settings": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. The tenant's memory settings: memory profile, embedding model (and the one in effect), consolidation similarity, stale days, the reindex state, and the embedding models to choose from",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. Changes the memory settings (422 for a profile that does not resolve or a model that is not an approved embedding model); a change of the embedding model in effect starts a reindex. Audited (memory.settings.updated)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorySettingsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/{id}/expiry/accept": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "Accepts the memory's expiry proposal (the owner, or a curator for workspace and agent memories): it expires at the proposed time and is then purged. 409 without a proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The memory (see docs/api.md, Memory), with expiryProposal cleared and, on accept, expiresAt set"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/{id}/expiry/reject": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "Rejects the memory's expiry proposal; it is not proposed again for the same reason (nor the contradicting pair judged again)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The memory (see docs/api.md, Memory), with expiryProposal cleared and, on accept, expiresAt set"
+                }
+              }
+            }
           }
         }
       }
