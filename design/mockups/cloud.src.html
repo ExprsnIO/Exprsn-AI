@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Exprsn Cloud 2.0</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Annotated storyboard for Exprsn-AI 2.0.0: cloud accounts, deployments, managed data, GPU pools, cloud model backends, Cloudflare edge and FinOps on AWS, Azure, DigitalOcean and Cloudflare. Example data only.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/*APP_CSS*/
+</style>
+<style>
+/* Storyboard layout. Everything inside a .frame uses the console's own classes and tokens (app.css above, which already
+   defines every colour on :root with dark values under prefers-color-scheme and [data-theme="dark"]). */
+html,body{height:auto}
+body{overflow:auto;overflow-x:clip;background:var(--bg);color:var(--fg)}
+.doc{max-width:1320px;margin:0 auto;padding:28px 24px 80px;display:flex;flex-direction:column;gap:36px;min-width:0}
+.doc h1{font-family:var(--serif);font-size:30px;font-weight:600;margin:0;line-height:1.15;text-wrap:balance}
+.doc h2{font-size:18px;font-weight:600;margin:0}
+.doc h3{font-size:14px;font-weight:600;margin:0}
+.doc p{margin:0;max-width:76ch;color:var(--fg2)}
+.doc .lede{font-size:15px;color:var(--fg2);max-width:84ch}
+.meta{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.topbar{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.topbar nav{display:flex;gap:2px;flex-wrap:wrap;min-width:0}
+.topbar nav a{font-size:12px;font-weight:600;color:var(--fg2);text-decoration:none;padding:4px 7px;border-radius:5px}
+.topbar nav a:hover{background:var(--sel);color:var(--fg)}
+.section{display:flex;flex-direction:column;gap:14px;scroll-margin-top:80px;min-width:0}
+.part-head{display:flex;flex-direction:column;gap:6px;padding-top:18px;border-top:2px solid var(--fg)}
+.part-head .eyebrow{color:var(--accent)}
+.part-head h2{font-family:var(--serif);font-size:24px}
+.frame{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:18px;align-items:start}
+.frame.full{grid-template-columns:1fr}
+.frame > *{min-width:0}
+.frame .screen{border:1px solid var(--line);border-radius:8px;background:var(--bg);overflow-x:auto;box-shadow:var(--shadow);min-width:0}
+.frame .screen .fhead{min-height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--nav);font-size:12px;color:var(--muted);flex-wrap:wrap}
+.frame .screen .fhead b{color:var(--fg)}
+.frame .screen .fhead .right{margin-left:auto;display:flex;gap:6px;align-items:center}
+.frame .screen .fbody{display:flex;min-height:380px;min-width:0}
+.frame .screen .fpage{flex-grow:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px}
+.frame .screen .finsp{width:250px;flex-shrink:0;border-left:1px solid var(--line);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:10px;font-size:12px;min-width:0}
+.notes{display:flex;flex-direction:column;gap:10px;min-width:0}
+.notes ol{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.notes li{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;font-size:13px;color:var(--fg2)}
+.notes li b{color:var(--fg)}
+.callout,.notes li .n{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-fg);font-size:11px;font-weight:700;flex-shrink:0;vertical-align:middle}
+.callout{position:relative;top:-1px;margin-left:4px}
+.steps{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:12px}
+.steps span{display:inline-flex;align-items:center;gap:6px;padding:0 8px;height:28px;color:var(--muted);font-weight:500}
+.steps span.cur{color:var(--fg);font-weight:700}.steps span.done{color:var(--fg2)}
+.steps .n{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);font-size:11px;font-style:normal}
+.steps .cur .n{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}.steps .done .n{background:var(--fg2);color:var(--bg);border-color:var(--fg2)}
+.steps .sep{color:var(--faint)}
+.flow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.flow .box{display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);min-width:0}
+.flow .box .t{font-weight:600}
+.flow .box .s{font-size:12px;color:var(--muted)}
+.tiles{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.tile{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;min-width:0}
+.tile.on{border-color:var(--accent);background:var(--accent-tint)}
+.tile.off{opacity:.6}
+.tile b{font-size:13px}
+.minitable table.dt{min-width:0}
+.minitable table.dt td,.minitable table.dt th{padding:5px 8px;font-size:12px}
+.frame .notice,.doc .notice{display:flex}
+.fb{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line);flex-wrap:wrap}
+.twocol{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.twocol > *,.threecol > *{min-width:0}
+.threecol{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.diagram{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:10px}
+.diagram svg{display:block;min-width:640px;width:100%;height:auto}
+.diagram svg text{font-family:var(--sans);fill:var(--fg)}
+.diff-add{color:var(--ok-fg)}.diff-del{color:var(--danger-fg)}.diff-chg{color:var(--warn-fg)}.diff-rep{color:var(--info-fg)}
+.theme{margin-left:auto}
+.example{font-size:12px;color:var(--muted)}
+@media (max-width:1000px){.frame{grid-template-columns:1fr}.flow{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol,.threecol{grid-template-columns:1fr}.frame .screen .fbody{flex-direction:column}.frame .screen .finsp{width:auto;border-left:0;border-top:1px solid var(--line)}}
+@media (max-width:520px){.doc{padding:16px 16px 60px;gap:28px}.doc h1{font-size:24px}.flow{grid-template-columns:1fr}.topbar{position:static}.frame .screen .fpage{padding:10px}}
+@media print{.topbar{position:static}.frame .screen{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="doc">
+
+<div class="topbar">
+  <span class="eyebrow">Exprsn-AI 2.0.0 · cloud storyboard</span>
+  <nav aria-label="Storyboard sections"><a href="#overview">Overview</a><a href="#accounts">Cloud accounts</a><a href="#deployments">Deployments</a><a href="#data">Managed data</a><a href="#compute">GPU pools</a><a href="#models">Model backends</a><a href="#edge">Cloudflare edge</a><a href="#finops">Cloud spend</a><a href="#states">States</a><a href="#backlog">Backlog</a></nav>
+  <button type="button" class="btn sm theme" id="theme">Theme: system</button>
+</div>
+
+<!--PART:overview-->
+
+<!--PART:accounts-->
+
+<!--PART:deployments-->
+
+<!--PART:data-->
+
+<!--PART:compute-->
+
+<!--PART:models-->
+
+<!--PART:edge-->
+
+<!--PART:finops-->
+
+<!--PART:states-->
+
+<!--PART:backlog-->
+
+</div>
+<script>
+(function () {
+  var b = document.getElementById('theme'); var order = [null, 'light', 'dark']; var i = 0;
+  try { var t = localStorage.getItem('exprsn.theme'); if (t && order.indexOf(t) > 0) { i = order.indexOf(t); document.documentElement.setAttribute('data-theme', t); } } catch (e) {}
+  function label() { b.textContent = 'Theme: ' + (order[i] || 'system'); b.setAttribute('aria-label', 'Colour theme: ' + (order[i] || 'system') + '. Select to change.'); }
+  label();
+  b.addEventListener('click', function () {
+    i = (i + 1) % order.length; var t = order[i];
+    if (t) document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme');
+    try { if (t) localStorage.setItem('exprsn.theme', t); else localStorage.removeItem('exprsn.theme'); } catch (e) {}
+    label();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<section class="section" id="data">
+  <div class="part-head">
+    <span class="eyebrow">Part 4 · B-103 managed data services, B-109 R2 and D1</span>
+    <h2>Managed databases, caches and object stores</h2>
+    <p>One screen, <span class="mono">#/cloud-data</span>, lists every database, cache and object store Exprsn-AI provisioned or discovered in a connected account. Each one has a role: the platform's own database or Redis, a tenant data connection, or an object store. Provisioning goes through the same plan, apply and verify path as a deployment (B-101), so a database is a resource in the journal with a cost estimate, drift checks and deletion protection.</p>
+    <p class="example">Example data for the Northwind tenant on Monday 28 Sep 2026. Account IDs, hostnames and prices are illustrative, not provider quotes.</p>
+  </div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Cloud data</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Cloud data</h1><div class="sub">Databases, caches and object stores in connected cloud accounts</div></div><div class="actions"><button type="button" class="btn sm">Discover in accounts <span class="callout">1</span></button><button type="button" class="btn sm primary">Provision</button></div></div>
+        <nav class="tabs" aria-label="Families"><button type="button" class="active">All <span class="count">11</span></button><button type="button">PostgreSQL <span class="count">5</span></button><button type="button">MySQL <span class="count">1</span></button><button type="button">Document and key-value <span class="count">3</span></button><button type="button">Caches <span class="count">1</span></button><button type="button">Object stores <span class="count">1</span></button></nav>
+        <div class="toolbar"><div class="search" style="width:220px"><input type="search" value="" placeholder="Filter by name, engine, account" aria-label="Filter by name, engine, account"></div><button type="button" class="chip">Role: any</button><button type="button" class="chip">Provider: any</button><span class="callout">2</span><span class="muted" style="font-size:12px;margin-left:auto">11 of 11</span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:820px"><thead><tr><th>Name</th><th>Provider, region</th><th>Engine</th><th>Size</th><th>Role <span class="callout">3</span></th><th>State</th></tr></thead><tbody>
+          <tr class="row selected"><td><b>nw-prod-aurora</b></td><td>AWS aws-prod<div class="muted">eu-central-1</div></td><td>Aurora PostgreSQL 17.4</td><td>2x db.r7g.xlarge</td><td><span class="pill accent">Exprsn-AI database</span><div class="muted">nw-prod-eu</div></td><td><span class="pill ok">available</span></td></tr>
+          <tr class="row"><td><b>nw-prod-valkey</b></td><td>AWS aws-prod<div class="muted">eu-central-1</div></td><td>ElastiCache Valkey 8.0</td><td>cache.r7g.large, 1 replica</td><td><span class="pill accent">Exprsn-AI Redis</span><div class="muted">nw-prod-eu</div></td><td><span class="pill ok">available</span></td></tr>
+          <tr class="row"><td><b>nw-dr-flex</b></td><td>Azure azure-eu<div class="muted">swedencentral</div></td><td>Azure PostgreSQL Flexible 17</td><td>GP_Standard_D4ds_v5, HA</td><td><span class="pill accent">Exprsn-AI database</span><div class="muted">nw-dr-azure</div></td><td><span class="pill ok">available</span></td></tr>
+          <tr class="row"><td><b>hr-analytics-flex</b></td><td>Azure azure-eu<div class="muted">westeurope</div></td><td>Azure PostgreSQL Flexible 16</td><td>GP_Standard_D2ds_v5</td><td><span class="pill info">connection hr-analytics</span><div class="muted">People Ops</div></td><td><span class="pill warn">needs action</span></td></tr>
+          <tr class="row"><td><b>partner-mysql</b></td><td>DigitalOcean do-team<div class="muted">fra1</div></td><td>DO Managed MySQL 8</td><td>db-s-2vcpu-4gb</td><td><span class="pill info">connection partner-orders</span><div class="muted">Field Sales</div></td><td><span class="pill ok">online</span></td></tr>
+          <tr class="row"><td><b>catalog-docdb</b></td><td>AWS aws-prod<div class="muted">eu-central-1</div></td><td>Amazon DocumentDB 5.0</td><td>db.r6g.large</td><td><span class="pill info">connection product-catalog</span></td><td><span class="pill ok">available</span></td></tr>
+          <tr class="row"><td><b>events-dynamo</b></td><td>AWS aws-prod<div class="muted">eu-central-1</div></td><td>DynamoDB table nw-events</td><td>on-demand</td><td><span class="pill info">connection events, read-only</span></td><td><span class="pill ok">active</span></td></tr>
+          <tr class="row"><td><b>support-cosmos</b></td><td>Azure azure-eu<div class="muted">westeurope</div></td><td>Cosmos DB for NoSQL</td><td>serverless</td><td><span class="pill outline">discovered</span></td><td><span class="pill">not connected</span></td></tr>
+          <tr class="row"><td><b>lab-pg</b></td><td>DigitalOcean do-team<div class="muted">ams3</div></td><td>DO Managed PostgreSQL 17</td><td>db-s-1vcpu-2gb</td><td><span class="pill outline">planned for lab-do</span></td><td><span class="pill danger">blocked by budget</span></td></tr>
+          <tr class="row"><td><b>nw-edge-blobs</b></td><td>Cloudflare cf-edge<div class="muted">EU jurisdiction</div></td><td>R2 bucket</td><td>412 GiB</td><td><span class="pill accent">object store</span><div class="muted">nw-edge-cf</div></td><td><span class="pill ok">active</span></td></tr>
+          <tr class="row"><td><b>field-d1</b></td><td>Cloudflare cf-edge<div class="muted">global</div></td><td>D1 database field-notes</td><td>1.2 GB</td><td><span class="pill info">connection field-notes, read-only</span></td><td><span class="pill ok">connected</span></td></tr>
+        </tbody></table></div>
+      </div>
+      <div class="finsp">
+        <div class="hstack"><b class="grow">nw-prod-aurora</b><span class="pill ok">available</span></div>
+        <div class="kv" style="--cols:1">
+          <div><div class="k">Engine</div><div class="v">Aurora PostgreSQL 17.4, writer and one reader</div></div>
+          <div><div class="k">Role</div><div class="v">Exprsn-AI database for nw-prod-eu (<span class="mono">DATABASE_URL</span>)</div></div>
+          <div><div class="k">Region ceiling</div><div class="v"><span class="label confidential sm"><span class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>confidential</span> eu-central-1, zone cloud-eu</div></div>
+          <div><div class="k">Extensions</div><div class="v">pgvector 0.8.0 on, pg_trgm on, PostGIS 3.5 available <span class="callout">4</span></div></div>
+          <div><div class="k">Access</div><div class="v">Private subnets only; admin password in <span class="mono">vault:cloud/nw-prod-aurora#master</span></div></div>
+          <div><div class="k">Backups</div><div class="v">14 days, snapshot nightly 02:00; deletion protection on</div></div>
+          <div><div class="k">Cost</div><div class="v">about $1,310 a month (estimate)</div></div>
+        </div>
+        <div class="hstack wrap gap6"><button type="button" class="btn sm">Snapshots</button><button type="button" class="btn sm">Open deployment</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Discover</b> lists databases, caches and buckets the account's credentials can read but Exprsn-AI did not create (B-10306). They can be connected or adopted into a deployment; nothing is changed by discovery.</span></li>
+      <li><span class="n">2</span><span>Families follow the owner's scope: PostgreSQL, MySQL, document and key-value, caches, object stores. Filters narrow the table; counts update.</span></li>
+      <li><span class="n">3</span><span><b>Role decides the rules.</b> Exprsn-AI database and Redis rows belong to a deployment and inherit its protection. Connection rows open on Connections with the tenant's masking and row access. Read-only connections never get a write role.</span></li>
+      <li><span class="n">4</span><span>Extensions are read from <span class="mono">pg_available_extensions</span> after provisioning, not trusted from a static table (B-10301).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="data-provision">
+  <h2>Provision a database: own database or data connection</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud data / <b>Provision</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Engine</span><span class="sep">›</span><span class="cur"><i class="n">2</i>Placement and size</span><span class="sep">›</span><span><i class="n">3</i>Role</span><span class="sep">›</span><span><i class="n">4</i>Review and plan</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Provider</div></div>
+          <div class="tiles">
+            <div class="tile on"><div class="hstack"><b class="grow">AWS</b><span class="pill ok">aws-prod</span></div><span>RDS PostgreSQL, Aurora PostgreSQL</span></div>
+            <div class="tile"><div class="hstack"><b class="grow">Azure</b><span class="pill ok">azure-eu</span></div><span>PostgreSQL Flexible Server</span></div>
+            <div class="tile"><div class="hstack"><b class="grow">DigitalOcean</b><span class="pill danger">budget hard stop</span></div><span>Managed PostgreSQL; new resources refused until the override or next month <span class="callout">1</span></span></div>
+            <div class="tile off" aria-disabled="true"><div class="hstack"><b class="grow">Cloudflare</b><span class="pill">not available</span></div><span>Runs the app tier only; pick a provider for data and GPUs. D1 can be added as a read-only connection; R2 is an object store. <span class="callout">2</span></span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="formgrid" style="--cols:2">
+            <div class="field"><label for="pv-eng">Engine and version</label><select class="select" id="pv-eng"><option>Aurora PostgreSQL 17.4</option><option>RDS PostgreSQL 17.4</option></select></div>
+            <div class="field"><label for="pv-reg">Region</label><select class="select" id="pv-reg"><option>eu-central-1, ceiling confidential, zone cloud-eu</option><option>us-east-1, ceiling internal, zone cloud-us</option></select><div class="hint">Only regions on the account's allow list. The data's label must not exceed the region ceiling. <span class="callout">3</span></div></div>
+            <div class="field"><label for="pv-size">Size</label><select class="select" id="pv-size"><option>db.r7g.large, 2 vCPU, 16 GiB</option><option>db.r7g.xlarge, 4 vCPU, 32 GiB</option></select></div>
+            <div class="field"><label for="pv-ha">Availability</label><select class="select" id="pv-ha"><option>Writer and one reader in another zone</option><option>Single instance</option></select></div>
+            <div class="field"><label for="pv-bk">Backups</label><select class="select" id="pv-bk"><option>14 days, nightly snapshot</option><option>7 days</option></select></div>
+            <div class="field"><label for="pv-net">Network</label><select class="select" id="pv-net"><option>Private subnets of nw-prod-eu VPC</option><option>New private network</option></select><div class="hint">Public access stays off. Private endpoints are added to <span class="mono">CONNECTIONS_ALLOWED_HOSTS</span>.</div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Role</div><span class="callout">4</span></div>
+          <div class="seg"><button type="button" class="active">Data connection</button><button type="button">Exprsn-AI database</button></div>
+          <div class="formgrid" style="--cols:2">
+            <div class="field"><label for="pv-ws">Workspace</label><select class="select" id="pv-ws"><option>People Ops</option><option>Finance Ops</option></select></div>
+            <div class="field"><label for="pv-lbl">Label</label><select class="select" id="pv-lbl"><option>confidential</option><option>internal</option></select></div>
+          </div>
+          <label class="check"><input type="checkbox" checked> <span>Issue short-lived database users through the vault's lease engine (B-1704)</span></label>
+          <label class="check"><input type="checkbox"> <span>Use IAM database authentication instead of passwords</span></label>
+        </div>
+        <div class="notice info"><span class="grow" style="min-width:0">Estimate about <b>$655 a month</b>: instances $590, storage 200 GiB $46, backups beyond the free allowance $19. The plan shows 3 creates (cluster, two instances) and 1 update (security group). <span class="callout">5</span></span></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Review plan</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Budget hard stop</b> shows on the tile rather than after the plan, so an admin does not configure a database that will be refused (B-10602).</span></li>
+      <li><span class="n">2</span><span><b>Cloudflare is shown, disabled, with the reason.</b> It cannot host PostgreSQL, MySQL or Redis. D1 appears only as a read-only connection (SQLite dialect, B-10907), never as the platform's database; R2 is an object store (B-10906).</span></li>
+      <li><span class="n">3</span><span>Region allow list and label ceilings come from the account (B-10008). A confidential data connection cannot be placed in us-east-1.</span></li>
+      <li><span class="n">4</span><span><b>Own database or data connection.</b> As the Exprsn-AI database it must be PostgreSQL or MySQL in the deployment's network, and pgvector is required for knowledge and memory (B-10302). As a connection it gets the tenant's workspace, label, schema allow list and dynamic users (B-10306).</span></li>
+      <li><span class="n">5</span><span>The estimate comes from the price catalogue (B-10601). Review shows the plan diff; apply runs as a journaled job.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="data-connect">
+  <h2>Connect an existing database</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud data / <b>support-cosmos</b> / Connect</div>
+      <div class="fbody"><div class="fpage">
+        <div class="kv" style="--cols:3">
+          <div><div class="k">Found in</div><div class="v">azure-eu, westeurope</div></div>
+          <div><div class="k">Engine</div><div class="v">Cosmos DB for NoSQL, serverless</div></div>
+          <div><div class="k">Discovered</div><div class="v">28 Sep 06:10 by the inventory job</div></div>
+        </div>
+        <div class="formgrid" style="--cols:2">
+          <div class="field"><label for="cn-name">Connection name</label><input class="input" id="cn-name" value="support-cases"></div>
+          <div class="field"><label for="cn-ws">Workspace and label</label><select class="select" id="cn-ws"><option>Field Sales, internal</option><option>People Ops, confidential</option></select></div>
+          <div class="field"><label for="cn-auth">Authentication</label><select class="select" id="cn-auth"><option>Entra token from the account's federated identity</option><option>Read-only key in the vault</option></select></div>
+          <div class="field"><label for="cn-acc">Access</label><select class="select" id="cn-acc"><option>Read-only queries</option></select><div class="hint">Document and key-value drivers are read-only in 2.0 <span class="callout">1</span></div></div>
+        </div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:520px"><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>
+          <tr><td>Private endpoint in the deployment network</td><td><span class="pill warn">missing</span> the plan adds one <span class="callout">2</span></td></tr>
+          <tr><td>Region ceiling allows internal</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Sample of 200 documents, PII classifier</td><td><span class="pill warn">2 fields flagged</span> email, phone masked by default</td></tr>
+          <tr><td>Containers listed</td><td>cases, contacts, kb-articles</td></tr>
+        </tbody></table></div>
+        <div class="fb"><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Connect</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Read-only first.</b> DynamoDB (Query and PartiQL reads), Cosmos NoSQL queries and the MongoDB driver for DocumentDB and DO Managed MongoDB answer reads only; the MongoDB driver is shared with the 1.6 MongoDB connection work (B-10304).</span></li>
+      <li><span class="n">2</span><span>Connections never go over a public endpoint by default. The private endpoint is a planned resource with its own cost line (B-10306).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="data-extensions">
+  <h2>Extension availability and the own-database path</h2>
+  <div class="twocol">
+    <div class="panel">
+      <div class="eyebrow">PostgreSQL extensions per provider (documented expectation)</div>
+      <div class="tablewrap minitable"><table class="dt" style="min-width:460px"><thead><tr><th>Service</th><th>pgvector</th><th>PostGIS</th><th>Step</th></tr></thead><tbody>
+        <tr><td>RDS PostgreSQL</td><td><span class="pill ok">available</span></td><td><span class="pill ok">available</span></td><td>CREATE EXTENSION</td></tr>
+        <tr><td>Aurora PostgreSQL</td><td><span class="pill ok">available</span></td><td><span class="pill ok">available</span></td><td>CREATE EXTENSION</td></tr>
+        <tr><td>Azure PostgreSQL Flexible</td><td><span class="pill ok">available</span></td><td><span class="pill ok">available</span></td><td>allow-list in <span class="mono">azure.extensions</span>, then CREATE EXTENSION</td></tr>
+        <tr><td>DO Managed PostgreSQL</td><td><span class="pill ok">available</span></td><td><span class="pill ok">available</span></td><td>CREATE EXTENSION</td></tr>
+        <tr><td>Cloudflare</td><td><span class="pill">none</span></td><td><span class="pill">none</span></td><td>no database hosting; Hyperdrive reaches one of the above</td></tr>
+      </tbody></table></div>
+      <p class="example">Verified on every provisioned server from <span class="mono">pg_available_extensions</span> and again in the sandbox e2e run (B-10804). A server without pgvector cannot be the Exprsn-AI database; hr-analytics-flex shows "pgvector not allow-listed" with a one-click parameter change.</p>
+    </div>
+    <div class="panel">
+      <div class="eyebrow">Move an existing install's database to a managed service (B-10302)</div>
+      <div class="timeline">
+        <div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">Provision and check</div><div class="fg2" style="font-size:12px">Managed server in the deployment network, extensions and connection limit checked against the app's pool size.</div></div></div>
+        <div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">Backup</div><div class="fg2" style="font-size:12px"><span class="mono">exprsn-ai backup:create</span> on the current database, consistent with the blob store.</div></div></div>
+        <div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">Restore</div><div class="fg2" style="font-size:12px"><span class="mono">exprsn-ai backup:restore</span> into the managed server, then <span class="mono">migrate --check</span> and <span class="mono">audit:verify</span>.</div></div></div>
+        <div class="tl"><div class="dotcol"><i class="warn"></i><b></b></div><div class="tbody"><div style="font-weight:600">Cutover window</div><div class="fg2" style="font-size:12px">Writes paused (read-only banner), final incremental restore, <span class="mono">DATABASE_URL</span> switched with the provider's CA bundle and TLS required.</div></div></div>
+        <div class="tl"><div class="dotcol"><i></i></div><div class="tbody"><div style="font-weight:600">Verify, keep the old database 7 days</div><div class="fg2" style="font-size:12px">Rollback is a switch back to the old URL while it is kept.</div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="eyebrow">Caches as Exprsn-AI's Redis (B-10305)</div>
+    <div class="tablewrap minitable"><table class="dt" style="min-width:620px"><thead><tr><th>Rule</th><th>Why</th></tr></thead><tbody>
+      <tr><td>Cluster mode off (one shard, replicas allowed)</td><td>BullMQ, the Socket.io adapter and the bus use multi-key commands on one node</td></tr>
+      <tr><td><span class="mono">maxmemory-policy noeviction</span></td><td>An evicted job or lease key loses work; the check refuses other policies</td></tr>
+      <tr><td>TLS (<span class="mono">rediss://</span>) and an auth token in the vault</td><td>Backend TLS is required in production</td></tr>
+      <tr><td>Supported: ElastiCache Valkey or Redis OSS, MemoryDB, Azure Cache for Redis, DO Managed Valkey</td><td>All speak the Redis protocol Exprsn-AI uses</td></tr>
+      <tr><td>Not a substitute: Cloudflare Workers KV</td><td>Eventually consistent key-value with no pub/sub, lists or Lua; a Cloudflare deployment still needs one of the caches above</td></tr>
+    </tbody></table></div>
+  </div>
+</section>

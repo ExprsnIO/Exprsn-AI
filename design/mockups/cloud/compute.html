@@ -1,0 +1,109 @@
+<section class="section" id="compute">
+  <div class="part-head">
+    <span class="eyebrow">Part 5 · B-104 GPU compute pools</span>
+    <h2>GPU compute pools in the cloud</h2>
+    <p>A cloud node group is a pool like any other: the gateway places approved models on its instances, the memory planner and slot leases work unchanged, and instances join over mutual TLS with certificates from the Exprsn-AI CA. What the cloud adds is elasticity: node groups scale to zero when idle, run on spot capacity where the provider offers it, and are checked against quotas and the account's budget before they grow.</p>
+    <p class="example">Example data on Monday 28 Sep 2026. Hourly prices are illustrative, not provider quotes.</p>
+  </div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Cloud compute</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Cloud compute</h1><div class="sub">Node groups that serve Exprsn-AI pools</div></div><div class="actions"><button type="button" class="btn sm">Open Pools</button><button type="button" class="btn sm primary">Add node group</button></div></div>
+        <div class="stats">
+          <div class="stat"><div class="n">4</div><div class="l">GPU nodes running</div><div class="d">of 9 allowed</div></div>
+          <div class="stat"><div class="n">$9.75/h</div><div class="l">Current GPU spend</div><div class="d">spot saves $1.19/h</div></div>
+          <div class="stat"><div class="n">212 h</div><div class="l">Scaled down this month</div><div class="d">about $474 saved <span class="callout">1</span></div></div>
+        </div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:820px"><thead><tr><th>Pool</th><th>Provider, node group</th><th>GPU</th><th>Pricing</th><th class="r">Min / max / now</th><th>Scale to zero</th><th>State</th></tr></thead><tbody>
+          <tr class="row selected"><td><b>gpu-cloud-eu</b></td><td>AWS aws-prod, EKS eu-central-1<div class="mono muted">ng-gpu-l40s</div></td><td>g6e.2xlarge<div class="muted">1x L40S 48 GB</div></td><td>spot about $1.05/h<div class="muted">on-demand fallback $2.24/h</div></td><td class="r num">0 / 4 / 2</td><td>after 20 min idle</td><td><span class="pill ok">serving</span></td></tr>
+          <tr class="row"><td><b>gpu-azure-se</b></td><td>Azure azure-eu, AKS swedencentral<div class="mono muted">gpua100</div></td><td>Standard_NC24ads_A100_v4<div class="muted">1x A100 80 GB</div></td><td>on-demand about $3.67/h<div class="muted">spot off</div></td><td class="r num">0 / 2 / 0</td><td>after 30 min idle</td><td><span class="pill">scaled to zero</span><div class="muted">cold start about 6 min</div></td></tr>
+          <tr class="row"><td><b>gpu-do-h100</b></td><td>DigitalOcean do-team, GPU Droplets nyc3</td><td>gpu-h100x1-80gb<div class="muted">1x H100 80 GB</div></td><td>on-demand about $3.39/h<div class="muted">no spot on DigitalOcean</div></td><td class="r num">1 / 2 / 1</td><td>off (min 1)</td><td><span class="pill warn">scale-up blocked by budget</span> <span class="callout">2</span></td></tr>
+          <tr class="row"><td><b>cpu-cloud-eu</b></td><td>AWS aws-prod, EKS eu-central-1<div class="mono muted">ng-cpu</div></td><td>c7i.4xlarge<div class="muted">CPU helpers</div></td><td>on-demand $0.81/h</td><td class="r num">1 / 3 / 1</td><td>off</td><td><span class="pill ok">serving</span></td></tr>
+          <tr><td colspan="7"><span class="muted">Cloudflare: no GPU pools. Runs the app tier only; pick a provider for data and GPUs. Workers AI is offered as a model backend on Models instead. <span class="callout">3</span></span></td></tr>
+        </tbody></table></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Savings are measured, not assumed:</b> GPU-hours below the configured minimum times the hourly price, reported by FinOps (B-10605).</span></li>
+      <li><span class="n">2</span><span>do-team is past its budget, so adding a node is refused with <span class="mono">budget_exceeded</span>. Scaling down stays allowed (B-10602).</span></li>
+      <li><span class="n">3</span><span>Cloudflare stays visible in the provider picker and here with the reason, so admins know where Workers AI lives instead (B-10509).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="compute-detail">
+  <h2>Node group detail: scale to zero, spot interruptions, cold start and warm-up</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud compute / <b>gpu-cloud-eu</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="hstack wrap"><b class="grow">gpu-cloud-eu</b><span class="pill ok">serving</span><span class="label confidential sm"><span class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>confidential</span></div>
+        <div class="kv" style="--cols:3">
+          <div><div class="k">Node group</div><div class="v mono">ng-gpu-l40s on EKS nw-prod-eu</div></div>
+          <div><div class="k">Capacity</div><div class="v">spot first, then on-demand</div></div>
+          <div><div class="k">Placed models</div><div class="v">qwen2.5:32b-q4_K_M, llama3.1:8b-q5_K_M</div></div>
+        </div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Scaling</div><span class="callout">1</span></div>
+          <div class="formgrid" style="--cols:3">
+            <div class="field"><label for="ng-min">Minimum nodes</label><input class="input" id="ng-min" value="0"></div>
+            <div class="field"><label for="ng-max">Maximum nodes</label><input class="input" id="ng-max" value="4"></div>
+            <div class="field"><label for="ng-idle">Scale to zero after</label><select class="select" id="ng-idle"><option>20 minutes without a lease</option><option>60 minutes</option><option>Never</option></select></div>
+          </div>
+          <div class="meter accent"><div class="mrow"><span>Idle timer, node 2</span><span class="num">11 of 20 min</span></div><div class="track"><div class="fill" style="width:55%"></div></div></div>
+          <div class="notice info"><span class="grow" style="min-width:0">When the pool is at zero, the next request waits in the queue and the chat shows "Starting a GPU node, about 4 min". If the wait passes the queue timeout, the profile's fallback answers. <span class="callout">2</span></span></div>
+        </div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Spot interruption today</div><span class="callout">3</span></div>
+          <div class="timeline">
+            <div class="tl"><div class="dotcol"><i class="warn"></i><b></b></div><div class="tbody"><div style="font-weight:600">08:51 Two-minute notice for ip-10-40-3-17</div><div class="fg2" style="font-size:12px">Instance set to draining; no new leases.</div></div></div>
+            <div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">08:52 Streams finished or moved</div><div class="fg2" style="font-size:12px">3 streams completed, 1 resumed on node 1 through the resumable stream buffer.</div></div></div>
+            <div class="tl"><div class="dotcol"><i class="info"></i><b></b></div><div class="tbody"><div style="font-weight:600">08:53 Replacement requested</div><div class="fg2" style="font-size:12px">No spot capacity in eu-central-1b; on-demand g6e.2xlarge used.</div></div></div>
+            <div class="tl"><div class="dotcol"><i class="ok"></i></div><div class="tbody"><div style="font-weight:600">08:57 Replacement healthy</div><div class="fg2" style="font-size:12px">Models warm from the mirror snapshot in 2 min 40 s. <span class="callout">4</span></div></div></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Scale to zero</b> uses the gateway's leases: a node is idle when no lease and no placement load has touched it for the configured time. Scale-up follows queue depth (B-10402).</span></li>
+      <li><span class="n">2</span><span>The cold-start estimate is the median of the last ten boots, including model warm-up, so the waiting person sees a real number.</span></li>
+      <li><span class="n">3</span><span>EC2 spot notices and Azure Scheduled Events (Preempt) drain the instance before the provider stops it (B-10403). DigitalOcean has no spot capacity, so its node groups show spot as unavailable.</span></li>
+      <li><span class="n">4</span><span>Warm-up pulls approved placements from the registry mirror or attaches a pre-seeded volume snapshot, keeping digest checks (B-10404).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="compute-add">
+  <h2>Add a node group</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud compute / <b>Add node group</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="tiles">
+          <div class="tile"><div class="hstack"><b class="grow">AWS</b><span class="pill ok">aws-prod</span></div><span>EKS managed node group or EC2 instances</span></div>
+          <div class="tile on"><div class="hstack"><b class="grow">Azure</b><span class="pill ok">azure-eu</span></div><span>AKS GPU node pool or Azure VMs</span></div>
+          <div class="tile"><div class="hstack"><b class="grow">DigitalOcean</b><span class="pill danger">budget hard stop</span></div><span>DOKS GPU pool or GPU Droplets; on-demand only</span></div>
+          <div class="tile off" aria-disabled="true"><div class="hstack"><b class="grow">Cloudflare</b><span class="pill">not available</span></div><span>Runs the app tier only; pick a provider for data and GPUs.</span></div>
+        </div>
+        <div class="formgrid" style="--cols:2">
+          <div class="field"><label for="an-pool">Pool</label><select class="select" id="an-pool"><option>gpu-azure-se (new)</option><option>gpu-cloud-eu</option></select></div>
+          <div class="field"><label for="an-type">Instance type</label><select class="select" id="an-type"><option>Standard_NC24ads_A100_v4, 1x A100 80 GB, about $3.67/h</option><option>Standard_NC40ads_H100_v5, 1x H100 94 GB</option></select></div>
+          <div class="field"><label for="an-cap">Capacity</label><select class="select" id="an-cap"><option>On-demand</option><option>Spot with on-demand fallback</option></select><div class="hint">On DigitalOcean this field shows "Spot is not offered by DigitalOcean" and stays on on-demand.</div></div>
+          <div class="field"><label for="an-sz">Minimum, maximum</label><input class="input" id="an-sz" value="0, 2"></div>
+        </div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:520px"><thead><tr><th>Check before plan</th><th>Result</th></tr></thead><tbody>
+          <tr><td>Quota: Standard NCADS A100 v4 family vCPUs in swedencentral</td><td><span class="pill ok">48 of 48 free</span> max 2 nodes need 48 <span class="callout">1</span></td></tr>
+          <tr><td>Region ceiling for the pool's label</td><td><span class="pill ok">confidential allowed</span></td></tr>
+          <tr><td>Capacity fallback</td><td>If SkuNotAvailable, try swedencentral zone 2, then refuse <span class="callout">2</span></td></tr>
+          <tr><td>Budget azure-eu</td><td><span class="pill ok">59 % used</span> adds up to $5,360 a month at full scale</td></tr>
+        </tbody></table></div>
+        <div class="fb"><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Review plan</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span>Quotas are read before the plan: AWS Service Quotas for G and P instance vCPUs, Azure family vCPU quotas, DigitalOcean GPU limits (B-10405). A shortfall names the quota and links the provider's request page in the notes, not a download.</span></li>
+      <li><span class="n">2</span><span>Capacity errors (InsufficientInstanceCapacity, SkuNotAvailable) fall back only to types and zones the admin allowed here; the plan lists them.</span></li>
+    </ol></div>
+  </div>
+</section>

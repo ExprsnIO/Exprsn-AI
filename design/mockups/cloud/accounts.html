@@ -1,0 +1,196 @@
+<section class="section" id="accounts">
+  <div class="part-head"><span class="eyebrow">Part 1 · B-100</span><h2>Cloud accounts and credentials</h2>
+  <p>A cloud account is the unit of trust, scope and spend: one AWS account, Azure subscription, DigitalOcean team or Cloudflare account, with its credential mode, the regions it may use, the label ceiling and zone of each region, and its monthly budget. Platform accounts serve deployments and pools; tenant accounts serve one tenant's connections and model backends.</p></div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Cloud accounts</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Cloud accounts</h1><div class="sub">6 accounts across 4 providers · example data</div></div><div class="actions"><button type="button" class="btn sm">Issuer: id.northwind-example.com <span class="callout">1</span></button><button type="button" class="btn sm primary">Connect account</button></div></div>
+        <div class="toolbar"><div class="search" style="width:220px"><input type="search" aria-label="Filter accounts" placeholder="Filter accounts"></div><div class="seg"><button type="button" class="active">All</button><button type="button">AWS</button><button type="button">Azure</button><button type="button">DigitalOcean</button><button type="button">Cloudflare</button></div><span class="callout">2</span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:860px"><thead><tr><th>Account</th><th>Provider</th><th>Scope</th><th>Credentials</th><th>Regions</th><th class="r">Month to date</th><th>State</th></tr></thead><tbody>
+          <tr class="row selected"><td><b>aws-prod</b><div class="mono muted" style="font-size:11px">111122223333</div></td><td>AWS</td><td>platform</td><td><span class="pill ok">federated</span></td><td>eu-central-1, us-east-1</td><td class="r num">$9,840 <span class="muted">55 %</span></td><td><span class="pill ok">connected</span></td></tr>
+          <tr class="row"><td><b>aws-sandbox</b><div class="mono muted" style="font-size:11px">444455556666</div></td><td>AWS</td><td>platform</td><td><span class="pill">vaulted, auto-rotate</span></td><td>us-east-1</td><td class="r num">$1,410 <span style="color:var(--warn-fg)">94 %</span></td><td><span class="pill warn">80 % alert</span></td></tr>
+          <tr class="row"><td><b>azure-eu</b><div class="mono muted" style="font-size:11px">sub bbbbbbbb-…-b001</div></td><td>Azure</td><td>platform</td><td><span class="pill ok">federated</span></td><td>swedencentral, westeurope</td><td class="r num">$7,050 <span class="muted">59 %</span></td><td><span class="pill ok">connected</span></td></tr>
+          <tr class="row"><td><b>do-team</b><div class="mono muted" style="font-size:11px">team dddddddd-…-d001</div></td><td>DigitalOcean</td><td>platform</td><td><span class="pill">vaulted token</span></td><td>ams3, fra1, nyc3</td><td class="r num">$4,120 <span style="color:var(--danger-fg)">103 %</span></td><td><span class="pill danger">budget exceeded</span> <span class="callout">3</span></td></tr>
+          <tr class="row"><td><b>cf-edge</b><div class="mono muted" style="font-size:11px">0123456789abcdef…</div></td><td>Cloudflare</td><td>platform</td><td><span class="pill">vaulted scoped token</span></td><td>global edge, R2 EU</td><td class="r num">$310 <span class="muted">26 %</span></td><td><span class="pill warn">permission missing</span></td></tr>
+          <tr class="row"><td><b>azure-contoso</b><div class="mono muted" style="font-size:11px">sub bbbbbbbb-…-b002</div></td><td>Azure</td><td>tenant Contoso</td><td><span class="pill">vaulted secret</span></td><td>westeurope</td><td class="r num">$620 <span class="muted">62 %</span></td><td><span class="pill warn">secret expires 4 Oct</span></td></tr>
+        </tbody></table></div>
+        <p class="example">Example data: account numbers, subscription and team IDs are placeholders, not real accounts.</p>
+      </div>
+      <div class="finsp"><div class="hstack"><b class="grow">aws-prod</b><span class="pill ok">connected</span></div>
+        <div class="kv" style="--cols:1"><div><div class="k">Account</div><div class="v mono">111122223333</div></div><div><div class="k">Credentials</div><div class="v">Federated: <span class="mono" style="overflow-wrap:anywhere">arn:aws:iam::111122223333:role/exprsn-ai-deploy</span>, 1 h sessions <span class="callout">4</span></div></div><div><div class="k">Last validated</div><div class="v">today 09:12, deploy tier, 0 missing actions</div></div><div><div class="k">Regions</div><div class="v">eu-central-1 (default), us-east-1</div></div></div>
+        <div class="meter"><div class="mrow"><span>September budget</span><span class="num">$9,840 of $18,000</span></div><div class="track"><div class="fill" style="width:55%"></div></div></div>
+        <div class="muted">50 % alert sent 16 Sep. Forecast $10,600.</div>
+        <div class="hstack wrap gap6"><button type="button" class="btn sm">Validate</button><button type="button" class="btn sm">Regions and labels</button><button type="button" class="btn sm ghost">Disconnect</button></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>The federation issuer</b> is shown once for all accounts: AWS and Azure trust it, and its discovery document and JWKS are published to a public static location while the signing key stays in OpenBao transit (B-10005).</span></li>
+      <li><span class="n">2</span><span><b>Provider filter</b> uses the picker order AWS, Azure, DigitalOcean, Cloudflare everywhere in the console.</span></li>
+      <li><span class="n">3</span><span><b>Budget state is part of the account state.</b> At 100 % new resources are refused; the row links to Cloud spend (B-10602).</span></li>
+      <li><span class="n">4</span><span><b>Federated accounts hold no secret.</b> The worker mints a token for <span class="mono">sub=cloud-account:aws-prod</span> and exchanges it for a one-hour session (B-10003). Columns and actions: B-10002; validation: B-10007.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="accounts-provider">
+  <h2>Connect account, step 1: provider</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud accounts / <b>Connect account</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="cur"><i class="n">1</i>Provider</span><span class="sep">›</span><span><i class="n">2</i>Credentials</span><span class="sep">›</span><span><i class="n">3</i>Setup</span><span class="sep">›</span><span><i class="n">4</i>Validate</span><span class="sep">›</span><span><i class="n">5</i>Scope</span></div>
+        <div class="tiles">
+          <div class="tile on"><div class="hstack"><b class="grow">AWS</b><span class="pill ok">federation</span></div><span class="muted">AWS SDK v3</span><span>Deployments, managed data, GPU node groups, Bedrock, Route 53, Cost Explorer</span></div>
+          <div class="tile"><div class="hstack"><b class="grow">Azure</b><span class="pill ok">federation</span></div><span class="muted">ARM SDKs</span><span>Deployments, managed data, AKS GPU pools, Azure AI Foundry, Azure DNS, Cost Management</span></div>
+          <div class="tile"><div class="hstack"><b class="grow">DigitalOcean</b><span class="pill">token only</span></div><span class="muted">REST API v2</span><span>Deployments, managed data, GPU Droplets, GenAI inference, DO DNS, billing</span></div>
+          <div class="tile"><div class="hstack"><b class="grow">Cloudflare</b><span class="pill">token only</span></div><span class="muted">API v4</span><span>Front door, Tunnel, WAF, Access, Containers app tier, R2, D1, Workers AI, AI Gateway <span class="callout">1</span></span></div>
+        </div>
+        <div class="formgrid" style="--cols:2"><div class="field"><label>Account name</label><input class="input" value="aws-prod" aria-label="Account name"></div><div class="field"><label>Scope</label><div class="seg"><button type="button" class="active">Platform</button><button type="button">One tenant</button></div><div class="hint">Tenant accounts serve that tenant's connections and model backends only <span class="callout">2</span></div></div></div>
+        <div class="fb"><button type="button" class="btn sm" disabled>Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Cloudflare is a provider like the others</b> but only for the edge and the app tier; its tile lists what it can do, and later steps show the rest disabled with the reason (B-10009, B-109).</span></li>
+      <li><span class="n">2</span><span><b>Scope</b> decides who may use the account. A tenant account federates through that tenant's issuer, <span class="mono">&lt;issuer&gt;/t/&lt;slug&gt;</span>, so one tenant's token never reaches another's account (B-10002).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="accounts-credentials">
+  <h2>Step 2: credentials, federated or vaulted</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud accounts / Connect account / <b>Credentials</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Provider</span><span class="sep">›</span><span class="cur"><i class="n">2</i>Credentials</span><span class="sep">›</span><span><i class="n">3</i>Setup</span><span class="sep">›</span><span><i class="n">4</i>Validate</span><span class="sep">›</span><span><i class="n">5</i>Scope</span></div>
+        <div class="twocol">
+          <div class="tile on"><div class="hstack"><b class="grow">Federated, short-lived</b><span class="pill ok">recommended</span></div><span>AWS trusts the Exprsn-AI issuer through an IAM OIDC provider; the worker calls <span class="mono">AssumeRoleWithWebIdentity</span> for one-hour sessions. Nothing secret is stored. <span class="callout">1</span></span><div class="field"><label>Role ARN</label><input class="input mono" value="arn:aws:iam::111122223333:role/exprsn-ai-deploy" aria-label="Role ARN"></div></div>
+          <div class="tile"><div class="hstack"><b class="grow">Vaulted static keys</b></div><span>An IAM user's access key in the vault as <span class="mono">vault:cloud/aws-prod#access_key</span>, sealed and never shown again; rotated automatically every 90 days by creating, verifying and deleting keys. <span class="callout">2</span></span></div>
+        </div>
+        <div class="panel tint"><div class="eyebrow">Other providers at this step</div>
+          <div class="tablewrap bare minitable"><table class="dt"><tbody>
+            <tr><td><b>Azure</b></td><td>Federated identity credential on an app registration or user-assigned managed identity, or a client secret or certificate in the vault (certificate issued by the Exprsn-AI CA)</td></tr>
+            <tr><td><b>DigitalOcean</b></td><td><span class="pill">Federated: disabled</span> Federation is not offered by DigitalOcean. A custom-scoped token in the vault, rotated by hand with reminders <span class="callout">3</span></td></tr>
+            <tr><td><b>Cloudflare</b></td><td><span class="pill">Federated: disabled</span> Federation is not offered by Cloudflare. A scoped API token and the account ID, vaulted only</td></tr>
+          </tbody></table></div></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Admin's choice per account.</b> Federated is preselected where the provider offers it (B-10003 AWS, B-10004 Azure).</span></li>
+      <li><span class="n">2</span><span><b>Vaulted keys</b> are tenant vault references with rotation schedules; the console shows last use and next rotation, never the value (B-10006).</span></li>
+      <li><span class="n">3</span><span><b>Disabled, not hidden.</b> The radio is present and greyed with the reason, so an admin knows why there is no choice (B-10009).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="accounts-setup">
+  <h2>Step 3: setup in the provider's console</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud accounts / Connect account / <b>Setup</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Provider</span><span class="sep">›</span><span class="done"><i class="n">2</i>Credentials</span><span class="sep">›</span><span class="cur"><i class="n">3</i>Setup</span><span class="sep">›</span><span><i class="n">4</i>Validate</span><span class="sep">›</span><span><i class="n">5</i>Scope</span></div>
+        <div class="hstack wrap"><span class="fg2">Permission tier</span><div class="seg"><button type="button">Read</button><button type="button" class="active">Deploy</button><button type="button">Admin</button></div><span class="callout">1</span></div>
+        <div class="twocol">
+          <div class="vstack gap6" style="min-width:0"><div class="eyebrow">AWS trust policy for exprsn-ai-deploy</div>
+<pre class="codebox">{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Federated":
+      "arn:aws:iam::111122223333:oidc-provider/id.northwind-example.com" },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": { "StringEquals": {
+      "id.northwind-example.com:aud": "sts.amazonaws.com",
+      "id.northwind-example.com:sub": "cloud-account:aws-prod"
+    } }
+  }]
+}</pre>
+            <span class="muted" style="font-size:12px">The deploy permissions policy is generated beside it; writes are conditioned on the tag <span class="mono">exprsn:managed=true</span>. <span class="callout">2</span></span></div>
+          <div class="vstack gap6" style="min-width:0"><div class="eyebrow">Azure, the same step</div>
+<pre class="codebox">az identity federated-credential create \
+  --name exprsn-ai-azure-eu \
+  --identity-name exprsn-ai-deploy \
+  --resource-group rg-exprsn-identity \
+  --issuer https://id.northwind-example.com \
+  --subject cloud-account:azure-eu \
+  --audiences api://AzureADTokenExchange
+az role assignment create --role Contributor \
+  --assignee cccccccc-0000-4000-8000-00000000c001 \
+  --scope /subscriptions/bbbbbbbb-0000-4000-8000-00000000b001/resourceGroups/rg-exprsn</pre>
+            <span class="muted" style="font-size:12px">Plus Cost Management Reader on the subscription for billing ingestion.</span></div>
+        </div>
+        <div class="notice info"><span class="grow">Copy the snippets, apply them in the provider's console or CLI, then validate. Exprsn-AI never asks for an administrator key to set itself up. <span class="callout">3</span></span></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Validate</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Three tiers</b> map to the console permissions: Read (inventory, prices, billing), Deploy (create and change tagged resources), Admin (plus IAM for key rotation). The snippets change with the tier.</span></li>
+      <li><span class="n">2</span><span><b>Least privilege by tag.</b> Every resource Exprsn-AI creates carries <span class="mono">exprsn:managed</span>, <span class="mono">exprsn:account</span> and <span class="mono">exprsn:deployment</span>; the policy refuses writes to anything else (B-10003, B-10004).</span></li>
+      <li><span class="n">3</span><span><b>Setup is copy and paste</b>, with no Terraform or CloudFormation dependency; the role is the customer's to own.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="accounts-cloudflare">
+  <h2>Step 3 for Cloudflare: token-permission checklist</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud accounts / Connect account / <b>Setup, Cloudflare</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="formgrid" style="--cols:2"><div class="field"><label>Account ID</label><input class="input mono" value="0123456789abcdef0123456789abcdef" aria-label="Cloudflare account ID"></div><div class="field"><label>Scoped API token</label><input class="input" type="password" value="example-token-value" aria-label="Cloudflare API token"><div class="hint">Stored as <span class="mono">vault:cloud/cf-edge#token</span>; shown once</div></div></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:560px"><thead><tr><th>Permission</th><th>Level</th><th>Needed for</th><th>Token</th></tr></thead><tbody>
+          <tr><td>Cloudflare Tunnel</td><td>Account, Edit</td><td>Front door without inbound ports</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>Workers Scripts</td><td>Account, Edit</td><td>Static assets, Containers entry Worker</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>Containers</td><td>Account, Edit</td><td>App tier on Cloudflare Containers</td><td><span class="pill danger">missing</span> <span class="callout">1</span></td></tr>
+          <tr><td>Hyperdrive</td><td>Account, Edit</td><td>PostgreSQL from Containers</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>Workers R2 Storage</td><td>Account, Edit</td><td>R2 object store</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>D1</td><td>Account, Read</td><td>Read-only data connections</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>Workers AI</td><td>Account, Read</td><td>Model backend</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>AI Gateway</td><td>Account, Edit</td><td>Optional proxy for cloud model calls</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>Access: Apps and Policies</td><td>Account, Edit</td><td>Access before the admin console</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>Account Analytics, Billing</td><td>Account, Read</td><td>Spend and Workers AI neurons</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td>DNS, Zone WAF, SSL and Certificates</td><td>Zone northwind-example.com, Edit</td><td>DNS, rules, edge certificates</td><td><span class="pill ok">granted</span></td></tr>
+        </tbody></table></div>
+        <div class="notice warn"><span class="grow">The token lacks <b>Containers Edit</b>. Everything else works; deployments that run the app tier on Cloudflare wait until the token is replaced. <span class="callout">2</span></span><button type="button" class="btn sm">Replace token</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Each permission is probed</b> after <span class="mono">/user/tokens/verify</span>, and the row says which feature it unlocks (B-10009). The same checklist is the account's Permissions tab later.</span></li>
+      <li><span class="n">2</span><span><b>Partial tokens are accepted</b> with the gap named, so the edge front door can go live before the app tier. The nw-edge-cf plan shows the same reason.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="accounts-validate">
+  <h2>Step 4 and 5: validate, then scope and submit</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud accounts / Connect account / <b>Validate and scope</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Provider</span><span class="sep">›</span><span class="done"><i class="n">2</i>Credentials</span><span class="sep">›</span><span class="done"><i class="n">3</i>Setup</span><span class="sep">›</span><span class="done"><i class="n">4</i>Validate</span><span class="sep">›</span><span class="cur"><i class="n">5</i>Scope</span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:520px"><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>
+          <tr><td>Token exchange, <span class="mono">sts:AssumeRoleWithWebIdentity</span></td><td><span class="pill ok">passed</span> session until 10:12</td></tr>
+          <tr><td>Identity, <span class="mono">sts:GetCallerIdentity</span></td><td><span class="pill ok">passed</span> 111122223333</td></tr>
+          <tr><td>Deploy tier, 214 actions simulated</td><td><span class="pill ok">passed</span> 0 missing <span class="callout">1</span></td></tr>
+          <tr><td>Billing, <span class="mono">ce:GetCostAndUsage</span></td><td><span class="pill ok">passed</span></td></tr>
+        </tbody></table></div>
+        <div class="eyebrow">Regions, label ceilings and zones <span class="callout">2</span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:520px"><thead><tr><th>Region</th><th>Allowed</th><th>Label ceiling</th><th>Zone</th></tr></thead><tbody>
+          <tr><td>eu-central-1 <span class="muted">default</span></td><td><span class="pill ok">allowed</span></td><td><span class="label confidential sm"><span class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>confidential</span></td><td class="mono">cloud-eu</td></tr>
+          <tr><td>us-east-1</td><td><span class="pill ok">allowed</span></td><td><span class="label internal sm"><span class="bars"><i class="on"></i><i class="on"></i><i></i><i></i></span>internal</span></td><td class="mono">cloud-us</td></tr>
+          <tr><td>All other regions</td><td><span class="pill">not allowed</span></td><td class="muted">—</td><td class="muted">—</td></tr>
+        </tbody></table></div>
+        <div class="formgrid" style="--cols:2"><div class="field"><label>Monthly budget</label><input class="input num" value="$18,000" aria-label="Monthly budget"><div class="hint">Alerts at 50, 80 and 100 %; new resources stop at 100 %</div></div><div class="field"><label>Second approver</label><input class="input" value="Jonas Lindqvist" aria-label="Second approver"><div class="hint">Adding an account is dual-controlled</div></div></div>
+        <div class="notice info"><span class="grow">Restricted data never goes to a cloud region unless a platform admin and a second approver override it for one region. <span class="callout">3</span></span></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Submit for approval</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Validation simulates every action</b> the tier needs (IAM policy simulation, Azure permission listing, token scopes) and lists missing ones by feature (B-10007).</span></li>
+      <li><span class="n">2</span><span><b>Regions carry a label ceiling and a zone.</b> The policy pipeline refuses to place data, pools or model backends above the region's ceiling (B-10008).</span></li>
+      <li><span class="n">3</span><span><b>Submit, not save.</b> The account appears as pending until Jonas Lindqvist approves; the requester cannot approve their own request (B-10002).</span></li>
+    </ol></div>
+  </div>
+</section>

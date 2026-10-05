@@ -1,0 +1,121 @@
+<section class="section" id="models">
+  <div class="part-head">
+    <span class="eyebrow">Part 6 · B-105 cloud model backends, B-10908 AI Gateway · needs B-43</span>
+    <h2>Cloud model backends on the Models screen</h2>
+    <p>Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI models join the catalogue as server-held entries (<span class="mono">format: server</span>, from epic B-43's <span class="mono">ModelServer</span> interface): no weights and no digest, but the same licence record, conformance run, dual-control approval and label ceiling as an Ollama model. The Models screen gains a provider filter and a cloud catalogue import; nothing about profiles, guardrails or metering changes for the person chatting.</p>
+    <p class="example">Example data on Monday 28 Sep 2026. Model prices are illustrative, not provider quotes.</p>
+  </div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Models</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Model catalog</h1><div class="sub">Weights enter only through the signed import path; cloud models are held by their provider</div></div><div class="actions"><button type="button" class="btn sm">Browse repositories</button><button type="button" class="btn sm primary">Import from a cloud account <span class="callout">1</span></button></div></div>
+        <div class="toolbar"><span class="fg2" style="font-size:12px">Provider</span><div class="seg"><button type="button">All</button><button type="button">Ollama</button><button type="button" class="active">Bedrock</button><button type="button">Azure AI Foundry</button><button type="button">DigitalOcean GenAI</button><button type="button">Workers AI</button></div><span class="callout">2</span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:820px"><thead><tr><th>Model</th><th>Provider, region</th><th>Capabilities</th><th>Max label</th><th class="r">Price per 1M in / out</th><th>Lifecycle</th></tr></thead><tbody>
+          <tr class="row selected"><td class="mono">amazon.nova-pro-v1:0</td><td>Bedrock, aws-prod<div class="muted">eu-central-1</div></td><td>chat, tools</td><td><span class="label confidential sm"><span class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>confidential</span></td><td class="r num">$0.80 / $3.20</td><td><span class="pill ok">approved</span></td></tr>
+          <tr class="row"><td class="mono">eu.amazon.nova-lite-v1:0</td><td>Bedrock inference profile<div class="muted">EU regions only</div></td><td>chat</td><td><span class="label internal sm"><span class="bars"><i class="on"></i><i class="on"></i><i></i><i></i></span>internal</span></td><td class="r num">$0.06 / $0.24</td><td><span class="pill info">evaluated</span></td></tr>
+          <tr class="row"><td class="mono">amazon.titan-embed-text-v2:0</td><td>Bedrock, aws-prod<div class="muted">eu-central-1</div></td><td>embed</td><td><span class="label confidential sm"><span class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>confidential</span></td><td class="r num">$0.02</td><td><span class="pill ok">approved</span></td></tr>
+        </tbody></table></div>
+        <p class="example">Other providers under All: nw-gpt-4-1-mini and nw-embed-3-large (Azure AI Foundry, swedencentral), llama3.3-70b-instruct (DigitalOcean GenAI, draft), @cf/meta/llama-3.1-8b-instruct (Workers AI, evaluated).</p>
+      </div>
+      <div class="finsp">
+        <div class="mono" style="font-size:13px;font-weight:500">amazon.nova-pro-v1:0</div>
+        <div class="hstack wrap gap4"><span class="pill outline">format: server</span><span class="pill ok">approved</span></div>
+        <div class="kv" style="--cols:1">
+          <div><div class="k">Held by</div><div class="v">Bedrock in aws-prod, eu-central-1, Converse API. No digest; the provider's model id and version are recorded at approval. <span class="callout">3</span></div></div>
+          <div><div class="k">Price</div><div class="v">$0.80 in, $3.20 out per 1M tokens, from the AWS price list, effective 1 Sep 2026</div></div>
+          <div><div class="k">Residency</div><div class="v">eu-central-1 only; cross-region profiles refused for this entry</div></div>
+          <div><div class="k">Label ceiling</div><div class="v">confidential, equal to the region ceiling <span class="callout">4</span></div></div>
+          <div><div class="k">Provider guardrail</div><div class="v">Bedrock Guardrail gr-example01 as an extra layer <span class="callout">5</span></div></div>
+          <div><div class="k">AI Gateway</div><div class="v"><span class="toggle"><span class="sw"></span><span>Off for this backend</span></span></div></div>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Import from a cloud account</b> opens the frame below, with the account preselected when it is opened from Cloud accounts (B-10504).</span></li>
+      <li><span class="n">2</span><span>The provider filter sits next to the existing lifecycle and capability filters (B-10508). "Ollama" includes B-43's other local servers.</span></li>
+      <li><span class="n">3</span><span>A server-held model has no pinned digest. When the provider reports a new version under the same id, the entry is flagged and the conformance run repeats, as B-4304 does for local servers.</span></li>
+      <li><span class="n">4</span><span>An entry's label ceiling can never exceed the ceiling of the region that serves it (B-10507). A global endpoint caps at internal unless an admin records the provider's data terms.</span></li>
+      <li><span class="n">5</span><span>Exprsn-AI's own guardrails stay authoritative and run before and after the call. The provider's guardrail is an extra layer whose intervention is recorded as a guardrail decision (B-10506).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="models-import">
+  <h2>Import from a cloud account</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Models / <b>Import from a cloud account</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="formgrid" style="--cols:2">
+          <div class="field"><label for="mi-acc">Account</label><select class="select" id="mi-acc"><option>aws-prod, Bedrock, eu-central-1</option><option>azure-eu, Azure AI Foundry, swedencentral</option><option>do-team, DigitalOcean GenAI</option><option>cf-edge, Workers AI</option></select></div>
+          <div class="field"><label for="mi-pool">Target pool</label><select class="select" id="mi-pool"><option>cloud-bedrock-eu (kind: bedrock)</option></select><div class="hint">One pool per account and region; it holds no GPUs</div></div>
+        </div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:700px"><thead><tr><th></th><th>Model</th><th>Region</th><th>Capabilities</th><th class="r">Price per 1M in / out</th><th>Provider access</th></tr></thead><tbody>
+          <tr><td><input type="checkbox" checked aria-label="Select amazon.nova-pro-v1:0"></td><td class="mono">amazon.nova-pro-v1:0</td><td>eu-central-1</td><td>chat, tools</td><td class="r num">$0.80 / $3.20</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td><input type="checkbox" checked aria-label="Select eu.amazon.nova-lite-v1:0"></td><td class="mono">eu.amazon.nova-lite-v1:0</td><td>EU profile <span class="callout">1</span></td><td>chat</td><td class="r num">$0.06 / $0.24</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td><input type="checkbox" aria-label="Select amazon.titan-embed-text-v2:0"></td><td class="mono">amazon.titan-embed-text-v2:0</td><td>eu-central-1</td><td>embed</td><td class="r num">$0.02</td><td><span class="pill ok">granted</span></td></tr>
+          <tr><td><input type="checkbox" disabled aria-label="Select a global profile"></td><td class="mono">global.example-model-v1:0</td><td>global profile</td><td>chat</td><td class="r num">example</td><td><span class="pill warn">refused above internal</span></td></tr>
+        </tbody></table></div>
+        <div class="notice warn"><span class="grow" style="min-width:0"><b>Cross-region inference profile.</b> eu.amazon.nova-lite-v1:0 may be served from any EU region Bedrock chooses. It is imported with ceiling internal; raising it needs every EU region in its list to allow the label.</span></div>
+        <div class="fb"><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Register 2 drafts</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span>Lists come from the provider: Bedrock ListFoundationModels and inference profiles with model access state; Azure deployments under the account's Foundry resources; DigitalOcean GenAI models; Workers AI models. Registration creates drafts; approval stays dual-controlled (B-10504).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="models-backends">
+  <h2>Backends, guardrail mapping and AI Gateway</h2>
+  <div class="twocol">
+    <div class="panel">
+      <div class="eyebrow">How each provider is reached</div>
+      <div class="tablewrap minitable"><table class="dt" style="min-width:480px"><thead><tr><th>Provider</th><th>Instance kind</th><th>Credentials</th><th>Item</th></tr></thead><tbody>
+        <tr><td>Bedrock</td><td><span class="mono">bedrock</span>, Converse and ConverseStream; InvokeModel for embeddings</td><td>account session (federated or vaulted keys)</td><td>B-10501</td></tr>
+        <tr><td>Azure AI Foundry</td><td><span class="mono">openai</span> with Entra token or api-key</td><td>federated identity or vault</td><td>B-10502</td></tr>
+        <tr><td>DigitalOcean GenAI</td><td><span class="mono">openai</span>, serverless inference endpoint</td><td>model access key in the vault</td><td>B-10503</td></tr>
+        <tr><td>Workers AI</td><td><span class="mono">openai</span>, the OpenAI-compatible endpoint</td><td>scoped API token in the vault</td><td>B-10509</td></tr>
+      </tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="eyebrow">Provider safety results mapped to guardrail decisions</div>
+      <div class="tablewrap minitable"><table class="dt" style="min-width:420px"><thead><tr><th>Provider signal</th><th>Recorded as</th></tr></thead><tbody>
+        <tr><td>Bedrock Guardrail intervened</td><td>block at checkpoint <span class="mono">output</span>, source provider</td></tr>
+        <tr><td>Azure content filter, severity medium or high</td><td>flag or block per the rule set's mapping</td></tr>
+        <tr><td>Azure content filter, filtered prompt</td><td>block at checkpoint <span class="mono">prompt</span></td></tr>
+        <tr><td>No provider signal</td><td>Exprsn-AI's own checks only</td></tr>
+      </tbody></table></div>
+      <p class="example">Exprsn-AI's rule sets run first and last whatever the provider says.</p>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="phead"><div class="eyebrow">Cloudflare AI Gateway (optional, per backend, B-10908)</div></div>
+    <div class="tablewrap minitable"><table class="dt" style="min-width:620px"><thead><tr><th>Backend</th><th>AI Gateway</th><th>Cache</th><th>Logs</th></tr></thead><tbody>
+      <tr><td>Bedrock aws-prod</td><td><span class="pill">off</span></td><td>—</td><td>—</td></tr>
+      <tr><td>Azure azure-eu</td><td><span class="pill ok">on</span> gateway nw-ai-eu</td><td>off</td><td>off for content above internal</td></tr>
+      <tr><td>DigitalOcean do-team</td><td><span class="pill">off</span></td><td>—</td><td>—</td></tr>
+      <tr><td>Workers AI cf-edge</td><td><span class="pill ok">on</span> gateway nw-ai-eu</td><td>on, internal only</td><td>on, 7 days</td></tr>
+    </tbody></table></div>
+    <p class="example">AI Gateway adds caching, request logs, rate limits and its own retries in front of the provider. It never replaces Exprsn-AI's gateway, its slot queue or the profile's fallback, and its logs hold prompts, so they stay off for anything above internal.</p>
+  </div>
+</section>
+
+<section class="section" id="models-pricing">
+  <h2>Pricing into usage records</h2>
+  <div class="twocol">
+    <div class="panel"><div class="eyebrow">model_prices (new)</div><div class="minitable tablewrap bare"><table class="dt"><tbody>
+      <tr><td class="mono">id, model_id, provider, region</td><td class="fg2">one row per price version</td></tr>
+      <tr><td class="mono">unit</td><td class="fg2">tokens_in, tokens_out, tokens_cached, embed_tokens, neurons</td></tr>
+      <tr><td class="mono">price_micros_per_unit, per</td><td class="fg2">e.g. 800,000 micros per 1M input tokens</td></tr>
+      <tr><td class="mono">currency, effective_from, source</td><td class="fg2">USD; AWS price list, Azure retail prices, provider sheet</td></tr>
+    </tbody></table></div></div>
+    <div class="panel"><div class="eyebrow">usage_records additions (B-10505)</div><div class="minitable tablewrap bare"><table class="dt"><tbody>
+      <tr><td class="mono">cost_micros</td><td class="fg2">priced at metering time, null for local models without a set rate</td></tr>
+      <tr><td class="mono">currency, price_id</td><td class="fg2">the model_prices row used, so a later price change never rewrites history</td></tr>
+      <tr><td class="mono">neurons</td><td class="fg2">Workers AI usage, priced per 1,000 neurons (example $0.011)</td></tr>
+      <tr><td class="mono">provider_request_id</td><td class="fg2">for reconciliation with billing ingestion (B-10603)</td></tr>
+    </tbody></table></div></div>
+  </div>
+</section>
