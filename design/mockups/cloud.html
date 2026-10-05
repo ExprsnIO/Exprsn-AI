@@ -367,7 +367,7 @@ body{overflow:auto;overflow-x:clip;background:var(--bg);color:var(--fg)}
 .doc p{margin:0;max-width:76ch;color:var(--fg2)}
 .doc .lede{font-size:15px;color:var(--fg2);max-width:84ch}
 .meta{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
-.topbar{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
 .topbar nav{display:flex;gap:2px;flex-wrap:wrap;min-width:0}
 .topbar nav a{font-size:12px;font-weight:600;color:var(--fg2);text-decoration:none;padding:4px 7px;border-radius:5px}
 .topbar nav a:hover{background:var(--sel);color:var(--fg)}
@@ -929,7 +929,7 @@ az role assignment create --role Contributor \
 
 <section class="section" id="data">
   <div class="part-head">
-    <span class="eyebrow">Part 4 · B-103 managed data services, B-109 R2 and D1</span>
+    <span class="eyebrow">Part 3 · B-103 managed data services, B-109 R2 and D1</span>
     <h2>Managed databases, caches and object stores</h2>
     <p>One screen, <span class="mono">#/cloud-data</span>, lists every database, cache and object store Exprsn-AI provisioned or discovered in a connected account. Each one has a role: the platform's own database or Redis, a tenant data connection, or an object store. Provisioning goes through the same plan, apply and verify path as a deployment (B-101), so a database is a resource in the journal with a cost estimate, drift checks and deletion protection.</p>
     <p class="example">Example data for the Northwind tenant on Monday 28 Sep 2026. Account IDs, hostnames and prices are illustrative, not provider quotes.</p>
@@ -1100,7 +1100,7 @@ az role assignment create --role Contributor \
 
 <section class="section" id="compute">
   <div class="part-head">
-    <span class="eyebrow">Part 5 · B-104 GPU compute pools</span>
+    <span class="eyebrow">Part 4 · B-104 GPU compute pools</span>
     <h2>GPU compute pools in the cloud</h2>
     <p>A cloud node group is a pool like any other: the gateway places approved models on its instances, the memory planner and slot leases work unchanged, and instances join over mutual TLS with certificates from the Exprsn-AI CA. What the cloud adds is elasticity: node groups scale to zero when idle, run on spot capacity where the provider offers it, and are checked against quotas and the account's budget before they grow.</p>
     <p class="example">Example data on Monday 28 Sep 2026. Hourly prices are illustrative, not provider quotes.</p>
@@ -1210,7 +1210,7 @@ az role assignment create --role Contributor \
 
 <section class="section" id="models">
   <div class="part-head">
-    <span class="eyebrow">Part 6 · B-105 cloud model backends, B-10908 AI Gateway · needs B-43</span>
+    <span class="eyebrow">Part 5 · B-105 cloud model backends, B-10908 AI Gateway · needs B-43</span>
     <h2>Cloud model backends on the Models screen</h2>
     <p>Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI models join the catalogue as server-held entries (<span class="mono">format: server</span>, from epic B-43's <span class="mono">ModelServer</span> interface): no weights and no digest, but the same licence record, conformance run, dual-control approval and label ceiling as an Ollama model. The Models screen gains a provider filter and a cloud catalogue import; nothing about profiles, guardrails or metering changes for the person chatting.</p>
     <p class="example">Example data on Monday 28 Sep 2026. Model prices are illustrative, not provider quotes.</p>
@@ -1443,7 +1443,7 @@ az role assignment create --role Contributor \
 
 <section class="section" id="finops">
   <div class="part-head">
-    <span class="eyebrow">Part 8 · B-106 FinOps</span>
+    <span class="eyebrow">Part 7 · B-106 FinOps</span>
     <h2>Cloud spend: estimates, budgets, showback and anomalies</h2>
     <p>The screen <span class="mono">#/finops</span> (sidebar "Cloud spend") brings every cost the cloud work creates into one place: the estimate before a plan is applied, the actual bill ingested from each provider, budgets with alerts and a hard stop, showback per workspace and tenant, and the token cost of cloud models priced into usage records. It builds on the 1.6 usage and cost analytics (B-74) and the 1.1 price books, and never sends money anywhere.</p>
     <p class="example">Example data: September 2026 month to date, Monday 28 Sep 2026 09:40 UTC. Prices and totals are illustrative, not provider quotes.</p>
@@ -1583,7 +1583,7 @@ az role assignment create --role Contributor \
 
 <section class="section" id="states">
   <div class="part-head">
-    <span class="eyebrow">Part 9 · states for every cloud screen</span>
+    <span class="eyebrow">Part 8 · states for every cloud screen</span>
     <h2>States to design</h2>
     <p>Each cloud screen carries these states in its prototype module (applied from the command palette and by the smoke run). They reuse the console's empty, skeleton, problem and notice components, so a cloud failure looks like every other failure in the console: what happened, what still works, and what to do next, with the trace id.</p>
     <p class="example">Example data on Monday 28 Sep 2026.</p>
