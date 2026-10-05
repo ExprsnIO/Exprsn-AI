@@ -277,10 +277,12 @@ describe('realtime rooms for the new domains (B-2101)', () => {
   const join = (sock: Socket, kind: string, id: string) => new Promise<{ ok: boolean; label?: string; error?: string }>((r) => sock.emit('room.join', { kind, id }, r));
   const GROUP = '01J0GR0P000000000000000000';
 
-  // Groups register the real `group` authoriser since Sprint 27c (tested in sprint27c-groups.test.ts); the mechanism is
-  // exercised here with a synthetic `feed` domain.
+  // Groups register the real `group` authoriser since Sprint 27c (tested in sprint27c-groups.test.ts) and the feed its
+  // `feed` authoriser since Sprint 28c (sprint28c-feed.test.ts); the mechanism is exercised here with a synthetic
+  // `feed` domain in place of the real one.
   it('removing a member closes their room at once; others keep receiving', async () => {
     const ws = await h.s.tenants.createWorkspace(h.tenantId, 'Ops', 'internal');
+    (h.s.rooms as unknown as { authorizers: Map<string, unknown> }).authorizers.delete('feed');
     h.s.rooms.register('feed', async (p, id) => (members.get(id)?.has(p.userId) ? { label: 'internal', workspaceId: ws.id } : null));
     const ann = await person('ann');
     const bob = await person('bob');

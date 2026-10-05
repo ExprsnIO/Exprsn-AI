@@ -584,7 +584,21 @@ const base = z.object({
     GROUP_INVITE_DAYS: z.coerce.number().int().min(1).max(365).default(7),
     GROUP_REQUEST_DAYS: z.coerce.number().int().min(1).max(365).default(14),
     CALENDAR_FEED_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
-    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
+    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal'),
+    /**
+     * Sprint 28c (B-2701 to B-2705): the workspace feed. Posts and comments are at most FEED_POST_MAX_CHARS characters.
+     * A new post reaches the open home feeds of at most FEED_HOME_FANOUT_MAX followers live (the others see it on their
+     * next load). Hashtags are counted every FEED_TRENDING_MINUTES (0 turns it off) over the last FEED_TRENDING_HOURS.
+     * The weekly digest of a workspace lists its FEED_DIGEST_TOP posts of the week labelled up to FEED_DIGEST_MAX_LABEL,
+     * summarised by the workspace's digest profile, or FEED_DIGEST_PROFILE when it names none (empty: no digest).
+     */
+    FEED_POST_MAX_CHARS: z.coerce.number().int().min(100).max(100_000).default(5000),
+    FEED_HOME_FANOUT_MAX: z.coerce.number().int().min(0).max(100_000).default(1000),
+    FEED_TRENDING_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    FEED_TRENDING_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(72),
+    FEED_DIGEST_PROFILE: z.string().trim().max(200).optional(),
+    FEED_DIGEST_TOP: z.coerce.number().int().min(1).max(50).default(5),
+    FEED_DIGEST_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

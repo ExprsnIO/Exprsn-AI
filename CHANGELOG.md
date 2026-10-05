@@ -62,6 +62,31 @@
   New permissions `social:read` and `social:write` (members and tenant admins) and `social:manage` (tenant admins, an
   audited view of anyone's relations); audit actions `social.*`; catalogue version 4. Migration `030b_social`.
 
+### Workspace feed (Sprint 28, B-2701 to B-2705)
+
+- A feed for a workspace or a group (`/api/feed`, `server/src/feed/`): posts with media from the file store (only
+  files that passed quarantine; they raise the post's label), threaded comments, reactions, plain and quoted reposts
+  that stay in the original's workspace and group, and bookmarks. Bodies, comments and digest summaries are sealed
+  with the tenant key. A comment, reaction or repost on a deleted post is refused (`409`). New permissions
+  `feed:read` and `feed:write` (members and tenant admins) and `feed:manage` (tenant admins); audit actions `feed.*`.
+  Migration `030c_feed`.
+- Home (the caller and the people they follow), workspace, group, user, list, hashtag and bookmark feeds with cursor
+  pagination. The relations are the shared ones of `/api/social`: a muted author leaves the home feed; a block,
+  either way, hides posts, comments and reposted originals in every feed and refuses comments, reactions and reposts.
+- Realtime: the `feed` room kind (a workspace, a group, or one's own home room). A new post reaches open feeds without
+  a reload, as ids only, leaving out people below its label and everyone in a block with the author; followers' home
+  rooms get it up to `FEED_HOME_FANOUT_MAX`.
+- Posts pass the `user-input` guardrail checkpoint before publishing: a held post waits in the Flags queue (a `hold`
+  flag), invisible to everyone but its author until a reviewer approves it, and stays invisible when rejected. Posts
+  and comments are moderation object types (`feed-post`, `feed-comment`). The `post.*` catalogue events are now
+  emitted (catalogue version 5, with the `feed.*` group for the audit actions).
+- Hashtags extracted at publishing and counted by the `feed.trending` job per workspace and label (a reader sees only
+  what their clearance reaches); a weekly workspace digest (`feed.digest`) of the week's top posts, ranked by
+  reactions, comments and reposts and summarised by a profile through the gateway, with per-workspace settings.
+  Settings `FEED_*`.
+- Group feeds are feed posts targeted at the group; the group notices of Sprint 27 (`/api/groups/:id/posts`) stay as
+  they are.
+
 ## Unreleased
 
 ### Fixed

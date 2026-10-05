@@ -105,6 +105,7 @@ import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
 import { SocialService } from './social/service.js';
+import { FeedService } from './feed/service.js';
 
 export interface Services {
   cfg: Config;
@@ -240,6 +241,8 @@ export interface Services {
   calendar: CalendarService;
   /** 1.4.0, Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules, shared by messaging and the feed. */
   social: SocialService;
+  /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
+  feed: FeedService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -487,6 +490,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
     // 1.4.0, Sprint 28b: social relations.
     social: new SocialService(() => s),
+    // 1.4.0, Sprint 28c: the workspace feed.
+    feed: new FeedService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -596,6 +601,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 27c (B-2501 to B-2505): the group room authoriser, group content as moderation objects, reminder jobs.
   s.groups.init();
   s.calendar.registerJobs();
+  // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
+  s.feed.init();
+  s.feed.digests.registerJobs();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -655,4 +663,5 @@ export function startSchedules(s: Services): void {
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
 }

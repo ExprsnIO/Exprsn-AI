@@ -12,7 +12,9 @@ const FILE_TABLES = ['file_shares', 'file_tags', 'file_previews', 'file_versions
 const GROUP_TABLES = ['calendar_feeds', 'group_event_reminders', 'group_event_rsvps', 'group_events', 'group_posts', 'group_requests', 'group_members', 'social_groups'] as const;
 // Sprint 28b: social relations (blocks, mutes, follows, lists, contact rules).
 const SOCIAL_TABLES = ['social_list_members', 'social_lists', 'social_settings', 'social_follows', 'social_mutes', 'social_blocks'] as const;
-const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...SOCIAL_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
+// Sprint 28c: the workspace feed (posts, comments and digest summaries are sealed with the tenant key).
+const FEED_TABLES = ['feed_settings', 'feed_digests', 'feed_trending', 'feed_hashtags', 'feed_bookmarks', 'feed_reactions', 'feed_comments', 'feed_post_media', 'feed_posts'] as const;
+const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...SOCIAL_TABLES, ...FEED_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
 const BLOB_PREFIXES = ['exports', 'attachments', 'quarantine', 'knowledge', 'knowledge-quarantine', 'memory-exports', 'files'] as const;
 
 /**

@@ -577,6 +577,20 @@ filter, private `/tmp`, only the state directory writable.
   receiving other people's events there (only the blocked pair's events to each other are left out). The contact rule
   applies when a conversation is started or a person added; a conversation that already exists keeps working until
   one of the two blocks the other.
+- Workspace feed (1.4.0, Sprint 28c, B-27). Post bodies, comments and digest summaries are sealed; hashtags (lower
+  case), reactions, bookmarks, the trending counts and each digest's ranked post ids are stored in the clear so they
+  can be queried and counted. Realtime feed events carry ids only and are filtered when raised: people whose stored
+  clearance is below the post's label and everyone in a block with the author are left out, but someone who joined a
+  workspace room learns that a post id exists before fetching it (the fetch applies clearance, blocks and group
+  membership again). A block hides content from the moment it is made; events already relayed are not withdrawn, and
+  a digest summary written before a block may still name the blocked person (its post list is filtered at read). The
+  digest is written by a model from the posts' text: it is screened at `model-output`, but a summary can misstate a
+  post. Only posts wait for review: an edit or comment that a rule would hold is refused instead, and a quoted repost
+  is held like a post. Group posts' hashtags are left out of trending; a workspace's trending tags are visible to its
+  members at each label they are cleared for, so a tag used only in internal posts is visible to every internal
+  reader. The home fan-out uses stored workspace and group membership: tenant admins who read every workspace get
+  their followed people's posts on the next load rather than live. Comments are not threaded beyond `parentId` (no
+  depth limit) and send no notifications.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off

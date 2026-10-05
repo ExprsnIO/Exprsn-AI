@@ -2861,3 +2861,106 @@ For other modules, `server/src/social/service.ts` (`s.social`) has the shared ch
 `requireContact`, and `emitToRoom`, which publishes a realtime room event with everyone in a block with the actor left
 out (`exceptUserIds` on the room event), so the filter applies on every instance. Every change is also published on
 the bus (`social.relation {tenantId, kind: block | mute | follow, userId, targetId, on}`).
+
+## Sprint 28c (1.4.0): the workspace feed (B-2701 to B-2705)
+
+A feed for a workspace or a group, not a public social network. Workspace membership stays the outer boundary: every
+route starts from the workspaces the caller may act in now and their clearance, so a post outside them is `404`.
+`feed:read` reads feeds, posts, comments, trending tags and digests; `feed:write` posts, comments, reacts, reposts and
+bookmarks (both held by members and tenant admins); `feed:manage` (tenant admins) removes anyone's posts and comments
+in the holder's workspaces and sets and runs a workspace's digest. Every route answers `Cache-Control: no-store`.
+
+- A **post** belongs to one workspace, or is targeted at a group of it (`groupId`): the group feed, with the group's
+  rights (members post and comment, moderators remove, readers read; a private group's posts never reach the workspace
+  feed). The group's Sprint 27 notices (`/api/groups/:id/posts`) stay as they are, beside the group feed.
+- **Labels**: a workspace post is `internal` by default (or the `label` asked for), at most the workspace ceiling
+  (`422`) and the author's clearance (`403`); a group post carries the group's label. **Media** are files from the file
+  store (`media: [fileId]`, at most 10) in the post's workspace (`422` otherwise) that passed quarantine (`409` while
+  pending or rejected); they raise the post's label to theirs. A **repost** carries the original's label and stays in
+  its workspace and group, so the audience never widens.
+- Bodies, comments and digest summaries are **sealed** with the tenant key. Posts and comments are at most
+  `FEED_POST_MAX_CHARS` characters.
+- **Relations** come from the shared social module (Sprint 28b): a block, either way, hides the other's posts,
+  comments and reposts' originals in every feed and refuses comments, reactions and reposts on their posts (`404`, as
+  if they did not exist), and their user feed is `404`; a mute takes the muted person's posts out of the muter's home
+  feed only. Someone sharing no workspace with the caller is unknown to them.
+- **Guardrails** (B-2704): a post's text passes the `user-input` checkpoint before it is published. A block is `422`
+  (`step: guardrail`), a redaction is stored redacted, and a hold (`require-approval`) keeps the post `held`: `202`,
+  seen only by its author, with a hold flag (`checkpoint: user-input`, source `feed-post`) in the Flags queue. A
+  reviewer's `POST /api/flags/:ref/decide {decision: approved}` publishes it (the author is notified; a reviewer cannot
+  decide on their own post), `rejected` withdraws it (`state: rejected`, still seen only by its author). Edits and
+  comments do not wait for review: a hold refuses them (`422`).
+
+Pages are `{items, nextCursor}`, newest first by publication time; pass `cursor` (opaque) and `limit` (1 to 100,
+default 20) for the next page; a cursor the server did not give out is `400`. A post is `{id, workspaceId, groupId,
+author: {id, username, displayName}, body, label, state: held | published | rejected | hidden, repostOf, original,
+media: [{fileId, name, type, size, available}], tags, counts: {comments, reposts, reactions: {<kind>: n}}, mine:
+{reactions, bookmarked, reposted}, createdAt, publishedAt, editedAt}`; `original` is the reposted post as the caller
+may see it now, or `null` (blocked, gone or out of reach). Media are downloaded through the file routes
+(`/api/files/:id/content`).
+
+### Feeds (B-2703)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/feed/home?cursor=&limit=` | `feed:read`. The caller's posts and those of the people they follow (`/api/social/following`), in every workspace and group they may read, minus muted people |
+| `GET /api/feed/workspaces/:id` | A workspace's feed (its posts not targeted at a group). `404` outside the caller's workspaces |
+| `GET /api/feed/groups/:id` | A group's feed (feed posts targeted at it): readers of the group's content (`403`, `step: group`, to non-members of a private group) |
+| `GET /api/feed/users/:id` | A person's posts the caller may read; `404` when they share no workspace or are in a block with the caller |
+| `GET /api/feed/lists/:id` | The posts of the people on one of the caller's lists (`/api/social/lists`); someone else's list is `404` |
+| `GET /api/feed/tags/:tag?workspace=` | Posts with a hashtag (any case), in one workspace or all the caller's |
+| `GET /api/feed/bookmarks` | The caller's bookmarks, most recently saved first (posts they can no longer see are left out) |
+| `GET /api/feed/trending?workspace=&limit=` | `{tags: [{tag, posts, people}], computedAt, windowStart}`, from the last `feed.trending` run, counting only posts at labels the caller is cleared for |
+
+### Posts, reposts, comments, reactions and bookmarks (B-2701)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/feed/posts` `{workspaceId?, groupId?, body?, media?, label?}` | `feed:write`. In the current workspace when neither is named. Text or media are needed (`422`). Hashtags are extracted when published. `201` with the post, or `202` when held for review. Audited `feed.post.created` or `feed.post.held`; catalogue events `post.created`, `post.held` |
+| `GET /api/feed/posts/:id` | `feed:read`. One post (held and rejected ones for their author only) |
+| `PATCH /api/feed/posts/:id` `{body}` | The author. Checked again (a hold refuses); re-tags the post; `editedAt` is set. Audited `feed.post.updated`; event `post.updated` |
+| `DELETE /api/feed/posts/:id` | The author, a moderator of its group, or `feed:manage` in its workspace. `{id, state: deleted}`. Audited `feed.post.deleted`; event `post.deleted` |
+| `POST /api/feed/posts/:id/repost` `{body?}` | Reposts into the original's workspace or group (group members only). Plain (no text): once per person (`200` with the existing repost), and a plain repost of a plain repost reposts the original. With text it is a post of its own (guardrails, holds). `201`, `202` when held |
+| `DELETE /api/feed/posts/:id/repost` | Takes back the caller's plain repost of the post |
+| `GET /api/feed/posts/:id/comments?cursor=&limit=` | Oldest first: `{items: [{id, postId, parentId, author, body, state, createdAt}], nextCursor}`; threads are built from `parentId`. Comments by people in a block with the caller are left out |
+| `POST /api/feed/posts/:id/comments` `{body, parentId?}` | A comment, or a reply to a comment on the same post (`404` otherwise). **A comment on a deleted post is refused** (`409`, problem+json), as are reactions and reposts; a post waiting for review takes none (`409`). Group posts take comments from members. `201`. Audited `feed.comment.created` |
+| `DELETE /api/feed/comments/:id` | The comment's author, the post's author, a moderator of the group, or `feed:manage`. Audited `feed.comment.deleted` |
+| `PUT /api/feed/posts/:id/reactions/:kind` | `kind`: `like`, `celebrate`, `support`, `insightful`, `funny`. `201 {postId, kind, added: true}`, `200` with `added: false` when already there. Audited `feed.reaction.added` |
+| `DELETE /api/feed/posts/:id/reactions/:kind` | Removes it. Audited `feed.reaction.removed` |
+| `PUT /api/feed/posts/:id/bookmark` | Saves it (`201`; `200` when already saved). Audited `feed.bookmark.added` |
+| `DELETE /api/feed/posts/:id/bookmark` | Removes the bookmark, also of a post that is gone. Audited `feed.bookmark.removed` |
+
+Posts and comments are moderation objects (Sprint 26c): `feed-post` (a hidden post leaves every feed) and
+`feed-comment`. `POST /api/moderation/reports {type: feed-post, id}` by anyone who can read the post files a flag in
+its workspace's queue; a reviewer's hide and an upheld appeal work as for any object.
+
+### Trending and the weekly digest (B-2705)
+
+The `feed.trending` job (every `FEED_TRENDING_MINUTES`, per tenant) counts the hashtags of workspace posts published
+in the last `FEED_TRENDING_HOURS`, per workspace, tag and label (group posts are left out). The `feed.digest` job
+(checked hourly) writes, for each workspace with a digest profile, the digest of the last complete week (Monday 00:00
+UTC to Monday) once: its `FEED_DIGEST_TOP` workspace posts labelled up to `FEED_DIGEST_MAX_LABEL`, ranked by reactions
+\+ 2 × comments + 3 × reposts, and a summary the profile writes through the gateway (the answer passes the
+`model-output` checkpoint). A model failure keeps the ranked list (`state: failed`, `error`); a week without posts is
+`empty`. Members cleared for the digest's label are notified (`feed`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/feed/workspaces/:id/digests` | `feed:read`. `[{id, workspaceId, weekStart, weekEnd, label, state: ready \| empty \| failed, posts, createdAt}]`, newest first, within the caller's clearance |
+| `GET /api/feed/digests/:id` | `{id, workspaceId, weekStart, weekEnd, label, state, profile, error, summary, posts: [{id, score, reactions, comments, reposts, post}], createdAt}`; `post` is the post as the caller may see it now, or `null` |
+| `GET /api/feed/workspaces/:id/settings` | `feed:manage`. `{digestEnabled, digestProfile, effectiveProfile, updatedBy, updatedAt}`; `effectiveProfile` falls back to `FEED_DIGEST_PROFILE` |
+| `PUT /api/feed/workspaces/:id/settings` `{digestEnabled?, digestProfile?}` | `feed:manage`. A profile that does not resolve to a published profile is `422`. Audited `feed.settings.updated` |
+| `POST /api/feed/workspaces/:id/digest` `{}` | `feed:manage`. Queues a digest of the last seven days now: `202 {jobId, workspaceId}`; `409` without a digest profile. Audited `feed.digest.requested`; the job audits `feed.digest.created` |
+
+### Realtime (B-2703)
+
+The `feed` room kind (B-2101), joined with `room.join {kind: feed, id}` by `feed:read` holders:
+
+- `id` = a workspace the caller may act in: its feed. Events `feed.post.created`, `feed.post.updated`,
+  `feed.post.deleted` and `feed.comment.created` (`{postId, authorId, workspaceId, groupId, repostOf}` or `{postId,
+  commentId, parentId, authorId}`: ids only; the client fetches the post through the API). People below the post's
+  label and everyone in a block with the author are left out on every instance.
+- `id` = a group whose content the caller reads: its group feed, the same events.
+- `id` = the caller's own user id: their home room. A new post reaches the home rooms of the author's followers who
+  may read it and did not mute the author (`feed: home` in the data), up to `FEED_HOME_FANOUT_MAX` followers; the
+  others see it on their next load. A person's feed (`/api/feed/users/:id`) updates from the workspace rooms.
