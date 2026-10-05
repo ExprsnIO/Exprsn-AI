@@ -8,8 +8,9 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 75 items, 427 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 248, P2 60. At about
-78 points a sprint (roughly five engineers) that is Sprints 29 to 34 with Sprints 30 and 31 over the guide; with fewer,
+**Size.** 82 items, 466 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 287, P2 60, of which
+B-42 (7 items, 39 points) is not yet placed in a sprint. At about 78 points a sprint (roughly five engineers) that is
+Sprints 29 to 34 with Sprints 30 and 31 over the guide; with fewer,
 P2 (the PDS and feed generator) moves to 1.6 first, then WebDAV (B-32), then the import wizard's dataset half
 (B-3804 to B-3807), then Workflows 2 (B-39, added 2026-10-05 from the Sprint 29 prototype roll-up
 `design/prototype/rollup-1.5.html`).
@@ -30,6 +31,7 @@ the same policy pipeline.
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
 | 33 | Agents, tools and skills in chat | B-4001–B-4008 | 40 | `035_chat_invocation` | Planned |
 | 34 | Chaining agents, skills, tools and workflows; release | B-4102–B-4109, B-3501 | 39 | `036_chains` | Planned |
+| — | Platform administration screens (B-42): unscheduled until the owner decides Q12 (Sprint 31 beside the release, Sprint 30 displacing WebDAV, or 1.6) | B-4202–B-4207 (B-4201 done) | 39 | — | Unscheduled |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
