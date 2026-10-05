@@ -575,7 +575,16 @@ const base = z.object({
     APPS_EXPORT_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(100_000),
     APPS_BULK_MAX: z.coerce.number().int().min(1).max(1000).default(500),
     APPS_TRIGGER_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
-    APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60)
+    APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /**
+     * Sprint 27c (B-2501, B-2504): groups and events. Invitations expire after GROUP_INVITE_DAYS and join requests after
+     * GROUP_REQUEST_DAYS. Signed calendar feeds are rate-limited per address (CALENDAR_FEED_PER_MINUTE) and show
+     * events labelled above CALENDAR_FEED_MAX_LABEL only as busy time (calendar clients copy feeds to other servers).
+     */
+    GROUP_INVITE_DAYS: z.coerce.number().int().min(1).max(365).default(7),
+    GROUP_REQUEST_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+    CALENDAR_FEED_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
+    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */

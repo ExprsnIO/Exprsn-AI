@@ -556,6 +556,20 @@ filter, private `/tmp`, only the state directory writable.
   `FIREHOSE_TICK_MS`; after a crash another instance takes over when the lease runs out and resumes from the last
   stored cursor (at most `FIREHOSE_CHECKPOINT_MS` old), so posts handled since are checked again (a check is idempotent
   per post: one flag). A failed check is retried three times and then counted as `failed` and skipped.
+- Groups and events (1.4.0, Sprint 27c). Workspace membership is checked on every request, so a member who leaves
+  the workspace loses its groups at once, but their membership and RSVP rows stay (they come back if the user
+  rejoins the workspace). Group names are stored in the clear (like file names); descriptions, posts and event titles,
+  descriptions and locations are sealed. In-app notices name the group, which a notification row stores in the clear;
+  emails carry only the time and a link. Calendar feed URLs are bearer credentials: anyone holding one reads the
+  owner's events up to `CALENDAR_FEED_MAX_LABEL` (above it, busy time only) until the owner revokes it, and calendar
+  programs fetch them over the network, so a URL in a mail client or third-party calendar should be treated as
+  shared. Feed signatures use a key derived from `SESSION_SECRET`; rotating it invalidates every feed (there is no
+  per-feed key rotation other than revoking and creating a new one). Feed fetches are not audited one by one (they
+  record `lastUsedAt`); creation and revocation are. Events have no recurrence and no VTIMEZONE (times are UTC, which
+  RFC 5545 allows); a wall-clock time in a daylight-saving gap moves forward by the gap. Reminders go to attendees
+  who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
+  default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
+  (no edit, no attachments, no threads); the workspace feed is B-27.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off

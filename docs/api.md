@@ -2708,3 +2708,104 @@ answer) leaves the field empty and the record saved, with `aiState: failed` and 
 
 Records are moderation objects (type `record`): a takedown hides the record from every list and read, an upheld appeal
 shows it again.
+
+## Sprint 27c (1.4.0): groups and events (B-2501 to B-2505)
+
+Groups live inside one workspace, and workspace membership stays the outer boundary: every route starts from the
+workspaces the caller may act in now, so a group outside them is `404` (it cannot be seen, joined or reported), and a
+member who leaves the workspace loses its groups at once, whatever their group role. `groups:read` sees groups, their
+content and events; `groups:write` creates groups, joins, posts, RSVPs and keeps calendar feeds (both held by
+members and tenant admins); what someone may do inside a group is their **group role**: `owner` (settings, roles,
+delete), `moderator` (requests, invitations, removing members, hiding posts, events, check-in, cases) or `member`
+(posts, RSVPs). `groups:manage` (tenant admins) acts as owner of every group in the workspaces the holder may act in.
+A group's `visibility` is `public` (listed and readable by everyone in the workspace; posting needs membership),
+`private` (listed; content for members) or `hidden` (known only to members, invitees and managers); its `joinMode` is
+`open`, `request` or `invite`. Its `label` (at most the workspace ceiling, default `internal`) is the label of all its
+content: nobody below it sees the content or joins. Descriptions, posts and event titles, descriptions and locations
+are sealed with the tenant key. Refusals for a reader carry `step`: `group` (join first), `group-role` (with
+`right`), `clearance`, `join-mode`, `workspace`, `invitee`, `guardrails`. Every route answers `Cache-Control:
+no-store`. Changes are audited under `group.*` and `calendar.feed.*`; the catalogue events `group.created`,
+`group.updated`, `group.deleted`, `group.member.added`, `group.member.removed`, `group.post.created`,
+`group.post.deleted`, `group.event.created`, `group.event.updated` and `group.event.cancelled` are emitted to
+webhooks and plugins (ids only).
+
+### Groups, members, requests and invitations (B-2501)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups?workspace=&mine=true` | `groups:read`. The groups the caller may know of in their workspaces (or one): `[{id, workspaceId, name, description, visibility, joinMode, label, state, role, actingRole, members, …}]`; `description` is null where the caller may not read the content |
+| `POST /api/groups` `{workspaceId?, name, description?, visibility?: private, joinMode?: request, label?}` | `groups:write`. In a workspace the caller may act in (default the current one), label at most the workspace ceiling (`422`) and the caller's clearance (`403`). The creator is the owner. `201` with the group |
+| `GET /api/groups/:id` | `groups:read`. The group with the caller's `role`, `actingRole` and member count |
+| `PATCH /api/groups/:id` `{name?, description?, visibility?, joinMode?, label?}` | Owner. A raised label raises its posts and events; sockets in the group's room are checked again |
+| `DELETE /api/groups/:id` | Owner. The group is deleted (`state: deleted`), pending requests cancelled, reminders stopped |
+| `GET /api/groups/:id/members` | Readers of the content. `[{userId, username, displayName, role, joinedAt}]` |
+| `PATCH /api/groups/:id/members/:userId` `{role: owner \| moderator \| member}` | Owner. A group keeps at least one owner (`409`) |
+| `DELETE /api/groups/:id/members/:userId` | Leave (one's own id) or remove (moderators remove members, owners anyone). The last owner cannot leave (`409`). The member's sockets leave the group's room at once |
+| `POST /api/groups/:id/join` | `open`: `200 {joined: true, role}`. `request`: `202 {requested: true, request}` (the same pending request again if there is one; moderators are notified). `invite`: `403` (`step: join-mode`) unless the caller holds an invitation, which this accepts. Outside the workspace or below the label: `404` |
+| `POST /api/groups/:id/invites` `{userId, role?: member}` | Moderators (owners for `moderator` and `owner`). The invitee must be active, in the group's workspace and cleared for its label (`422`, `step: workspace`); one pending invitation or request per user (`409`). Expires after `GROUP_INVITE_DAYS`. `201` with the invitation; the invitee is notified |
+| `GET /api/groups/:id/requests?state=` | Moderators. Requests and invitations (default `pending`; expired ones are marked so) |
+| `GET /api/group-requests` | The caller's pending requests and the invitations waiting for them: `[{id, groupId, groupName, kind: request \| invite, role, state, expiresAt, …}]` |
+| `POST /api/group-requests/:id/accept` | An invitation by its invitee; a request by a moderator. The workspace boundary and label are checked again now (`422`); expired is `410` |
+| `POST /api/group-requests/:id/decline` | The same people. `200` with the request |
+| `DELETE /api/group-requests/:id` | Withdraw: the requester their request, a moderator an invitation |
+
+### Posts and cases (B-2505)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups/:id/posts?before=&limit=` | Readers. Newest first: `[{id, groupId, authorId, authorName, body, label, state, createdAt, updatedAt}]`; moderators also see hidden posts (`body: null`) |
+| `POST /api/groups/:id/posts` `{body}` | Members (up to 10,000 characters). Screened at the `user-input` guardrail checkpoint (`422`, `step: guardrails` on a block; a redaction is stored redacted). `201` with the post |
+| `DELETE /api/group-posts/:id` | Its author, or a moderator |
+| `GET /api/groups/:id/cases?state=` | Moderators. The flags on the group's content (reports and moderation checks through B-19), within clearance: `[{id, ref, kind, state, severity, objectType, objectId, label, ruleName, dueAt, createdAt}]` |
+
+Group content is moderated through the moderation API (Sprint 26c) with three registered types: `group-post` (hidden
+posts are shown to nobody but the group's moderators), `group` (its name and description; a hidden group is closed to
+everyone but managers and its owners) and `group-event` (a hidden event is left out of calendars and its reminders are
+not sent). `POST /api/moderation/reports {type: group-post, id}` by anyone who can read the post files a flag in the
+group's workspace queue; a reviewer's hide and an upheld appeal work as for any object.
+
+### Events, RSVPs and check-in (B-2502)
+
+Times are given as an instant with an offset (`2026-11-03T08:00:00Z`) or as a wall-clock time (`2026-11-03T09:00`) or
+date (all-day events) in `timeZone`, an IANA zone name (`Europe/Berlin`, `UTC`; offsets and unknown names are `400`).
+They are stored in UTC with the zone. A wall-clock time that occurs twice takes the earlier instant; one in a
+daylight-saving gap moves forward by the gap. Events last at most 31 days. Readers of the group read its events.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups/:id/events?from=&to=&includeCancelled=` | Readers. Events overlapping the window (default from a day ago, a year long) |
+| `POST /api/groups/:id/events` `{title, description?, location?, start, end? \| durationMinutes?, timeZone, allDay?, capacity?, maxGuests?, reminders?}` | Moderators. `reminders` are up to five offsets in minutes before the start (at most 28 days). `201 {id, title, startsAt, endsAt, timeZone, localStart, localEnd, allDay, capacity, maxGuests, reminders, label, state, sequence, attendance, myRsvp, canManage, …}` |
+| `GET /api/calendar/events?from=&to=` | The caller's calendar: events of their groups and events they RSVPed to (going or maybe), still readable now; at most 400 days |
+| `GET /api/calendar/events/:id` | With `attendance {going, maybe, guests, checkedIn}` and the caller's `myRsvp` |
+| `PATCH /api/calendar/events/:id` | Moderators; the event fields, all optional. A change attendees see moves `sequence`; a new time or reminder list reschedules the reminders |
+| `POST /api/calendar/events/:id/cancel` `{reason?}` | Moderators. Stops the reminders and notifies **every attendee** (going or maybe), in the console (`event.cancelled`) and by email (`event-notice`: the time and a link, never the event's title or the reason). `200` with the event and `notified` |
+| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`) |
+| `GET /api/calendar/events/:id/attendees` | Readers see who is going or maybe; moderators also the declined and check-ins |
+| `POST /api/calendar/events/:id/check-in` `{userId, checkedIn?: true}` | Moderators. Someone without an RSVP is added as going (if they can read the event) |
+| `GET /api/calendar/events/:id/reminders` | Moderators. `[{id, minutesBefore, fireAt, state: scheduled \| sending \| sent \| cancelled \| skipped, recipients, sentAt}]` |
+
+### Reminders (B-2503)
+
+Each reminder offset is a row and a `calendar.reminder` job queued with `runAt` at its time. The queue claims a job
+with a conditional update, so one instance runs it however many poll the database (tested with two instances on one
+database); the reminder row also moves `scheduled` → `sending` → `sent` with a compare-and-set, so a retried or
+duplicated job never sends twice. At its time the job notifies the attendees (going or maybe) who can still read the
+event, in the console (`event.reminder`) and by email, and is audited `group.event.reminded`. A cancelled, hidden or
+moved event's reminders are cancelled or skipped.
+
+### Calendar feeds (B-2504)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/calendar/feeds` | `groups:read`. The caller's feeds: `[{id, kind, targetId, name, url, createdAt, revokedAt, lastUsedAt}]` |
+| `POST /api/calendar/feeds` `{kind: event \| group \| user, targetId?}` | `groups:write`. An event or group the caller can read, or their own calendar. `201` with the `url`. Audited `calendar.feed.created` |
+| `DELETE /api/calendar/feeds/:id` | Revoke (the owner, or a `groups:manage` holder). Audited `calendar.feed.revoked` |
+| `GET /calendar/feeds/:id/:signature.ics` | Public, outside `/api`: no session or cookie, rate-limited per address (`CALENDAR_FEED_PER_MINUTE`). `text/calendar` (RFC 5545: UTC times, all-day dates in the event's zone, escaped and folded). The signature is an HMAC-SHA256 over the feed's id, tenant, owner, kind and target with a key derived from `SESSION_SECRET` (HKDF). A bad signature, an unknown or revoked feed, or an owner who is disabled, sanctioned or no longer entitled is the same `404`. The feed is rendered as its owner at every fetch (workspace, group and clearance); a user feed covers the last 30 days and the next year, cancelled events as `STATUS:CANCELLED`. Events above `CALENDAR_FEED_MAX_LABEL` (default `internal`) appear as `Busy (<label>)` without details |
+
+### Realtime (B-2101)
+
+The `group` room kind: a socket joins with `room.join {kind: group, id}` when its user can read the group's content.
+Events: `group.updated`, `group.member.added`, `group.member.removed`, `group.member.role`, `group.post.created`,
+`group.post.deleted`, `group.event.created`, `group.event.updated`, `group.event.cancelled`, `group.event.rsvp`,
+`group.event.check-in` (ids, never content). Removing a member closes their room at once; a visibility or label change
+checks everyone in it again; leaving the workspace closes it.

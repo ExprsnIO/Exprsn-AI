@@ -35,6 +35,23 @@
 - Apps export and import as bundles signed with a KMS HMAC key; a tampered bundle is refused. Records are moderation
   objects.
 
+### Groups and events (Sprint 27, B-2501 to B-2505)
+
+- Groups inside a workspace (`/api/groups`): public, private or hidden; open, request or invitation-only joining;
+  join requests and invitations that expire (`GROUP_REQUEST_DAYS`, `GROUP_INVITE_DAYS`); owner, moderator and member
+  roles. Workspace membership is the outer boundary: a user outside the workspace cannot see, join or be invited to
+  its groups. New permissions `groups:read` and `groups:write` (members) and `groups:manage` (tenant admins).
+- Group events with IANA time zones (stored as UTC plus the zone), RSVPs with guests and capacity, attendee lists and
+  check-in. Cancelling an event notifies every attendee in the console and by email (the new `event-notice` template).
+- Reminders as `calendar.reminder` queue jobs at their time, sent in the console and by email, once across instances.
+- Signed iCalendar feeds per event, group and user at `/calendar/feeds/<id>/<signature>.ics` (RFC 5545, HMAC with a
+  derived key, revocable); events above `CALENDAR_FEED_MAX_LABEL` show as busy time.
+- Group posts (sealed, screened at `user-input`) and group, post and event moderation through the moderation API:
+  a report on a group post makes a flag in the workspace queue, and moderators see their group's cases.
+- The `group` realtime room kind; catalogue version 3 emits `group.*` events (members, posts, events).
+- Migration `029c_groups`; new settings `GROUP_INVITE_DAYS`, `GROUP_REQUEST_DAYS`, `CALENDAR_FEED_PER_MINUTE`,
+  `CALENDAR_FEED_MAX_LABEL`.
+
 ## Unreleased
 
 ### Fixed
