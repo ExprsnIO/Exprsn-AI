@@ -100,7 +100,9 @@ export const TOPICS = {
   /** 1.4.0 (B-2101): an event for the sockets in a domain room: `RoomEvent` (realtime/rooms.ts). */
   roomEvent: 'room.event',
   /** 1.4.0 (B-2002): a tenant's plugin installs changed: `{ tenantId, pluginId }`. */
-  pluginChanged: 'plugin.changed'
+  pluginChanged: 'plugin.changed',
+  /** 1.4.0 (B-2606, B-2702): a block, mute or follow between two users changed: `SocialRelationEvent` (social/service.ts). */
+  socialRelation: 'social.relation'
 } as const;
 
 /** Sprint 21: workspaces a user is no longer a member of; live shared watches through them end at once. */

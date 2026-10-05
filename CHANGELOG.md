@@ -52,6 +52,16 @@
 - Migration `029c_groups`; new settings `GROUP_INVITE_DAYS`, `GROUP_REQUEST_DAYS`, `CALENDAR_FEED_PER_MINUTE`,
   `CALENDAR_FEED_MAX_LABEL`.
 
+### Social relations and messaging (Sprint 28, B-2601 to B-2606)
+
+- Social relations shared by messaging and the workspace feed (`/api/social`, `server/src/social/`): blocks that work
+  in both directions and end follows both ways, private mutes that may expire, follows and lists inside the workspaces
+  two people share, and a contact rule per user (everyone in my workspaces, people I follow, or nobody). A block
+  refuses with the same words as a contact rule, so the blocked person is not told. Room events raised through
+  `SocialService.emitToRoom` leave out everyone in a block with the actor on every instance (the platform's BUG-080).
+  New permissions `social:read` and `social:write` (members and tenant admins) and `social:manage` (tenant admins, an
+  audited view of anyone's relations); audit actions `social.*`; catalogue version 4. Migration `030b_social`.
+
 ## Unreleased
 
 ### Fixed

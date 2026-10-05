@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 3;
+export const CATALOGUE_VERSION = 4;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -64,6 +64,8 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'group.*', description: 'Groups (Sprint 27c): created, updated, deleted; members added and removed; posts created and deleted; events created, updated and cancelled; and audit actions for requests, invitations, roles, RSVPs, check-ins and reminders' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
   { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
+  // 1.4.0, Sprint 28b (B-2606 with B-2702)
+  { pattern: 'social.*', description: 'Social relations: blocks, mutes, follows, lists and contact rules made or removed, and admin views of a user’s relations (audit actions)' },
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
   { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
   // 1.4.0, Sprint 25c (B-1704 to B-1706)

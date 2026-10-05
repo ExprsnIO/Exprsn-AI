@@ -53,6 +53,7 @@ import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
+import { socialRoutes } from '../routes/social.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -245,6 +246,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(firehoseRoutes(s));
   // Sprint 27c (B-2501 to B-2505): groups, posts, events, RSVPs, reminders and calendar feeds.
   api.use(groupRoutes(s));
+  // Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules.
+  api.use(socialRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

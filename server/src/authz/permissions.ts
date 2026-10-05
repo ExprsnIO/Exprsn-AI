@@ -43,7 +43,10 @@ export const PERMISSIONS = [
   // 1.4.0 (Sprint 27c, B-25): groups and events in one's workspaces. read: see groups, their content and events;
   // write: create groups, join, post, RSVP and keep calendar feeds (what a member may do in a group is its group role);
   // manage: act as owner of every group in the workspaces one may act in.
-  'groups:read', 'groups:write', 'groups:manage'
+  'groups:read', 'groups:write', 'groups:manage',
+  // 1.4.0 (Sprint 28b, B-2606 with B-2702): social relations shared by messaging and the feed. read: one's own blocks,
+  // mutes, follows, followers, lists and contact rule; write: change them; manage: see any user's relations (audited).
+  'social:read', 'social:write', 'social:manage'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -74,14 +77,16 @@ const MEMBER: readonly Permission[] = [
   // Sprint 27 (B-2202): the records of the apps in their workspaces.
   'records:read', 'records:write',
   // Sprint 27c (B-25): groups and events in their workspaces, with the rights of their group role.
-  'groups:read', 'groups:write'
+  'groups:read', 'groups:write',
+  // Sprint 28b (B-2606): their own blocks, mutes, follows, lists and contact rule.
+  'social:read', 'social:write'
 ];
 
 const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'social:read', 'social:write', 'social:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage'], requiresMfa: true, grantableBy: ADMINS },

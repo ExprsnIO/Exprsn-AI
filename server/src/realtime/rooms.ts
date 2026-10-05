@@ -49,6 +49,11 @@ export interface RoomEvent {
   data: Record<string, unknown>;
   /** Not to this user's sockets (the author already has it). */
   exceptUserId?: string;
+  /**
+   * Not to these users' sockets either (1.4.0, B-2603 and B-2702: people in a block with the actor, from
+   * `SocialService.emitToRoom`). Decided where the event is raised, so every instance relays the same filtered event.
+   */
+  exceptUserIds?: string[];
 }
 
 export const MAX_ROOMS_PER_SOCKET = 50;
@@ -100,7 +105,7 @@ export interface RoomSocketData {
 
 interface Io {
   of(nsp: '/'): { adapter: { rooms: Map<string, Set<string>> }; sockets: Map<string, Socket> };
-  local: { to(room: string): { except(room: string): { emit(ev: string, data: unknown): void }; emit(ev: string, data: unknown): void } };
+  local: { to(room: string): { except(room: string | string[]): { emit(ev: string, data: unknown): void }; emit(ev: string, data: unknown): void } };
 }
 
 const joinMsg = z.object({ kind: z.enum(ROOM_KINDS), id: z.string().regex(ID) }).strict();
@@ -167,7 +172,8 @@ export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: 
     bus.on<RoomEvent>(TOPICS.roomEvent, (e) => {
       if (!e?.event?.startsWith(`${e.kind}.`) || !EVENT.test(e.event)) return;
       const to = io.local.to(roomName(e.tenantId, e.kind, e.id));
-      (e.exceptUserId ? to.except(userRoom(e.exceptUserId)) : to).emit(e.event, { kind: e.kind, id: e.id, ...e.data });
+      const except = [...(e.exceptUserId ? [e.exceptUserId] : []), ...(Array.isArray(e.exceptUserIds) ? e.exceptUserIds : [])].map(userRoom);
+      (except.length ? to.except(except) : to).emit(e.event, { kind: e.kind, id: e.id, ...e.data });
     }),
     bus.on<RoomAccessEvent>(TOPICS.roomAccess, (e) => {
       const room = roomName(e.tenantId, e.kind, e.id);

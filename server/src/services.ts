@@ -104,6 +104,7 @@ import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
+import { SocialService } from './social/service.js';
 
 export interface Services {
   cfg: Config;
@@ -237,6 +238,8 @@ export interface Services {
   groups: GroupService;
   /** 1.4.0, Sprint 27c (B-2502 to B-2504): group events, RSVPs, check-in, reminders and signed iCalendar feeds. */
   calendar: CalendarService;
+  /** 1.4.0, Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules, shared by messaging and the feed. */
+  social: SocialService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -482,6 +485,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
+    // 1.4.0, Sprint 28b: social relations.
+    social: new SocialService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();

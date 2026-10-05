@@ -570,6 +570,13 @@ filter, private `/tmp`, only the state directory writable.
   who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
   default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
   (no edit, no attachments, no threads); the workspace feed is B-27.
+- Social relations (1.4.0, Sprint 28b, B-2606). Blocks, mutes, follows and lists are stored in the clear (user ids
+  only) and audited under `social.*`, so tenant auditors and `social:manage` holders can see who blocked or follows
+  whom (an admin's view of one user's relations is itself audited). A block is checked when a message, post or socket
+  event is raised: events already relayed before the block are not withdrawn, and a socket already in a room keeps
+  receiving other people's events there (only the blocked pair's events to each other are left out). The contact rule
+  applies when a conversation is started or a person added; a conversation that already exists keeps working until
+  one of the two blocks the other.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off

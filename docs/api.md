@@ -2809,3 +2809,55 @@ Events: `group.updated`, `group.member.added`, `group.member.removed`, `group.me
 `group.post.deleted`, `group.event.created`, `group.event.updated`, `group.event.cancelled`, `group.event.rsvp`,
 `group.event.check-in` (ids, never content). Removing a member closes their room at once; a visibility or label change
 checks everyone in it again; leaving the workspace closes it.
+
+## Sprint 28b (1.4.0): social relations (B-2606, shared with the feed's B-2702)
+
+Blocks, mutes, follows, lists and contact rules, per tenant and per user; messaging (B-26) and the workspace feed
+(B-27) both enforce them. `social:read` sees one's own relations, `social:write` changes them (both held by members and
+tenant admins), `social:manage` (tenant admins) sees anyone's. Every route answers `Cache-Control: no-store`; changes
+are audited under `social.*` (the people involved, never more).
+
+- A **block** works in both directions: neither person can start a conversation with or message the other, each
+  other's messages, posts and socket events (typing, presence, new messages and posts) are left out for the other, and
+  blocking ends follows both ways. The blocked person is never told: to them it reads as "does not accept messages
+  from you", the same words as a contact rule.
+- A **mute** is one-way and private, for a number of minutes or until removed: the muted person's posts leave the
+  muter's home feed and their messages notify the muter of nothing.
+- **Follows** and **list** members must share a workspace with the caller (else `404`, as if unknown); blocks and
+  mutes may name anyone active in the tenant. Someone in a block with the caller cannot be followed or listed (`409`
+  for the blocker, `404` for the blocked).
+- The **contact rule** says who may start a conversation with a user or add them to one: `workspace` (anyone who
+  shares a workspace with them, the default), `following` (only people they follow) or `nobody`.
+
+Limits per user: 5,000 blocks, mutes and follows each, 100 lists of up to 1,000 people.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/social/settings` | `{contactRule: workspace \| following \| nobody}` |
+| `PUT /api/social/settings` `{contactRule}` | Sets the caller's contact rule (audited `social.contact-rule.updated` when it changes) |
+| `GET /api/social/users/:id` | The caller's relation with one person: `{userId, blocking, muting, following, followedBy, canMessage}`. Someone outside the caller's workspaces is `404` unless the caller blocked or muted them. Being blocked by them shows only as `canMessage: false` |
+| `GET /api/social/blocks` | `[{userId, username, displayName, createdAt}]` |
+| `POST /api/social/blocks` `{userId}` | `201 {userId, blocked: true, created: true}`; `200` with `created: false` when already blocked; `422` for oneself |
+| `DELETE /api/social/blocks/:userId` | Unblocks (`404` when there was no block) |
+| `GET /api/social/mutes` | `[{userId, username, displayName, expiresAt, createdAt}]` (live mutes) |
+| `POST /api/social/mutes` `{userId, minutes?}` | Mutes for `minutes` (at most a year) or until unmuted; muting again sets the new end. `201` |
+| `DELETE /api/social/mutes/:userId` | Unmutes |
+| `GET /api/social/following` | `[{userId, username, displayName, since}]` |
+| `GET /api/social/followers` | The caller's followers, same shape |
+| `POST /api/social/following` `{userId}` | Follows (`201`; `200` when already following) |
+| `DELETE /api/social/following/:userId` | Unfollows |
+| `GET /api/social/lists` | `[{id, name, description, members, createdAt, updatedAt}]` |
+| `POST /api/social/lists` `{name, description?}` | `201`; a name the caller already uses (any case) is `409` |
+| `GET /api/social/lists/:id` | The list with `people: [{userId, username, displayName}]`; someone else's list is `404` |
+| `PATCH /api/social/lists/:id` `{name?, description?}` | Renames or describes it |
+| `DELETE /api/social/lists/:id` | Deletes it |
+| `POST /api/social/lists/:id/members` `{userId}` | Adds someone (`201`; `200` when already in it) |
+| `DELETE /api/social/lists/:id/members/:userId` | Takes them off |
+| `GET /api/social/admin/users/:id` | `social:manage`. `{userId, username, contactRule, blocks, blockedBy, mutes, following, followers, lists}` (user ids and a list count); audited `social.relations.viewed` |
+
+For other modules, `server/src/social/service.ts` (`s.social`) has the shared checks: `isBlocked(tenantId, a, b)`
+(either direction), `blockedWith` and `blockedAmong`, `mutedBy`, `isMuted`, `following`, `followers`, `isFollowing`,
+`hiddenFor` (blocked and muted together, for feeds), `listMembers` and `inList`, `contactRule`, `mayContact` and
+`requireContact`, and `emitToRoom`, which publishes a realtime room event with everyone in a block with the actor left
+out (`exceptUserIds` on the room event), so the filter applies on every instance. Every change is also published on
+the bus (`social.relation {tenantId, kind: block | mute | follow, userId, targetId, on}`).
