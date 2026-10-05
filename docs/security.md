@@ -128,7 +128,13 @@ filter, private `/tmp`, only the state directory writable.
   handler adds (ownership, membership, clearance) are not in the table. Workflow approval steps and low-code state
   machines still name built-in roles only. Access reviews cover direct grants; roles and memberships from group
   mappings or the directory are reviewed at the mapping, since a removed row would come back at the next sign-in or
-  sync. A review does not snapshot API keys: a key's scopes only narrow its owner's roles, so revoking the role is
+  sync. Reviewers are assigned per item (the grant's admins and the member's directory manager); the manager comes
+  only from LDAP stores (`managerAttribute`) and SQL user tables (`columns.manager`), and only when the manager is a
+  user linked to the same store (matched on the external id, ignoring case but not spacing within a DN); upstream
+  OIDC and SAML claims, SCIM and the local store carry none, so their members are reviewed by admins only. Workspaces
+  have no admin role of their own: a workspace's admins are the tenant admins and its members holding `roles:manage`.
+  A grant whose only possible reviewer is its member (a sole tenant admin reviewing their own membership) stays
+  unassigned to anyone else but the campaign's creator, and is escalated when overdue. A review does not snapshot API keys: a key's scopes only narrow its owner's roles, so revoking the role is
   enough. The effective-access matrix shows at most 100 workspaces and 100 users per answer, and its cells are the
   policy decision only: `member` says separately whether the user may act in the workspace.
 

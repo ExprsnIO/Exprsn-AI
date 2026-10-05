@@ -263,40 +263,58 @@ describe('Sprint 29: permission matrices, custom roles, effective access and acc
       await localUser(h, 'rv-owen', ['flag-reviewer'], 'internal');
       const ws = await s.tenants.createWorkspace(h.tenantId, 'Review room', 'internal');
       await s.users.setWorkspaceMemberships(dana.id, 'direct', [ws.id]);
-      const reviewer = await localUser(h, 'rv-rita', ['member'], 'internal');
+      // Dana's user store names Mia as her manager (a local store here: its external ids are user ids).
+      const mia = await localUser(h, 'rv-mia', ['member'], 'internal');
+      const local = (await s.providers.list(h.tenantId)).find((x) => x.kind === 'local')!;
+      await s.users.upsertIdentity(dana.id, local.id, dana.id, [], mia.id);
       const danaC = await login(h, 'rv-dana');
       await danaC.agent.get('/api/flags').expect(200);
 
-      const created = (await send(ta, 'post', '/api/authz/reviews', { name: 'Q4 reviewers', kinds: ['role', 'workspace'], roles: ['flag-reviewer'], reviewerIds: [reviewer.id, dana.id], dueDays: 7 }).expect(201)).body;
-      expect(created).toMatchObject({ state: 'open', scope: { kinds: ['role', 'workspace'], roles: ['flag-reviewer'] }, counts: { total: expect.any(Number), decided: 0 }, overdue: false });
-      const rita = await login(h, 'rv-rita');
-      // The reviewer sees the campaign; a member who is not one does not.
-      expect((await rita.agent.get('/api/authz/reviews').expect(200)).body.map((r: { id: string }) => r.id)).toEqual([created.id]);
+      const created = (await send(ta, 'post', '/api/authz/reviews', { name: 'Q4 reviewers', kinds: ['role', 'workspace'], roles: ['flag-reviewer'], dueDays: 7 }).expect(201)).body;
+      expect(created).toMatchObject({ state: 'open', scope: { kinds: ['role', 'workspace'], roles: ['flag-reviewer'] }, reviewers: [], counts: { total: expect.any(Number), decided: 0 }, overdue: false });
+      const all = (await ta.agent.get(`/api/authz/reviews/${created.id}`).expect(200)).body.items as { id: string; user: { id: string; username: string }; kind: string; reviewers: string[]; manager: string | null }[];
+      // Every item has its admins (the tenant admins here) and never its own member.
+      for (const i of all) {
+        expect(i.reviewers).not.toContain(i.user.id);
+        expect(i.reviewers).toEqual(expect.arrayContaining([taId]));
+      }
+      // The manager sees the campaign and only the items assigned to her; a member assigned nothing does not.
+      const miaC = await login(h, 'rv-mia');
+      expect((await miaC.agent.get('/api/authz/reviews').expect(200)).body.map((r: { id: string }) => r.id)).toEqual([created.id]);
       const owenC = await login(h, 'rv-owen');
+      expect((await owenC.agent.get('/api/authz/reviews').expect(200)).body).toEqual([]);
       await owenC.agent.get(`/api/authz/reviews/${created.id}`).expect(404);
-      const detail = (await rita.agent.get(`/api/authz/reviews/${created.id}`).expect(200)).body;
-      const item = (u: string, kind: string) => detail.items.find((i: { user: { username: string }; kind: string }) => i.user.username === u && i.kind === kind);
-      expect(item('rv-dana', 'role')).toMatchObject({ grant: { id: 'flag-reviewer', name: 'Flag reviewer' }, decision: 'pending' });
-      expect(item('rv-dana', 'workspace')).toMatchObject({ grant: { id: ws.id, name: 'Review room' } });
-      expect(item('rv-owen', 'role')).toBeDefined();
-      expect(detail.items.some((i: { grant: { id: string } }) => i.grant.id === 'member')).toBe(false); // only the roles in scope
+      const detail = (await miaC.agent.get(`/api/authz/reviews/${created.id}`).expect(200)).body;
+      expect(detail.items).toHaveLength(2);
+      const item = (u: string, kind: string) => all.find((i) => i.user.username === u && i.kind === kind)!;
+      expect(detail.items.find((i: { kind: string }) => i.kind === 'role')).toMatchObject({ user: { username: 'rv-dana' }, grant: { id: 'flag-reviewer', name: 'Flag reviewer' }, decision: 'pending', manager: mia.id });
+      expect(detail.items.find((i: { kind: string }) => i.kind === 'workspace')).toMatchObject({ grant: { id: ws.id, name: 'Review room' } });
+      expect(item('rv-dana', 'role').reviewers).toEqual(expect.arrayContaining([taId, mia.id]));
+      expect(item('rv-owen', 'role')).toMatchObject({ manager: null });
+      expect(item('rv-owen', 'role').reviewers).not.toContain(mia.id);
+      expect(all.some((i) => (i as unknown as { grant: { id: string } }).grant.id === 'member')).toBe(false); // only the roles in scope
 
-      // Dana reviews too, but never her own grants.
+      // Nobody reviews their own grant.
       const danaReview = await send(danaC, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'role').id}/decision`, { decision: 'confirm' }).expect(403);
       expect(danaReview.body.step).toBe('self');
 
-      await send(rita, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'role').id}/decision`, { decision: 'revoke', note: 'left the team' }).expect(200);
+      await send(miaC, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'role').id}/decision`, { decision: 'revoke', note: 'left the team' }).expect(200);
       // Gone on her next request, with the same session.
       await danaC.agent.get('/api/flags').expect(403);
-      await send(rita, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'workspace').id}/decision`, { decision: 'revoke' }).expect(200);
+      // The first decision stands: the tenant admin's later one is refused, naming who decided.
+      const late = await send(tb, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'role').id}/decision`, { decision: 'confirm' }).expect(409);
+      expect(late.body).toMatchObject({ decision: 'revoked', decidedBy: mia.id });
+      expect(late.body.detail).toContain('RV-MIA');
+      await send(ta, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'workspace').id}/decision`, { decision: 'revoke' }).expect(200);
       const danaP = (await loadPrincipal(s, h.tenantId, dana.id, {}))!;
       expect((await workspacesFor(s, danaP)).some((w) => w.id === ws.id)).toBe(false);
-      await send(rita, 'post', `/api/authz/reviews/${created.id}/items/${item('rv-dana', 'role').id}/decision`, { decision: 'confirm' }).expect(409);
+      const decided = (await miaC.agent.get(`/api/authz/reviews/${created.id}`).expect(200)).body.items.find((i: { kind: string }) => i.kind === 'role');
+      expect(decided).toMatchObject({ decision: 'revoked', decidedBy: mia.id, decidedByName: 'RV-MIA', removed: true });
 
       // Deciding the rest closes the campaign.
-      const rest = ((await rita.agent.get(`/api/authz/reviews/${created.id}?decision=pending`).expect(200)).body.items as { id: string; user: { username: string } }[]);
-      for (const i of rest) await send(rita, 'post', `/api/authz/reviews/${created.id}/items/${i.id}/decision`, { decision: 'confirm' }).expect(200);
-      const closed = (await rita.agent.get(`/api/authz/reviews/${created.id}`).expect(200)).body;
+      const rest = ((await ta.agent.get(`/api/authz/reviews/${created.id}?decision=pending`).expect(200)).body.items as { id: string }[]);
+      for (const i of rest) await send(ta, 'post', `/api/authz/reviews/${created.id}/items/${i.id}/decision`, { decision: 'confirm' }).expect(200);
+      const closed = (await ta.agent.get(`/api/authz/reviews/${created.id}`).expect(200)).body;
       expect(closed.state).toBe('closed');
       expect(closed.items.filter((i: { decision: string }) => i.decision === 'revoked')).toHaveLength(2);
       await owenC.agent.get('/api/flags').expect(200); // confirmed: kept

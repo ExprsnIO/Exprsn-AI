@@ -3202,7 +3202,7 @@ The `feed` room kind (B-2101), joined with `room.join {kind: feed, id}` by `feed
 ## Sprint 29 (1.5.0): permission matrices, custom roles and access reviews (B-3301 to B-3305)
 
 New permission `roles:manage` (tenant admins; system admins hold every permission). Every route below needs it,
-except that the reviewers of an access review list, read and decide the campaigns they review. Nothing here is a
+except that the reviewers assigned to an access review's items list, read and decide them. Nothing here is a
 second policy engine: role resolution, cells and `explain` steps all come from `server/src/authz/policy.ts`. Errors
 are problem+json; a refusal names the failing `step`. Migration `031_access`.
 
@@ -3264,24 +3264,36 @@ clearance are left out (at most 100 per answer).
 A campaign certifies the direct grants in its scope (`kinds`: roles, workspace memberships or both; optionally only
 some roles, or only the members of one workspace). Roles in scope are those named, else every role the creator may
 grant; naming one the creator cannot grant is `403`. Grants from group mappings or the directory are reviewed at the
-mapping. When the campaign opens, each grant becomes an item; a reviewer confirms or revokes it, never their own
-(`403` `step: self`). A revoke removes the grant at once: it is gone on the member's next request, and their sockets
-leave the permission rooms it gave. Deciding every item closes the campaign. The `authz.reviews` job (every five
-minutes) opens scheduled campaigns and escalates an open one past its due date, once, to the holders of
-`roles:manage` and the reviewers (notification `authz.review.overdue`). Closing a campaign with `everyDays` schedules
-the next one `everyDays` after this one opened. Audited `authz.review.created`, `opened`, `confirmed`, `revoked`,
-`escalated`, `closed` and `cancelled`.
+mapping. When the campaign opens, each grant becomes an item with its own reviewers:
 
-Review view: `{id, name, state: scheduled | open | closed | cancelled, scope: {kinds, roles, workspaceId}, reviewers,
+- the admins of the grant: for a workspace membership, the tenant admins (holders of `tenant:manage`) and the members
+  of that workspace holding `roles:manage`; for a role, the tenant admins;
+- the member's directory manager, when their user store names one and that manager is an active user linked to the
+  same store (LDAP: the `managerAttribute` of the store, default `manager`, a DN; SQL user tables: the
+  `columns.manager` column, holding the manager's id column value). Sign-in and directory sync keep it; an empty
+  attribute means only the admins are assigned;
+- the campaign's extra reviewers (`reviewerIds`, optional).
+
+Nobody is assigned their own grant (and deciding it is `403` `step: self`); when that leaves nobody, the tenant admins
+are assigned, then the campaign's creator. Any assigned reviewer may decide; the first decision stands, and a later
+one is `409` naming who decided (`decision`, `decidedBy`, `decidedAt` in the problem). A revoke removes the grant at
+once: it is gone on the member's next request, and their sockets leave the permission rooms it gave. Deciding every
+item closes the campaign. Each assigned reviewer is notified when it opens. The `authz.reviews` job (every five
+minutes) opens scheduled campaigns and escalates an open one past its due date, once, to the tenant admins
+(notification `authz.review.overdue`). Closing a campaign with `everyDays` schedules the next one `everyDays` after
+this one opened. Audited `authz.review.created`, `opened`, `confirmed`, `revoked`, `escalated`, `closed` and
+`cancelled`.
+
+Review view (`reviewers` are the extra reviewers): `{id, name, state: scheduled | open | closed | cancelled, scope: {kinds, roles, workspaceId}, reviewers,
 opensAt, dueDays, dueAt, everyDays, overdue, escalatedAt, counts: {total, decided}, nextId, createdBy, createdAt,
 openedAt, closedAt}`.
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /api/authz/reviews?state&limit&offset` | Signed in. Review views: all of the tenant's for holders of `roles:manage`, else those the caller reviews |
-| `POST /api/authz/reviews` `{name, kinds?, roles?, workspaceId?, reviewerIds, opensAt?, dueDays?, everyDays?}` | `201` review view; opens at once unless `opensAt` (ISO time) is in the future. `dueDays` 1 to 90 (default 14), `everyDays` 7 to 366. At most 5000 grants (`409`: narrow it) |
-| `GET /api/authz/reviews/:id?decision&limit&offset` | Signed in, for its reviewers and holders of `roles:manage` (else `404`). The review view and `items: [{id, user: {id, username, displayName}, kind: role \| workspace, grant: {id, name}, decision: pending \| confirmed \| revoked \| expired, decidedBy, decidedAt, note, removed}]` |
-| `POST /api/authz/reviews/:id/items/:itemId/decision` `{decision: confirm \| revoke, note?}` | A reviewer's decision: `{id, decision, decidedBy, decidedAt, note, removed}` (`removed` false when the grant was already gone). `409` when already decided or the campaign is not open |
+| `GET /api/authz/reviews?state&limit&offset` | Signed in. Review views: all of the tenant's for holders of `roles:manage`, else those with at least one item assigned to the caller |
+| `POST /api/authz/reviews` `{name, kinds?, roles?, workspaceId?, reviewerIds?, opensAt?, dueDays?, everyDays?}` | `201` review view; opens at once unless `opensAt` (ISO time) is in the future. `dueDays` 1 to 90 (default 14), `everyDays` 7 to 366. At most 5000 grants (`409`: narrow it) |
+| `GET /api/authz/reviews/:id?decision&limit&offset` | Signed in, for holders of `roles:manage` (every item) and assigned reviewers (their items only); else `404`. The review view and `items: [{id, user: {id, username, displayName}, kind: role \| workspace, grant: {id, name}, decision: pending \| confirmed \| revoked \| expired, reviewers, manager, decidedBy, decidedByName, decidedAt, note, removed}]` |
+| `POST /api/authz/reviews/:id/items/:itemId/decision` `{decision: confirm \| revoke, note?}` | An assigned reviewer's decision: `{id, decision, decidedBy, decidedAt, note, removed}` (`removed` false when the grant was already gone). Not assigned: `403` `step: reviewer`. Already decided: `409` naming who decided first; campaign not open: `409` |
 | `POST /api/authz/reviews/:id/open` | Opens a scheduled campaign now: the review view |
 | `POST /api/authz/reviews/:id/close` | Closes it (undecided items expire and their grants stay) or cancels a scheduled one: the review view |
 

@@ -12,8 +12,8 @@ import type { Services } from '../services.js';
 
 /**
  * 1.5.0, Sprint 29 (B-3301 to B-3305): the role × permission matrix, custom roles, the effective-access matrix with
- * `explain` and "who can", and access reviews. Everything needs `roles:manage`, except that a campaign's reviewers
- * list, read and decide the campaigns they review.
+ * `explain` and "who can", and access reviews. Everything needs `roles:manage`, except that the reviewers assigned to
+ * a campaign's items (admins, the members' directory managers, extra reviewers) list, read and decide them.
  */
 export function authzRoutes(s: Services): Router {
   const r = Router();
@@ -159,7 +159,7 @@ export function authzRoutes(s: Services): Router {
         kinds: z.array(z.enum(['role', 'workspace'])).min(1).max(2).default(['role', 'workspace']),
         roles: z.array(roleId).max(100).nullable().default(null),
         workspaceId: id26.nullable().default(null),
-        reviewerIds: z.array(id26).min(1).max(50),
+        reviewerIds: z.array(id26).max(50).default([]),
         opensAt: z.iso.datetime().nullable().default(null),
         dueDays: z.number().int().min(1).max(90).default(14),
         everyDays: z.number().int().min(7).max(366).nullable().default(null)
@@ -172,8 +172,10 @@ export function authzRoutes(s: Services): Router {
 
   r.get('/authz/reviews/:id', async (req, res) => {
     const q = parseBody(z.object({ decision: z.enum(['pending', 'confirmed', 'revoked', 'expired']).optional(), limit: z.coerce.number().int().min(1).max(1000).default(200), offset: z.coerce.number().int().min(0).default(0) }), req.query);
-    const review = await s.accessReviews.visible(principalOf(req), String(req.params.id));
-    res.json({ ...reviewView(review), items: await s.accessReviews.items(review, q) });
+    const p = principalOf(req);
+    const review = await s.accessReviews.visible(p, String(req.params.id));
+    // Holders of roles:manage see every item; a reviewer sees the items assigned to them.
+    res.json({ ...reviewView(review), items: await s.accessReviews.items(review, { ...q, ...(s.accessReviews.manages(p) ? {} : { forReviewer: p.userId }) }) });
   });
 
   r.post('/authz/reviews/:id/items/:itemId/decision', async (req, res) => {

@@ -20,9 +20,13 @@
 - Route permission registry `server/src/authz/routes.ts`: every route declares its permission, and a route without one
   fails the test suite; `requireAnyPermission` replaces the routes' own any-of helpers (B-3304).
 - Access reviews under `/api/authz/reviews`: scheduled and repeating certification campaigns over direct role grants
-  and workspace memberships, reviewers confirm or revoke each grant (a revoke is gone on the member's next request and
-  their sockets leave the rooms it gave), overdue campaigns escalate once to the holders of `roles:manage`, and every
-  step is in the audit chain (`authz.review.*`, the `authz.reviews` job) (B-3305).
+  and workspace memberships. Each grant is assigned to its admins (the tenant admins, and for a workspace membership
+  also the workspace's members holding `roles:manage`) and to the member's directory manager, never to the member;
+  the first decision stands. A revoke is gone on the member's next request and their sockets leave the rooms it gave;
+  overdue campaigns escalate once to the tenant admins; every step is in the audit chain (`authz.review.*`, the
+  `authz.reviews` job) (B-3305).
+- LDAP stores read the user's manager (`managerAttribute`, default `manager`) and SQL user tables an optional
+  `columns.manager`; sign-in and directory sync keep it on the user's identity (`user_identities.manager_ref`).
 
 ## 1.4.0
 

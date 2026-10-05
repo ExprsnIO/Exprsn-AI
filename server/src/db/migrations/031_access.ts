@@ -15,10 +15,20 @@ import type { Knex } from 'knex';
  *   of user ids; `state` scheduled, open, closed or cancelled. `every_days` repeats the campaign: closing it schedules
  *   the next one (`next_id`).
  * - `access_review_items`: one direct grant (a role or a workspace membership) of one user, snapshotted when the
- *   campaign opens; `decision` pending, confirmed, revoked or expired (the campaign closed first).
+ *   campaign opens, with the reviewers assigned to it (`reviewers`, JSON; `manager_id` when the member's directory
+ *   manager is one of them); `decision` pending, confirmed, revoked or expired (the campaign closed first). The first
+ *   decision stands.
+ * - `user_identities.manager_ref`: the manager the user store names (an LDAP DN or a SQL row key), from sign-in and
+ *   directory sync.
  * Expand only.
  */
 export async function up(knex: Knex): Promise<void> {
+  // B-3305: the manager a user store names for the user (the manager's external id in the same store: an LDAP DN, a
+  // SQL row key), kept by sign-in and directory sync, so access reviews can assign the member's manager.
+  await knex.schema.alterTable('user_identities', (t) => {
+    t.string('manager_ref', 512).nullable();
+  });
+
   await knex.schema.createTable('custom_roles', (t) => {
     t.string('id', 40).primary();
     t.string('tenant_id', 26).notNullable();
@@ -89,6 +99,8 @@ export async function up(knex: Knex): Promise<void> {
     t.bigInteger('decided_at').nullable();
     t.string('note', 500).nullable();
     t.boolean('removed').notNullable().defaultTo(false);
+    t.text('reviewers').nullable(); // JSON array of the user ids assigned to decide it
+    t.string('manager_id', 26).nullable(); // the member's directory manager, when one was assigned
     t.index(['review_id', 'decision']);
     t.index(['tenant_id', 'user_id']);
   });
@@ -96,4 +108,7 @@ export async function up(knex: Knex): Promise<void> {
 
 export async function down(knex: Knex): Promise<void> {
   for (const table of ['access_review_items', 'access_reviews', 'custom_role_versions', 'custom_roles']) await knex.schema.dropTableIfExists(table);
+  await knex.schema.alterTable('user_identities', (t) => {
+    t.dropColumn('manager_ref');
+  });
 }

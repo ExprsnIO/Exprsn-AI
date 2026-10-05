@@ -6944,6 +6944,26 @@
               "expired"
             ]
           },
+          "reviewers": {
+            "description": "The user ids assigned to decide it: the admins of the grant, the member's directory manager, extra reviewers",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "manager": {
+            "description": "The member's directory manager, when assigned",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "decidedBy": {
             "type": [
               "string",
@@ -37827,7 +37847,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Access reviews: all for holders of roles:manage, else those the caller reviews",
+        "summary": "Access reviews: all for holders of roles:manage, else those with at least one item assigned to the caller",
         "parameters": [
           {
             "name": "state",
@@ -37881,7 +37901,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Creates an access review campaign over direct grants; opens at once unless opensAt is in the future",
+        "summary": "Creates an access review campaign over direct grants; each item is assigned to its admins and the member's directory manager (reviewerIds: optional extra reviewers); opens at once unless opensAt is in the future",
         "requestBody": {
           "required": true,
           "content": {
@@ -37947,8 +37967,7 @@
                   }
                 },
                 "required": [
-                  "name",
-                  "reviewerIds"
+                  "name"
                 ]
               }
             }
@@ -37977,7 +37996,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "An access review with its items (reviewers and holders of roles:manage)",
+        "summary": "An access review with its items: every item for holders of roles:manage, else the items assigned to the caller",
         "parameters": [
           {
             "name": "id",
@@ -38054,7 +38073,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "A reviewer confirms or revokes one grant; a revoke removes it at once",
+        "summary": "A reviewer assigned to the item confirms or revokes the grant; the first decision stands (a later one is 409 naming who decided); a revoke removes it at once",
         "parameters": [
           {
             "name": "id",
