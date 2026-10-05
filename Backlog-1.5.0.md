@@ -155,11 +155,12 @@ sealed with the tenant key, resumable after a restart), paused without holding a
 replayable from a step, audited under `workflow.*`, and bounded by the run limits (40 steps, fan-out 10, 30 min a
 step, 2 h and 200k tokens a run). Labels propagate along every path; nothing runs below the run's label or above a
 step's ceiling. Trigger chains carry on: app triggers stop at `APPS_TRIGGER_MAX_DEPTH`, plugins at `PLUGIN_MAX_DEPTH`,
-and sub-workflows at `WORKFLOW_MAX_DEPTH` (new).
+and sub-workflows at `WORKFLOW_MAX_DEPTH` (new; superseded by B-4101's chain context and its one `CHAIN_MAX_DEPTH` across
+kinds once PR #41 lands, with the per-kind limits kept as caps).
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
-| B-3901 | Sub-workflow step (`sub`): a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; `workflow.*` tools stay refused in tool steps, chaining goes through this step; depth capped by `WORKFLOW_MAX_DEPTH` | A parent run resumes with the child's output after the child's approval is decided | 8 |
+| B-3901 | Sub-workflow step (`sub`): a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; `workflow.*` tools stay refused in tool steps, chaining goes through this step; depth capped by the chain context (B-4101) | A parent run resumes with the child's output after the child's approval is decided | 8 |
 | B-3902 | Agent step (`agent`) and skills on model steps: a registry agent runs within its budgets and is awaited like B-1006 in reverse; `skills[]` on a `model` step loads published skills' instructions and tools through the dispatcher | A model step with a skill calls one of the skill's tools and the call passes the `tool-call` checkpoint | 8 |
 | B-3903 | Triggers on the workflow itself: source `event` (a catalogue event with the plugin fan-out rules: workspace, label, rate, loop chain) and source `schedule` (a five-field UTC cron claimed once across instances, no app entity needed) | A `file.uploaded` event starts a run without a plugin; a cron run starts once with two instances | 8 |
 | B-3904 | Domain steps as built-in registry tools (`impl: builtin`, shared by chat, agents and workflows): send a message, post to a feed, write a file version, create a group event, answer a channel session; the plugin broker's `records.*`, `files.read`, `groups.read` and `posts.write` calls confirmed live | A workflow posts to a workspace feed under its label and the post carries the run as its source | 8 |
