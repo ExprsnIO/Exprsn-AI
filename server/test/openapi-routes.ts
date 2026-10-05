@@ -43,6 +43,9 @@ export function recordMounts(): void {
   };
 }
 
+/** The path a router layer was mounted at (B-3304's route registry walks the same stacks). */
+export const mountPathOf = (layer: object): string | undefined => mounts.get(layer);
+
 /** Express path syntax to OpenAPI: `:id` to `{id}`; optional `{/:x}` groups give both paths; `*splat` to `{splat}`. */
 export function toOpenApi(p: string): string[] {
   const opt = /\{([^{}]*)\}/.exec(p);

@@ -244,7 +244,7 @@ export class SignupService {
    */
   async invite(p: Principal, input: { email: string; workspaceId: string | null; roles: string[]; clearance: Label }, ctx: { ip: string | null; traceId?: string }): Promise<{ invitation: InvitationRow; sent: boolean }> {
     const s = this.s();
-    const denied = input.roles.filter((r) => !canGrant(p.roles, r));
+    const denied = input.roles.filter((r) => !canGrant(p.roles, r, p.tenantId));
     if (denied.length) throw forbidden(`Your roles cannot grant ${denied.join(', ')}.`, { step: 'role' });
     if (!clears(p.clearance, input.clearance)) throw forbidden('You cannot grant a clearance above your own.', { step: 'clearance' });
     let workspaceName = '';

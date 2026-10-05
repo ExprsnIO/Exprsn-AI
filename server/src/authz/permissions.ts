@@ -2,6 +2,12 @@
  * Permission catalogue and the thirteen built-in roles from the Tenants board.
  * A permission is `resource:action`. Roles are sets of permissions; `system-admin` holds everything.
  * API keys and service accounts carry scopes, which can only narrow what the role grants ("scopes never widen a role").
+ *
+ * 1.5.0 (B-3302): tenants add custom roles, built only from catalogue permissions. Their current definitions are
+ * kept here (`setCustomRoles`, fed by `CustomRoleService` from the database and the bus), so every function below
+ * resolves a custom role id exactly as it resolves a built-in one. A custom role belongs to one tenant: the functions
+ * that take a tenant id ignore another tenant's custom roles, and `isRole` and `canGrant` without a tenant id know only
+ * the built-in roles (input validated without a tenant never accepts a custom role).
  */
 export const PERMISSIONS = [
   // workspace
@@ -56,7 +62,9 @@ export const PERMISSIONS = [
   // 1.4.0 (Sprint 28c, B-27): the workspace feed. read: the feeds, posts and comments of one's workspaces and groups,
   // trending tags and digests; write: post, comment, react, repost and bookmark; manage: remove anyone's posts and
   // comments in the workspaces one may act in, and set and run each workspace's digest.
-  'feed:read', 'feed:write', 'feed:manage'
+  'feed:read', 'feed:write', 'feed:manage',
+  // 1.5.0 (Sprint 29, B-33): tenant-defined roles, the role and effective-access matrices, and access reviews.
+  'roles:manage'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -96,11 +104,15 @@ const MEMBER: readonly Permission[] = [
   'feed:read', 'feed:write'
 ];
 
+/** The member baseline. Any other permission is an admin permission (B-3302: a custom role holding one is under dual control). */
+export const MEMBER_PERMISSIONS: readonly Permission[] = MEMBER;
+export const isAdminPermission = (p: Permission): boolean => !MEMBER.includes(p);
+
 const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage', 'channels:review'], requiresMfa: true, grantableBy: ADMINS },
@@ -116,14 +128,46 @@ export const ROLES: readonly RoleDef[] = [
 
 const byId = new Map(ROLES.map((r) => [r.id, r]));
 
-export const getRole = (id: string): RoleDef | undefined => byId.get(id);
-export const isRole = (id: string): boolean => byId.has(id);
+/** A tenant's custom role (B-3302), as it is in force: its current version. */
+export interface CustomRoleDef extends RoleDef {
+  permissions: readonly Permission[];
+  tenantId: string;
+  version: number;
+}
+
+/** Custom role ids: `custom-` and a lower-case ULID, so they never collide with a built-in id or another tenant's. */
+export const CUSTOM_ROLE_PREFIX = 'custom-';
+export const isCustomRoleId = (id: string): boolean => id.startsWith(CUSTOM_ROLE_PREFIX);
+
+const custom = new Map<string, CustomRoleDef>();
+
+/** Replaces the custom roles in force for one tenant (the ones not listed stop resolving at once). */
+export function setCustomRoles(tenantId: string, roles: readonly CustomRoleDef[]): void {
+  for (const [id, r] of custom) if (r.tenantId === tenantId) custom.delete(id);
+  for (const r of roles) if (r.tenantId === tenantId && isCustomRoleId(r.id)) custom.set(r.id, r);
+}
+
+/** The custom roles in force for a tenant, by name. */
+export const customRolesOf = (tenantId: string): CustomRoleDef[] => [...custom.values()].filter((r) => r.tenantId === tenantId).sort((a, b) => a.name.localeCompare(b.name));
+
+const lookup = (id: string, tenantId?: string): RoleDef | undefined => {
+  const b = byId.get(id);
+  if (b) return b;
+  const c = custom.get(id);
+  return c && (tenantId === undefined || c.tenantId === tenantId) ? c : undefined;
+};
+
+/** A role by id: built-in, or a custom role (of `tenantId` when given). */
+export const getRole = (id: string, tenantId?: string): RoleDef | undefined => lookup(id, tenantId);
+
+/** A built-in role, or, with a tenant id, one of that tenant's custom roles in force. */
+export const isRole = (id: string, tenantId?: string): boolean => byId.has(id) || (tenantId !== undefined && custom.get(id)?.tenantId === tenantId);
 
 /** Union of the permissions granted by the given roles. `'*'` means every permission. */
-export function permissionsFor(roleIds: readonly string[]): Set<Permission> {
+export function permissionsFor(roleIds: readonly string[], tenantId?: string): Set<Permission> {
   const out = new Set<Permission>();
   for (const id of roleIds) {
-    const r = byId.get(id);
+    const r = lookup(id, tenantId);
     if (!r) continue;
     if (r.permissions === '*') return new Set(PERMISSIONS);
     for (const p of r.permissions) out.add(p);
@@ -131,14 +175,36 @@ export function permissionsFor(roleIds: readonly string[]): Set<Permission> {
   return out;
 }
 
-export const rolesRequireMfa = (roleIds: readonly string[]): boolean => roleIds.some((id) => byId.get(id)?.requiresMfa);
+export const rolesRequireMfa = (roleIds: readonly string[], tenantId?: string): boolean => roleIds.some((id) => lookup(id, tenantId)?.requiresMfa);
 
-/** Can someone holding `granterRoles` grant `role`? */
-export function canGrant(granterRoles: readonly string[], role: string): boolean {
-  const r = byId.get(role);
-  if (!r) return false;
-  return granterRoles.some((g) => r.grantableBy.includes(g));
+/**
+ * Can someone holding `granterRoles` grant `role`? A built-in role: when they hold a role in its `grantableBy`. A
+ * custom role (only with the tenant id it belongs to): the same, and they must also hold every permission it grants,
+ * so a role never hands out more than its granter has.
+ */
+export function canGrant(granterRoles: readonly string[], role: string, tenantId?: string): boolean {
+  const b = byId.get(role);
+  if (b) return granterRoles.some((g) => b.grantableBy.includes(g));
+  const c = tenantId === undefined ? undefined : custom.get(role);
+  if (!c || c.tenantId !== tenantId) return false;
+  if (!granterRoles.some((g) => c.grantableBy.includes(g))) return false;
+  const held = permissionsFor(granterRoles, tenantId);
+  return c.permissions.every((p) => held.has(p));
 }
 
 /** Can someone holding `granterRoles` change a user holding `targetRoles`? Only if they could grant every one of them. */
-export const canManage = (granterRoles: readonly string[], targetRoles: readonly string[]): boolean => targetRoles.every((r) => canGrant(granterRoles, r));
+export const canManage = (granterRoles: readonly string[], targetRoles: readonly string[], tenantId?: string): boolean => targetRoles.every((r) => canGrant(granterRoles, r, tenantId));
+
+/** The ids of the roles (built-in, and the tenant's custom ones) that grant a permission: for "who holds this" queries. */
+export function rolesGranting(permission: Permission, tenantId: string): string[] {
+  return [...ROLES, ...customRolesOf(tenantId)].filter((r) => r.permissions === '*' || r.permissions.includes(permission)).map((r) => r.id);
+}
+
+/**
+ * The lowest `requiresMfa` a role holding these permissions may have (B-3302, "as for built-ins"): false only when
+ * a built-in role without the MFA requirement grants each of them.
+ */
+export function mfaFloor(perms: readonly Permission[]): boolean {
+  const open = new Set(ROLES.filter((r) => !r.requiresMfa && r.permissions !== '*').flatMap((r) => r.permissions as readonly Permission[]));
+  return perms.some((p) => !open.has(p));
+}

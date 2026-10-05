@@ -72,7 +72,7 @@ export class DirectorySync {
     const cfg = parseProviderConfig(row.kind, row.config);
     const mappings = await this.users.mappings(tenantId);
 
-    type Plan = { userId: string; username: string; action: 'disable'; reason: string } | { userId: string; username: string; action: 'update'; groups: string[]; externalId: string };
+    type Plan = { userId: string; username: string; action: 'disable'; reason: string } | { userId: string; username: string; action: 'update'; groups: string[]; externalId: string; manager: string | null | undefined };
     const plans: Plan[] = [];
     for (const link of links) {
       report.checked++;
@@ -88,7 +88,7 @@ export class DirectorySync {
           plans.push({ userId: link.user_id, username: link.username, action: 'disable', reason: 'No longer in any mapped group' });
           continue;
         }
-        plans.push({ userId: link.user_id, username: link.username, action: 'update', groups: ext.groups, externalId: ext.externalId });
+        plans.push({ userId: link.user_id, username: link.username, action: 'update', groups: ext.groups, externalId: ext.externalId, manager: ext.manager });
       } catch (err) {
         // An unreachable store must never read as "everyone was removed".
         report.errors.push(`${link.username}: ${(err as Error).message}`);
@@ -127,7 +127,7 @@ export class DirectorySync {
         const mappedClearance: Label = mapped.clearance ?? cfg.defaultClearance;
         const clearance = user.clearance_direct ? highest(mappedClearance, user.clearance_direct) : mappedClearance;
         const before = { roles: (await this.users.roles(user.id)).filter((r) => r.source === 'mapping').map((r) => r.role).sort(), clearance: user.clearance };
-        await this.users.upsertIdentity(user.id, row.id, plan.externalId, plan.groups);
+        await this.users.upsertIdentity(user.id, row.id, plan.externalId, plan.groups, plan.manager);
         await this.users.setRoles(user.id, 'mapping', roles);
         await this.users.setWorkspaceMemberships(user.id, 'mapping', mapped.workspaces);
         const allRoles = await this.users.roleIds(user.id);

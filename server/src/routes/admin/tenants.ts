@@ -271,7 +271,7 @@ export function tenantAdminRoutes(s: Services): Router {
         labelCeiling: z.enum(LABELS).default('internal'),
         visibility: z.enum(['tenant', 'members']).default('members'),
         mapping: z
-          .object({ group: z.string().trim().min(1).max(512), role: z.string().refine(isRole, 'Unknown role').default('member'), clearance: z.enum(LABELS), providerId: z.string().length(26).nullable().default(null) })
+          .object({ group: z.string().trim().min(1).max(512), role: z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role').default('member'), clearance: z.enum(LABELS), providerId: z.string().length(26).nullable().default(null) })
           .optional()
       }),
       req.body
@@ -279,7 +279,7 @@ export function tenantAdminRoutes(s: Services): Router {
     if (!clears(p.clearance, body.labelCeiling)) throw forbidden('You cannot create a workspace with a ceiling above your own clearance.', { step: 'clearance' });
     if (body.mapping) {
       if (t.id !== p.tenantId) throw forbidden('Group mappings are managed from inside the tenant.', { step: 'tenant' });
-      if (!canGrant(p.roles, body.mapping.role)) throw forbidden(`Your roles cannot grant ${body.mapping.role}.`, { step: 'role' });
+      if (!canGrant(p.roles, body.mapping.role, p.tenantId)) throw forbidden(`Your roles cannot grant ${body.mapping.role}.`, { step: 'role' });
       if (!clears(p.clearance, body.mapping.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
     }
     let w: Workspace;

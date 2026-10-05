@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { clears } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import type { ShareAccessEvent } from '../chat/sharing.js';
-import { TOPICS, type MembershipEvent } from '../platform/bus.js';
+import { TOPICS, type MembershipEvent, type RolesChangedEvent } from '../platform/bus.js';
 import type { JobProgressEvent } from '../platform/jobs.js';
 import type { Services } from '../services.js';
 import { attachRooms, type RoomSocketData } from './rooms.js';
@@ -53,6 +53,12 @@ function forReaders(event: string, data: Record<string, unknown>): Record<string
 
 /** Permissions whose holders receive live admin updates. */
 const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage', 'flags:review', 'tools:manage', 'zones:manage', 'training:manage', 'channels:review'] as const;
+
+/** The permission rooms a principal's sockets join. */
+const permRoomsOf = (p: Principal): string[] => {
+  const perms = effectivePermissions(p);
+  return LIVE_PERMS.filter((x) => perms.has(x)).flatMap((x) => [rooms.perm(p.tenantId, x), rooms.platformPerm(x)]);
+};
 
 /**
  * Socket.io on the same HTTP server (path /socket.io), authenticated by the session cookie at handshake.
@@ -103,8 +109,7 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
   io.on('connection', (socket: Socket) => {
     const d = socket.data as SocketData;
     domainRooms.onConnection(socket);
-    const perms = effectivePermissions(d.principal);
-    const permRooms = LIVE_PERMS.filter((x) => perms.has(x)).flatMap((x) => [rooms.perm(d.principal.tenantId, x), rooms.platformPerm(x)]);
+    const permRooms = permRoomsOf(d.principal);
     void socket.join([rooms.user(d.principal.userId), rooms.tenant(d.principal.tenantId), rooms.session(d.sessionId), ...permRooms]);
     s.metrics.socketConnections.inc();
     socket.on('disconnect', () => s.metrics.socketConnections.dec());
@@ -202,8 +207,35 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     }
   };
 
+  /**
+   * 1.5.0 (B-3302, B-3305): a custom role's definition changed (every socket of the tenant) or some users lost grants
+   * (theirs). Each socket's principal is loaded again and its permission rooms are decided again: rooms no longer
+   * held are left, new ones joined. A session that no longer resolves is disconnected.
+   */
+  const regrant = (e: RolesChangedEvent) => {
+    const sids = new Set<string>();
+    for (const room of e.userIds ? e.userIds.map((u) => rooms.user(u)) : [rooms.tenant(e.tenantId)]) for (const sid of io.of('/').adapter.rooms.get(room) ?? []) sids.add(sid);
+    for (const sid of sids) {
+      const socket = io.of('/').sockets.get(sid);
+      const d = socket?.data as SocketData | undefined;
+      if (!socket || !d || d.principal.tenantId !== e.tenantId) continue;
+      const before = new Set(permRoomsOf(d.principal));
+      void (async () => {
+        const session = await s.sessions.resolve(d.token);
+        const principal = session ? await loadPrincipal(s, session.tenant_id, session.user_id, { session }) : null;
+        if (!principal) return void socket.disconnect(true);
+        principal.workspaceId = d.principal.workspaceId ?? null;
+        d.principal = principal;
+        const after = permRoomsOf(principal);
+        for (const room of before) if (!after.includes(room)) await socket.leave(room);
+        await socket.join(after.filter((room) => !before.has(room)));
+      })().catch((err: unknown) => s.log.warn({ err }, 'socket rooms not re-decided'));
+    }
+  };
+
   // Every instance hears revocations through the bus and closes the sockets it holds.
   const offs = [
+    s.bus.on<RolesChangedEvent>(TOPICS.rolesChanged, (e) => regrant(e)),
     ...domainRooms.offs,
     s.bus.on<string[]>(TOPICS.sessionsRevoked, (ids) => {
       for (const id of ids) {

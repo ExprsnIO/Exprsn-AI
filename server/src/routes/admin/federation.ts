@@ -270,7 +270,7 @@ export function federationAdminRoutes(s: Services): Router {
     let serviceUserId: string | null = null;
     if (body.type === 'service') {
       // A service account is a user with no password: it holds roles, and its tokens' scopes narrow them.
-      if (!canGrant(p.roles, 'member')) throw forbidden('Your roles cannot create a service account.', { step: 'role' });
+      if (!canGrant(p.roles, 'member', p.tenantId)) throw forbidden('Your roles cannot create a service account.', { step: 'role' });
       const base = `svc-${slugify(body.name)}`.slice(0, 60);
       let username = base;
       for (let i = 2; await s.users.byUsername(p.tenantId, username); i++) username = `${base}-${i}`;
@@ -616,7 +616,7 @@ export function federationAdminRoutes(s: Services): Router {
     let revoked: number;
     // As on the Users screen: only someone who could grant all of the owner's roles may end their session or grant.
     const mayRevoke = async (userId: string) => {
-      if (userId !== p.userId && !canManage(p.roles, await s.users.roleIds(userId))) throw forbidden('This belongs to someone holding roles you cannot grant, so you cannot revoke it.', { step: 'role' });
+      if (userId !== p.userId && !canManage(p.roles, await s.users.roleIds(userId), p.tenantId)) throw forbidden('This belongs to someone holding roles you cannot grant, so you cannot revoke it.', { step: 'role' });
     };
     if (body.kind === 'session') {
       const target = await s.sessions.get(p.tenantId, body.id);

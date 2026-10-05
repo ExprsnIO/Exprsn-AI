@@ -4,7 +4,7 @@ import { actorFrom } from '../audit/chain.js';
 import { LABELS, type Label } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import type { Permission } from '../authz/permissions.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, workspacesFor } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission, workspacesFor } from '../http/middleware.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { classifierView, newClassifierSchema, type ClassifierRow } from '../guardrails/classifiers.js';
 import { POST_OBJECT as FEED_POST } from '../feed/service.js';
@@ -31,12 +31,7 @@ export function guardrailRoutes(s: Services): Router {
   const classify = requirePermission(s, 'classifiers:manage');
   const review = requirePermission(s, 'flags:review');
   /** Passes when the caller holds any of the permissions; the denial (and its audit) names the first. */
-  const anyOf =
-    (...perms: Permission[]): RequestHandler =>
-    (req, res, next) => {
-      const held = effectivePermissions(principalOf(req));
-      return requirePermission(s, perms.find((x) => held.has(x)) ?? perms[0]!)(req, res, next);
-    };
+  const anyOf = (...perms: Permission[]): RequestHandler => requireAnyPermission(s, perms);
 
   const audit = (req: Request, action: string, target: Record<string, unknown>, detail?: Record<string, unknown>, label?: Label) => {
     const p = principalOf(req);

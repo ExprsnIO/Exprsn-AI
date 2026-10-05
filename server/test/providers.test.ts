@@ -83,7 +83,7 @@ describe('SQL user-table provider (SQLite)', () => {
     dir = mkdtempSync(path.join(tmpdir(), 'exprsn-sql-'));
     file = path.join(dir, 'hr.sqlite');
     const db = new Database(file);
-    db.exec(`CREATE TABLE staff (id INTEGER PRIMARY KEY, login TEXT, pw TEXT, full_name TEXT, mail TEXT, inactive INTEGER, grp TEXT);
+    db.exec(`CREATE TABLE staff (id INTEGER PRIMARY KEY, login TEXT, pw TEXT, full_name TEXT, mail TEXT, inactive INTEGER, grp TEXT, boss TEXT);
              CREATE TABLE staff_groups (staff_id INTEGER, grp TEXT);`);
     const ins = db.prepare('INSERT INTO staff (login, pw, full_name, mail, inactive, grp) VALUES (?, ?, ?, ?, ?, ?)');
     ins.run('jdoe', bcrypt.hashSync(PASSWORD, 10), 'Jane Doe', 'jdoe@example.test', 0, 'finance-ops,people');
@@ -91,6 +91,7 @@ describe('SQL user-table provider (SQLite)', () => {
     ins.run('plain', PASSWORD, 'Plain Text', null, 0, null);
     ins.run('gone', bcrypt.hashSync(PASSWORD, 10), 'Gone', null, 1, null);
     db.prepare('INSERT INTO staff_groups VALUES (1, ?)').run('cn=ai-admins');
+    db.prepare("UPDATE staff SET boss = '2' WHERE login = 'jdoe'").run();
     db.close();
     process.env.HR_DB = file;
   });
@@ -204,6 +205,38 @@ describe('SQL user-table provider (SQLite)', () => {
       const p = await provision(h.s.users, h.tenantId, store, ok.user);
       expect(p).toMatchObject({ status: 'ok', roles: ['flag-reviewer', 'member'], created: true });
       expect(p.status === 'ok' && p.user.clearance).toBe('confidential');
+    });
+
+    it('keeps the manager a store names, from sign-in and directory sync, for access reviews (B-3305)', async () => {
+      const store = await h.s.providers.create(h.tenantId, { name: 'HR with managers', kind: 'sql', position: 10, enabled: true, config: { dialect: 'sqlite', connection: 'env:HR_DB', table: 'staff', columns: { id: 'id', username: 'login', passwordHash: 'pw', groups: 'grp', manager: 'boss' } } });
+      await h.s.users.addMapping(h.tenantId, { providerId: null, group: 'finance-ops', role: 'member', clearance: 'internal' });
+      await h.s.users.addMapping(h.tenantId, { providerId: null, group: 'a', role: 'member', clearance: 'internal' });
+      const signIn = async (username: string) => {
+        const ok = await h.s.chain.authenticate(h.tenantId, username, PASSWORD);
+        if (ok.status !== 'ok') throw new Error('expected ok');
+        const p = await provision(h.s.users, h.tenantId, store, ok.user);
+        if (p.status !== 'ok') throw new Error('expected ok');
+        return { ext: ok.user, user: p.user };
+      };
+      const jdoe = await signIn('jdoe');
+      expect(jdoe.ext.manager).toBe('2');
+      // The manager is not a user yet: nobody is assigned.
+      expect(await h.s.users.managerOf(h.tenantId, jdoe.user.id)).toBeNull();
+      const argon = await signIn('argon');
+      expect(argon.ext.manager).toBeNull();
+      expect(await h.s.users.managerOf(h.tenantId, jdoe.user.id)).toBe(argon.user.id);
+      expect(await h.s.users.managerOf(h.tenantId, argon.user.id)).toBeNull();
+      // Directory sync follows a change in the store.
+      const db = new Database(process.env.HR_DB!);
+      db.prepare("UPDATE staff SET boss = NULL WHERE login = 'jdoe'").run();
+      db.close();
+      await h.s.sync.syncProvider(store);
+      expect(await h.s.users.managerOf(h.tenantId, jdoe.user.id)).toBeNull();
+      const db2 = new Database(process.env.HR_DB!);
+      db2.prepare("UPDATE staff SET boss = '2' WHERE login = 'jdoe'").run();
+      db2.close();
+      await h.s.sync.syncProvider(store);
+      expect(await h.s.users.managerOf(h.tenantId, jdoe.user.id)).toBe(argon.user.id);
     });
 
     it('refuses to merge a username that belongs to another store', async () => {
