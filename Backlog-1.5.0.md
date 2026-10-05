@@ -8,13 +8,14 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 89 items, 490 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 count in 1.6.0): P0 132, P1 298, P2 60.
+**Size.** 77 items, 419 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 count in 1.6.0): P0 132, P1 227, P2 60.
 At about 78 points a sprint (roughly five engineers) that is Sprints 29 to 34. Groomed by the owner on 2026-10-05 with
 `design/grooming/groom.mjs` (state in `design/grooming/grooming.json`, summary in `design/grooming/GROOMING.md`):
 WebDAV (B-32) moved to Sprint 34, the import wizard split between Sprints 31 and 33, Sprint 31 accepted at 93 points,
 the platform administration live screens (B-4202 to B-4207) moved to 1.6.0, and four 1.4.0 gaps, MongoDB connections,
-user profiles and presence added (B-51). Model servers beyond Ollama (B-43, 34 points) were approved after the
-grooming and are not yet placed. With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
+user profiles and presence added (B-58). Model servers beyond Ollama (B-43, 34 points) were approved after the
+grooming and are not yet placed. Sprint 33 (chat invocation, B-40, and the import wizard's dataset half, B-3804 to
+B-3807) moved to 1.7.0 on 2026-10-05. With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -30,8 +31,8 @@ the same policy pipeline.
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3701–B-3703, B-3602 | 76 | `032_dav`, `032c_memory` | Planned |
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `032b_imports`, `033_pds_feeds` | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
-| 33 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | B-4001–B-4008, B-3804–B-3807 | 69 | `035_chat_invocation` | Planned |
-| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5101, B-5102, B-3605, B-3501 | 66 | `036_chains`, `036b_profiles` | Planned |
+| 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3501 | 64 | `036_chains`, `036b_profiles` | Planned |
 | — | Model servers beyond Ollama (B-43): approved 2026-10-05 after the grooming and not yet placed: a Sprint 35 before the release (B-3501 moves with it) or the first sprint of 1.6 | B-4301–B-4307 | 34 | `037_model_servers` | Unscheduled |
 
 The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
@@ -41,10 +42,10 @@ The order follows the dependencies: the permission matrix (B-3301) and custom ro
 the file-store mount (B-3102, B-3103, B-32); the PDS repository (B-2902) before the outbound firehose (B-2904) and
 before a feed generator publishes its record into a tenant repo (B-3004); the AT-Protocol screen (B-3406) last, so it
 covers the PDS and feeds; Workflows 2's agent step and skill loading (B-3902) and the built-in domain tools (B-3904)
-before agents, tools and skills in chat (B-40), which reuse them; the chain context (B-4101) with Workflows 2, so
-sub-workflows (B-3901), agent steps (B-3902) and chat's agents (B-4004, B-4006) are chained from the start, and before
-the rest of chaining (B-4102 to B-4109); the repository registry (B-3801) before any import, and model and dataset import (B-3803,
-B-3804) before the Import screen (B-3807) goes live; the gateway interface (B-4301) before any `openai`
+before agents, tools and skills in chat (B-40, 1.7.0), which reuse them; the chain context (B-4101) with Workflows 2, so
+sub-workflows (B-3901) and agent steps (B-3902) are chained from the start, and before the rest of chaining (B-4102 to
+B-4109); the repository registry (B-3801) before any import (model import here; dataset import and the Import screen,
+B-3804 to B-3807, in 1.7.0); the gateway interface (B-4301) before any `openai`
 instance (B-4302), and both before the Models screen changes (B-4307).
 
 ---
@@ -157,9 +158,9 @@ proposals a person accepts, with the rules kept as the fallback.
 | B-3702 | A consolidation job: near-duplicates found by embedding similarity and confirmed by the profile become one merge proposal; stale or contradicted memories get an expiry proposal; nothing changes until accepted | Two near-duplicate memories produce one merge proposal and both stay unchanged until it is accepted | 5 |
 | B-3703 | The memory embedding model as a tenant setting (instead of the first approved embedding model by name), with a reindex job and recall by recency while it runs | Switching the model reindexes every memory and recall keeps answering during the reindex | 3 |
 
-### B-38 Model and dataset import wizard (50 points)
+### B-38 Model and dataset import wizard (21 points in 1.5.0)
 
-Split at grooming (2026-10-05): repositories, browse and model import (B-3801 to B-3803) in Sprint 31; datasets, knowledge sets, eval sets and the Import screen (B-3804 to B-3807) in Sprint 33.
+Split at grooming (2026-10-05): repositories, browse and model import (B-3801 to B-3803) in Sprint 31. Datasets, knowledge sets, eval sets and the Import screen (B-3804 to B-3807) moved with Sprint 33 to 1.7.0 on 2026-10-05 ([Backlog-1.7.0.md](Backlog-1.7.0.md)); until then model import is reached through the API.
 
 Approved from the mockup `design/mockups/import-wizard.html` and the prototype board `design/prototype/js/screens/import.js`
 (route `#/import`) on 2026-10-05. One guided path from a public repository (Hugging Face Hub, the Ollama library,
@@ -178,10 +179,6 @@ the weekly bundle. New permissions: `imports:run` (model, ML and knowledge admin
 | B-3801 | Repository registry: types (Hugging Face compatible hub, Ollama compatible registry, CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle, bundle share), credentials in the vault, the staging-proxy allow-list, dual-controlled add, harvest schedules and the catalogue snapshot | A CKAN portal added from the screen is harvested and browsable after confirmation | 8 |
 | B-3802 | Catalogue browse: search, classification and licence facets from the source's own taxonomy, live search through the proxy when reachable, snapshot fallback with backoff when rate limited | A facet count equals the rows the filter returns | 5 |
 | B-3803 | Model import: tags, variants and files, gate acceptance with the recorded token, format and pickle checks, licence policy and exceptions, GGUF conversion on the training pool, draft registration with digest pinning; bundle mode for air-gapped instances | A pickle-only repository is refused with nothing written; a safetensors import registers a draft whose digest matches | 8 |
-| B-3804 | Dataset import: configurations, splits, resources and API paging (CKAN datastore, Socrata, SDMX, e-Stat, OGD), schema preview with PII flags, sampling above the quota, scrub and versioning into `training_datasets` | An imported version has a manifest, hash and scrub report identical in shape to an inline one | 8 |
-| B-3805 | Knowledge sets: `knowledge_sources.kind = dataset` with column mapping (title, text, metadata), grouping by a column, refresh schedules that follow the publisher, citations back to the row | A monthly SDMX table refreshes on schedule and the index swaps without downtime | 8 |
-| B-3806 | Classifier eval sets and imported classifier engines: rows into an eval set with minimum-sample warnings; a text-classification model served by the classifier worker | An imported eval set shows precision and recall per label on the Classifiers screen | 5 |
-| B-3807 | Import screen: the wizard, the Imports queue with cancel, retry and logs, the Repositories tab; entry points on Models, Training, Classifiers and Knowledge; Playwright and axe coverage for every state on the board | Every state on the board is reachable in the e2e suite in light and dark | 8 |
 
 ### B-39 Workflows 2 (61 points)
 
@@ -211,33 +208,11 @@ kinds once PR #41 lands, with the per-kind limits kept as caps).
 | B-3909 | Workflow bundles: signed export and import (`exprsn-workflow/1`, like `exprsn-app/1`) with tool, profile and trigger references re-bound on import | A bundle changed after signing is refused with `422 Bundle refused` | 3 |
 | B-3910 | Console: the live Workflows screen matches the realigned board (Triggers and callers tab, record and vault editors, decision-edge labels, the new kinds as they land) and joins the Playwright suite | Every control on the screen is backed by the server | 3 |
 
-### B-40 Agents, tools and skills in chat (40 points)
-
-Added 2026-10-05 at the owner's request. Chat today offers only the tools on its profile's list, read-only ones whose
-`confirm` is `never`, and only when the model decides to call them; write and destructive tools are left out because
-their approval exists only in agent runs; agents run only from the Runs screen; skills reach a model only through an
-agent's definition. This epic lets a person call each of them from a conversation, and reuses what already decides
-them: the registry's publish and label rules, the dispatcher with the tool-call guardrail and its approvals, agent runs
-with their budgets, and skill instructions as agents load them (and as model steps will, B-3902). Every invocation is
-audited, metered to the conversation, sealed with the tenant key and labelled at the higher of the conversation's and
-the entry's label; nothing runs above the conversation's ceiling or the caller's clearance.
-
-| ID | Item | Done when | Pts |
-| --- | --- | --- | --- |
-| B-4001 | What a conversation may call: `GET /api/conversations/:id/capabilities` lists the published agents, tools and skills the caller may use there (tenant, workspace, clearance, the conversation's ceiling, the profile's allow-list), with each tool's input schema and side-effect class | An entry above the conversation's ceiling is never listed, and calling it by name is refused the same way | 3 |
-| B-4002 | A person calls a tool: the composer's `/tool` sends arguments (a form from the tool's JSON schema, or text the profile turns into arguments) through the dispatcher and the tool-call guardrail; the call and its result join the conversation as a tool turn the model sees next | A call the guardrail holds shows as held, and runs only when a reviewer approves it in the flag queue | 5 |
-| B-4003 | Write and destructive tools in chat, user- or model-proposed, behind an in-chat approval card: write tools run on the caller's own approval, destructive ones and `confirm: always` ones also need the guardrail's approver when a rule says so; denied and expired cards are recorded | A write tool runs only after its card is approved, and a denied card leaves no side effect | 5 |
-| B-4004 | `@agent` in a conversation starts an agent run bound to it: input is the message plus, when the person allows it, the recent turns within the agent's label; the run's steps stream into a run card; its answer becomes an assistant turn attributed to the agent; budgets, approvals and cancel as in Runs | A run started from chat shows in Runs with a link back, and cancelling it from the chat stops it | 8 |
-| B-4005 | Skills on a conversation: `+skill` adds a published skill's instructions to the conversation's system prompt (sticky until removed, or for one turn), shown as chips; the profile can restrict which skills apply | Removing a skill leaves its instructions out of the very next turn | 3 |
-| B-4006 | The model may hand a turn to an agent: agents on a profile's list are offered as tools (`agent:<name>`), run as in B-4004 within the chain's depth and budgets (B-4101) | An agent offered as a tool cannot start itself again past the chain's depth limit | 5 |
-| B-4007 | Prototype board for the Chat screen additions: the `/` and `@` and `+` pickers, tool, approval and run cards, skill chips, their states and copy; the smoke run clean | The board passes the prototype smoke run in light and dark | 3 |
-| B-4008 | Console: the live Chat screen gets the pickers and cards from B-4007, keyboard-first, with the run card linking to Runs; joins the Playwright suite with axe-core and the reflow checks | An agent run, a held tool call and a skill chip work end to end in the e2e suite with no axe or reflow finding | 8 |
-
 ### B-41 Chaining agents, skills, tools and workflows (47 points)
 
 Added 2026-10-05 at the owner's request. Some links exist: agents call tools and load skills, skills name the tools
 they need, agents await workflows published as tools (B-1006), and workflows call tools; Workflows 2 adds sub-workflows
-and agent steps (B-3901, B-3902) and B-40 brings agents, tools and skills into chat. Missing are agents delegating to
+and agent steps (B-3901, B-3902) and B-40 brings agents, tools and skills into chat in 1.7.0 (moved with Sprint 33). Missing are agents delegating to
 agents, skills built from skills, workflows started from chat, and above all one chain across them: today each kind
 keeps its own depth limit (`PLUGIN_MAX_DEPTH`, `APPS_TRIGGER_MAX_DEPTH`, and the planned workflow and chat-agent
 limits), budgets are per run, nothing checks a cycle across kinds, and no view shows a chain end to end. Rules for
@@ -249,12 +224,12 @@ every link: the principal never changes (a chain acts as the person or service t
 | B-4101 | The chain context: every invocation (chat turn, agent run, workflow run, tool call, skill load, plugin action, app trigger) records its root, parent, depth, principal and label high-water mark; tokens, steps, wall time and cost are charged to the root's budgets; one `CHAIN_MAX_DEPTH` across kinds, with the per-kind limits kept as caps; carried across instances and job retries | A mixed chain (agent → workflow → agent → tool) stops at the depth limit or at the root's budget, whichever comes first, with the same answer on every instance | 8 |
 | B-4102 | Agents delegate to agents: an agent's definition lists the `agents` it may call; each is offered as a tool (`agent:<name>`) and runs as a child run in the chain; a child's answer can be typed by its `outputSchema` | A child run cannot spend more than the parent's remaining budget nor read above the chain's ceiling | 8 |
 | B-4103 | Skills compose: a skill lists the `skills` and `tools` it needs; loading resolves the closure (deduplicated, in order) and offers the required tools to the agent or model step that loads it | Loading a skill offers the tools its sub-skills need, and the closure loads each skill once | 5 |
-| B-4104 | Workflows as first-class callees: agents list `workflows` they may start without publishing them as tools; chat starts one with `/workflow` (a form from its input schema, a run card, approvals in the conversation, as B-40) | A workflow started from chat shows its run card and pauses on an approval card in the conversation | 5 |
+| B-4104 | Workflows as first-class callees of agents: agents list `workflows` they may start without publishing them as tools; the run awaits the workflow and gets its output as a typed answer (starting a workflow from chat, `/workflow`, moved to 1.7.0 with B-40 as B-4009) | An agent starts a workflow it lists and receives its output; a workflow it does not list is refused | 3 |
 | B-4105 | Chain checks at publish: the registry and workflow publish build the reference graph across agents, skills, tools and workflows; cycles that cannot terminate, references above the referrer's ceiling and unpublished references are refused; a "used by" view before deprecating or retiring an entry | Retiring a skill a published agent uses is refused, naming the agent | 5 |
-| B-4106 | Approvals and failures through the chain: a call held anywhere pauses the chain and is approved where the root is (the conversation's card, the run, or the workflow's approval) with the path shown; a child's failure reaches its parent as a typed error the parent handles (an agent sees it as a tool error, a workflow takes its failure edge, B-3906) | A write tool held three levels down is approved from the root conversation and the chain resumes | 5 |
+| B-4106 | Approvals and failures through the chain: a call held anywhere pauses the chain and is approved where the root is (the run or the workflow's approval; the conversation's card comes with B-40 in 1.7.0) with the path shown; a child's failure reaches its parent as a typed error the parent handles (an agent sees it as a tool error, a workflow takes its failure edge, B-3906) | A write tool held three levels down is approved from the root run and the chain resumes | 5 |
 | B-4107 | Chain view: `GET /api/chains/:id`, the tree of invocations with timing, tokens, cost, labels and guardrail decisions; links to the audit entries; replay from a node where its kind can replay | The tree's token total equals what was metered for the chain | 3 |
-| B-4108 | Prototype boards: the chain tree in Runs (linked from chat's run cards and workflow runs), the registry editor's delegates, skill dependencies and workflows fields, and the "used by" view; the smoke run clean | The boards pass the prototype smoke run in light and dark | 3 |
-| B-4109 | Console: the live chain tree and registry fields from B-4108, joining the Playwright suite with axe-core and the reflow checks | A three-level chain opens as a tree from its chat run card with no axe or reflow finding | 5 |
+| B-4108 | Prototype boards: the chain tree in Runs (linked from workflow runs; chat's run cards link to it in 1.7.0), the registry editor's delegates, skill dependencies and workflows fields, and the "used by" view; the smoke run clean | The boards pass the prototype smoke run in light and dark | 3 |
+| B-4109 | Console: the live chain tree and registry fields from B-4108, joining the Playwright suite with axe-core and the reflow checks | A three-level chain opens as a tree from its run in Runs with no axe or reflow finding | 5 |
 
 ### B-43 Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (34 points)
 
@@ -286,15 +261,15 @@ Not in this epic: converting Apple's open-weight models (OpenELM, DCLM) to GGUF 
 GGUF conversion (B-3803) already covers; Private Cloud Compute; MLX or llama.cpp as managed runtimes the server
 starts and stops (they are external instances here, as Ollama is).
 
-### B-51 Profiles and presence (11 points)
+### B-58 Profiles and presence (11 points)
 
 Added at grooming (2026-10-05): exprsn-platform's users had avatars, bios and a status; Exprsn-AI users have a display
 name only, so the feed, messaging and groups screens have no profile to open. Sprint 34.
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
-| B-5101 | Profiles: avatar through the file store and the attachment quarantine, bio and pronouns through the `user-input` guardrail, a profile page opened from posts, messages, groups and the directory, visibility by workspace and clearance | Opening an author from a post shows their profile; an avatar that fails the scan is never shown | 8 |
-| B-5102 | Presence status: available, away, busy or offline, chosen or derived from idle time, over the existing presence sockets; blocked users see nothing (B-2603, B-2606) | A member set to busy shows busy to a contact within five seconds and not at all to a blocked user | 3 |
+| B-5801 | Profiles: avatar through the file store and the attachment quarantine, bio and pronouns through the `user-input` guardrail, a profile page opened from posts, messages, groups and the directory, visibility by workspace and clearance | Opening an author from a post shows their profile; an avatar that fails the scan is never shown | 8 |
+| B-5802 | Presence status: available, away, busy or offline, chosen or derived from idle time, over the existing presence sockets; blocked users see nothing (B-2603, B-2606) | A member set to busy shows busy to a contact within five seconds and not at all to a blocked user | 3 |
 
 ## P2
 

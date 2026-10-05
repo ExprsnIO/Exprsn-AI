@@ -42,12 +42,13 @@ from prototype data to live only when every control on it is backed by the serve
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Connections | Planned |
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | Planned |
-| 33 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.5.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
+| 33 | Moved to 1.7.0 on 2026-10-05 as Sprint 38 | — | Moved |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Runs, Registry, Chat, Settings, Files | Planned |
 | — | Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (B-43, 1.5.0 or 1.6) | Models | Unscheduled (approved 2026-10-05) |
 | 35 | Platform administration live screens; tenant provisioning templates (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants | Planned |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
+| 38 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen; release (1.7.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
