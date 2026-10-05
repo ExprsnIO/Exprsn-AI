@@ -2447,6 +2447,9 @@ verified addresses and the local account has an unproven one (a new link is sent
 when the second factor was skipped. `POST /api/auth/mfa/totp`, `/mfa/recovery` and `/mfa/webauthn` take
 `rememberDevice: true` (not for recovery codes) and then answer `trustedDevice: {until}` (or `null` when the tenant
 allows no trusted devices). `GET /api/auth/sign-in-options` adds `signup: false | {approval, verifyEmail}`.
+Since Sprint 30 (B-3413) the session body at the `mfa` stage also carries `mfa.trustedDeviceDays`: the tenant's
+period, or `0` when the account may not have a trusted device (admin roles, accounts marked as needing a factor), so the
+sign-in page offers "trust this browser" only when it applies. `GET /api/me` adds `user.email` and `user.emailVerified`.
 
 ### Invitations by workspace admins (`members:invite`)
 

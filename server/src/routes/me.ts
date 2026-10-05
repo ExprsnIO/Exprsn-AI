@@ -70,19 +70,22 @@ export function meRoutes(s: Services): Router {
 
   r.get('/', active, async (req, res) => {
     const p = principalOf(req);
-    const [tenant, workspaces, methods, recovery, preferences, home] = await Promise.all([
+    const [tenant, workspaces, methods, recovery, preferences, home, row, verifiedAt] = await Promise.all([
       s.tenants.byId(p.tenantId),
       workspacesFor(s, p),
       s.mfa.methods(p.userId),
       s.mfa.remainingRecoveryCodes(p.userId),
       s.account.preferences(p.userId),
-      s.account.passwordHome(p.tenantId, p.userId)
+      s.account.passwordHome(p.tenantId, p.userId),
+      s.users.get(p.tenantId, p.userId),
+      s.signup.emailVerifiedAt(p.userId)
     ]);
     const passwordStepUp = home.kind === 'local' || home.stores.some((x) => x.kind === 'ldap' || x.kind === 'sql');
     // B-803: a session from an upstream OIDC or SAML provider can step up by signing in there again.
     const upstream = await upstreamOf(req);
     res.json({
-      user: { id: p.userId, username: p.username, displayName: p.displayName, clearance: p.clearance },
+      // Sprint 30d (B-3413): the address and whether it is proven, for Settings' verification link (B-1802).
+      user: { id: p.userId, username: p.username, displayName: p.displayName, clearance: p.clearance, email: row?.email ?? null, emailVerified: verifiedAt != null },
       roles: p.roles.map((id) => ({ id, name: getRole(id, p.tenantId)?.name ?? id })),
       permissions: [...effectivePermissions(p)].sort(),
       tenant: tenant ? { id: tenant.id, slug: tenant.slug, name: tenant.name } : null,
