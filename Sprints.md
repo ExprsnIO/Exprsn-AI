@@ -39,8 +39,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
 | 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
 | 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **In progress** (B-3401 boards done) |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new) | Planned |
-| 31 | AT-Protocol PDS and feed generator (1.5.0) | AT-Protocol (new) | Planned |
+| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Models | Planned |
+| 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen (1.5.0) | AT-Protocol, Import (new); Training, Classifiers, Knowledge | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; release (1.5.0) | Workflows, Settings | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
@@ -1127,7 +1127,7 @@ Delivered so far on `sprint-29`:
     tool, record), with a Triggers and callers tab (app triggers, plugins' `call:workflow`, agent tool calls, chat) and
     the 1.5 proposals (sub-workflow, agent, skills, event trigger, map, loop, media, query, script, plugin action) shown
     dashed and refused at publish. The roll-up `design/prototype/rollup-1.5.html` lists what 1.5.0 was missing; the
-    owner approved rolling it into the backlog as B-37 Workflows 2 (Sprint 32) and B-3415.
+    owner approved rolling it into the backlog as B-39 Workflows 2 (Sprint 32) and B-3415.
   - The design-state controls (header "States" button, the strip at the foot of each page) were removed from the
     prototype as from the console; states are applied from the command palette and by the smoke run.
 

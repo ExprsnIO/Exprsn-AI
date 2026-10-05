@@ -83,7 +83,7 @@
         + '.models-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
         + '</style>'
         + '<div class="page">'
-        + UI.pagehead('Model catalog', 'Weights enter only through the signed import path', UI.btn('Import safetensors', { attrs: 'data-import' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }))
+        + UI.pagehead('Model catalog', 'Weights enter only through the signed import path', UI.btn('Browse repositories', { icon: 'search', attrs: 'data-browse' }) + UI.btn('Import safetensors', { attrs: 'data-import' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }))
         + problem
         + '<div class="toolbar">' + UI.search('Filter models', 'data-search', st.query) + '<span class="relative">' + UI.btn('Lifecycle: ' + st.lifecycle, { attrs: 'data-menu="lifecycle"', cls: st.lifecycle !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Capability: ' + st.cap, { attrs: 'data-menu="cap"', cls: st.cap !== 'all' ? 'active' : '' }) + '</span><span class="muted right" style="font-size:12px">' + rows.length + ' of ' + all.length + ' models</span></div>'
         + UI.table(['Model', 'Family', 'Size', 'Capabilities', 'Max label', 'Lifecycle'], rows.map((m) => ({ cells: ['<span class="mono">' + esc(m.id) + '</span>', esc(m.family), esc(m.size), esc(m.caps.join(', ')), UI.label(m.label, { sm: true }), UI.pill(lcOf(m))], selected: m.id === sel.id, attrs: 'data-id="' + esc(m.id) + '"' })), { emptyTitle: 'No models match', emptyText: 'Clear the filters or request an import.' })
@@ -102,6 +102,7 @@
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-profile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.profile }); });
       ctx.on('click', '[data-dismiss]', () => { st.problem = null; ctx.rerender(); });
+      ctx.on('click', '[data-browse]', () => ctx.navigate('import', { kind: 'model', target: 'models' }));
 
       ctx.on('click', '[data-approve]', async () => {
         const chatOnly = sel.confTone === 'warn';

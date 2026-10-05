@@ -8,9 +8,10 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 48 items, 277 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 98, P2 60. At about
-78 points a sprint (roughly five engineers) that is Sprints 29 to 32. With fewer, P2 (the PDS and feed generator)
-moves to 1.6 first, then WebDAV (B-32), then Workflows 2 (B-37, added 2026-10-05 from the Sprint 29 prototype roll-up
+**Size.** 58 items, 340 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 161, P2 60. At about
+78 points a sprint (roughly five engineers) that is Sprints 29 to 32 with Sprints 30 and 31 over the guide; with fewer,
+P2 (the PDS and feed generator) moves to 1.6 first, then WebDAV (B-32), then the import wizard's dataset half
+(B-3804 to B-3807), then Workflows 2 (B-39, added 2026-10-05 from the Sprint 29 prototype roll-up
 `design/prototype/rollup-1.5.html`).
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
@@ -24,15 +25,16 @@ the same policy pipeline.
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203 | 73 | `032_dav` | Planned |
-| 31 | AT-Protocol PDS and feed generator | B-2901–B-2906, B-3001–B-3004, B-3406 | 65 | `033_pds_feeds` | Planned |
-| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling, release | B-3701–B-3710, B-3415, B-3501 | 63 | `034_workflows2` | Planned |
+| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703, B-3801–B-3803 | 107 | `032_dav`, `032b_imports` | Planned |
+| 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807 | 94 | `033_pds_feeds` | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; release | B-3901–B-3910, B-3415, B-3501 | 63 | `034_workflows2` | Planned |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
 the file-store mount (B-3102, B-3103, B-32); the PDS repository (B-2902) before the outbound firehose (B-2904) and
 before a feed generator publishes its record into a tenant repo (B-3004); the AT-Protocol screen (B-3406) last, so it
-covers the PDS and feeds.
+covers the PDS and feeds; the repository registry (B-3801) before any import, and model and dataset import (B-3803,
+B-3804) before the Import screen (B-3807) goes live.
 
 ---
 
@@ -74,7 +76,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3412 | Roles and access: the role matrix, custom roles with diff, the effective-access matrix with `explain`, access reviews | Every cell's `explain` opens from the matrix | 5 |
 | B-3413 | Identity additions to existing screens: self-registration policy, MFA policy and trusted devices, GitHub stores, CSV import, DID binding | The registration policy changes from Settings | 3 |
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
-| B-3415 | Settings: app passwords for DAV clients (scoped keys with device names, last use, revoke) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
+| B-3415 | Settings: app passwords for DAV clients (DAV-only scope, device names, last use, revoke; creating one needs a fresh MFA step-up, per the decision below) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
 
 ### B-36 Carried over from 1.4.0 (5 points)
 
@@ -105,7 +107,43 @@ CalDAV had broken filter operators: B-3104 states the fixed behaviour as its tes
 | B-3202 | `COPY` and `MOVE` for files and folders (the platform returned 501), `LOCK` and `UNLOCK` (class 2) for Finder and Office | Moving a folder over WebDAV keeps its versions and shares | 5 |
 | B-3203 | Quota properties (RFC 4331), shares honoured, the `litmus` suite in CI | `litmus` passes its basic, copymove and locks groups | 3 |
 
-### B-37 Workflows 2 (61 points)
+### B-37 Model-based memory management (13 points)
+
+Today memory proposals come from rules over a chat turn (`extractProposals`) and the only model memory uses is the
+embedding model, chosen as the first approved one by name. This adds a model where judgement helps, always as
+proposals a person accepts, with the rules kept as the fallback.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3701 | A tenant `memory` profile that extracts proposals from chat turns and agent runs; the rules run when no profile is set or the model fails; proposals still pass the `memory` checkpoint, the credential ban and the rejection list | A model error still yields the rules' proposals, and a rejected text is never proposed again | 5 |
+| B-3702 | A consolidation job: near-duplicates found by embedding similarity and confirmed by the profile become one merge proposal; stale or contradicted memories get an expiry proposal; nothing changes until accepted | Two near-duplicate memories produce one merge proposal and both stay unchanged until it is accepted | 5 |
+| B-3703 | The memory embedding model as a tenant setting (instead of the first approved embedding model by name), with a reindex job and recall by recency while it runs | Switching the model reindexes every memory and recall keeps answering during the reindex | 3 |
+
+### B-38 Model and dataset import wizard (50 points)
+
+Approved from the mockup `design/mockups/import-wizard.html` and the prototype board `design/prototype/js/screens/import.js`
+(route `#/import`) on 2026-10-05. One guided path from a public repository (Hugging Face Hub, the Ollama library,
+ModelScope, data.gov, data.europa.eu, Eurostat and the ECB, data.gov.sg, data.go.jp and e-Stat, data.gov.in,
+data.go.kr, OpenML, Zenodo, Kaggle, the signed import share) to a draft model in the catalogue, a versioned training
+dataset, a classifier evaluation set or a knowledge set. It extends the Models, Training, Classifiers and Knowledge
+screens rather than replacing them: the result lands where those screens already govern it, and the licence, label,
+digest, attribution and requester are recorded on the manifest. Weights still enter only through the signed import
+path (GGUF and safetensors; pickle refused before anything is written); air-gapped instances queue the request for
+the weekly bundle. New permissions: `imports:run` (model, ML and knowledge admins by destination) and
+`imports:repositories` (model admin, dual control). New tables: `import_repositories`, `import_catalog`,
+`import_jobs`; `knowledge_sources.kind` gains `dataset`, `training_datasets.source_kind` gains `import`.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3801 | Repository registry: types (Hugging Face compatible hub, Ollama compatible registry, CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle, bundle share), credentials in the vault, the staging-proxy allow-list, dual-controlled add, harvest schedules and the catalogue snapshot | A CKAN portal added from the screen is harvested and browsable after confirmation | 8 |
+| B-3802 | Catalogue browse: search, classification and licence facets from the source's own taxonomy, live search through the proxy when reachable, snapshot fallback with backoff when rate limited | A facet count equals the rows the filter returns | 5 |
+| B-3803 | Model import: tags, variants and files, gate acceptance with the recorded token, format and pickle checks, licence policy and exceptions, GGUF conversion on the training pool, draft registration with digest pinning; bundle mode for air-gapped instances | A pickle-only repository is refused with nothing written; a safetensors import registers a draft whose digest matches | 8 |
+| B-3804 | Dataset import: configurations, splits, resources and API paging (CKAN datastore, Socrata, SDMX, e-Stat, OGD), schema preview with PII flags, sampling above the quota, scrub and versioning into `training_datasets` | An imported version has a manifest, hash and scrub report identical in shape to an inline one | 8 |
+| B-3805 | Knowledge sets: `knowledge_sources.kind = dataset` with column mapping (title, text, metadata), grouping by a column, refresh schedules that follow the publisher, citations back to the row | A monthly SDMX table refreshes on schedule and the index swaps without downtime | 8 |
+| B-3806 | Classifier eval sets and imported classifier engines: rows into an eval set with minimum-sample warnings; a text-classification model served by the classifier worker | An imported eval set shows precision and recall per label on the Classifiers screen | 5 |
+| B-3807 | Import screen: the wizard, the Imports queue with cancel, retry and logs, the Repositories tab; entry points on Models, Training, Classifiers and Knowledge; Playwright and axe coverage for every state on the board | Every state on the board is reachable in the e2e suite in light and dark | 8 |
+
+### B-39 Workflows 2 (61 points)
 
 Added 2026-10-05 from the Sprint 29 prototype roll-up (`design/prototype/rollup-1.5.html`), approved by the owner. The
 realigned Workflows board (`design/prototype/js/screens/workflows.js`) already shows every step and trigger below as a
@@ -121,16 +159,16 @@ and sub-workflows at `WORKFLOW_MAX_DEPTH` (new).
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
-| B-3701 | Sub-workflow step (`sub`): a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; `workflow.*` tools stay refused in tool steps, chaining goes through this step; depth capped by `WORKFLOW_MAX_DEPTH` | A parent run resumes with the child's output after the child's approval is decided | 8 |
-| B-3702 | Agent step (`agent`) and skills on model steps: a registry agent runs within its budgets and is awaited like B-1006 in reverse; `skills[]` on a `model` step loads published skills' instructions and tools through the dispatcher | A model step with a skill calls one of the skill's tools and the call passes the `tool-call` checkpoint | 8 |
-| B-3703 | Triggers on the workflow itself: source `event` (a catalogue event with the plugin fan-out rules: workspace, label, rate, loop chain) and source `schedule` (a five-field UTC cron claimed once across instances, no app entity needed) | A `file.uploaded` event starts a run without a plugin; a cron run starts once with two instances | 8 |
-| B-3704 | Domain steps as built-in registry tools (`impl: builtin`, shared by chat, agents and workflows): send a message, post to a feed, write a file version, create a group event, answer a channel session; the plugin broker's `records.*`, `files.read`, `groups.read` and `posts.write` calls confirmed live | A workflow posts to a workspace feed under its label and the post carries the run as its source | 8 |
-| B-3705 | `map` (fan-out over a list with a parallelism cap) and `loop` (bounded iteration) whose items and iterations count toward the run limits | A map over 200 items runs 20 at a time and a loop stops at its cap | 8 |
-| B-3706 | Per-step retry policy, an on-failure edge (`branch: failure`) and a dead-letter view of failed runs with redrive, like moderation's | A failed HTTP step takes the on-failure edge instead of failing the run | 5 |
-| B-3707 | Approval with a form: the step names an app form whose answers (validated like a submission) become the step's output | An approver's answers reach the next step and are audited with the decision | 5 |
-| B-3708 | `notify` and `webhook` steps: in-app and email notices to cleared recipients; outbound webhooks through the tenant's allowed hosts, signed with the tenant's webhook keys | A webhook step is refused at save for a host outside the tenant's list | 5 |
-| B-3709 | Workflow bundles: signed export and import (`exprsn-workflow/1`, like `exprsn-app/1`) with tool, profile and trigger references re-bound on import | A bundle changed after signing is refused with `422 Bundle refused` | 3 |
-| B-3710 | Console: the live Workflows screen matches the realigned board (Triggers and callers tab, record and vault editors, decision-edge labels, the new kinds as they land) and joins the Playwright suite | Every control on the screen is backed by the server | 3 |
+| B-3901 | Sub-workflow step (`sub`): a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; `workflow.*` tools stay refused in tool steps, chaining goes through this step; depth capped by `WORKFLOW_MAX_DEPTH` | A parent run resumes with the child's output after the child's approval is decided | 8 |
+| B-3902 | Agent step (`agent`) and skills on model steps: a registry agent runs within its budgets and is awaited like B-1006 in reverse; `skills[]` on a `model` step loads published skills' instructions and tools through the dispatcher | A model step with a skill calls one of the skill's tools and the call passes the `tool-call` checkpoint | 8 |
+| B-3903 | Triggers on the workflow itself: source `event` (a catalogue event with the plugin fan-out rules: workspace, label, rate, loop chain) and source `schedule` (a five-field UTC cron claimed once across instances, no app entity needed) | A `file.uploaded` event starts a run without a plugin; a cron run starts once with two instances | 8 |
+| B-3904 | Domain steps as built-in registry tools (`impl: builtin`, shared by chat, agents and workflows): send a message, post to a feed, write a file version, create a group event, answer a channel session; the plugin broker's `records.*`, `files.read`, `groups.read` and `posts.write` calls confirmed live | A workflow posts to a workspace feed under its label and the post carries the run as its source | 8 |
+| B-3905 | `map` (fan-out over a list with a parallelism cap) and `loop` (bounded iteration) whose items and iterations count toward the run limits | A map over 200 items runs 20 at a time and a loop stops at its cap | 8 |
+| B-3906 | Per-step retry policy, an on-failure edge (`branch: failure`) and a dead-letter view of failed runs with redrive, like moderation's | A failed HTTP step takes the on-failure edge instead of failing the run | 5 |
+| B-3907 | Approval with a form: the step names an app form whose answers (validated like a submission) become the step's output | An approver's answers reach the next step and are audited with the decision | 5 |
+| B-3908 | `notify` and `webhook` steps: in-app and email notices to cleared recipients; outbound webhooks through the tenant's allowed hosts, signed with the tenant's webhook keys | A webhook step is refused at save for a host outside the tenant's list | 5 |
+| B-3909 | Workflow bundles: signed export and import (`exprsn-workflow/1`, like `exprsn-app/1`) with tool, profile and trigger references re-bound on import | A bundle changed after signing is refused with `422 Bundle refused` | 3 |
+| B-3910 | Console: the live Workflows screen matches the realigned board (Triggers and callers tab, record and vault editors, decision-edge labels, the new kinds as they land) and joins the Playwright suite | Every control on the screen is backed by the server | 3 |
 
 ## P2
 
@@ -177,11 +215,21 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 ## Open decisions
 
-- [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
-  tenant's own domain).
-- [x] Custom roles: the tenant only (decided 2026-10-05 for the B-3412 board; workspaces reuse tenant roles).
-- [x] Access reviews: the workspace admin reviews by default (decided 2026-10-05); a campaign may name other reviewers.
-- [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
+All six resolved by the owner on 2026-10-05.
+
+- [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant
+  subdomain (`<handle>.<tenant>.<pds domain>`). A tenant's own handle domain is deferred to 1.6 (B-2901).
+- [x] Custom roles: tenant only. Workspaces assign roles but do not define them; the matrix stays one table per
+  tenant (B-3302, B-3412).
+- [x] Access reviews: both the workspace admin (tenant admin for tenant-level roles) and the member's directory
+  manager are assigned; the first decision stands. When the manager attribute is empty only the admin is assigned
+  (B-3305).
+- [x] DAV app passwords: allowed for roles that require MFA, but creating one needs a fresh MFA step-up and the
+  password carries a DAV-only scope (CalDAV, CardDAV, WebDAV; never the API or console) (B-3101).
+- [x] Import quota (B-38): 500 GB per tenant for datasets, metered and shown beside the existing tenant quotas; any
+  workspace's import draws from it (B-3804).
+- [x] Licence exceptions (B-3803, B-3804): granted or refused by a reviewer holding a new `legal-review` role; tenant
+  admins request but cannot grant. The import waits in the queue until the decision.
 
 ## Risks
 
@@ -190,5 +238,6 @@ and a handle domain per tenant. New permission: `pds:manage`.
 | AT-Protocol repo format | A subtle MST or CAR encoding error makes relays and AppViews reject the repo | Conformance against the reference implementation's test vectors and the dev environment in CI (B-2906) |
 | Hosting public repositories | Abuse, takedown and legal duties for content Exprsn-AI now serves to the network | P2 and off by default per tenant; takedowns through B-19; the open decision above |
 | DAV client quirks | Clients differ on ETags, sync tokens and locking | Recorded conformance runs (B-3104) and `litmus` (B-3203) in CI |
+| Public repositories | A harvested card misstates its licence, or a gated download changes under the same revision | Licence recorded from the fetched files, not the snapshot; digests pinned at request time; pickle scan at staging as well as in the wizard (B-3803) |
 | Custom roles widening access | A role grants more than its creator holds, or more than a zone allows | Creation capped at the creator's own permissions, dual control for admin permissions, the zone ceiling still applies in `policy.ts` |
-| Screen volume | Thirteen new screens strain the e2e suite's run time | Share fixtures; the reflow spec covers dialogs by registry rather than per test |
+| Screen volume | Fourteen new screens strain the e2e suite's run time | Share fixtures; the reflow spec covers dialogs by registry rather than per test |
