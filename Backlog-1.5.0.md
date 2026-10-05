@@ -8,12 +8,12 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 82 items, 466 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 287, P2 60, of which
-B-42 (7 items, 39 points) is not yet placed in a sprint. At about 78 points a sprint (roughly five engineers) that is
-Sprints 29 to 34 with Sprints 30 and 31 over the guide; with fewer,
-P2 (the PDS and feed generator) moves to 1.6 first, then WebDAV (B-32), then the import wizard's dataset half
-(B-3804 to B-3807), then Workflows 2 (B-39, added 2026-10-05 from the Sprint 29 prototype roll-up
-`design/prototype/rollup-1.5.html`).
+**Size.** 83 items, 456 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 271, P2 66.
+At about 78 points a sprint (roughly five engineers) that is Sprints 29 to 34. Groomed by the owner on 2026-10-05 with
+`design/grooming/groom.mjs` (state in `design/grooming/grooming.json`, summary in `design/grooming/GROOMING.md`):
+WebDAV (B-32) moved to Sprint 34, the import wizard split between Sprints 31 and 33, Sprint 31 accepted at 93 points,
+the platform administration live screens (B-4202 to B-4207) moved to 1.6.0, and four 1.4.0 gaps, MongoDB connections,
+user profiles and presence added. With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -26,12 +26,13 @@ the same policy pipeline.
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703, B-3801–B-3803 | 107 | `032_dav`, `032b_imports` | Planned |
-| 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807 | 94 | `033_pds_feeds` | Planned |
+| 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3701–B-3703, B-3602 | 76 | `032_dav`, `032c_memory` | Planned |
+| 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `032b_imports`, `033_pds_feeds` | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
-| 33 | Agents, tools and skills in chat | B-4001–B-4008 | 40 | `035_chat_invocation` | Planned |
-| 34 | Chaining agents, skills, tools and workflows; release | B-4102–B-4109, B-3501 | 39 | `036_chains` | Planned |
-| — | Platform administration screens (B-42): unscheduled until the owner decides Q12 (Sprint 31 beside the release, Sprint 30 displacing WebDAV, or 1.6) | B-4202–B-4207 (B-4201 done) | 39 | — | Unscheduled |
+| 33 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | B-4001–B-4008, B-3804–B-3807 | 69 | `035_chat_invocation` | Planned |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-4301, B-4302, B-3605, B-3501 | 66 | `036_chains`, `036b_profiles` | Planned |
+
+The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
@@ -85,11 +86,15 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
 | B-3415 | Settings: app passwords for DAV clients (DAV-only scope, device names, last use, revoke; creating one needs a fresh MFA step-up, per the decision below) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
 
-### B-36 Carried over from 1.4.0 (5 points)
+### B-36 Carried over from 1.4.0 (18 points)
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
 | B-3601 | Low-code record queries that PostgreSQL can answer from an index: `NULLS LAST` instead of the `case` sort keys, indexes on `app_record_values` with `collate "C"` for text, a plan that filters and orders on one indexed field before joining the others, and keyset paging; the same rows on SQLite, MySQL and PostgreSQL as today (Sprint 27's 19-query proof) | The 1.4.0 load test's records query p95 is below 250 ms on PostgreSQL (732 ms at release) | 5 |
+| B-3602 | Merge MongoDB data connections (`feat/mongodb-connections`): read-only find and aggregate, collection knowledge sources; rebased and tested on the three application databases (Sprint 30) | The `sample-mongodb` connection registers and its knowledge base builds | 3 |
+| B-3603 | RSVP capacity race (B-2502 known gap): a conditional update or row lock on the remaining places (Sprint 31) | Fifty concurrent RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL | 2 |
+| B-3604 | Verify relay commit signatures on the firehose (B-1908 known gap) against the repo's DID key; bad commits dropped and audited, as inbound labels are (Sprint 31) | A commit with a bad signature is dropped and audited; a good one becomes a label as before | 5 |
+| B-3605 | The IMAP channel adapter (B-2303) against a containerised IMAP server in CI instead of a mocked fetcher (Sprint 34) | A message delivered to the test mailbox becomes a channel thread in CI | 3 |
 
 ## P1
 
@@ -108,13 +113,15 @@ CalDAV had broken filter operators: B-3104 states the fixed behaviour as its tes
 
 ### B-32 WebDAV for the file store (13 points)
 
+Moved from Sprint 30 to Sprint 34 at grooming (2026-10-05); CalDAV and CardDAV (B-31) stay in Sprint 30 on the same WebDAV core.
+
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
 | B-3201 | B-24 folders and files as WebDAV collections; `PUT` through the attachment quarantine, type check and ClamAV; versions kept | An upload over WebDAV is scanned before it can be read | 5 |
 | B-3202 | `COPY` and `MOVE` for files and folders (the platform returned 501), `LOCK` and `UNLOCK` (class 2) for Finder and Office | Moving a folder over WebDAV keeps its versions and shares | 5 |
 | B-3203 | Quota properties (RFC 4331), shares honoured, the `litmus` suite in CI | `litmus` passes its basic, copymove and locks groups | 3 |
 
-### B-42 Platform administration screens (39 points)
+### B-42 Platform administration screens (42 points; 5 in 1.5.0)
 
 Renumbered from B-39 on 2026-10-05: B-39 is Workflows 2 (below), which B-40 and B-41 already reference.
 
@@ -129,12 +136,12 @@ rules; open questions are answered with `node design/platform-admin/decide.mjs` 
 | B-4202 | Overview live: `GET /api/admin/overview` (alerts, counters, instances with their `/readyz` checks, next schedules, recent audit, capacity); acknowledge alerts; drain an instance | Draining an instance from the screen stops it claiming jobs | 5 |
 | B-4203 | Jobs and queues live: `GET /api/admin/jobs` with filters, `/queues`, `/schedules` (run now, pause), `/dead-letters` (redrive, discard), `/cache` (namespaces, invalidate); pause by type in `JobQueue` | A paused type stops claiming within one poll and resumes from the screen | 8 |
 | B-4204 | Storage live: stores and health, usage by workspace and user, quarantine listing with rescan, the integrity job `ops.blobs.verify` with findings, purge schedule summary | An orphan found by the job can be deleted from the screen after a dry run | 8 |
-| B-4205 | Configuration live: a settings descriptor generated from `config/index.ts` (name, section, type, default, secret, hot or restart), `GET /api/admin/platform/settings` with per-instance values; overrides only if decided | Two instances with different values show as differing on the screen | 5 |
-| B-4206 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules | A revoked calendar feed answers 404 on its next fetch | 5 |
+| B-4205 | Configuration live: a settings descriptor generated from `config/index.ts` (name, section, type, default, secret, hot or restart), `GET /api/admin/platform/settings` with per-instance values; database overrides for every setting under dual control, applied hot or flagged restart required (decision Q2) | Two instances with different values show as differing; an override applies only after a second platform admin approves | 8 |
+| B-4206 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules; a new `social:manage` permission, with held content under `moderation:manage` (decision Q4) | A revoked calendar feed answers 404 on its next fetch | 5 |
 | B-4207 | Accessibility and reflow for the five screens; `docs/accessibility.md` updated | No axe or reflow finding on any of the five | 3 |
 
-B-4201 is done on `design/platform-admin`. Sprint placement for the rest (Sprint 31 beside the release, Sprint 30
-displacing WebDAV, or 1.6) is decision Q12 below.
+B-4201 is done (Sprint 29). B-4202 to B-4207 (37 points) open 1.6.0 in Sprint 35 (decision Q12, groomed 2026-10-05) and
+are tracked in [Backlog-1.6.0.md](Backlog-1.6.0.md). All sixteen design questions are answered in `design/platform-admin/DECISIONS.md`.
 ### B-37 Model-based memory management (13 points)
 
 Today memory proposals come from rules over a chat turn (`extractProposals`) and the only model memory uses is the
@@ -148,6 +155,8 @@ proposals a person accepts, with the rules kept as the fallback.
 | B-3703 | The memory embedding model as a tenant setting (instead of the first approved embedding model by name), with a reindex job and recall by recency while it runs | Switching the model reindexes every memory and recall keeps answering during the reindex | 3 |
 
 ### B-38 Model and dataset import wizard (50 points)
+
+Split at grooming (2026-10-05): repositories, browse and model import (B-3801 to B-3803) in Sprint 31; datasets, knowledge sets, eval sets and the Import screen (B-3804 to B-3807) in Sprint 33.
 
 Approved from the mockup `design/mockups/import-wizard.html` and the prototype board `design/prototype/js/screens/import.js`
 (route `#/import`) on 2026-10-05. One guided path from a public repository (Hugging Face Hub, the Ollama library,
@@ -244,6 +253,16 @@ every link: the principal never changes (a chain acts as the person or service t
 | B-4108 | Prototype boards: the chain tree in Runs (linked from chat's run cards and workflow runs), the registry editor's delegates, skill dependencies and workflows fields, and the "used by" view; the smoke run clean | The boards pass the prototype smoke run in light and dark | 3 |
 | B-4109 | Console: the live chain tree and registry fields from B-4108, joining the Playwright suite with axe-core and the reflow checks | A three-level chain opens as a tree from its chat run card with no axe or reflow finding | 5 |
 
+### B-43 Profiles and presence (11 points)
+
+Added at grooming (2026-10-05): exprsn-platform's users had avatars, bios and a status; Exprsn-AI users have a display
+name only, so the feed, messaging and groups screens have no profile to open. Sprint 34.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-4301 | Profiles: avatar through the file store and the attachment quarantine, bio and pronouns through the `user-input` guardrail, a profile page opened from posts, messages, groups and the directory, visibility by workspace and clearance | Opening an author from a post shows their profile; an avatar that fails the scan is never shown | 8 |
+| B-4302 | Presence status: available, away, busy or offline, chosen or derived from idle time, over the existing presence sockets; blocked users see nothing (B-2603, B-2606) | A member set to busy shows busy to a contact within five seconds and not at all to a blocked user | 3 |
+
 ## P2
 
 ### B-29 AT-Protocol personal data server (42 points)
@@ -274,31 +293,26 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 | ID | Item | Pts |
 | --- | --- | --- |
-| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 32) | — |
+| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 34) | — |
 
 ---
 
 ## Still deferred
 
-| Item | Why |
+Groomed by the owner on 2026-10-05.
+
+| Item | Decision |
 | --- | --- |
-| Live streaming (ingest, WebRTC rooms, simulcast) | Needs SRS or Cloudflare Stream plus RTMP and TURN infrastructure |
-| Governance voting | No demand in Exprsn-AI's workspaces yet |
-| End-to-end-encrypted messaging | Conflicts with server-side guardrails and AI features |
-| SMS one-time codes | Needs a paid SMS provider |
+| Live streaming (ingest, WebRTC rooms, simulcast, recordings) | Dropped: no live streaming in Exprsn-AI |
+| End-to-end-encrypted messaging | Dropped: server-side guardrails, summaries and semantic search stay |
+| Governance voting | 1.7 or later; no demand in Exprsn-AI's workspaces yet |
+| Recurring events and VTIMEZONE in calendar feeds | 1.7 or later |
+| Web push notifications | 1.7 or later |
+| SMS one-time codes | 1.7 or later; needs a paid SMS provider |
+| Server log view in the console | 1.7 or later; traces and metrics only for now |
 
 ## Open decisions
 
-- [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
-  tenant's own domain).
-- [x] Custom roles: the tenant only (decided 2026-10-05 for the B-3412 board; workspaces reuse tenant roles).
-- [x] Access reviews: the workspace admin reviews by default (decided 2026-10-05); a campaign may name other reviewers.
-- [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
-- [ ] Platform administration screens (B-42, renumbered from B-39): sixteen questions in `design/platform-admin/questions.json` (cache
-  placement, configuration overrides, Overview placement, the social permission, legal-hold exports, group categories,
-  logs, live streaming, job visibility, orphan deletion, tenant templates, sprint placement, icons, instance drain,
-  alert acknowledgement, blob migration). Answer with `node design/platform-admin/decide.mjs`; it prints the lines for
-  this list.
 All six resolved by the owner on 2026-10-05.
 
 - [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant
@@ -314,6 +328,15 @@ All six resolved by the owner on 2026-10-05.
   workspace's import draws from it (B-3804).
 - [x] Licence exceptions (B-3803, B-3804): granted or refused by a reviewer holding a new `legal-review` role; tenant
   admins request but cannot grant. The import waits in the queue until the decision.
+- [x] Platform administration screens (B-42), all sixteen design questions (answered 2026-10-05, full table in
+  `design/platform-admin/DECISIONS.md`): the cache is a tab on Jobs and queues; Configuration takes database
+  overrides for every setting under dual control; Overview is first in the Admin group; a new `social:manage`
+  permission, with held content under `moderation:manage`; legal-hold exports under dual control; groups get a
+  tenant-managed category list (1.6.0, B-44); system admins see every tenant's jobs, tenant admins their own; orphan
+  blobs are deleted after a dry run by one admin with a reason; tenant templates on the Tenants screen (1.6.0, B-45);
+  the live screens open 1.6.0 in Sprint 35; icons are added when the screens go live; instances drain from the
+  console with a confirm and a recent sign-in; alerts are acknowledged tenant-wide; blob store migration is designed
+  as proposed. Logs wait for 1.7 and live streaming is dropped.
 
 ## Risks
 

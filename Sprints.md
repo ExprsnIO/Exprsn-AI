@@ -39,11 +39,14 @@ from prototype data to live only when every control on it is backed by the serve
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
 | 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
 | 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **In progress** (B-3401 boards done) |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Models | Planned |
-| 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen (1.5.0) | AT-Protocol, Import (new); Training, Classifiers, Knowledge | Planned |
+| 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Connections | Planned |
+| 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | Planned |
-| 33 | Agents, tools and skills in chat (1.5.0) | Chat | Planned |
-| 34 | Chaining agents, skills, tools and workflows; release (1.5.0) | Runs, Registry, Chat | Planned |
+| 33 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.5.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Runs, Registry, Chat, Settings, Files | Planned |
+| 35 | Platform administration live screens; tenant provisioning templates (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants | Planned |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
+| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -61,7 +64,9 @@ planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server featu
 identity work. Sprints 29 to 34 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
 features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, model-based memory management, the model
 and dataset import wizard, an AT-Protocol PDS and feed generator, Workflows 2, agents, tools and skills in chat, and chaining them
-with workflows.
+with workflows, user profiles and presence. Sprints 35 to 37 are planned in the [1.6.0 backlog](Backlog-1.6.0.md): the
+platform administration screens, groups depth, tenant templates, blob deduplication, vault extras and capability tokens
+(groomed 2026-10-05 with `design/grooming/groom.mjs`).
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-05T19:43:50.787Z",
+  "updatedAt": "2026-10-05T19:49:55.179Z",
   "answers": {
     "Q12": {
       "choice": "s35",
@@ -16,15 +16,111 @@
     },
     "Q8": {
       "choice": "other",
-      "answer": "other",
+      "answer": "Dropped: no live streaming in Exprsn-AI (B-43)",
       "note": "",
-      "at": "2026-10-05T19:42:33.483Z"
+      "at": "2026-10-05T19:49:20.379Z"
     },
     "Q7": {
       "choice": "other",
-      "answer": "other",
+      "answer": "1.7 or later; traces and metrics only for now (B-57)",
       "note": "",
-      "at": "2026-10-05T19:43:50.787Z"
+      "at": "2026-10-05T19:49:20.329Z"
+    },
+    "Q1": {
+      "choice": "tab",
+      "answer": "A tab on Jobs and queues",
+      "note": "",
+      "at": "2026-10-05T19:48:30.350Z"
+    },
+    "Q2": {
+      "choice": "dual",
+      "answer": "Database overrides for every setting, dual control",
+      "note": "",
+      "at": "2026-10-05T19:48:30.400Z"
+    },
+    "Q3": {
+      "choice": "first",
+      "answer": "First in the Admin group; Platform unchanged",
+      "note": "",
+      "at": "2026-10-05T19:48:30.452Z"
+    },
+    "Q4": {
+      "choice": "other",
+      "answer": "A new social:manage for feed, groups, messaging and relations policy; moderation:manage for held posts and the moderation-facing parts",
+      "note": "",
+      "at": "2026-10-05T19:49:20.281Z"
+    },
+    "Q5": {
+      "choice": "dual",
+      "answer": "Dual control: a second platform admin approves",
+      "note": "",
+      "at": "2026-10-05T19:49:20.429Z"
+    },
+    "Q6": {
+      "choice": "categories",
+      "answer": "A tenant-managed category list",
+      "note": "",
+      "at": "2026-10-05T19:49:20.488Z"
+    },
+    "Q9": {
+      "choice": "both",
+      "answer": "System admins see all with a tenant filter; tenant admins see their own",
+      "note": "",
+      "at": "2026-10-05T19:49:20.562Z"
+    },
+    "Q10": {
+      "choice": "dryrun",
+      "answer": "Dry run, then one admin with a reason",
+      "note": "",
+      "at": "2026-10-05T19:49:20.623Z"
+    },
+    "Q13": {
+      "choice": "later",
+      "answer": "The sprint-29 session adds overview, jobs, storage, configuration, social when the screens go live",
+      "note": "",
+      "at": "2026-10-05T19:49:54.641Z"
+    },
+    "Q14": {
+      "choice": "console",
+      "answer": "From the console with confirm and a recent sign-in",
+      "note": "",
+      "at": "2026-10-05T19:49:54.719Z"
+    },
+    "Q15": {
+      "choice": "tenant",
+      "answer": "Tenant-wide, audited",
+      "note": "",
+      "at": "2026-10-05T19:49:54.802Z"
+    },
+    "Q16": {
+      "choice": "design",
+      "answer": "Design it as proposed on the Stores tab",
+      "note": "",
+      "at": "2026-10-05T19:49:54.866Z"
+    },
+    "C1": {
+      "choice": "other",
+      "answer": "Resolved: PR #42 merged into sprint-29 on 2026-10-05",
+      "note": "",
+      "at": "2026-10-05T19:49:54.928Z"
+    },
+    "C2": {
+      "choice": "ack",
+      "answer": "Acknowledged for the prototype",
+      "note": "",
+      "at": "2026-10-05T19:49:55.000Z"
+    },
+    "C3": {
+      "choice": "other",
+      "answer": "Resolved: sprint-29 renumbered the epic to B-42",
+      "note": "",
+      "at": "2026-10-05T19:49:55.090Z"
+    },
+    "C4": {
+      "choice": "other",
+      "answer": "Superseded by grooming: live streaming dropped, governance and logs wait for 1.7",
+      "note": "",
+      "at": "2026-10-05T19:49:55.178Z"
     }
   }
 }
