@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.0 (in progress)
+
+### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
+
+- New permission `roles:manage` (tenant admins). Migration `031_access`.
+- Role × permission matrix generated from the catalogue: `GET /api/authz/matrix` (JSON, or CSV with `?format=csv`),
+  with the tenant's custom roles and the routes of each permission. `docs/permissions.md` is generated from the same
+  source (`npm run docs:permissions`); the test suite fails when it differs from the catalogue (B-3301).
+- Custom roles per tenant under `/api/authz/roles`: built only from catalogue permissions the creator holds (a tenant
+  admin cannot create a role holding `platform:manage`), with `grantableBy` and `requiresMfa` as for built-in roles; a
+  role holding an admin permission is under dual control; every version is kept with a diff and audited
+  (`authz.role.*`). Custom roles resolve wherever built-in ones do: assignment, group mappings, invitations, CSV
+  imports, `GET /api/me`, the policy, effective permissions and `explain`, whose role step now names the granting
+  roles (B-3302).
+- Effective-access matrix `GET /api/authz/access` (users and their API keys × workspaces × permissions after scopes,
+  clearance and zone ceilings), `explain` for any cell and "who can" for one permission; every cell is
+  `policy.explain`'s decision (B-3303).
+- Route permission registry `server/src/authz/routes.ts`: every route declares its permission, and a route without one
+  fails the test suite; `requireAnyPermission` replaces the routes' own any-of helpers (B-3304).
+- Access reviews under `/api/authz/reviews`: scheduled and repeating certification campaigns over direct role grants
+  and workspace memberships, reviewers confirm or revoke each grant (a revoke is gone on the member's next request and
+  their sockets leave the rooms it gave), overdue campaigns escalate once to the holders of `roles:manage`, and every
+  step is in the audit chain (`authz.review.*`, the `authz.reviews` job) (B-3305).
+
 ## 1.4.0
 
 ### AT-Protocol firehose ingest (Sprint 27, B-1908)
