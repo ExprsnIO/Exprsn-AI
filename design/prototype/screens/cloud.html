@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>models · Exprsn-AI</title>
+<title>cloud · Exprsn-AI</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
 /* Exprsn-AI console prototype — tokens and components.
@@ -745,214 +745,281 @@ table.dt .actions{white-space:nowrap}
 })();
 
 </script>
-<script>App.fileMode = true; App.defaultRoute = "models";</script>
+<script>App.fileMode = true; App.defaultRoute = "cloud";</script>
 <script>
 (function () {
   const { UI, esc } = App;
 
-  const STEPS = ['draft', 'evaluated', 'approved', 'deprecated', 'retired'];
-  const MODELS = [
-    { id: 'qwen2.5:32b-q4_K_M', family: 'Qwen 2.5', size: '32B', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', digest: 'sha256:41ab9c0e7f5d2b18...e3a7', full: 'sha256:41ab9c0e7f5d2b18c4a6f0d9e2b7c1a8f5e3d2c1b0a9f8e7d6c5b4a3f2e1d0e3a7', ctx: '32,768', source: 'Ollama library, import bundle 2026-35', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'cuda passed, rocm passed, cpu passed', conf: '44 of 44 passed', confTone: 'ok', pools: ['gpu-large'], profiles: ['analyst'] },
-    { id: 'llama3.1:8b-q5_K_M', family: 'Llama 3.1', size: '8B', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', digest: 'sha256:7d21e6b03a9f4c55...0b2d', full: 'sha256:7d21e6b03a9f4c55e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a60b2d', ctx: '32,768', source: 'Ollama library, import bundle 2026-35', licence: 'Llama 3.1 Community, recorded', manifest: 'verified', hw: 'cuda passed, cpu passed', conf: '43 of 44 passed', confTone: 'ok', pools: ['gpu-large', 'cpu-helpers'], profiles: ['general-8b', 'chat-default'] },
-    { id: 'qwen2.5-coder:32b-q4_K_M', family: 'Qwen 2.5', size: '32B', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'evaluated', digest: 'sha256:9f2c41d07be6a3...c81e', full: 'sha256:9f2c41d07be6a3f1e8d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7c81e', ctx: '32,768', source: 'Ollama library, import bundle 2026-37', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'cuda passed, cpu passed', conf: '41 of 44 passed', confTone: 'warn', pools: ['gpu-large'], profiles: ['coder-32b', 'code'], warn: 'The tools capability is withheld until the conformance suite passes. Approval is still possible for chat only.' },
-    { id: 'nomic-embed-text:v1.5', family: 'Nomic', size: '137M', caps: ['embed'], label: 'restricted', lifecycle: 'approved', digest: 'sha256:0c6e3d4a1f9b2e77...94af', full: 'sha256:0c6e3d4a1f9b2e77d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f494af', ctx: '8,192', source: 'Ollama library, import bundle 2026-31', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'cpu passed, cuda passed', conf: 'not applicable, no tools capability', confTone: '', pools: ['cpu-helpers'], profiles: [] },
-    { id: 'llama-guard3:8b', family: 'Llama Guard', size: '8B', caps: ['chat'], label: 'restricted', lifecycle: 'approved', digest: 'sha256:b3a8f1c92d0e6547...1e60', full: 'sha256:b3a8f1c92d0e6547a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c41e60', ctx: '8,192', source: 'Ollama library, import bundle 2026-31', licence: 'Llama 3.1 Community, recorded', manifest: 'verified', hw: 'cpu passed, cuda passed', conf: 'not applicable, guard model', confTone: '', pools: ['cpu-helpers'], profiles: [], guard: true },
-    { id: 'finance-lora-v3:8b', family: 'Llama 3.1', size: '8B', caps: ['chat'], label: 'confidential', lifecycle: 'draft', digest: 'sha256:e5d09a7c3b2f1486...77c3', full: 'sha256:e5d09a7c3b2f1486b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d377c3', ctx: '32,768', source: 'Internal fine-tune, training job finance-lora-v3', licence: 'Inherits Llama 3.1 Community, recorded', manifest: 'signed, cosign key northwind-ml', hw: 'cuda passed', conf: 'not run', confTone: '', pools: ['none until approved'], profiles: [], evalNote: 'Registration waits on the guardrail red-team suite, which is below its threshold (0.968 against 0.980).' },
-    { id: 'llama3:8b-q4_0', family: 'Llama 3', size: '8B', caps: ['chat'], label: 'internal', lifecycle: 'deprecated', digest: 'sha256:2a7c9e4d0b1f8365...5bd2', full: 'sha256:2a7c9e4d0b1f8365c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e25bd2', ctx: '8,192', source: 'Ollama library, import bundle 2026-12', licence: 'Llama 3 Community, recorded', manifest: 'verified', hw: 'cuda passed, cpu passed', conf: '38 of 44 passed', confTone: 'warn', pools: ['gpu-large'], profiles: [], depNote: 'Deprecated on 2 Sep. New profiles cannot pick it; existing profiles keep routing until 30 Sep, then it retires.' }
-  ];
-  const CAPS = ['chat', 'tools', 'embed', 'vision', 'thinking'];
+  // ---- nav entry (app.js untouched): Admin group, before Zones ----
+  (function nav() {
+    const admin = (App.NAV || []).find((g) => g.group === 'Admin'); if (!admin || admin.items.some((i) => i.id === 'cloud')) return;
+    const item = { id: 'cloud', label: 'Cloud accounts', icon: 'map' };
+    const z = admin.items.findIndex((i) => i.id === 'zones');
+    if (z >= 0) admin.items.splice(z, 0, item); else admin.items.push(item);
+  })();
 
-  // ---- 2.0.0 cloud model backends (B-105; every one needs B-43's ModelServer interface and format: server entries) ----
-  const PROVIDERS = ['all', 'Ollama', 'Bedrock', 'Azure AI Foundry', 'DigitalOcean GenAI', 'Workers AI'];
-  const cloudRow = (o) => Object.assign({ digest: 'held by the provider, no digest', full: 'held by the provider, no digest', source: 'Provider catalogue, account ' + o.cloud.account, licence: 'Provider service terms, recorded on the account', manifest: 'not applicable', hw: 'not applicable, provider-hosted', pools: ['none (provider endpoint)'], conf: 'not run', confTone: '', profiles: [] }, o);
-  const CLOUD = [
-    cloudRow({ id: 'amazon.nova-pro-v1:0', provider: 'Bedrock', family: 'Amazon Nova', size: 'eu-central-1', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', ctx: '300,000', conf: '44 of 44 passed', confTone: 'ok', profiles: ['analyst-cloud'], cloud: { account: 'aws-prod', region: 'eu-central-1', regionCeiling: 'confidential', price: '$0.80 in, $3.20 out per 1M tokens', endpoint: 'Bedrock Converse and ConverseStream, SigV4 with the account\'s federated role', residency: 'Single-region model id: runs in eu-central-1 only.', guardrail: 'Bedrock Guardrail gr-example01, an extra layer; Exprsn-AI guardrails run first and last and stay authoritative', gateway: 'off' } }),
-    cloudRow({ id: 'eu.amazon.nova-lite-v1:0', provider: 'Bedrock', family: 'Amazon Nova (inference profile)', size: 'eu-* (EU regions only)', caps: ['chat'], label: 'internal', lifecycle: 'evaluated', ctx: '300,000', conf: '41 of 44 passed', confTone: 'warn', cloud: { account: 'aws-prod', region: 'EU cross-region inference profile', regionCeiling: 'internal', price: '$0.06 in, $0.24 out per 1M tokens', endpoint: 'Bedrock Converse through an inference profile', residency: 'A cross-region profile may run in any EU region of the profile. Cross-region profiles are refused above internal by default, so the ceiling is internal.', guardrail: 'none on the provider side; Exprsn-AI guardrails only', gateway: 'off' }, warn: 'The tools capability is withheld until the conformance suite passes. Approval is still possible for chat only.' }),
-    cloudRow({ id: 'amazon.titan-embed-text-v2:0', provider: 'Bedrock', family: 'Amazon Titan', size: 'eu-central-1', caps: ['embed'], label: 'confidential', lifecycle: 'approved', ctx: '8,192', conf: 'not applicable, no tools capability', profiles: ['knowledge-embed'], cloud: { account: 'aws-prod', region: 'eu-central-1', regionCeiling: 'confidential', price: '$0.02 per 1M tokens', endpoint: 'Bedrock InvokeModel (embeddings)', residency: 'Single-region model id: runs in eu-central-1 only.', guardrail: 'not applicable to embeddings', gateway: 'off' } }),
-    cloudRow({ id: 'nw-gpt-4-1-mini', provider: 'Azure AI Foundry', family: 'gpt-4.1-mini (deployment)', size: 'swedencentral', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', ctx: '1,047,576', conf: '44 of 44 passed', confTone: 'ok', profiles: ['analyst-cloud'], cloud: { account: 'azure-eu', region: 'swedencentral', regionCeiling: 'confidential', price: '$0.40 in, $1.60 out per 1M tokens', endpoint: 'kind: openai, Azure OpenAI v1 with an Entra token from the federated credential', residency: 'Regional deployment in swedencentral; data stays in the region.', guardrail: 'Azure content filter results mapped to guardrail decisions; Exprsn-AI guardrails stay authoritative', gateway: 'on (Cloudflare AI Gateway; logs off for content above internal)' } }),
-    cloudRow({ id: 'nw-embed-3-large', provider: 'Azure AI Foundry', family: 'text-embedding-3-large (deployment)', size: 'swedencentral', caps: ['embed'], label: 'confidential', lifecycle: 'approved', ctx: '8,191', conf: 'not applicable, no tools capability', profiles: ['knowledge-embed'], cloud: { account: 'azure-eu', region: 'swedencentral', regionCeiling: 'confidential', price: '$0.13 per 1M tokens', endpoint: 'kind: openai, /embeddings on the Azure OpenAI v1 endpoint', residency: 'Regional deployment in swedencentral.', guardrail: 'not applicable to embeddings', gateway: 'on (Cloudflare AI Gateway; logs off for content above internal)' } }),
-    cloudRow({ id: 'llama3.3-70b-instruct', provider: 'DigitalOcean GenAI', family: 'Llama 3.3', size: 'global endpoint', caps: ['chat'], label: 'internal', lifecycle: 'draft', ctx: '128,000', cloud: { account: 'do-team', region: 'global serverless endpoint', regionCeiling: 'internal', price: '$0.65 in, $0.65 out per 1M tokens', endpoint: 'kind: openai, serverless inference with a model access key from the vault', residency: 'The serverless endpoint does not pin a region, so the ceiling is internal.', guardrail: 'none on the provider side; Exprsn-AI guardrails only', gateway: 'off' }, evalNote: 'Conformance has not run yet. Approval waits on an eval record for this provider endpoint.' }),
-    cloudRow({ id: '@cf/meta/llama-3.1-8b-instruct', provider: 'Workers AI', family: 'Llama 3.1', size: 'Cloudflare edge', caps: ['chat'], label: 'internal', lifecycle: 'evaluated', ctx: '128,000', conf: '43 of 44 passed', confTone: 'ok', profiles: ['edge-chat'], cloud: { account: 'cf-edge', region: 'Cloudflare edge', regionCeiling: 'internal', price: 'priced in neurons, example $0.011 per 1,000 neurons', endpoint: 'kind: openai, Workers AI OpenAI-compatible endpoint with a scoped API token', residency: 'Runs at the Cloudflare edge location nearest the gateway; the edge ceiling is internal.', guardrail: 'none on the provider side; Exprsn-AI guardrails only', gateway: 'on (Cloudflare AI Gateway; logs off for content above internal)' } })
+  // ---- example data (Northwind, Monday 28 Sep 2026 09:40 UTC). Every ID here is fake. ----
+  const PROVIDERS = ['AWS', 'Azure', 'DigitalOcean', 'Cloudflare'];
+  const REGION_POLICY = {
+    'eu-central-1': ['confidential', 'cloud-eu'], 'us-east-1': ['internal', 'cloud-us'], swedencentral: ['confidential', 'cloud-eu'], westeurope: ['confidential', 'cloud-eu'],
+    ams3: ['internal', 'cloud-eu'], fra1: ['internal', 'cloud-eu'], nyc3: ['internal', 'cloud-us'], 'global edge': ['internal', 'edge'], 'R2 jurisdiction EU': ['internal', 'edge']
+  };
+  const REGIONS_BY_PROVIDER = {
+    AWS: ['eu-central-1', 'us-east-1', 'eu-west-1', 'us-west-2'], Azure: ['swedencentral', 'westeurope', 'eastus2'],
+    DigitalOcean: ['ams3', 'fra1', 'nyc3', 'sfo3', 'tor1'], Cloudflare: ['global edge', 'R2 jurisdiction EU']
+  };
+  const ACCOUNTS0 = () => [
+    { id: 'aws-prod', provider: 'AWS', scope: 'platform', ext: 'account 111122223333', mode: 'federated', cred: { role: 'arn:aws:iam::111122223333:role/exprsn-ai-deploy', aud: 'sts.amazonaws.com', session: '1 h sessions, refreshed at 40 min', last: 'session issued 09:12' }, regions: ['eu-central-1', 'us-east-1'], budget: 18000, mtd: 9840, forecast: 10600, alert: '50 % alert sent 16 Sep', state: 'connected', validated: 'validated today 09:12' },
+    { id: 'aws-sandbox', provider: 'AWS', scope: 'platform', ext: 'account 444455556666', mode: 'vaulted', cred: { key: 'AKIAEXAMPLESANDBOX01', ref: 'vault:cloud/aws-sandbox#access_key', rotation: 'automatic every 90 days', lastRotated: '12 Aug', next: '10 Nov' }, regions: ['us-east-1'], budget: 1500, mtd: 1410, forecast: 1690, alert: '80 % alert sent 24 Sep; forecast above budget', state: 'connected', validated: 'validated today 06:00' },
+    { id: 'azure-eu', provider: 'Azure', scope: 'platform', ext: 'tenant aaaaaaaa-0000-4000-8000-00000000a001, subscription bbbbbbbb-0000-4000-8000-00000000b001', mode: 'federated', cred: { app: 'exprsn-ai-deploy', client: 'cccccccc-0000-4000-8000-00000000c001', aud: 'api://AzureADTokenExchange', session: 'Entra tokens for ARM, Cost Management and Cognitive Services, 1 h', last: 'token issued 09:20' }, regions: ['swedencentral', 'westeurope'], budget: 12000, mtd: 7050, forecast: 7600, alert: '50 % alert sent 18 Sep', state: 'connected', validated: 'validated today 09:20' },
+    { id: 'do-team', provider: 'DigitalOcean', scope: 'platform', ext: 'team Northwind Example, dddddddd-0000-4000-8000-00000000d001', mode: 'vaulted', cred: { key: 'dop_v1_...EXAMPLE', ref: 'vault:cloud/do-team#token', rotation: 'manual, notice 14 days before due', lastRotated: '14 Jul', next: '12 Oct', scopes: 'droplet, kubernetes, database, app, vpc, firewall, domain, spaces, billing:read' }, regions: ['ams3', 'fra1', 'nyc3'], budget: 4000, mtd: 4120, forecast: 4420, alert: 'Hard stop since 26 Sep: plans that add cost are refused', state: 'budget exceeded', validated: 'validated today 06:00' },
+    { id: 'cf-edge', provider: 'Cloudflare', scope: 'platform', ext: 'account 0123456789abcdef0123456789abcdef, zone northwind-example.com', mode: 'vaulted', cred: { key: 'scoped API token ...EXAMPLE', ref: 'vault:cloud/cf-edge#api_token', rotation: 'manual, notice 14 days before due', lastRotated: '2 Sep', next: '1 Dec' }, regions: ['global edge', 'R2 jurisdiction EU'], budget: 1200, mtd: 310, forecast: 340, alert: 'none', state: 'needs attention', validated: 'validated today 09:31', missing: ['Containers Edit'] },
+    { id: 'azure-contoso', provider: 'Azure', scope: 'tenant Contoso', ext: 'tenant aaaaaaaa-0000-4000-8000-00000000a002, subscription bbbbbbbb-0000-4000-8000-00000000b002', mode: 'vaulted', cred: { key: 'client secret ...EXAMPLE', ref: 'vault:cloud/azure-contoso#client_secret', rotation: 'Graph addPassword when the app may own its secrets, otherwise a notice', lastRotated: '4 Apr', next: '4 Oct', expires: '4 Oct' }, regions: ['westeurope'], budget: 1000, mtd: 620, forecast: 680, alert: '50 % alert sent 21 Sep', state: 'secret expires 4 Oct', validated: 'validated today 06:00' }
   ];
-  // Importable provider models per account (the Cloud catalogue modal). Prices are example data.
-  const CATALOGUE = [
-    { account: 'aws-prod', provider: 'Bedrock', where: 'eu-central-1', rows: [['amazon.nova-pro-v1:0', 'chat, tools', '$0.80 / $3.20'], ['eu.amazon.nova-lite-v1:0', 'chat', '$0.06 / $0.24'], ['amazon.titan-embed-text-v2:0', 'embed', '$0.02'], ['amazon.nova-micro-v1:0', 'chat', '$0.035 / $0.14'], ['us.amazon.nova-pro-v1:0', 'chat, tools', '$0.80 / $3.20', 'US cross-region profile']] },
-    { account: 'azure-eu', provider: 'Azure AI Foundry', where: 'swedencentral deployments', rows: [['nw-gpt-4-1-mini', 'chat, tools', '$0.40 / $1.60'], ['nw-embed-3-large', 'embed', '$0.13'], ['nw-gpt-4-1-nano', 'chat, tools', '$0.10 / $0.40']] },
-    { account: 'do-team', provider: 'DigitalOcean GenAI', where: 'serverless inference', rows: [['llama3.3-70b-instruct', 'chat', '$0.65 / $0.65'], ['mistral-nemo-instruct-2407', 'chat', '$0.30 / $0.30']] },
-    { account: 'cf-edge', provider: 'Workers AI', where: 'Cloudflare edge', rows: [['@cf/meta/llama-3.1-8b-instruct', 'chat', 'neurons'], ['@cf/baai/bge-m3', 'embed', 'neurons']] }
+  const CF_PERMS = [
+    ['Account', 'Cloudflare Tunnel Edit', 'Front door: Tunnel'], ['Account', 'Workers Scripts Edit', 'App tier Worker'], ['Account', 'Containers Edit', 'App tier on Cloudflare Containers'],
+    ['Account', 'Hyperdrive Edit', 'Postgres through Hyperdrive'], ['Account', 'Workers R2 Storage Edit', 'R2 object store'], ['Account', 'D1 Read', 'D1 read-only connection'],
+    ['Account', 'Workers AI Read', 'Workers AI model backend'], ['Account', 'AI Gateway Edit', 'AI Gateway proxy'], ['Account', 'Access: Apps and Policies Edit', 'Access before the admin console'],
+    ['Account', 'Account Analytics Read', 'GraphQL Analytics, neurons'], ['Account', 'Billing Read', 'Billing ingestion'],
+    ['Zone', 'DNS Edit', 'DNS records, northwind-example.com'], ['Zone', 'Zone WAF Edit', 'WAF and rate-limit rules'], ['Zone', 'SSL and Certificates Edit', 'Edge TLS']
   ];
+  const DO_SCOPES = ['droplet:create, read, update, delete', 'kubernetes:create, read, update, delete', 'database:create, read, update, delete', 'app:create, read, update, delete', 'vpc and firewall:create, read, update', 'domain:create, read, update', 'spaces:read, write', 'billing:read'];
+  const featureChecks = (a) => {
+    if (a.provider === 'Cloudflare') return [['Front door (DNS, TLS, Tunnel, WAF, Access)', 'ok'], ['App tier on Cloudflare Containers', 'missing: Containers Edit'], ['R2 and D1', 'ok'], ['Workers AI and AI Gateway', 'ok'], ['Billing and GraphQL Analytics', 'ok']];
+    if (a.provider === 'DigitalOcean') return [['Inventory read', 'ok'], ['Deploy (Kubernetes, Droplets, App Platform)', 'ok'], ['Managed databases', 'ok'], ['GenAI serverless inference', 'ok'], ['Billing read', 'ok']];
+    const base = [['Inventory read', 'ok'], ['Deploy tagged resources (exprsn:managed)', 'ok'], ['Managed data', 'ok'], ['GPU node groups', a.id === 'aws-sandbox' ? 'not granted (sandbox policy)' : 'ok'], ['Model backends', a.id === 'azure-contoso' ? 'not granted' : 'ok'], ['Billing read', 'ok']];
+    return base;
+  };
+  const money = (n) => '$' + Math.round(n).toLocaleString('en-US');
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+  const tone = (p) => p >= 100 ? 'danger' : p >= 80 ? 'warn' : '';
+  const statePill = (s) => UI.pill(s, /connected/.test(s) ? 'ok' : /exceeded|denied|failed/.test(s) ? 'danger' : /attention|expires|pending|throttled/.test(s) ? 'warn' : '');
+  const provPill = (p) => '<span class="pill outline">' + esc(p) + '</span>';
 
-  function menu(ctx, host, items, cur, onPick) {
-    ctx.$$('.dropdown').forEach((d) => d.remove());
-    const d = document.createElement('div'); d.className = 'dropdown';
-    d.innerHTML = items.map((it) => '<button type="button" data-v="' + esc(it) + '" class="' + (it === cur ? 'on' : '') + '">' + esc(it) + '</button>').join('');
-    host.appendChild(d);
-    d.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; d.remove(); onPick(b.dataset.v); });
-    setTimeout(() => document.addEventListener('click', function h(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', h); } }), 0);
-  }
+  const init = (st) => {
+    if (st.accounts) return;
+    st.accounts = ACCOUNTS0(); st.sel = 'aws-prod'; st.prov = 'all'; st.q = ''; st.wiz = null; st.view = null; st.pending = [];
+  };
 
   App.register({
-    id: 'models', title: 'Models', summary: 'Catalog, signed import path, lifecycle approvals, quantization builds', section: 'admin', crumb: ['Admin', 'Models'],
-    commands: [{ label: 'Request model import', sub: 'Models', run(app) { app.stateFor('models').openRequest = true; app.render(); } },
-      { label: 'Import from cloud catalogue', sub: 'Models, cloud providers', run(app) { app.stateFor('models').openCatalogue = true; app.render(); } }],
+    id: 'cloud', title: 'Cloud accounts', section: 'admin', crumb: ['Admin', 'Cloud accounts'],
+    summary: 'AWS, Azure, DigitalOcean and Cloudflare accounts, credentials, regions and label ceilings',
+    commands: [
+      { label: 'Connect a cloud account', sub: 'Cloud accounts', run(app) { const s = app.stateFor('cloud'); init(s); s.wiz = { step: 1, provider: 'AWS', mode: 'federated', regions: ['eu-central-1'], budget: '5000', name: 'aws-analytics' }; app.render(); } },
+      { label: 'Validate every cloud account', sub: 'Cloud accounts', run(app) { app.toast('Validation queued for 6 accounts. Results replace the permission checks as they arrive.'); } }
+    ],
     states: [
-      { title: 'Pickle rejected', tone: 'danger', text: 'Import refused: the archive contains a pickle checkpoint. Only GGUF and safetensors are accepted.', apply(ctx) { ctx.state.problem = 'pickle'; ctx.rerender(); } },
-      { title: 'Digest mismatch', tone: 'danger', text: 'The blob digest does not match the approved manifest. The gateway refuses the blob and nothing is registered.', apply(ctx) { ctx.state.problem = 'digest'; ctx.rerender(); } },
-      { title: 'Licence missing', tone: 'warn', text: 'Approve is disabled until the licence field is completed and reviewed.', apply(ctx) { ctx.state.selected = 'qwen2.5-coder:32b-q4_K_M'; ctx.state.licenceMissing = true; ctx.rerender(); } },
-      { title: 'Cross-region profile refused', tone: 'danger', text: 'Importing us.amazon.nova-pro-v1:0 at confidential is refused: a cross-region inference profile may run outside the account\'s allowed regions and is capped at internal.', apply(ctx) { ctx.state.problem = 'crossregion'; ctx.state.noB43 = false; ctx.rerender(); } },
-      { title: 'B-43 not installed', tone: 'warn', text: 'Cloud backends need the model server interface from B-43. Without it the cloud rows are listed as unavailable and the Cloud catalogue is disabled.', apply(ctx) { ctx.state.noB43 = true; ctx.state.provider = 'all'; ctx.state.selected = 'amazon.nova-pro-v1:0'; ctx.rerender(); } },
-      { title: 'Retired', tone: 'neutral', text: 'Retired tags stay resolvable for audit and are removed from routing. Shown read-only.', apply(ctx) { ctx.state.lc = ctx.state.lc || {}; ctx.state.lc['llama3:8b-q4_0'] = 'retired'; ctx.state.selected = 'llama3:8b-q4_0'; ctx.state.lifecycle = 'all'; ctx.rerender(); } }
+      { title: 'No accounts yet', tone: 'neutral', text: 'Nothing is connected. The page explains federated and vaulted credentials and offers Connect account.', apply(ctx) { init(ctx.state); ctx.state.view = 'empty'; ctx.state.wiz = null; ctx.rerender(); } },
+      { title: 'Loading', tone: 'neutral', text: 'Accounts and their last validation load; rows show skeletons.', apply(ctx) { init(ctx.state); ctx.state.view = 'loading'; ctx.state.wiz = null; ctx.rerender(); } },
+      { title: 'Provider API error', tone: 'danger', text: 'Azure Resource Manager answered 503 while validating azure-eu. The problem carries the trace id and the provider request id.', apply(ctx) { init(ctx.state); ctx.state.view = 'error'; ctx.state.sel = 'azure-eu'; ctx.state.wiz = null; ctx.rerender(); } },
+      { title: 'Rate limited', tone: 'warn', text: 'DigitalOcean answered 429; validation waits for ratelimit-reset and retries. Nothing is lost.', apply(ctx) { init(ctx.state); ctx.state.view = 'throttled'; ctx.state.sel = 'do-team'; ctx.state.wiz = null; ctx.rerender(); } },
+      { title: 'Permission denied', tone: 'danger', text: 'Felix Brandt (member, Finance Ops) opens Cloud accounts without cloud:read. The page explains the decision step by step.', apply(ctx) { init(ctx.state); ctx.state.view = 'denied'; ctx.state.wiz = null; ctx.rerender(); } },
+      { title: 'Credential expiring', tone: 'warn', text: 'The azure-contoso client secret expires on 4 Oct. The row and the inspector say so and offer Rotate.', apply(ctx) { init(ctx.state); ctx.state.view = null; ctx.state.wiz = null; ctx.state.sel = 'azure-contoso'; ctx.rerender(); } },
+      { title: 'Cloudflare token missing a permission', tone: 'warn', text: 'The cf-edge token lacks Containers Edit, so the nw-edge-cf plan waits. The checklist marks the missing permission.', apply(ctx) { init(ctx.state); ctx.state.view = null; ctx.state.wiz = null; ctx.state.sel = 'cf-edge'; ctx.rerender(); } },
+      { title: 'Dual control pending', tone: 'info', text: 'A new account waits for a second cloud admin. It is listed as pending and cannot be used until Jonas Lindqvist approves.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = null; st.wiz = null; if (!st.accounts.some((a) => a.id === 'aws-analytics')) st.accounts.push({ id: 'aws-analytics', provider: 'AWS', scope: 'platform', ext: 'account 777788889999', mode: 'federated', cred: { role: 'arn:aws:iam::777788889999:role/exprsn-ai-deploy', aud: 'sts.amazonaws.com', session: '1 h sessions', last: 'not issued yet' }, regions: ['eu-central-1'], budget: 5000, mtd: 0, forecast: 0, alert: 'none', state: 'pending approval', validated: 'validated 09:38 by Mara Okafor' }); st.sel = 'aws-analytics'; ctx.rerender(); } }
     ],
     render(root, ctx) {
-      const st = ctx.state;
-      st.selected = st.selected || 'qwen2.5-coder:32b-q4_K_M'; st.query = st.query || ''; st.lifecycle = st.lifecycle || 'all'; st.cap = st.cap || 'all';
-      st.lc = st.lc || {}; st.extra = st.extra || []; st.reveal = st.reveal || {}; st.provider = st.provider || 'all';
-      if (ctx.params.model) { st.selected = ctx.params.model; delete ctx.params.model; }
-      if (ctx.params.provider && st.provHash !== location.hash) { st.provHash = location.hash; st.provider = ctx.params.provider; if (st.provider === 'cloud') st.selected = 'amazon.nova-pro-v1:0'; }
-      const all = MODELS.concat(CLOUD, st.extra);
-      const provOf = (m) => m.provider || 'Ollama';
-      const provOk = (m) => st.provider === 'all' || (st.provider === 'cloud' ? provOf(m) !== 'Ollama' : provOf(m) === st.provider);
-      const lcOf = (m) => st.lc[m.id] || m.lifecycle;
-      const q = st.query.toLowerCase();
-      const rows = all.filter((m) => (!q || (m.id + ' ' + m.family + ' ' + m.caps.join(' ')).toLowerCase().includes(q)) && (st.lifecycle === 'all' || lcOf(m) === st.lifecycle) && (st.cap === 'all' || m.caps.includes(st.cap)) && provOk(m));
-      const sel = all.find((m) => m.id === st.selected) || all[0];
-      const lc = lcOf(sel);
-      const licenceMissing = st.licenceMissing && sel.id === 'qwen2.5-coder:32b-q4_K_M';
-      const readOnly = lc === 'retired';
+      const st = ctx.state; init(st);
+      if (ctx.params.id) { if (st.accounts.some((a) => a.id === ctx.params.id)) { st.sel = ctx.params.id; st.wiz = null; st.view = null; } delete ctx.params.id; }
+      const style = '<style>'
+        + '.cloud-steps{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:12px}.cloud-steps span{display:inline-flex;align-items:center;gap:6px;padding:0 6px;height:26px;color:var(--muted);font-weight:500}.cloud-steps .cur{color:var(--fg);font-weight:700}.cloud-steps .done{color:var(--fg2)}.cloud-steps i{font-style:normal;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);font-size:11px}.cloud-steps .cur i{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}.cloud-steps .done i{background:var(--fg2);color:var(--bg);border-color:var(--fg2)}.cloud-steps .sep{color:var(--faint)}'
+        + '.cloud-tiles{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}.cloud-tile{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);text-align:left;cursor:pointer;font-size:12px;color:var(--fg2)}.cloud-tile b{font-size:13px;color:var(--fg)}.cloud-tile.on{border-color:var(--accent);background:var(--accent-tint)}.cloud-tile[disabled]{opacity:.6;cursor:not-allowed}'
+        + '.cloud-t{flex-shrink:0}.cloud-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}.cloud-fb{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line);flex-wrap:wrap}'
+        + '</style>';
+      const example = '<span class="muted" style="font-size:12px">Example data. IDs and prices are illustrative; no real accounts or keys.</span>';
 
-      const stepper = '<div class="models-steps">' + STEPS.map((s, i) => '<span class="' + (s === lc ? 'cur' : STEPS.indexOf(lc) > i ? 'done' : '') + '">' + s + '</span>' + (i < STEPS.length - 1 ? '<span class="sep">›</span>' : '')).join('') + '</div>';
-      const digest = st.reveal[sel.id] ? '<span class="mono fg2" style="overflow-wrap:anywhere">' + esc(sel.full) + '</span> <a href="#" data-reveal style="font-size:12px">hide</a>' : '<span class="mono fg2">' + esc(sel.digest) + '</span> <a href="#" data-reveal style="font-size:12px">reveal</a>';
-      const kv = [
-        ['Digest', digest],
-        ['Context length', esc(sel.ctx)],
-        ['Source', esc(sel.source) + (/bundle/.test(sel.source) ? ' <a href="#" data-go="platform" style="font-size:12px">bundle</a>' : /training job/.test(sel.source) ? ' <a href="#" data-go="training" style="font-size:12px">open job</a>' : '')],
-        ['Licence', licenceMissing ? '<span style="color:var(--warn-fg)">not recorded</span> ' + UI.btn('Record licence', { size: 'xs', attrs: 'data-licence' }) : esc(sel.licence)],
-        ['Signed manifest', sel.manifest === 'verified' ? UI.pill('verified', 'ok') : UI.pill(sel.manifest, 'ok')],
-        ['Tested hardware', esc(sel.hw)],
-        ['Tool-calling conformance', sel.confTone ? UI.pill(sel.conf, sel.confTone) : '<span class="fg2">' + esc(sel.conf) + '</span>'],
-        ['Allowed pools', sel.pools.map((p) => /^none/.test(p) ? '<span class="fg2">' + esc(p) + '</span>' : '<a href="#" data-go="pools">' + esc(p) + '</a>').join(', ')],
-        ['Used by profiles', sel.profiles.length ? sel.profiles.map((p) => '<a href="#" data-profile="' + esc(p) + '">' + esc(p) + '</a>').join(', ') : '<span class="fg2">' + (sel.guard ? 'guardrails only' : 'none') + '</span>']
-      ];
-      const cl = sel.cloud;
-      if (cl) {
-        kv.splice(0, kv.length,
-          ['Weights', '<span class="fg2">held by the provider, no digest</span>'],
-          ['Provider', esc(provOf(sel)) + ', account <a href="#" data-goacct="' + esc(cl.account) + '" class="mono">' + esc(cl.account) + '</a>'],
-          ['Region', esc(cl.region)],
-          ['Endpoint', esc(cl.endpoint) + '<div class="muted" style="font-size:12px">Catalogue entry <span class="mono">format: server</span>; needs the B-43 model server interface</div>'],
-          ['Price', esc(cl.price) + ' <span class="muted" style="font-size:12px">example</span><div class="muted" style="font-size:12px">Priced into usage_records at metering</div>'],
-          ['Label ceiling', UI.label(sel.label, { sm: true }) + ' <span class="muted" style="font-size:12px">within the region ceiling</span> ' + UI.label(cl.regionCeiling, { sm: true })],
-          ['Residency', esc(cl.residency)],
-          ['Provider guardrail', esc(cl.guardrail)],
-          ['AI Gateway', esc(cl.gateway)],
-          ['Context length', esc(sel.ctx)],
-          ['Tool-calling conformance', sel.confTone ? UI.pill(sel.conf, sel.confTone) : '<span class="fg2">' + esc(sel.conf) + '</span>'],
-          ['Used by profiles', sel.profiles.length ? sel.profiles.map((p) => '<a href="#" data-profile="' + esc(p) + '">' + esc(p) + '</a>').join(', ') : '<span class="fg2">none</span>']);
+      // ---------- permission denied ----------
+      if (st.view === 'denied') {
+        root.innerHTML = style + '<div class="page">' + UI.pagehead('Cloud accounts', 'Signed in as Felix Brandt, member, Finance Ops')
+          + UI.problem('You need cloud:read', 'Cloud accounts are visible to cloud admins, cloud operators and FinOps analysts. Ask a cloud admin for one of those roles.', '0d7a51c2e98b4f63a1c05e7d3b9f2a48')
+          + UI.panel('Why this was refused', UI.timeline([
+            { title: 'Role', text: 'Member grants chat, knowledge and tools; it does not grant cloud:read.', tone: 'danger' },
+            { title: 'Scopes', text: 'Console session, no narrower scope.', tone: 'ok' },
+            { title: 'Tenant', text: 'Northwind; cloud accounts with platform scope belong to the platform.', tone: 'ok' },
+            { title: 'Clearance', text: 'confidential, not reached.', tone: '' },
+            { title: 'Decision', text: 'Refused at the role step (policy.explain).', tone: 'danger' }]))
+          + '<div class="hstack gap6">' + UI.btn('Back to the board view', { size: 'sm', attrs: 'data-reset' }) + UI.btn('Open Roles and access', { size: 'sm', attrs: 'data-go="roles"' }) + '</div></div>';
+        ctx.on('click', '[data-reset]', () => { st.view = null; ctx.rerender(); });
+        ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
+        return;
       }
-      let notice = '';
-      if (cl && st.noB43) notice = UI.notice('Unavailable: this install has no model server interface (B-43), so provider endpoints cannot be called. The entry is kept and routes again once B-43 is installed.', 'warn');
-      else if (readOnly) notice = UI.notice('Retired on ' + (sel.id === 'llama3:8b-q4_0' ? '20 Sep' : 'today') + '. The tag stays resolvable for audit and is removed from routing. Fields are read-only.', 'info');
-      else if (licenceMissing) notice = UI.notice('Approve is disabled until the licence field is completed and reviewed.', 'warn');
-      else if (sel.warn && lc === 'evaluated') notice = UI.notice(esc(sel.warn), 'warn');
-      else if (sel.evalNote && lc === 'draft') notice = UI.notice(esc(sel.evalNote) + ' <a href="#" data-go="training">Open evals</a>', 'warn');
-      else if (sel.depNote && lc === 'deprecated') notice = UI.notice(esc(sel.depNote), 'warn');
-      else if (lc === 'approved' && sel.warn) notice = UI.notice('Approved for chat only. Tools stay withheld until the conformance suite passes.', 'info');
-      let actions = '';
-      if (readOnly) actions = UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'draft') actions = UI.btn('Approve', { kind: 'primary', disabled: true, title: 'Needs an eval record and a passing red-team suite' }) + UI.btn('Build quantization', { attrs: 'data-quant' }) + UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'evaluated') actions = UI.btn('Approve', { kind: 'primary', attrs: 'data-approve', disabled: licenceMissing, title: licenceMissing ? 'Licence not recorded' : '' }) + UI.btn('Build quantization', { attrs: 'data-quant' }) + UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'approved') actions = UI.btn('Deprecate', { attrs: 'data-deprecate' }) + UI.btn('Build quantization', { attrs: 'data-quant' }) + UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'deprecated') actions = UI.btn('Retire', { kind: 'danger', attrs: 'data-retire' }) + UI.btn('Model card', { attrs: 'data-card' });
-      if (cl) actions = actions.replace(UI.btn('Build quantization', { attrs: 'data-quant' }), '') + UI.btn('Cloud spend', { attrs: 'data-spend' });
 
-      const problem = st.problem === 'pickle'
-        ? '<div class="vstack gap6">' + UI.problem('Import refused: pickle checkpoint', 'The archive 2026-38-hf-models.tar contains consolidated.00.pth, a pickle checkpoint. Only GGUF and safetensors are accepted. Nothing was written to MinIO and no tag was registered.', '7c1e0b3f9a2d4e6c8b5a7f1e3d9c0b2a') + '<div>' + UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismiss' }) + '</div></div>'
-        : st.problem === 'digest'
-          ? '<div class="vstack gap6">' + UI.problem('Digest mismatch', 'Blob sha256:c07e2a… does not match the approved manifest for qwen2.5:32b-q4_K_M (expected sha256:41ab9c…). The gateway refused the blob on gpu-large-1/1 and nothing is registered.', '3e9a7c1b5d2f4e8a6c0b9d7f1a3e5c2b') + '<div>' + UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismiss' }) + UI.btn('Open import log', { kind: 'ghost', size: 'sm', attrs: 'data-go="platform"' }) + '</div></div>'
-          : st.problem === 'crossregion'
-            ? '<div class="vstack gap6">' + UI.problem('Import refused: cross-region profile above internal', 'us.amazon.nova-pro-v1:0 is a US cross-region inference profile in aws-prod. It may run in Regions outside the account\'s allow list (eu-central-1, us-east-1), and cross-region profiles are capped at internal. The request asked for confidential. Nothing was registered.', '2b8e6c0a4f1d3e5a7c9b1d3f5a7c9e0b') + '<div>' + UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismiss' }) + UI.btn('Import at internal instead', { kind: 'ghost', size: 'sm', attrs: 'data-imp="us.amazon.nova-pro-v1:0" data-acct="aws-prod"' }) + '</div></div>'
-            : '';
-      const b43 = st.noB43 ? UI.notice('<b>Cloud backends unavailable.</b> Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI entries need the model server interface from B-43 (<span class="mono">ModelServer</span>, instance kind <span class="mono">openai</span>, catalogue format <span class="mono">server</span>). Ollama models are not affected.', 'warn') : '';
+      // ---------- connect wizard ----------
+      if (st.wiz) { renderWizard(root, ctx, st, style, example); return; }
 
-      root.innerHTML = '<style>'
-        + '.models-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.models-steps span{color:var(--muted);font-weight:500}.models-steps .cur{color:var(--fg);font-weight:700}.models-steps .done{color:var(--fg2)}.models-steps .sep{color:var(--faint)}'
-        + '.models-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
-        + '</style>'
-        + '<div class="page">'
-        + UI.pagehead('Model catalog', 'Weights enter only through the signed import path', UI.btn('Browse repositories', { icon: 'search', attrs: 'data-browse' }) + UI.btn('Cloud catalogue', { attrs: 'data-catalogue', disabled: !!st.noB43, title: st.noB43 ? 'Needs the B-43 model server interface' : '' }) + UI.btn('Import safetensors', { attrs: 'data-import' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }))
-        + problem + b43
-        + '<div class="toolbar">' + UI.search('Filter models', 'data-search', st.query) + '<span class="relative">' + UI.btn('Lifecycle: ' + st.lifecycle, { attrs: 'data-menu="lifecycle"', cls: st.lifecycle !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Capability: ' + st.cap, { attrs: 'data-menu="cap"', cls: st.cap !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Provider: ' + (st.provider === 'cloud' ? 'any cloud' : st.provider), { attrs: 'data-menu="provider"', cls: st.provider !== 'all' ? 'active' : '' }) + '</span><span class="muted right" style="font-size:12px">' + rows.length + ' of ' + all.length + ' models</span></div>'
-        + UI.table(['Model', 'Provider', 'Family', 'Size or region', 'Capabilities', 'Max label', 'Lifecycle'], rows.map((m) => ({ cells: ['<span class="mono">' + esc(m.id) + '</span>', esc(provOf(m)) + (m.cloud && st.noB43 ? ' ' + UI.pill('unavailable', 'warn') : ''), esc(m.family), esc(m.size), esc(m.caps.join(', ')), UI.label(m.label, { sm: true }), UI.pill(lcOf(m))], selected: m.id === sel.id, attrs: 'data-id="' + esc(m.id) + '"' })), { emptyTitle: 'No models match', emptyText: 'Clear the filters or request an import.' })
-        + '<span class="muted" style="font-size:12px">Cloud rows are example data; prices are illustrative, not provider quotes.</span>'
-        + '</div>'
-        + '<aside class="inspector w360"><div class="models-name">' + esc(sel.id) + '</div>' + stepper + UI.kv(kv, 1) + notice + '<div class="hstack wrap gap6">' + actions + '</div></aside>';
+      const head = UI.pagehead('Cloud accounts', 'Credentials, regions and label ceilings for AWS, Azure, DigitalOcean and Cloudflare', UI.btn('Validate all', { icon: 'refresh', attrs: 'data-validate-all' }) + UI.btn('Connect account', { kind: 'primary', icon: 'plus', attrs: 'data-connect' }));
 
-      ctx.on('click', 'tr.row', (e, t) => { st.selected = t.dataset.id; ctx.rerender(); });
-      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
-      ctx.on('click', '[data-menu]', (e, t) => {
-        e.stopPropagation();
-        if (t.dataset.menu === 'lifecycle') menu(ctx, t.parentElement, ['all'].concat(STEPS), st.lifecycle, (v) => { st.lifecycle = v; ctx.rerender(); });
-        else if (t.dataset.menu === 'provider') menu(ctx, t.parentElement, PROVIDERS, st.provider, (v) => { st.provider = v; const first = all.find((m) => provOk(m)); if (first && !provOk(sel)) st.selected = first.id; ctx.rerender(); });
-        else menu(ctx, t.parentElement, ['all'].concat(CAPS), st.cap, (v) => { st.cap = v; ctx.rerender(); });
-      });
-      ctx.on('click', '[data-reveal]', (e) => { e.preventDefault(); st.reveal[sel.id] = !st.reveal[sel.id]; ctx.rerender(); });
-      ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
-      ctx.on('click', '[data-profile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.profile }); });
-      ctx.on('click', '[data-dismiss]', () => { st.problem = null; ctx.rerender(); });
-      ctx.on('click', '[data-browse]', () => ctx.navigate('import', { kind: 'model', target: 'models' }));
+      if (st.view === 'empty') {
+        root.innerHTML = style + '<div class="page">' + head
+          + UI.empty('No cloud accounts connected', 'Connect an AWS, Azure, DigitalOcean or Cloudflare account to deploy Exprsn-AI there, add GPU pools, managed databases and cloud model backends. Federated credentials (AWS, Azure) leave no key to steal; vaulted tokens are sealed in the tenant vault and rotated.', UI.btn('Connect account', { kind: 'primary', attrs: 'data-connect' }))
+          + '<div class="grid2">' + UI.panel('Federated (AWS, Azure)', '<div class="fg2" style="font-size:12px">The account trusts Exprsn-AI\'s OIDC issuer <span class="mono">https://id.northwind-example.com</span>. Each call uses a one-hour session; nothing long-lived is stored.</div>')
+          + UI.panel('Vaulted (all four)', '<div class="fg2" style="font-size:12px">A key or scoped token sealed in the vault, never shown again, rotated on a schedule. DigitalOcean and Cloudflare offer no federation, so they use this.</div>') + '</div>' + example + '</div>';
+        ctx.on('click', '[data-connect]', () => { st.wiz = { step: 1, provider: 'AWS', mode: 'federated', regions: ['eu-central-1'], budget: '5000', name: 'aws-analytics' }; ctx.rerender(); });
+        ctx.on('click', '[data-validate-all]', () => ctx.toast('Nothing to validate yet.'));
+        return;
+      }
 
-      ctx.on('click', '[data-approve]', async () => {
-        const chatOnly = sel.confTone === 'warn';
-        const ok = await ctx.confirm({ title: 'Approve ' + sel.id, tag: chatOnly ? 'chat only' : 'approved', tone: 'ok', body: '<p style="margin:0" class="fg2">' + (cl ? 'Approval lets profiles route to this provider model. No weights are mirrored: the provider model id and the version it reports are recorded, and a change re-runs the conformance suite.' : 'Approval mirrors the weights into MinIO by digest and allows placement on the allowed pools. Profiles can pin this version from now on.') + (chatOnly ? ' The tools capability stays withheld until the conformance suite passes.' : '') + '</p>', kv: cl ? [['Provider model', '<span class="mono">' + esc(sel.id) + '</span>'], ['Max label', UI.label(sel.label, { sm: true })], ['Account', esc(cl.account)], ['Region', esc(cl.region)]] : [['Digest', '<span class="mono">' + esc(sel.digest) + '</span>'], ['Max label', UI.label(sel.label, { sm: true })], ['Allowed pools', esc(sel.pools.join(', '))], ['Signed manifest', UI.pill('verified', 'ok')]], ok: 'Approve' });
+      const q = st.q.toLowerCase();
+      const rows = st.accounts.filter((a) => (st.prov === 'all' || a.provider === st.prov) && (!q || (a.id + ' ' + a.ext + ' ' + a.scope).toLowerCase().includes(q)));
+      if (!rows.some((a) => a.id === st.sel) && rows.length) st.sel = rows[0].id;
+      const sel = st.accounts.find((a) => a.id === st.sel);
+      const loading = st.view === 'loading';
+
+      let banner = '';
+      if (st.view === 'error') banner = '<div class="vstack gap6">' + UI.problem('Validation failed: Azure Resource Manager unavailable', 'GET /subscriptions/bbbbbbbb-0000-4000-8000-00000000b001 answered 503 (x-ms-request-id 5f0e9c2a-example). The account keeps its last good validation from 09:20; deployments on it are not affected.', '9b3e7d1f0a2c4e6b8d5f1a3c7e9b2d40') + '<div class="hstack gap6">' + UI.btn('Retry now', { size: 'sm', attrs: 'data-retry' }) + UI.btn('Dismiss', { size: 'sm', kind: 'ghost', attrs: 'data-dismiss' }) + '</div></div>';
+      else if (st.view === 'throttled') banner = UI.notice('<b>DigitalOcean is rate limiting this account.</b> 429 with ratelimit-reset in 38 s; validation and inventory reads wait and retry with jitter (B-10108). No request is dropped.', 'warn', UI.btn('Dismiss', { size: 'xs', attrs: 'data-dismiss' }));
+      const over = st.accounts.filter((a) => a.mtd >= a.budget);
+      const budgetNote = over.length ? UI.notice('<b>Budget exceeded:</b> ' + over.map((a) => esc(a.id) + ' at ' + pct(a.mtd, a.budget) + ' %').join(', ') + '. Plans that add monthly cost on it are refused; scale-down and destroy still work.', 'danger', UI.btn('Open Cloud spend', { size: 'xs', attrs: 'data-go="finops"' })) : '';
+
+      const table = loading
+        ? '<div class="tablewrap"><table class="dt"><tbody>' + [1, 2, 3, 4, 5].map(() => '<tr><td><div class="skeleton" style="width:120px"></div></td><td><div class="skeleton" style="width:80px"></div></td><td><div class="skeleton" style="width:220px"></div></td><td><div class="skeleton" style="width:90px"></div></td><td><div class="skeleton" style="width:140px"></div></td></tr>').join('') + '</tbody></table></div>'
+        : UI.table(['Account', 'Provider', 'Scope', 'External id', 'Credentials', 'Regions', { label: 'Budget this month', width: '170px' }, 'State'], rows.map((a) => {
+          const p = pct(a.mtd, a.budget);
+          return { cells: ['<span class="mono" style="font-weight:600">' + esc(a.id) + '</span>', provPill(a.provider), esc(a.scope), '<span class="mono" style="font-size:11px;display:inline-block;max-width:190px;overflow-wrap:anywhere">' + esc(a.ext) + '</span>', a.mode === 'federated' ? UI.pill('federated', 'info') : UI.pill('vaulted', 'outline'), esc(a.regions.join(', ')), UI.meter('', money(a.mtd) + ' of ' + money(a.budget), p, tone(p)), statePill(a.state)], attrs: 'data-id="' + esc(a.id) + '"', selected: a.id === st.sel };
+        }), { minWidth: '1000px', emptyTitle: 'No accounts match', emptyText: 'Clear the filter or connect an account.' });
+
+      let insp = '';
+      if (loading) insp = '<div class="skeleton" style="width:60%"></div><div class="skeleton"></div><div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:70%"></div>';
+      else if (sel) insp = inspector(sel, st);
+
+      root.innerHTML = style + '<div class="page">' + head + banner + budgetNote
+        + '<div class="toolbar">' + UI.search('Filter accounts', 'data-search', st.q) + UI.seg([{ id: 'all', label: 'All' }].concat(PROVIDERS.map((p) => ({ id: p, label: p }))), st.prov, 'data-prov') + '<span class="muted right" style="font-size:12px">' + rows.length + ' of ' + st.accounts.length + ' accounts</span></div>'
+        + table
+        + '<span class="muted" style="font-size:12px">Federation issuer <span class="mono">https://id.northwind-example.com</span> (discovery and JWKS published to a public bucket; signing keys stay in OpenBao transit, B-10005). Token subject <span class="mono">cloud-account:&lt;id&gt;</span>.</span>'
+        + example + '</div>'
+        + '<aside class="inspector w360">' + insp + '</aside>';
+
+      ctx.on('click', 'tr.row', (e, t) => { if (t.dataset.id) { st.sel = t.dataset.id; ctx.rerender(); } });
+      ctx.on('click', '[data-prov] [data-seg]', (e, t) => { st.prov = t.dataset.seg; ctx.rerender(); });
+      ctx.on('input', '[data-search]', (e, t) => { st.q = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
+      ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go, t.dataset.id ? { id: t.dataset.id } : undefined); });
+      ctx.on('click', '[data-dismiss]', () => { st.view = null; ctx.rerender(); });
+      ctx.on('click', '[data-retry]', () => { st.view = null; const a = st.accounts.find((x) => x.id === 'azure-eu'); a.validated = 'validated today 09:41'; ctx.rerender(); ctx.toast('azure-eu validated again: every check passed.', 'ok'); });
+      ctx.on('click', '[data-connect]', () => { st.wiz = { step: 1, provider: 'AWS', mode: 'federated', regions: ['eu-central-1'], budget: '5000', name: 'aws-analytics' }; ctx.rerender(); });
+      ctx.on('click', '[data-validate-all]', () => { st.accounts.forEach((a) => { if (a.state !== 'pending approval') a.validated = 'validated today 09:41'; }); ctx.rerender(); ctx.toast('Validated 6 accounts. cf-edge still lacks Containers Edit; azure-contoso secret expires 4 Oct.', 'warn', 5000); });
+      if (!sel || loading) return;
+      ctx.on('click', '[data-validate]', () => { sel.validated = 'validated today 09:41'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> validated. ' + (sel.missing ? 'Still missing: ' + esc(sel.missing.join(', ')) + '.' : 'Every check passed.'), sel.missing ? 'warn' : 'ok'); });
+      ctx.on('click', '[data-recheck-cf]', () => { sel.missing = null; sel.state = 'connected'; ctx.rerender(); ctx.toast('Token permissions re-read: Containers Edit is granted. The nw-edge-cf plan can apply.', 'ok', 5000); });
+      ctx.on('click', '[data-rotate]', async () => {
+        const auto = sel.provider === 'AWS' || sel.id === 'azure-contoso';
+        const ok = await ctx.confirm({ title: 'Rotate credentials for ' + sel.id, tag: 'rotation', tone: 'warn', body: '<p class="fg2" style="margin:0">' + (auto ? 'Exprsn-AI creates the new credential through the provider API, validates it, stores it as a new vault version and then revokes the old one. Running operations finish on the old credential.' : 'This provider has no API to issue its own tokens. Paste the new token; Exprsn-AI validates it before it replaces the old vault version, then you revoke the old token at the provider.') + '</p>' + (auto ? '' : UI.field('New token', UI.input('', { type: 'password', placeholder: 'shown once, sealed in the vault' }))), kv: [['Vault path', '<span class="mono">' + esc(sel.cred.ref) + '</span>'], ['Last rotated', esc(sel.cred.lastRotated)]], ok: 'Rotate' });
         if (!ok) return;
-        st.lc[sel.id] = 'approved'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> approved' + (chatOnly ? ' for chat only' : '') + (cl ? '. Provider model id recorded; audit entry written.' : '. Weights mirrored to MinIO; audit entry written.'), 'ok', 5000);
+        sel.cred.lastRotated = 'today 09:41'; sel.cred.next = sel.provider === 'AWS' ? '27 Dec' : '27 Dec'; if (sel.cred.expires) { sel.cred.expires = null; sel.state = 'connected'; }
+        ctx.rerender(); ctx.toast('Credentials for <b>' + esc(sel.id) + '</b> rotated. New vault version written; the old one is revoked. Audit entry cloud.credential.rotated.', 'ok', 5000);
       });
-      ctx.on('click', '[data-deprecate]', async () => {
-        const ok = await ctx.confirm({ title: 'Deprecate ' + sel.id, tag: 'deprecated', tone: 'warn', body: '<p style="margin:0" class="fg2">New profiles cannot pick a deprecated tag. Profiles that already pin it keep routing until the retirement date you set here.</p>' + UI.field('Retire on', UI.input('2026-10-31', { type: 'date' })) + (sel.profiles.length ? UI.notice('Still pinned by ' + sel.profiles.map((p) => '<b>' + esc(p) + '</b>').join(', ') + '. Repoint them before retirement.', 'warn') : ''), ok: 'Deprecate' });
+      ctx.on('click', '[data-regions]', () => regionsModal(ctx, st, sel));
+      ctx.on('click', '[data-trust]', () => ctx.drawer({ title: 'Trust for ' + esc(sel.id), body: setupSnippet(sel.provider, sel.id) + UI.notice('The trust only accepts tokens whose subject is <span class="mono">cloud-account:' + esc(sel.id) + '</span>. Deleting the trust or the role ends access at once.', 'info'), actions: UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }) }));
+      ctx.on('click', '[data-disconnect]', async () => {
+        const ok = await ctx.confirm({ title: 'Disconnect ' + sel.id, tag: 'dual control', tone: 'danger', body: '<p class="fg2" style="margin:0">Deployments, pools and connections on this account stop being managed; nothing in the cloud is deleted. A second cloud admin must approve before it takes effect.</p>' + UI.field('Reason', UI.input('', { placeholder: 'Recorded in the audit chain' })), kv: [['Deployments on it', sel.id === 'aws-prod' ? 'nw-prod-eu, nw-edge-cf' : sel.id === 'azure-eu' ? 'nw-dr-azure' : sel.id === 'do-team' ? 'lab-do' : sel.id === 'aws-sandbox' ? 'sandbox-ecs' : sel.id === 'cf-edge' ? 'nw-edge-cf' : 'none'], ['Second approver', 'Jonas Lindqvist or another cloud admin']], ok: 'Propose disconnect' });
         if (!ok) return;
-        st.lc[sel.id] = 'deprecated'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> deprecated. Retires on 31 Oct unless extended.', 'warn', 5000);
+        sel.state = 'disconnect pending approval'; ctx.rerender(); ctx.toast('Disconnect of <b>' + esc(sel.id) + '</b> proposed. Waiting for a second cloud admin.', 'warn', 5000);
       });
-      ctx.on('click', '[data-retire]', async () => {
-        const ok = await ctx.confirm({ title: 'Retire ' + sel.id, tag: 'destructive', tone: 'danger', body: '<p style="margin:0" class="fg2">The tag is removed from routing on every pool and unloaded from instances. It stays resolvable for audit and the blob stays in MinIO for the retention period.</p>', kv: [['Loaded on', 'gpu-large-2/0'], ['Requests last 7 days', '0']], ok: 'Retire' });
-        if (!ok) return;
-        st.lc[sel.id] = 'retired'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> retired and removed from routing.', '', 5000);
-      });
-      ctx.on('click', '[data-licence]', () => ctx.modal({ title: 'Record licence for ' + esc(sel.id), body: UI.field('Licence', UI.select(['Apache 2.0', 'MIT', 'Llama 3.1 Community', 'Qwen Research', 'Other, attach text'], 'Apache 2.0')) + UI.field('Source of the licence text', UI.input('LICENSE in the Hugging Face repository, import bundle 2026-37')) + UI.check('Reviewed by legal for commercial internal use', false) + UI.notice('The licence is recorded on the manifest and shown on the model card. Approve becomes available once it is saved.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save licence', { kind: 'primary', attrs: 'data-save' }), onMount(m) { m.querySelector('[data-save]').addEventListener('click', () => { App.closeOverlay(); st.licenceMissing = false; ctx.rerender(); ctx.toast('Licence recorded as Apache 2.0. Approve is available.', 'ok'); }); } }));
-      ctx.on('click', '[data-quant]', () => ctx.modal({ title: 'Build quantization from ' + esc(sel.id), body: '<div class="formgrid" style="--cols:2">' + UI.field('Target quantization', UI.select(['Q4_K_M', 'Q5_K_M', 'Q8_0'], 'Q8_0')) + UI.field('Evals to run', UI.select(['cuda and cpu', 'cuda only', 'cuda, rocm and cpu'], 'cuda and cpu')) + UI.field('Result tag', UI.input(sel.id.replace(/-q[0-9]_[A-Z0-9_]+$/i, '') + '-q8_0', { readonly: true }), 'Registers as a new draft with its own digest') + UI.field('Priority', UI.select(['low, off-peak', 'normal'], 'low, off-peak')) + '</div>' + UI.notice('Runs llama-quantize on the training pool from the mirrored safetensors. The new tag needs its own eval record per hardware class before approval.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Queue build', { kind: 'primary', attrs: 'data-queue' }), onMount(m) { m.querySelector('[data-queue]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Quantization queued on train-1, off-peak. It appears as a draft tag when packaging finishes. <a href="#/training" style="color:inherit">Track it</a>', '', 6000); }); } }));
-      ctx.on('click', '[data-card]', () => ctx.drawer({ title: 'Model card, ' + esc(sel.id), body: '<div class="hstack">' + UI.pill(lc) + UI.label(sel.label, { sm: true }) + '</div>' + UI.kv([['Base digest', '<span class="mono">' + esc(sel.digest) + '</span>'], ['Family, size', esc(sel.family + ', ' + sel.size)], ['Capabilities', esc(sel.caps.join(', '))], ['Context length', esc(sel.ctx)], ['Source', esc(sel.source)], ['Licence', licenceMissing ? 'not recorded' : esc(sel.licence)], ['Tested hardware', esc(sel.hw)], ['Tool-calling conformance', esc(sel.conf)]].concat(sel.id === 'finance-lora-v3:8b' ? [['Dataset version', 'finance-qa v6, 18,420 rows'], ['Code commit', '<span class="mono">a91f3c2</span>'], ['Container digest', '<span class="mono">sha256:5be0…</span>'], ['Hyperparameters', 'LoRA r=16, alpha=32, lr 2e-4, 3 epochs, seed 1337'], ['Eval scores', 'held-out 0.781, regression 0.974, red-team 0.968 (fail)']] : [['Evals', 'task suite passed per class, red-team 0.991']]), 1) + UI.timeline([{ title: 'Imported', text: esc(sel.source), meta: 'signature and digest verified at the diode', tone: 'ok' }, { title: 'Evaluated', text: esc(sel.hw), meta: 'per hardware class', tone: STEPS.indexOf(lc) >= 1 ? 'ok' : '' }, { title: 'Approved', text: STEPS.indexOf(lc) >= 2 ? 'Mara Okafor, model admin' : 'pending', tone: STEPS.indexOf(lc) >= 2 ? 'ok' : '' }]), actions: UI.btn('Download card (JSON)', { icon: 'download', attrs: 'data-dl' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { d.querySelector('[data-dl]').addEventListener('click', () => ctx.toast('Model card exported with the signed manifest attached.')); } }));
-
-      ctx.on('click', '[data-goacct]', (e, t) => { e.preventDefault(); ctx.navigate('cloud', { account: t.dataset.goacct }); });
-      ctx.on('click', '[data-spend]', () => ctx.navigate('finops', { tab: 'tokens' }));
-      const importCloud = (id, account) => {
-        const grp = CATALOGUE.find((g) => g.account === account); const row = grp && grp.rows.find((r) => r[0] === id); if (!row) return;
-        const cross = !!row[3];
-        ctx.modal({ title: 'Import ' + esc(id) + ' as draft', body: UI.kv([['Provider', esc(grp.provider)], ['Account', '<span class="mono">' + esc(account) + '</span>'], ['Where', esc(cross ? row[3] : grp.where)], ['Price per 1M tokens', esc(row[2]) + ' <span class="muted">example</span>']], 2)
-          + UI.field('Requested max label', UI.select(['public', 'internal', 'confidential'], cross ? 'confidential' : 'internal', 'data-f="lbl"'), 'Capped at the region ceiling; cross-region and global endpoints at internal')
-          + (cross ? UI.notice('This is a cross-region inference profile. It may run in Regions outside the account\'s allow list, so it is refused above internal.', 'warn') : '')
-          + UI.notice('The entry registers as a draft with format server and no digest. Licence terms, a conformance run and dual-control approval still apply (B-10504).', 'info'),
-        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Import as draft', { kind: 'primary', attrs: 'data-do' }),
-        onMount(m) { m.querySelector('[data-do]').addEventListener('click', () => {
-          const lbl = m.querySelector('[data-f="lbl"]').value; App.closeOverlay();
-          if (cross && lbl === 'confidential') { st.problem = 'crossregion'; ctx.rerender(); return; }
-          if (!all.some((x) => x.id === id)) st.extra.push(cloudRow({ id, provider: grp.provider, family: grp.provider + ' model', size: cross ? row[3] : grp.where, caps: row[1].split(', '), label: lbl, lifecycle: 'draft', ctx: 'reported by the provider', cloud: { account, region: cross ? row[3] : grp.where, regionCeiling: cross ? 'internal' : 'confidential', price: row[2] === 'neurons' ? 'priced in neurons' : row[2] + ' per 1M tokens', endpoint: grp.provider === 'Bedrock' ? 'Bedrock Converse' : 'kind: openai', residency: cross ? 'Cross-region profile, capped at internal.' : 'As the account\'s region.', guardrail: 'none yet', gateway: 'off' }, evalNote: 'Imported from the cloud catalogue. Run the conformance suite before approval.' }));
-          st.problem = null; st.selected = id; st.lifecycle = 'all'; st.provider = 'all'; ctx.rerender(); ctx.toast('<b>' + esc(id) + '</b> registered as a draft from ' + esc(account) + '. Audit entry models.import.cloud written.', 'ok', 5000);
-        }); } });
-      };
-      const catalogueModal = () => ctx.modal({ title: 'Cloud catalogue', cls: 'wide', body: '<p class="fg2" style="margin:0">Models the connected cloud accounts offer. Importing registers a draft catalogue entry; approval, licence and evaluation work as for any model.</p>'
-        + CATALOGUE.map((g) => '<div class="vstack gap6"><div class="hstack"><span class="eyebrow grow">' + esc(g.provider) + ', ' + esc(g.where) + '</span><span class="mono muted" style="font-size:12px">' + esc(g.account) + '</span></div>'
-          + UI.table(['Model', 'Capabilities', 'Price per 1M in / out', ''], g.rows.map((r) => { const have = all.some((x) => x.id === r[0]); return ['<span class="mono">' + esc(r[0]) + '</span>' + (r[3] ? ' ' + UI.pill(r[3], 'warn') : ''), esc(r[1]), esc(r[2]), have ? UI.pill('imported', 'ok') : UI.btn('Import as draft', { size: 'xs', attrs: 'data-imp="' + esc(r[0]) + '" data-acct="' + esc(g.account) + '"' })]; }), { clickable: false, minWidth: '0' }) + '</div>').join('')
-        + '<span class="muted" style="font-size:12px">Example data. Prices are illustrative, not provider quotes.</span>',
-        actions: UI.btn('Close', { attrs: 'data-close' }),
-        onMount(m) { m.addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (!b) return; const id = b.dataset.imp, acct = b.dataset.acct; App.closeOverlay(); setTimeout(() => importCloud(id, acct), 30); }); } });
-      ctx.on('click', '[data-catalogue]', catalogueModal);
-      ctx.on('click', '[data-imp]', (e, t) => importCloud(t.dataset.imp, t.dataset.acct));
-      if (st.openCatalogue) { st.openCatalogue = false; if (!st.noB43) setTimeout(catalogueModal, 30); }
-      const requestModal = () => ctx.modal({ title: 'Request model import', cls: 'wide', body: '<div class="formgrid" style="--cols:2">' + UI.field('Source', UI.select(['Ollama library mirror', 'Hugging Face, safetensors only', 'Internal fine-tune'], 'Ollama library mirror')) + UI.field('Model and tag', UI.input('', { placeholder: 'mistral-small:24b-instruct-q4_K_M', attrs: 'data-f="name"' })) + UI.field('Licence', UI.input('', { placeholder: 'As published by the source; legal reviews before approval' })) + UI.field('Requested max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal')) + UI.field('Capabilities expected', UI.input('chat, tools')) + UI.field('Allowed pools', '<div class="hstack wrap gap12" style="height:30px">' + UI.check('gpu-large', true) + UI.check('cpu-helpers', false) + UI.check('gpu-amd', false) + '</div>') + '<div class="span2">' + UI.field('Why this model', UI.textarea('', { placeholder: 'Which workload it serves and what the current model lacks', rows: 3 })) + '</div></div>' + UI.notice('Requests join the next weekly bundle. Staging fetches, scans and signs the weights; pickle checkpoints are rejected there, and only GGUF or safetensors cross the diode. The tag appears here as a draft once the digest verifies.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send request', { kind: 'primary', attrs: 'data-send' }), onMount(m) { m.querySelector('[data-send]').addEventListener('click', () => { const name = (m.querySelector('[data-f="name"]').value || 'mistral-small:24b-instruct-q4_K_M').trim(); App.closeOverlay(); st.extra.push({ id: name, family: 'pending', size: 'pending', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'draft', digest: 'not yet imported', full: 'not yet imported', ctx: 'pending', source: 'Import request IMP-2026-41, next weekly bundle', licence: 'to be recorded at staging', manifest: 'pending', hw: 'not yet tested', conf: 'not run', confTone: '', pools: ['none until approved'], profiles: [] }); st.selected = name; st.lifecycle = 'all'; ctx.rerender(); ctx.toast('Import request IMP-2026-41 sent to the model admin queue. Bundled with import 2026-39.', 'ok', 5000); }); } });
-      ctx.on('click', '[data-request]', requestModal);
-      if (st.openRequest) { st.openRequest = false; setTimeout(requestModal, 30); }
-      ctx.on('click', '[data-import]', () => ctx.modal({ title: 'Import safetensors bundle', cls: 'wide', body: UI.field('Bundle on the import share', UI.select(['2026-38-hf-models.tar, 47.2 GB, received 19 Sep 06:10', '2026-37-ollama-mirror.tar, imported'], '2026-38-hf-models.tar, 47.2 GB, received 19 Sep 06:10')) + UI.table(['Entry', 'Format', 'Size', 'Signature', 'Digest', 'Licence'], [['<span class="mono">mistral-small:24b-instruct</span>', 'safetensors', '47.1 GB', UI.pill('verified', 'ok'), UI.pill('matches manifest', 'ok'), 'Apache 2.0'], ['<span class="mono">tokenizer, config</span>', 'json', '4 MB', UI.pill('verified', 'ok'), UI.pill('matches manifest', 'ok'), '']], { clickable: false, minWidth: '0' }) + UI.notice('Import converts to GGUF on the training pool, records the licence and registers the tag as a draft. Pickle checkpoints in a bundle stop the whole import.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Verify and import', { kind: 'primary', attrs: 'data-do' }), onMount(m) { m.querySelector('[data-do]').addEventListener('click', () => { App.closeOverlay(); st.extra.push({ id: 'mistral-small:24b-instruct-q4_K_M', family: 'Mistral Small', size: '24B', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'draft', digest: 'sha256:6b1d0e8f2a9c4735...a204', full: 'sha256:6b1d0e8f2a9c4735e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2a204', ctx: '32,768', source: 'Hugging Face safetensors, import bundle 2026-38', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'not yet tested', conf: 'not run', confTone: '', pools: ['none until approved'], profiles: [], evalNote: 'Converted to GGUF Q4_K_M. Evals have not run yet; queue them under Training before approval.' }); st.selected = 'mistral-small:24b-instruct-q4_K_M'; st.lifecycle = 'all'; ctx.rerender(); ctx.toast('Bundle verified. mistral-small:24b-instruct registered as a draft; GGUF conversion queued.', 'ok', 5000); }); } }));
+      ctx.on('click', '[data-approve-pending]', () => { sel.state = 'connected'; ctx.rerender(); ctx.toast('Jonas Lindqvist approved <b>' + esc(sel.id) + '</b>. The account is usable.', 'ok'); });
     }
   });
+
+  function inspector(a, st) {
+    const p = pct(a.mtd, a.budget);
+    let cred = '';
+    if (a.mode === 'federated' && a.provider === 'AWS') cred = UI.kv([['Mode', UI.pill('federated', 'info') + ' AssumeRoleWithWebIdentity'], ['Role', '<span class="mono">' + esc(a.cred.role) + '</span>'], ['Audience', '<span class="mono">' + esc(a.cred.aud) + '</span>'], ['Subject', '<span class="mono">cloud-account:' + esc(a.id) + '</span>'], ['Sessions', esc(a.cred.session) + ', ' + esc(a.cred.last)]], 1);
+    else if (a.mode === 'federated') cred = UI.kv([['Mode', UI.pill('federated', 'info') + ' federated identity credential'], ['App registration', esc(a.cred.app) + ', client <span class="mono">' + esc(a.cred.client) + '</span>'], ['Audience', '<span class="mono">' + esc(a.cred.aud) + '</span>'], ['Subject', '<span class="mono">cloud-account:' + esc(a.id) + '</span>'], ['Tokens', esc(a.cred.session) + ', ' + esc(a.cred.last)]], 1);
+    else cred = UI.kv([['Mode', UI.pill('vaulted', 'outline') + (a.provider === 'DigitalOcean' || a.provider === 'Cloudflare' ? ' <span class="muted">(no federation offered by ' + esc(a.provider) + ')</span>' : '')], ['Credential', '<span class="mono">' + esc(a.cred.key) + '</span>'], ['Vault reference', '<span class="mono">' + esc(a.cred.ref) + '</span>'], ['Rotation', esc(a.cred.rotation)], ['Last rotated, next due', esc(a.cred.lastRotated) + ', ' + (a.cred.expires ? '<span style="color:var(--warn-fg)">expires ' + esc(a.cred.expires) + '</span>' : esc(a.cred.next))]].concat(a.cred.scopes ? [['Token scopes', esc(a.cred.scopes)]] : []), 1);
+    const regionRows = a.regions.map((r) => { const pol = REGION_POLICY[r] || ['internal', 'cloud']; return [esc(r) + (r === a.regions[0] ? ' <span class="muted">default</span>' : ''), UI.label(pol[0], { sm: true }), '<span class="mono">' + esc(pol[1]) + '</span>']; });
+    const checks = a.provider === 'Cloudflare'
+      ? UI.table(['Permission', 'Used for', 'Result'], CF_PERMS.map((c) => [esc(c[0] + ': ' + c[1]), esc(c[2]), (a.missing || []).includes(c[1]) ? UI.pill('missing', 'danger') : UI.pill('granted', 'ok')]), { clickable: false, minWidth: '0', cls: 'bare cloud-t' })
+      : UI.table(['Feature', 'Result'], featureChecks(a).map((c) => [esc(c[0]), UI.pill(c[1], c[1] === 'ok' ? 'ok' : /missing/.test(c[1]) ? 'danger' : 'warn')]), { clickable: false, minWidth: '0', cls: 'bare cloud-t' });
+    let notice = '';
+    if (a.state === 'pending approval') notice = UI.notice('Waiting for a second cloud admin (Jonas Lindqvist was asked). The account cannot be used until approved.', 'info', UI.btn('Simulate approval', { size: 'xs', attrs: 'data-approve-pending' }));
+    else if (a.cred.expires) notice = UI.notice('The client secret expires on <b>' + esc(a.cred.expires) + '</b>. Rotate now, or the account stops validating and its connections fail.', 'warn');
+    else if (a.missing && a.missing.length) notice = UI.notice('The token lacks <b>' + esc(a.missing.join(', ')) + '</b>. The nw-edge-cf plan waits; add the permission at Cloudflare, then re-check.', 'warn', UI.btn('Re-check token', { size: 'xs', attrs: 'data-recheck-cf' }));
+    else if (/disconnect/.test(a.state)) notice = UI.notice('Disconnect proposed. Waiting for a second cloud admin.', 'warn');
+    return '<div class="hstack"><div class="eyebrow grow">Cloud account</div>' + statePill(a.state) + '</div><div class="cloud-name">' + esc(a.id) + '</div><div class="hstack wrap gap6">' + provPill(a.provider) + '<span class="muted" style="font-size:12px">' + esc(a.scope) + ' scope, ' + esc(a.validated) + '</span></div>'
+      + '<div class="mono muted" style="font-size:11px;overflow-wrap:anywhere">' + esc(a.ext) + '</div>' + notice
+      + '<div class="eyebrow">Credentials</div>' + cred
+      + '<div class="eyebrow">Regions and label ceilings</div>' + UI.table(['Region', 'Ceiling', 'Zone'], regionRows, { clickable: false, minWidth: '0', cls: 'bare cloud-t' }) + '<span class="muted" style="font-size:12px">Restricted data never leaves on-prem unless a dual-controlled override says so (B-10008).</span>'
+      + '<div class="eyebrow">' + (a.provider === 'Cloudflare' ? 'Token permission checklist' : 'Permission check') + '</div>' + checks
+      + '<div class="eyebrow">Budget</div>' + UI.meter('September to date', money(a.mtd) + ' of ' + money(a.budget), p, tone(p)) + '<div class="muted" style="font-size:12px">Forecast ' + money(a.forecast) + '. ' + esc(a.alert) + '. <a href="#" data-go="finops">Cloud spend</a></div>'
+      + '<div class="hstack wrap gap6">' + UI.btn('Validate now', { size: 'sm', kind: 'primary', icon: 'check', attrs: 'data-validate' }) + (a.mode === 'vaulted' ? UI.btn('Rotate credentials', { size: 'sm', icon: 'key', attrs: 'data-rotate' }) : UI.btn('View trust', { size: 'sm', icon: 'lock', attrs: 'data-trust' })) + UI.btn('Edit regions', { size: 'sm', attrs: 'data-regions' }) + UI.btn('Deployments', { size: 'sm', attrs: 'data-go="deployments"' }) + UI.btn('Disconnect', { size: 'sm', kind: 'danger', attrs: 'data-disconnect' }) + '</div>';
+  }
+
+  function regionsModal(ctx, st, a) {
+    const all = REGIONS_BY_PROVIDER[a.provider];
+    ctx.modal({ title: 'Regions for ' + esc(a.id), cls: 'wide', body: '<p class="fg2" style="margin:0">Exprsn-AI places nothing outside these regions. Each region maps to a zone and a label ceiling; data, pools and models above the ceiling are refused there.</p>'
+      + UI.table(['Allowed', 'Region', 'Label ceiling', 'Zone'], all.map((r) => { const pol = REGION_POLICY[r] || ['internal', a.provider === 'AWS' || a.provider === 'Azure' ? 'cloud-us' : 'cloud']; return [UI.check('', a.regions.includes(r), 'data-r="' + esc(r) + '" aria-label="Allow ' + esc(r) + '"'), esc(r), UI.select(['public', 'internal', 'confidential', 'restricted'], pol[0], 'aria-label="Ceiling for ' + esc(r) + '" data-ceil="' + esc(r) + '"'), '<span class="mono">' + esc(pol[1]) + '</span>']; }), { clickable: false, minWidth: '0' })
+      + UI.notice('Raising a ceiling, or any ceiling of restricted, needs a second cloud admin.', 'info'),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save regions', { kind: 'primary', attrs: 'data-save' }),
+      onMount(m) {
+        m.querySelector('[data-save]').addEventListener('click', () => {
+          const picked = Array.prototype.slice.call(m.querySelectorAll('[data-r]')).filter((c) => c.checked).map((c) => c.dataset.r);
+          const raised = Array.prototype.slice.call(m.querySelectorAll('[data-ceil]')).some((s) => { const pol = REGION_POLICY[s.dataset.ceil]; const order = ['public', 'internal', 'confidential', 'restricted']; return pol && order.indexOf(s.value) > order.indexOf(pol[0]); });
+          App.closeOverlay(); if (picked.length) a.regions = picked; ctx.rerender();
+          ctx.toast(raised ? 'Regions saved. The raised ceiling waits for a second cloud admin.' : 'Regions saved for <b>' + esc(a.id) + '</b>: ' + esc(a.regions.join(', ')) + '.', raised ? 'warn' : 'ok', 5000);
+        });
+      } });
+  }
+
+  function setupSnippet(provider, id) {
+    if (provider === 'AWS') return UI.code(JSON.stringify({ Version: '2012-10-17', Statement: [{ Effect: 'Allow', Principal: { Federated: 'arn:aws:iam::111122223333:oidc-provider/id.northwind-example.com' }, Action: 'sts:AssumeRoleWithWebIdentity', Condition: { StringEquals: { 'id.northwind-example.com:aud': 'sts.amazonaws.com', 'id.northwind-example.com:sub': 'cloud-account:' + id } } }] }, null, 2), 'json');
+    if (provider === 'Azure') return UI.code(['az ad app federated-credential create \\', '  --id cccccccc-0000-4000-8000-00000000c001 \\', '  --parameters \'{"name":"exprsn-ai-' + id + '",', '    "issuer":"https://id.northwind-example.com",', '    "subject":"cloud-account:' + id + '",', '    "audiences":["api://AzureADTokenExchange"]}\'', 'az role assignment create --assignee cccccccc-0000-4000-8000-00000000c001 \\', '  --role Contributor --scope /subscriptions/bbbbbbbb-0000-4000-8000-00000000b001/resourceGroups/exprsn-ai', 'az role assignment create --assignee cccccccc-0000-4000-8000-00000000c001 \\', '  --role "Cost Management Reader" --scope /subscriptions/bbbbbbbb-0000-4000-8000-00000000b001'].join('\n'), 'sh');
+    if (provider === 'DigitalOcean') return '<div class="fg2" style="font-size:12px">Create a custom-scoped personal access token in the DigitalOcean control panel (API, Tokens) with these scopes, expiry 90 days:</div>' + UI.table(['Scope'], DO_SCOPES.map((s) => ['<span class="mono">' + esc(s) + '</span>']), { clickable: false, minWidth: '0', cls: 'bare cloud-t' });
+    return '<div class="fg2" style="font-size:12px">Create an account API token at Cloudflare (My Profile, API Tokens, Custom token) with exactly these permissions:</div>' + UI.table(['Permission', 'Used for'], CF_PERMS.map((c) => [esc(c[0] + ': ' + c[1]), esc(c[2])]), { clickable: false, minWidth: '0', cls: 'bare cloud-t' });
+  }
+
+  function renderWizard(root, ctx, st, style, example) {
+    const w = st.wiz;
+    const STEPS = ['Provider', 'Credentials', 'Setup', 'Validate', 'Scope'];
+    const noFed = w.provider === 'DigitalOcean' || w.provider === 'Cloudflare';
+    if (noFed) w.mode = 'vaulted';
+    const steps = '<div class="cloud-steps">' + STEPS.map((s, i) => '<span class="' + (i + 1 === w.step ? 'cur' : i + 1 < w.step ? 'done' : '') + '"><i>' + (i + 1) + '</i>' + s + '</span>' + (i < STEPS.length - 1 ? '<span class="sep">›</span>' : '')).join('') + '</div>';
+    let body = '';
+    if (w.step === 1) {
+      const blurb = { AWS: 'SDK v3. Deployments, managed data, GPU node groups, Bedrock.', Azure: 'ARM SDKs. Deployments, managed data, GPU node pools, Azure AI Foundry.', DigitalOcean: 'REST API v2. Kubernetes, Droplets, App Platform, managed data, GPU Droplets, GenAI.', Cloudflare: 'Edge and app tier only: front door, Tunnel, Containers, R2, D1, Workers AI, AI Gateway.' };
+      body = '<div class="cloud-tiles">' + PROVIDERS.map((p) => '<button type="button" class="cloud-tile' + (w.provider === p ? ' on' : '') + '" data-pick="' + p + '"><b>' + esc(p) + '</b><span>' + esc(blurb[p]) + '</span><span class="muted">' + (p === 'DigitalOcean' || p === 'Cloudflare' ? 'vaulted token only' : 'federated or vaulted') + '</span></button>').join('') + '</div>'
+        + UI.field('Account name in Exprsn-AI', UI.input(w.name, { attrs: 'data-f="name"' }), 'Lower case, used in tags (exprsn:account) and audit entries')
+        + UI.field('Scope', UI.select(['platform', 'tenant Northwind', 'tenant Contoso'], 'platform', 'data-f="scope"'), 'A tenant-scoped account is used only for that tenant\'s connections and model backends');
+    } else if (w.step === 2) {
+      body = '<div class="cloud-tiles">'
+        + '<button type="button" class="cloud-tile' + (w.mode === 'federated' ? ' on' : '') + '" data-mode="federated"' + (noFed ? ' disabled title="Federation not offered by ' + esc(w.provider) + '"' : '') + '><b>Federated</b><span>' + (noFed ? 'Federation not offered by ' + esc(w.provider) + '.' : 'The account trusts https://id.northwind-example.com; each call uses a one-hour session. Nothing long-lived is stored.') + '</span></button>'
+        + '<button type="button" class="cloud-tile' + (w.mode === 'vaulted' ? ' on' : '') + '" data-mode="vaulted"><b>Vaulted</b><span>' + (w.provider === 'AWS' ? 'An IAM access key, rotated automatically every 90 days.' : w.provider === 'Azure' ? 'A client secret or a certificate issued by the Exprsn-AI CA.' : w.provider === 'DigitalOcean' ? 'A custom-scoped personal access token, rotated by hand with notices.' : 'A scoped API token plus the account ID, rotated by hand with notices.') + '</span></button></div>'
+        + (w.mode === 'vaulted' ? '<div class="formgrid" style="--cols:2">' + (w.provider === 'Cloudflare' ? UI.field('Account ID', UI.input('0123456789abcdef0123456789abcdef')) : '') + UI.field(w.provider === 'AWS' ? 'Access key ID and secret' : w.provider === 'Azure' ? 'Client secret' : 'API token', UI.input('', { type: 'password', placeholder: 'shown once, sealed in the vault' })) + UI.field('Vault path', UI.input('vault:cloud/' + w.name + '#' + (w.provider === 'AWS' ? 'access_key' : w.provider === 'Azure' ? 'client_secret' : 'api_token'), { readonly: true })) + '</div>' : UI.notice('You will paste the role ARN or the app registration on the next step, after creating the trust.', 'info'));
+    } else if (w.step === 3) {
+      body = (w.mode === 'federated' ? '<div class="fg2" style="font-size:12px">Create the trust in the ' + esc(w.provider) + ' account, then paste ' + (w.provider === 'AWS' ? 'the role ARN' : 'the app registration\'s client ID') + '.</div>' : '') + setupSnippet(w.provider, w.name)
+        + (w.mode === 'federated' ? UI.field(w.provider === 'AWS' ? 'Role ARN' : 'Client ID', UI.input(w.provider === 'AWS' ? 'arn:aws:iam::777788889999:role/exprsn-ai-deploy' : 'cccccccc-0000-4000-8000-00000000c003')) : '')
+        + UI.btn('Copy', { size: 'sm', icon: 'copy', attrs: 'data-copy-setup' });
+    } else if (w.step === 4) {
+      const rows = w.provider === 'Cloudflare' ? CF_PERMS.map((c) => [esc(c[0] + ': ' + c[1]), esc(c[2]), UI.pill('granted', 'ok')]) : featureChecks({ provider: w.provider, id: w.name }).map((c) => [esc(c[0]), '', UI.pill(c[1], c[1] === 'ok' ? 'ok' : 'warn')]);
+      body = (w.validated ? UI.notice('Identity confirmed: ' + (w.provider === 'AWS' ? 'sts:GetCallerIdentity answered account 777788889999.' : w.provider === 'Azure' ? 'ARM returned the subscription.' : w.provider === 'DigitalOcean' ? '/v2/account answered team Northwind Example.' : '/user/tokens/verify answered active.') + ' Required actions simulated per feature.', 'ok') + UI.table([w.provider === 'Cloudflare' ? 'Permission' : 'Feature', w.provider === 'Cloudflare' ? 'Used for' : '', 'Result'], rows, { clickable: false, minWidth: '0' })
+        : UI.empty('Not validated yet', 'Validation calls the provider with the new credential and simulates every action Exprsn-AI needs, per feature.', UI.btn('Validate', { kind: 'primary', attrs: 'data-run-validate' })));
+    } else {
+      const regs = REGIONS_BY_PROVIDER[w.provider];
+      body = UI.table(['Allowed', 'Region', 'Label ceiling', 'Zone'], regs.map((r) => { const pol = REGION_POLICY[r] || ['internal', 'cloud']; return [UI.check('', w.regions.includes(r), 'data-wr="' + esc(r) + '" aria-label="Allow ' + esc(r) + '"'), esc(r), UI.label(pol[0], { sm: true }), '<span class="mono">' + esc(pol[1]) + '</span>']; }), { clickable: false, minWidth: '0' })
+        + '<div class="formgrid" style="--cols:2">' + UI.field('Monthly budget (USD)', UI.input(w.budget, { attrs: 'data-f="budget"' }), 'Alerts at 50, 80 and 100 %; new resources stop at 100 %') + UI.field('Default region', UI.select(regs, w.regions[0] || regs[0])) + '</div>'
+        + UI.notice('Adding an account needs a second cloud admin. Submitting sends a proposal to Jonas Lindqvist; the account stays unusable until approved.', 'info');
+    }
+    const back = w.step > 1 ? UI.btn('Back', { size: 'sm', attrs: 'data-back' }) : UI.btn('Back', { size: 'sm', disabled: true });
+    const next = w.step < 5 ? UI.btn('Next', { kind: 'primary', size: 'sm', attrs: 'data-next', disabled: w.step === 4 && !w.validated }) : UI.btn('Submit for approval', { kind: 'primary', size: 'sm', attrs: 'data-submit' });
+    root.innerHTML = style + '<div class="page">' + UI.pagehead('Connect a cloud account', 'Step ' + w.step + ' of 5, ' + esc(STEPS[w.step - 1]) + ' · ' + esc(w.provider), UI.btn('Cancel', { kind: 'ghost', attrs: 'data-cancel' }))
+      + steps + UI.panel('Step ' + w.step + ' of 5', body + '<div class="cloud-fb">' + back + UI.btn('Cancel', { size: 'sm', kind: 'ghost', attrs: 'data-cancel' }) + '<span class="grow"></span>' + next + '</div>') + example + '</div>';
+    ctx.on('click', '[data-pick]', (e, t) => { w.provider = t.dataset.pick; w.mode = w.provider === 'DigitalOcean' || w.provider === 'Cloudflare' ? 'vaulted' : 'federated'; w.regions = [REGIONS_BY_PROVIDER[w.provider][0]]; w.name = { AWS: 'aws-analytics', Azure: 'azure-analytics', DigitalOcean: 'do-analytics', Cloudflare: 'cf-analytics' }[w.provider]; w.validated = false; ctx.rerender(); });
+    ctx.on('input', '[data-f="name"]', (e, t) => { w.name = t.value.trim() || w.name; });
+    ctx.on('input', '[data-f="budget"]', (e, t) => { w.budget = t.value; });
+    ctx.on('click', '[data-mode]', (e, t) => { if (t.disabled) return; w.mode = t.dataset.mode; ctx.rerender(); });
+    ctx.on('change', '[data-wr]', (e, t) => { const r = t.dataset.wr; w.regions = t.checked ? w.regions.concat([r]) : w.regions.filter((x) => x !== r); });
+    ctx.on('click', '[data-copy-setup]', () => ctx.toast('Setup copied to the clipboard.'));
+    ctx.on('click', '[data-run-validate]', () => { w.validated = true; ctx.rerender(); ctx.toast('Validated: every required action is allowed.', 'ok'); });
+    ctx.on('click', '[data-back]', () => { w.step--; ctx.rerender(); });
+    ctx.on('click', '[data-next]', () => { w.step++; ctx.rerender(); });
+    ctx.on('click', '[data-cancel]', () => { st.wiz = null; ctx.rerender(); });
+    ctx.on('click', '[data-submit]', async () => {
+      const ok = await ctx.confirm({ title: 'Propose account ' + w.name, tag: 'dual control', tone: 'info', body: '<p class="fg2" style="margin:0">A second cloud admin approves before Exprsn-AI uses this account.</p>', kv: [['Provider', esc(w.provider)], ['Credentials', esc(w.mode)], ['Regions', esc(w.regions.join(', ') || 'none')], ['Budget', '$' + esc(w.budget)]], ok: 'Send proposal' });
+      if (!ok) return;
+      const ext = { AWS: 'account 777788889999', Azure: 'tenant aaaaaaaa-0000-4000-8000-00000000a003, subscription bbbbbbbb-0000-4000-8000-00000000b003', DigitalOcean: 'team Northwind Analytics, dddddddd-0000-4000-8000-00000000d002', Cloudflare: 'account fedcba9876543210fedcba9876543210' }[w.provider];
+      const cred = w.mode === 'federated' ? (w.provider === 'AWS' ? { role: 'arn:aws:iam::777788889999:role/exprsn-ai-deploy', aud: 'sts.amazonaws.com', session: '1 h sessions', last: 'not issued yet' } : { app: 'exprsn-ai-deploy', client: 'cccccccc-0000-4000-8000-00000000c003', aud: 'api://AzureADTokenExchange', session: '1 h tokens', last: 'not issued yet' }) : { key: 'sealed, shown once', ref: 'vault:cloud/' + w.name + '#token', rotation: w.provider === 'AWS' ? 'automatic every 90 days' : 'manual, notice 14 days before due', lastRotated: 'today', next: '27 Dec' };
+      st.accounts.push({ id: w.name, provider: w.provider, scope: 'platform', ext, mode: w.mode, cred, regions: w.regions.length ? w.regions : [REGIONS_BY_PROVIDER[w.provider][0]], budget: +w.budget || 0, mtd: 0, forecast: 0, alert: 'none', state: 'pending approval', validated: 'validated today 09:40 by Mara Okafor' });
+      st.sel = w.name; st.wiz = null; st.prov = 'all'; ctx.rerender();
+      ctx.toast('Proposal sent to Jonas Lindqvist. <b>' + esc(w.name) + '</b> is listed as pending approval.', 'ok', 5000);
+    });
+  }
 })();
 
 </script>
