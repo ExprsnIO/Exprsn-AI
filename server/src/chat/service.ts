@@ -10,7 +10,7 @@ import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { TOPICS, type Bus } from '../platform/bus.js';
 import type { DataKeys } from '../platform/datakeys.js';
 import type { QuotaService } from '../tenancy/quotas.js';
-import { QueueTimeout, type Gateway, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
+import { QueueTimeout, fallbackReason, type Gateway, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
 import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.js';
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
@@ -1290,8 +1290,10 @@ export class ChatService {
     this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', profile: r.profile.name, model: r.model.name, ...(from ? { continuing: from.seq } : {}) });
     try {
       const onPosition = (position: number) => this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', position });
-      // The fallback chain: when every slot for a profile stays busy past its queue wait, try its fallback, whose own
-      // fallback applies in turn (at most three hops, never revisiting a profile).
+      // The fallback chain: when every slot for a profile stays busy past its queue wait, or its model cannot be served
+      // (no healthy instance has it, it is retired or not approved, or it fails to load), try its fallback, whose own
+      // fallback applies in turn (at most three hops, never revisiting a profile). A policy refusal never falls back.
+      const onLoad = (instance: string) => this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'loading', instance, model: r.model.name, profile: r.profile.name });
       const tried = new Set<string>([r.profile.id]);
       // The prompt and its retrieved context are built before the lease (see gatherContext), again for a fallback.
       const prepare = async (rp: ResolvedProfile) => {
@@ -1305,13 +1307,17 @@ export class ChatService {
         if (prep.r !== r) prep = await prepare(r);
         const fallback = hop < 3 && r.profile.fallback && !tried.has(r.profile.fallback.profileId) ? r.profile.fallback : null;
         try {
-          lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: st.ac.signal, ...(fallback ? { waitMs: fallback.afterQueueWaitMs } : {}), onPosition });
+          // With a fallback to move on to, a cold model is loaded before the lease is returned, so a load failure
+          // happens here rather than once the answer has started.
+          lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: st.ac.signal, ...(fallback ? { waitMs: fallback.afterQueueWaitMs, preload: true, onLoad } : {}), onPosition });
           break;
         } catch (err) {
-          if (!(err instanceof QueueTimeout) || !fallback) throw err;
+          const reason = fallbackReason(err);
+          if (!reason || !fallback || st.ac.signal.aborted) throw err;
+          this.log.info({ message: m.id, profile: r.profile.name, model: r.model.name, reason, err: (err as Error).message }, 'falling back to the next profile');
           const fb = await this.resolveFor(p, fallback.profileId, c.label);
           tried.add(fb.profile.id);
-          this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'fallback', from: r.profile.name, profile: fb.profile.name, model: fb.model.name });
+          this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'fallback', reason, from: r.profile.name, profile: fb.profile.name, model: fb.model.name });
           r = fb;
           await this.db('messages').where({ id: m.id }).update({ profile_id: r.profile.id, profile_name: r.profile.name, model: r.model.name, canary: r.canary });
         }

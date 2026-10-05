@@ -130,7 +130,7 @@
     if (isShared(st, d)) { if (!sharedMsg(st, d.messageId)) sharedRefresh(st); return; }
     st.status = st.status || {};
     st.status[d.messageId] = Object.assign({}, st.status[d.messageId] || {}, d);
-    if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model }; }
+    if (d.state === 'fallback') { st.fallback = st.fallback || {}; st.fallback[d.messageId] = { from: d.from, profile: d.profile, model: d.model, reason: d.reason }; }
     if (d.state === 'context' && d.citations) { st.citeFor = st.citeFor || {}; st.citeFor[d.messageId] = true; }
     const m = byId(st, d.messageId);
     if (m && d.state === 'held') m.heldLive = true;
@@ -315,13 +315,16 @@
           : ' ≈ <b class="mono">' + esc(t.result.decimal) + '</b> <span class="muted">exactly <span class="mono">' + esc(t.result.fraction) + '</span></span>') : '')
       + (t.name !== 'calculate' ? ' <span class="muted">' + esc(t.name) + '</span>' : '') + '</div>').join('') + '<div class="muted" style="font-size:11px">Computed by the calculation worker, not by the model.</div></div>';
   }
+  // Why a profile handed its answer to its fallback (the chat.status reason).
+  const FALLBACK_WHY = { busy: 'waited too long in the queue', unavailable: 'could not be served: its model is unavailable', load_failed: 'could not be served: its model failed to load' };
+
   function aiHtml(st, conv, m) {
     const streaming = active(m);
     const openDefault = streaming && !m.content;
     const open = st.openThink && st.openThink[m.id] !== undefined ? st.openThink[m.id] : openDefault;
     const fb = (st.fallback || {})[m.id];
     let h = '<div class="ch-msg ch-ai" data-mid="' + esc(m.id) + '">';
-    if (fb) h += UI.notice(esc(fb.from) + ' waited too long in the queue, so ' + esc(fb.profile) + ' (<span class="mono">' + esc(fb.model) + '</span>) is answering instead.', 'warn');
+    if (fb) h += UI.notice(esc(fb.from) + ' ' + (FALLBACK_WHY[fb.reason] || FALLBACK_WHY.busy) + ', so ' + esc(fb.profile) + ' (<span class="mono">' + esc(fb.model) + '</span>) is answering instead.', 'warn');
     h += statusLine(st, m);
     if (m.thinking) {
       const u = m.usage;

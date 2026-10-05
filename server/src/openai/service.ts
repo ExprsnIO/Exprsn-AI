@@ -4,7 +4,7 @@ import { clears, labelRank, type Label } from '../authz/labels.js';
 import { authorize, type Principal } from '../authz/policy.js';
 import { actorFrom } from '../audit/chain.js';
 import { badRequest, forbidden, HttpProblem } from '../http/problem.js';
-import { QueueTimeout, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
+import { QueueTimeout, isFallbackError, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
 import { THINK_LEVELS, type ThinkLevel } from '../gateway/repo.js';
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL } from '../chat/calc.js';
@@ -389,10 +389,12 @@ export class OpenAiService {
       for (let hop = 0; ; hop++) {
         const fallback = hop < 3 && r.profile.fallback && !tried.has(r.profile.fallback.profileId) ? r.profile.fallback : null;
         try {
-          lease = await s.gateway.acquire(r.profile, r.model, label, { signal, ...(fallback ? { waitMs: fallback.afterQueueWaitMs } : {}) });
+          // As in chat: with a fallback, a cold model is loaded first, so a load failure can still move on to it.
+          lease = await s.gateway.acquire(r.profile, r.model, label, { signal, ...(fallback ? { waitMs: fallback.afterQueueWaitMs, preload: true } : {}) });
           break;
         } catch (err) {
-          if (!(err instanceof QueueTimeout) || !fallback) throw err;
+          // Busy past the queue wait, model unavailable or failed to load: try the fallback. Never on a policy refusal.
+          if (!isFallbackError(err) || !fallback || signal.aborted) throw err;
           r = await this.resolve(p, fallback.profileId, label);
           tried.add(r.profile.id);
         }

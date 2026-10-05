@@ -12,8 +12,8 @@
   const healthOf = (i) => (i.state === 'disabled' ? 'disabled' : i.state === 'draining' ? 'draining' : i.health || 'unknown');
   const healthKind = (h) => ({ healthy: 'ok', degraded: 'warn', unreachable: 'danger', draining: 'warn', disabled: 'outline', upgrading: 'info' }[h] || '');
   const resKind = (r) => ({ pinned: 'ok', warm: '', cold: 'outline', draining: 'warn', loading: 'info' }[r] || '');
-  const EVENT_TONE = { load: 'ok', unload: '', evicted: 'danger', pull: 'info' };
-  const EVENT_TEXT = { load: 'Loaded', unload: 'Unloaded', evicted: 'Evicted', pull: 'Pulled' };
+  const EVENT_TONE = { load: 'ok', unload: '', evicted: 'danger', pull: 'info', load_failed: 'danger' };
+  const EVENT_TEXT = { load: 'Loaded', unload: 'Unloaded', evicted: 'Evicted', pull: 'Pulled', load_failed: 'Load failed' };
   const ACCELERATORS = ['cuda', 'rocm', 'metal', 'cpu'];
   const LABELS = ['public', 'internal', 'confidential', 'restricted'];
   const overlayOpen = () => !!document.getElementById('overlay');

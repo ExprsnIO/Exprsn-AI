@@ -197,6 +197,18 @@
 
 ## Unreleased
 
+### Changed
+
+- Profile fallbacks also apply on failure, not only after the queue wait: a chat or `/v1` request moves on to the
+  profile's fallback when no pool or healthy instance can serve the model (`503`), when the model is retired or not
+  approved (`409`), or when it fails to load. With a fallback set, the gateway loads a cold model before admitting the
+  request (`acquire({preload: true})`, bounded by `OLLAMA_LOAD_TIMEOUT_MS`), so a failed load is a
+  `503 Model failed to load` with `step: load` and a `load_failed` entry in the instance's model log, and the next
+  profile is tried. A policy refusal (`403`, such as a zone ceiling) never falls back. The `chat.status` `fallback`
+  event carries `reason: busy|unavailable|load_failed` and the console says why. Still three hops at most, never
+  revisiting a profile; errors after streaming has started are not retried. Tests in `chat.test.ts` and
+  `openai.test.ts`.
+
 ### Fixed
 
 - Registry tool schemas are checked and validated in the JSON Schema dialect they declare with `$schema`: draft-07

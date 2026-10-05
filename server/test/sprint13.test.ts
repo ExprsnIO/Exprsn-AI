@@ -252,6 +252,47 @@ describe('B-301 OpenAI-compatible API', () => {
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
   });
 
+  it('falls back to the profile\'s fallback when its model is unavailable or fails to load, never on a zone denial', async () => {
+    const { pool, profile: general } = await seedGateway(h, ollama, { label: 'internal' });
+    const repo = h.s.gateway.repo;
+    const gemma = await repo.createModel({ name: 'gemma3:4b', source: 'Ollama library', expectedDigest: null, license: { name: 'test' }, label: 'confidential', notes: null, requestedBy: 'x', requestedTenant: h.tenantId });
+    await repo.updateModel(gemma.id, { state: 'approved', import_state: 'pulled', capabilities: ['completion'], size_bytes: 3 * GB });
+    await repo.place(gemma.id, pool.id, 'warm', 'x');
+    const t = Date.now();
+    await repo.createProfile({ ...general, id: 'PRIMARY0000000000000000000', name: 'primary', display_name: 'Primary', model_id: gemma.id, fallback: { profileId: general.id, afterQueueWaitMs: 5000 }, created_at: t, updated_at: t });
+    const u = await localUser(h, 'dev', ['member']);
+    const key = await apiKey(h, u.id);
+    const post = () => request(h.app).post('/v1/chat/completions').set({ authorization: `Bearer ${key}` }).send({ model: 'primary', messages: [{ role: 'user', content: 'hello' }] });
+    const chats = () => ollama.requests.filter((r) => r.path === '/api/chat').map((r) => r.body.model);
+
+    // No instance has gemma3:4b: acquire answers 503, and general answers instead.
+    const unavailable = await post().expect(200);
+    expect(unavailable.body.choices[0].message.content).toBe('You said: hello');
+    expect(chats()).toEqual(['llama3.1:8b']);
+
+    // gemma3:4b is pulled but fails to load: it is loaded first, the load fails, and general answers instead.
+    ollama.addAvailable({ name: 'gemma3:4b', size: 3 * GB });
+    ollama.failLoad.add('gemma3:4b');
+    await h.s.gateway.pollAll();
+    await post().expect(200);
+    expect(chats()).toEqual(['llama3.1:8b', 'llama3.1:8b']);
+    expect(ollama.requests.some((r) => r.path === '/api/generate' && r.body.model === 'gemma3:4b')).toBe(true);
+    const instance = (await repo.instances())[0]!;
+    expect((await repo.events(instance.id)).some((e) => e.model === 'gemma3:4b' && e.event === 'load_failed')).toBe(true);
+
+    // A zone denial is a policy refusal: no fallback, even though general (moved to another zone) could answer.
+    ollama.failLoad.clear();
+    const edge = await repo.createPool({ name: 'edge', accelerator: 'cuda', zone: 'edge', labelCeiling: 'confidential' });
+    await repo.createInstance({ poolId: edge.id, name: 'edge-1', url: ollama.url, deploy: 'docker', settings: { parallel: 4 } });
+    await repo.place(general.model_id!, edge.id, 'warm', 'x');
+    await repo.updateProfile(h.tenantId, general.id, { pool_id: edge.id });
+    await h.s.gateway.pollAll();
+    h.s.gateway.zoneCeiling = async (zone) => (zone === pool.zone ? 'public' : null);
+    const denied = await post().expect(403);
+    expect(denied.body.error.type).toBe('permission_error');
+    expect(chats()).toHaveLength(2);
+  });
+
   it('streams tokens as they are generated in live mode', async () => {
     await h.close();
     h = await harness({ OLLAMA_POLL_MS: '600000', OPENAI_STREAM_MODE: 'live' });

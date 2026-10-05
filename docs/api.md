@@ -149,6 +149,14 @@ retireAt, notes, createdAt, updatedAt}`.
 A profile: `{id, name, displayName, description, aliasOf, modelId, poolId, numCtx, temperature, thinkDefault,
 thinkCeiling, systemPrompt, fallback, canary, tools, label, status, version, updatedAt}`.
 
+A profile's `fallback` answers a chat or `/v1` request instead of it when the profile cannot: every slot stays busy past
+`afterQueueWaitMs`; no pool cleared for the label or no healthy instance has the model (`503`); the model is retired or
+not approved (`409`); or the model fails to load. With a fallback set, a cold model is loaded before the request is
+admitted, so a load failure (`503 Model failed to load`, `step: load`, and a `load_failed` entry in the instance's
+model log) can still move on. The fallback's own fallback applies in turn, at most three hops, never revisiting a
+profile. A policy refusal (`403`, such as a zone ceiling below the data label) never falls back, and nothing is retried
+once the answer has started streaming.
+
 ## Chat and compare (Sprint 4)
 
 Conversations belong to their author and to the session's current workspace. Reading needs `chat:read`; sending
@@ -179,7 +187,8 @@ error, label, attachments, usage: {promptTokens, outputTokens, thinkingTokens, c
 createdAt, completedAt}`.
 
 Socket events to the author: `chat.status {conversationId, messageId, state: queued|loading|streaming|fallback,
-position?, instance?, profile?, model?}`, `chat.chunk {conversationId, messageId, seq, delta?, thinking?, tool?}`,
+position?, instance?, profile?, model?, from?, reason?}` (on `fallback`: `from` is the profile that could not answer and
+`reason` is `busy|unavailable|load_failed`), `chat.chunk {conversationId, messageId, seq, delta?, thinking?, tool?}`,
 `chat.done {conversationId, messageId, state, seq, usage, error, profile, model}`. Sequence numbers start at 1 per
 message; a gap means call the stream endpoint with `after`.
 

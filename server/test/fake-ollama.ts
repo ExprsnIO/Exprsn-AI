@@ -61,6 +61,8 @@ export class FakeOllama {
   guard: (messages: Msg[]) => string = (messages) => (/UNSAFE-TEST/.test(messages[messages.length - 1]?.content ?? '') ? 'unsafe\nS1' : 'safe');
   /** Embedding size per model: models with "bge" in the name give 48 dimensions, others 64. */
   embedDims: (model: string) => number = (model) => (model.includes('bge') ? 48 : 64);
+  /** Models whose load (a generate request with a keep-alive) fails, as when they do not fit or the file is corrupt. */
+  failLoad = new Set<string>();
   /** When set, requests hang until released (to test queueing and stop). */
   hold: Promise<void> | null = null;
   down = false;
@@ -127,6 +129,7 @@ export class FakeOllama {
       case 'POST /api/generate': {
         const m = this.available.get(name);
         if (!m) return json(404, { error: `model '${name}' not found` });
+        if (body.keep_alive !== 0 && this.failLoad.has(name)) return json(500, { error: `llama runner process has terminated: error loading model ${name}` });
         if (body.keep_alive === 0) this.loaded.delete(name);
         else this.loaded.set(name, { size: m.size, expires: Date.now() + 30 * 60_000 });
         return json(200, { model: name, done: true, done_reason: body.keep_alive === 0 ? 'unload' : 'load' });

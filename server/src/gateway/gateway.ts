@@ -76,6 +76,28 @@ const sameModel = (a: string, b: string) => a === b || a === `${b}:latest` || `$
 
 export class QueueTimeout extends Error {}
 
+/** Why a profile's request may move on to its fallback profile (see `fallbackReason`). */
+export type FallbackReason = 'busy' | 'unavailable' | 'load_failed';
+
+/**
+ * Whether an error from `acquire` lets the request move on to the profile's fallback, and why: every slot stayed busy
+ * past the queue wait (`busy`); no pool or healthy instance can serve the model, or the model is retired or not
+ * approved (`unavailable`); or the model failed to load when the request preloaded it (`load_failed`). A policy
+ * refusal (403, such as a zone ceiling below the data label), an abort and any other error return null: a refusal must
+ * not be hidden by trying another model.
+ */
+export function fallbackReason(err: unknown): FallbackReason | null {
+  if (err instanceof QueueTimeout) return 'busy';
+  if (!(err instanceof HttpProblem)) return null;
+  if (err.status === 503 && err.extensions.step === 'load') return 'load_failed';
+  if (err.status === 503 && err.title === 'No capacity') return 'unavailable';
+  if (err.status === 409 && err.extensions.step === 'model') return 'unavailable';
+  return null;
+}
+
+/** True when an error from `acquire` lets the request move on to the profile's fallback (see `fallbackReason`). */
+export const isFallbackError = (err: unknown): boolean => fallbackReason(err) !== null;
+
 /**
  * The Ollama gateway: the only component that talks to Ollama. It polls every instance's /api/version, /api/ps and
  * /api/tags, keeps health and residency, plans memory before a load, limits load churn per instance, leases
@@ -438,9 +460,46 @@ export class Gateway {
    * the model resident win, then the least busy. When every candidate is at its parallel limit the request waits in
    * line (onPosition reports its place) until a slot frees or `waitMs` passes.
    */
-  async acquire(profile: ProfileRow, model: ModelRow, label: Label, opts: { signal: AbortSignal; waitMs?: number; onPosition?: (n: number) => void }): Promise<Lease> {
-    if (model.state === 'retired') throw new HttpProblem(409, 'Conflict', `${model.name} is retired.`);
-    if (!['approved', 'deprecated'].includes(model.state)) throw new HttpProblem(409, 'Conflict', `${model.name} is not approved.`);
+  async acquire(profile: ProfileRow, model: ModelRow, label: Label, opts: { signal: AbortSignal; waitMs?: number; onPosition?: (n: number) => void; preload?: boolean; onLoad?: (instance: string) => void }): Promise<Lease> {
+    const lease = await this.lease(profile, model, label, opts);
+    if (!opts.preload || !lease.cold || lease.shared) return lease;
+    return this.preload(lease, opts);
+  }
+
+  /**
+   * Loads a cold lease's model on its instance before the request uses it, so a model that cannot load fails here,
+   * where the caller can still move on to a fallback profile, rather than on the first chat call. On failure the slot
+   * is released, the instance's model log records it, and the error is a 503 with `step: 'load'`.
+   */
+  private async preload(lease: Lease, opts: { signal: AbortSignal; onLoad?: (instance: string) => void }): Promise<Lease> {
+    const { instance, model } = lease;
+    const r = this.runtimes.get(instance.id);
+    opts.onLoad?.(instance.name);
+    r?.loading.add(model.name);
+    this.publish();
+    try {
+      await lease.client.load(model.name, instance.settings.keepAlive ?? '30m', this.o.loadTimeoutMs ?? 5 * 60_000);
+    } catch (err) {
+      lease.release();
+      const reason = err instanceof OllamaError ? err.message : String(err);
+      this.log.warn({ instance: instance.name, model: model.name, err: reason }, 'model failed to load');
+      await this.repo.event(instance.id, model.name, 'load_failed', `Failed to load on request: ${reason}`.slice(0, 300), 'gateway').catch(() => undefined);
+      throw new HttpProblem(503, 'Model failed to load', `${model.name} failed to load on ${instance.name}: ${reason}`, { extensions: { step: 'load', instance: instance.name } });
+    } finally {
+      r?.loading.delete(model.name);
+      this.publish();
+    }
+    if (opts.signal.aborted) {
+      lease.release();
+      throw opts.signal.reason as Error;
+    }
+    this.noteResident(instance.id, model.name);
+    return { ...lease, cold: false };
+  }
+
+  private async lease(profile: ProfileRow, model: ModelRow, label: Label, opts: { signal: AbortSignal; waitMs?: number; onPosition?: (n: number) => void }): Promise<Lease> {
+    if (model.state === 'retired') throw new HttpProblem(409, 'Conflict', `${model.name} is retired.`, { extensions: { step: 'model' } });
+    if (!['approved', 'deprecated'].includes(model.state)) throw new HttpProblem(409, 'Conflict', `${model.name} is not approved.`, { extensions: { step: 'model' } });
     const cleared = (await this.poolsFor(profile, model)).filter((p) => labelRank(p.label_ceiling) >= labelRank(label));
     // The zone step of the policy pipeline: a pool whose zone ceiling is below the data label is never routed to.
     const pools: PoolRow[] = [];

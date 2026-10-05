@@ -334,7 +334,82 @@ describe('chat', () => {
     const statuses = m.events.filter((e) => e.event === 'chat.status' && e.data.messageId === b.body.messageId).map((e) => e.data);
     expect(statuses.some((s) => s.state === 'queued' && s.position === 1)).toBe(true);
     // the only slot was busy, so it waited in line; the fallback's model also shares that slot, so it completes after
-    expect(statuses.some((s) => s.state === 'fallback' && s.profile === 'thinker')).toBe(true);
+    expect(statuses.some((s) => s.state === 'fallback' && s.reason === 'busy' && s.profile === 'thinker')).toBe(true);
+  });
+
+  /** An approved model placed on the pool, and a profile on it that falls back to `to`. */
+  async function brokenProfile(pool: { id: string }, to: ProfileRow, model = 'gemma3:4b') {
+    const repo = h.s.gateway.repo;
+    const m = await repo.createModel({ name: model, source: 'Ollama library', expectedDigest: null, license: { name: 'test' }, label: 'confidential', notes: null, requestedBy: 'x', requestedTenant: h.tenantId });
+    await repo.updateModel(m.id, { state: 'approved', import_state: 'pulled', capabilities: ['completion'], size_bytes: 3 * GB });
+    await repo.place(m.id, pool.id, 'warm', 'x');
+    const t = Date.now();
+    const row: ProfileRow = { id: 'PRIMARY0000000000000000000', tenant_id: h.tenantId, name: 'primary', display_name: 'primary', description: null, alias_of: null, model_id: m.id, pool_id: pool.id, num_ctx: 8192, temperature: 0.2, think_default: 'off', think_ceiling: 'off', system_prompt: null, fallback: { profileId: to.id, afterQueueWaitMs: 5000 }, canary: null, tools: [], label: 'internal', status: 'published', version: 1, updated_by: null, created_at: t, updated_at: t };
+    await repo.createProfile(row);
+    return row;
+  }
+
+  const fallbackOf = (m: { events: { event: string; data: Record<string, unknown> }[] }, id: string) => m.events.find((e) => e.event === 'chat.status' && e.data.messageId === id && e.data.state === 'fallback')?.data;
+
+  it('falls back when no healthy instance has the profile\'s model', async () => {
+    const { pool, thinker } = await seed(h, ollama);
+    // gemma3:4b is approved and placed, but no instance has pulled it: acquire answers 503 No capacity.
+    await brokenProfile(pool, thinker);
+    const m = await member();
+    const sent = await m.post('/api/chat', { content: 'hello', profile: 'primary' }).expect(202);
+    expect(await m.done(sent.body.messageId)).toMatchObject({ state: 'complete', profile: 'thinker', model: 'qwen3:8b' });
+    expect(fallbackOf(m, sent.body.messageId)).toMatchObject({ reason: 'unavailable', from: 'primary', profile: 'thinker', model: 'qwen3:8b' });
+    const row = await h.s.db('messages').where({ id: sent.body.messageId }).first();
+    expect(row).toMatchObject({ profile_name: 'thinker', model: 'qwen3:8b' });
+  });
+
+  it('falls back when the profile\'s model fails to load', async () => {
+    const { pool, thinker } = await seed(h, ollama);
+    ollama.addAvailable({ name: 'gemma3:4b', size: 3 * GB });
+    ollama.failLoad.add('gemma3:4b');
+    await brokenProfile(pool, thinker);
+    await h.s.gateway.pollAll();
+    const m = await member();
+    const sent = await m.post('/api/chat', { content: 'hello', profile: 'primary' }).expect(202);
+    expect(await m.done(sent.body.messageId)).toMatchObject({ state: 'complete', profile: 'thinker', model: 'qwen3:8b' });
+    expect(fallbackOf(m, sent.body.messageId)).toMatchObject({ reason: 'load_failed', from: 'primary', profile: 'thinker' });
+    const statuses = m.events.filter((e) => e.event === 'chat.status' && e.data.messageId === sent.body.messageId).map((e) => e.data);
+    expect(statuses.some((s) => s.state === 'loading' && s.model === 'gemma3:4b')).toBe(true);
+    // The model was loaded before the answer started, so the failed model never got a chat request.
+    expect(ollama.requests.filter((r) => r.path === '/api/chat').map((r) => r.body.model)).not.toContain('gemma3:4b');
+    expect(ollama.requests.some((r) => r.path === '/api/generate' && r.body.model === 'gemma3:4b')).toBe(true);
+    const instance = (await h.s.gateway.repo.instances())[0]!;
+    const events = await h.s.gateway.repo.events(instance.id);
+    expect(events).toContainEqual(expect.objectContaining({ model: 'gemma3:4b', event: 'load_failed', actor: 'gateway', reason: expect.stringMatching(/error loading model/) }));
+  });
+
+  it('loads a cold model on the first chat call when the profile has no fallback, as before', async () => {
+    await seed(h, ollama);
+    const m = await member();
+    const sent = await m.post('/api/chat', { content: 'hello', profile: 'general' }).expect(202);
+    expect(await m.done(sent.body.messageId)).toMatchObject({ state: 'complete', profile: 'general' });
+    expect(ollama.requests.some((r) => r.path === '/api/generate')).toBe(false);
+  });
+
+  it('does not fall back on a zone denial', async () => {
+    const { pool, general, thinker } = await seed(h, ollama);
+    const repo = h.s.gateway.repo;
+    // The fallback runs on a second pool in another zone, where it could answer: falling back would succeed.
+    const edge = await repo.createPool({ name: 'edge', accelerator: 'cuda', zone: 'edge', labelCeiling: 'confidential' });
+    await repo.createInstance({ poolId: edge.id, name: 'edge-1', url: ollama.url, deploy: 'docker', settings: { parallel: 4 } });
+    await repo.place(thinker.model_id!, edge.id, 'warm', 'x');
+    await repo.updateProfile(h.tenantId, thinker.id, { pool_id: edge.id });
+    await repo.updateProfile(h.tenantId, general.id, { fallback: { profileId: thinker.id, afterQueueWaitMs: 5000 } });
+    await h.s.gateway.pollAll();
+    // The first pool's zone admits only public data, so internal data is refused there: a policy refusal, not a failure.
+    h.s.gateway.zoneCeiling = async (zone) => (zone === pool.zone ? 'public' : null);
+    const m = await member();
+    const sent = await m.post('/api/chat', { content: 'hello', profile: 'general' }).expect(202);
+    const done = await m.done(sent.body.messageId);
+    expect(done).toMatchObject({ state: 'failed', profile: 'general', model: 'llama3.1:8b' });
+    expect(String(done.error)).toMatch(/Zone ceiling public is below the data label internal/);
+    expect(m.events.some((e) => e.event === 'chat.status' && e.data.state === 'fallback')).toBe(false);
+    expect(ollama.requests.filter((r) => r.path === '/api/chat')).toHaveLength(0);
   });
 });
 

@@ -300,7 +300,7 @@ export class GatewayRepo {
 
   // ---------- model events ----------
 
-  async event(instanceId: string, model: string, event: 'load' | 'unload' | 'evicted' | 'pull', reason: string | null, actor: string | null): Promise<void> {
+  async event(instanceId: string, model: string, event: 'load' | 'unload' | 'evicted' | 'pull' | 'load_failed', reason: string | null, actor: string | null): Promise<void> {
     await this.db('model_events').insert({ id: ulid(), instance_id: instanceId, model, event, reason, actor, ts: Date.now() });
   }
 
