@@ -28,6 +28,23 @@
 - LDAP stores read the user's manager (`managerAttribute`, default `manager`) and SQL user tables an optional
   `columns.manager`; sign-in and directory sync keep it on the user's identity (`user_identities.manager_ref`).
 
+### Record queries PostgreSQL answers from an index (Sprint 29, B-3601)
+
+- Low-code record pages sorted on a value field are read in order from that field's value index and stop at the
+  page; the filter's top-level conditions on the same field are tested on the index row, the count starts from one
+  condition's index rows, and records are reached by primary key, so the plans hold before PostgreSQL has statistics
+  for a freshly loaded entity (the cause of the 1.4.0 load test's miss). Empty values sort last with `NULLS LAST` on
+  PostgreSQL and text compares and sorts with `COLLATE "C"`, as its indexes are built. SQLite, MySQL and PostgreSQL
+  return the same rows in the same order (`server/test/integration/apps.test.ts`, now also paged by cursor and by
+  offset). Migration `031b_record_queries`: the value indexes gain the record id (on PostgreSQL collated and partial).
+- Keyset paging: record listings and queries answer `nextCursor`; send it back as `cursor` for the next page.
+  `offset` still works (not together with a cursor). The CSV export pages by cursor and counts once.
+- Formula sorts put numbers before text on every dialect (PostgreSQL put text first when descending, SQLite and MySQL
+  when ascending), and text range filters on `state` compare bytes on PostgreSQL too.
+- Platform load test on PostgreSQL: records query p95 65 and 62 ms in two full runs (732 ms at release), every target
+  met; 67 ms with autovacuum off. The records scenario reports each query body's p95 and signs in 128 users (64 hit
+  the per-user API limit once queries got faster). `docs/loadtest.md`.
+
 ## 1.4.0
 
 ### AT-Protocol firehose ingest (Sprint 27, B-1908)
