@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (1.4.0)
+
+### Added
+
+- AT-Protocol firehose ingest (B-1908, Sprint 27): per-tenant subscriptions to a Jetstream or a relay's
+  `com.atproto.sync.subscribeRepos` under `/api/atproto/firehose` (new permission `firehose:manage`, held by tenant and
+  guardrail admins), with collection and author allow-lists and deterministic sampling. Posts go through the
+  moderation check and their verdicts become flags and signed labels from the tenant's labeler. Each consumer runs on
+  one worker instance through a lease, stores its cursor periodically and at shutdown and resumes from it after a
+  restart, pauses its socket when its queue is full, and reconnects with backoff. Migration `029b_firehose`; settings
+  `FIREHOSE_*`; metrics `exprsn_firehose_*`; audit actions `atproto.firehose.*`.
+
 ## Unreleased
 
 ### Fixed

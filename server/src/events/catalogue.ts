@@ -56,7 +56,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0 (B-2001)
   { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants; since Sprint 25 also plugin.audited, plugin.action.refused, plugin.call.refused and plugin.throttled (audit actions)' },
   // 1.4.0, Sprint 25 (B-1608 to B-1611)
-  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels (audit actions)' },
+  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels; since Sprint 27 firehose subscriptions created, updated, started, stopped and deleted (atproto.firehose.*) (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records: created, updated, deleted, transitioned (reserved until B-22)' },
   { pattern: 'file.*', description: 'File store (Sprint 26d): uploaded, updated, deleted (to the trash), restored, shared; and audit actions for uploads received, versions ready or rejected, downloads, shares, trash, purges and quotas' },
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },

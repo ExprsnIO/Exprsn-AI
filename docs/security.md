@@ -545,6 +545,17 @@ filter, private `/tmp`, only the state directory writable.
   which the job failed. External providers receive the object's text (up to 32,000 characters) and its type; the
   zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
   rules. Notices carry the moderator's reason, not the moderated content.
+- Firehose ingest (1.4.0, Sprint 27, B-1908): tested against a local Jetstream and relay double only, not yet against
+  the public Jetstream or a live relay. Records from subscribeRepos are read from the commit's CAR blocks without
+  verifying the commit signature or the repository's Merkle tree against the author's DID document, so a relay could
+  hand over records an author never wrote; Jetstream carries no proofs at all. Trust the endpoint you subscribe to.
+  Ingested posts are an unregistered moderation type (`atproto-post`): they are checked with their text and get a flag
+  and labels, but cannot be reported, hidden or appealed through the object registry (Exprsn-AI does not store them),
+  and a deleted post's labels are not withdrawn. Images and video are not fetched; only text and alt text are checked.
+  The flag stores the post text (sealed, as for any flag). A consumer is held by one instance through a lease of three
+  `FIREHOSE_TICK_MS`; after a crash another instance takes over when the lease runs out and resumes from the last
+  stored cursor (at most `FIREHOSE_CHECKPOINT_MS` old), so posts handled since are checked again (a check is idempotent
+  per post: one flag). A failed check is retried three times and then counted as `failed` and skipped.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off
