@@ -119,6 +119,17 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- CalDAV and CardDAV (1.5.0, Sprint 30, `docs/dav.md`): DAV clients authenticate with HTTP Basic and an app
+  password, so the password crosses every request (over TLS; plain HTTP is refused when `COOKIE_SECURE` is set, but a
+  deployment without it accepts Basic in the clear). A DAV request counts as MFA-verified because the app password was
+  created after a fresh second factor; it is narrowed to DAV scopes and never accepted by `/api`, `/v1` or the
+  console. Failed attempts are limited per address and per app password in the shared counter store, not by the
+  account lockout table. Group calendars and the directory are views without a change log: their sync tokens refuse a
+  removal they cannot name, so clients re-fetch the collection then. A time-range query on a recurring object is
+  inclusive (the span of all its instances), and a non-IANA TZID is read with its VTIMEZONE's standard offset.
+  Directory entries carry their person's clearance as their label; the directory lists the tenant's active users
+  within the caller's clearance (not only those sharing a workspace). The conformance fixtures were written from the
+  clients' request formats, not captured from devices.
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another
