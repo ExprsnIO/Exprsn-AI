@@ -500,12 +500,11 @@
         + UI.pagehead('Import models and datasets', 'Browse repositories, record licence and label, and register the result in the catalogue, under Training, Classifiers or as a knowledge set', '<span class="relative">' + UI.btn('Connectivity: ' + (st.connectivity === 'bundle' ? 'weekly bundle' : 'direct'), { attrs: 'data-menu="conn"' }) + '</span>' + UI.btn('New import', { kind: 'primary', attrs: 'data-newimport' }))
         + UI.tabs([{ id: 'new', label: 'New import' }, { id: 'imports', label: 'Imports', count: st.jobs.length }, { id: 'repos', label: 'Repositories', count: REPOS.length }], st.tab)
         + (st.tab === 'new' ? wizard : st.tab === 'imports' ? tabImports(st) : tabRepos(st))
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>'
         + inspector(st);
 
       const go = (step) => { st.step = step; ctx.rerender(); };
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '.tabs [data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
       ctx.on('click', '[data-gotab]', (e, t) => { st.tab = t.dataset.gotab; ctx.rerender(); });
       ctx.on('click', '[data-newimport]', () => { reset(st, st.kind); ctx.rerender(); });

@@ -38,9 +38,12 @@ from prototype data to live only when every control on it is backed by the serve
 | 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | **Done** |
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
 | 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
-| 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | Next |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new) | Planned |
-| 31 | AT-Protocol PDS and feed generator, release (1.5.0) | AT-Protocol (new) | Planned |
+| 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **In progress** (B-3401 boards done) |
+| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Models | Planned |
+| 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen (1.5.0) | AT-Protocol, Import (new); Training, Classifiers, Knowledge | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | Planned |
+| 33 | Agents, tools and skills in chat (1.5.0) | Chat | Planned |
+| 34 | Chaining agents, skills, tools and workflows; release (1.5.0) | Runs, Registry, Chat | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -55,8 +58,10 @@ signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a 
 `1.4.0` (Sprints 24 to 28, the [1.4.0 backlog](Backlog-1.4.0.md), server-only); before it, `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
 [1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
 planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
-identity work. Sprints 29 to 31 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
-features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, and an AT-Protocol PDS and feed generator.
+identity work. Sprints 29 to 34 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
+features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, model-based memory management, the model
+and dataset import wizard, an AT-Protocol PDS and feed generator, Workflows 2, agents, tools and skills in chat, and chaining them
+with workflows.
 
 ---
 
@@ -1092,6 +1097,47 @@ refunded with the amount (`server/test/sprint23-knowledge.test.ts`, 6 tests,
 contrast in Enhanced, and each screen's dialogs and drawers open at 320 px without sideways scrolling
 (`e2e/tests/y-accessibility.spec.ts`, `e2e/tests/y-reflow-overlays.spec.ts`).
 
+## Sprint 29: Permission matrices, custom roles and the 1.5.0 boards (in progress)
+
+Delivered so far on `sprint-29`:
+
+- **B-3401, prototype boards** in `design/prototype/` for every screen of B-34, built from `docs/api.md` (Sprints 24 to
+  28) and `Backlog-1.5.0.md`, each with example data, working filters, sorts, tabs, inspectors, modals and confirms, and
+  a "States to design from this page" strip wired to `App.applyState`:
+  - workspace: `files` (folders, upload through quarantine, versions and restore, trash, shares and links, quotas,
+    previews), `apps` (entity designer with every field type, formulas and AI fields, the state machine, the records grid
+    with the filter builder, sorts, paging, bulk, import and export, forms builder with public links, triggers),
+    `groups` (groups, join modes, requests and invitations, posts, the calendar with RSVP, check-in, reminders and
+    cancellation, feed URLs, cases), `messages` (conversations, threads, reactions, pins, attachments, search,
+    summaries; the feed with holds, comments, reposts, bookmarks, trending and digests; blocks, mutes, follows, lists and
+    the contact rule);
+  - admin: `moderation` (routed queues with SLA timers, reports, appeals with independence, actions, sanctions,
+    providers in shadow or enforce, dead letters), `channels` (sessions and transcripts, held replies with approve, edit
+    and reject, settings and secrets, email outbox and bounces, exports), `roles` (the role × permission matrix with
+    routes, custom roles with the creator ceiling, dual control and diffs, the effective-access matrix with `explain`,
+    access reviews; tenant-only roles and the workspace admin as default reviewer, per the decisions),
+    `certificates` (issuers, certificates, profiles, ACME, expiry), `vault` (KV versions, transit keys, policies with
+    `explain`, database leases), `plugins` (plugins, grants and lifecycle, install and bundles, the event catalogue,
+    runs and logs), `atproto` (identity and keys, labels, trusted labelers, firehose, DID bindings, and the planned PDS
+    and feed generators);
+  - B-3413 on existing boards: `signin` (self-registration under the policy, invitation and verification links, trusted
+    devices and email codes at the MFA step, GitHub and AT-Protocol sign-in, sanction and pending refusals), `settings`
+    (email verification, second factors with email codes, trusted devices, the user's DID binding) and `identity`
+    (GitHub and AT-Protocol user stores, the sign-up and MFA policy, sign-ups, invitations, CSV imports, DID bindings).
+  - The shell gained the eleven NAV entries and icons; `node build.mjs` and `npm run smoke` (38 screens, light and dark,
+    every state) run clean.
+  - The Workflows board was rebuilt on the server's step kinds (trigger sources manual, api, record and schedule; model,
+    transform, branch with labelled true and false edges, guardrail, approval, HTTP with vault references, calc, wait,
+    tool, record), with a Triggers and callers tab (app triggers, plugins' `call:workflow`, agent tool calls, chat) and
+    the 1.5 proposals (sub-workflow, agent, skills, event trigger, map, loop, media, query, script, plugin action) shown
+    dashed and refused at publish. The roll-up `design/prototype/rollup-1.5.html` lists what 1.5.0 was missing; the
+    owner approved rolling it into the backlog as B-39 Workflows 2 (Sprint 32) and B-3415.
+  - The design-state controls (header "States" button, the strip at the foot of each page) were removed from the
+    prototype as from the console; states are applied from the command palette and by the smoke run.
+
+Open on `sprint-29a` and `sprint-29b` (another session): B-3301 to B-3305 (`031_access`) and B-3601; then the live
+screens B-3402 to B-3404, B-3407, B-3408 and B-3413 in `web/`.
+
 ## Release 1.4.0
 
 The workspace, the server and the chart are versioned `1.4.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
@@ -1100,7 +1146,7 @@ features in Exprsn-AI: the certificate authority with OCSP and an ACME server, t
 catalogue and plugins; AT-Protocol keys, DIDs, labeler, sign-in and firehose ingest; moderation actions and appeals,
 the file store, low-code data apps, groups and events, customer-service channels, messaging and the workspace feed.
 They are server-only: no console screen changed, and the screens are planned in [Backlog-1.5.0.md](Backlog-1.5.0.md)
-(Sprints 29 to 31). Migrations `026_pki_secrets` to `030c_feed`. The suite at release: 794 passed and 1 skipped across 66 files; the PostgreSQL
+(Sprints 29 to 32). Migrations `026_pki_secrets` to `030c_feed`. The suite at release: 794 passed and 1 skipped across 66 files; the PostgreSQL
 integration suite against throwaway servers (22 files), MySQL and Redis in CI. The platform load test (B-2105,
 [docs/loadtest.md](docs/loadtest.md)): every target met with the `ci` targets on SQLite, and on PostgreSQL every target but one: the records query p95 (732 ms against 250 ms; the query path sorts every matching record, fix planned for 1.5.0). The known gaps of each sprint are in [docs/security.md](docs/security.md).
 Tagging `v1.4.0` and publishing the image and chart remain with the maintainers.

@@ -8,10 +8,12 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 47 items, 277 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 100, P2 60. At about
-78 points a sprint (roughly five engineers) that is Sprints 29 to 31 with Sprints 30 and 31 over the guide; with fewer,
+**Size.** 82 items, 466 points (1 point ≈ half a day for one engineer, tests included): P0 119, P1 287, P2 60, of which
+B-42 (7 items, 39 points) is not yet placed in a sprint. At about 78 points a sprint (roughly five engineers) that is
+Sprints 29 to 34 with Sprints 30 and 31 over the guide; with fewer,
 P2 (the PDS and feed generator) moves to 1.6 first, then WebDAV (B-32), then the import wizard's dataset half
-(B-3804 to B-3807).
+(B-3804 to B-3807), then Workflows 2 (B-39, added 2026-10-05 from the Sprint 29 prototype roll-up
+`design/prototype/rollup-1.5.html`).
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -23,15 +25,22 @@ the same policy pipeline.
 
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
-| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | Planned |
+| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703, B-3801–B-3803 | 107 | `032_dav`, `032b_imports` | Planned |
-| 31 | AT-Protocol PDS and feed generator, release; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807, B-3501 | 94 | `033_pds_feeds` | Planned |
+| 31 | AT-Protocol PDS and feed generator; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807 | 94 | `033_pds_feeds` | Planned |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
+| 33 | Agents, tools and skills in chat | B-4001–B-4008 | 40 | `035_chat_invocation` | Planned |
+| 34 | Chaining agents, skills, tools and workflows; release | B-4102–B-4109, B-3501 | 39 | `036_chains` | Planned |
+| — | Platform administration screens (B-42): unscheduled until the owner decides Q12 (Sprint 31 beside the release, Sprint 30 displacing WebDAV, or 1.6) | B-4202–B-4207 (B-4201 done) | 39 | — | Unscheduled |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
 the file-store mount (B-3102, B-3103, B-32); the PDS repository (B-2902) before the outbound firehose (B-2904) and
 before a feed generator publishes its record into a tenant repo (B-3004); the AT-Protocol screen (B-3406) last, so it
-covers the PDS and feeds; the repository registry (B-3801) before any import, and model and dataset import (B-3803,
+covers the PDS and feeds; Workflows 2's agent step and skill loading (B-3902) and the built-in domain tools (B-3904)
+before agents, tools and skills in chat (B-40), which reuse them; the chain context (B-4101) with Workflows 2, so
+sub-workflows (B-3901), agent steps (B-3902) and chat's agents (B-4004, B-4006) are chained from the start, and before
+the rest of chaining (B-4102 to B-4109); the repository registry (B-3801) before any import, and model and dataset import (B-3803,
 B-3804) before the Import screen (B-3807) goes live.
 
 ---
@@ -52,9 +61,10 @@ permission: `roles:manage`.
 | B-3304 | Route permission registry: every route declares its permission in one table; the matrix lists routes per permission | A route registered without a declared permission fails the test suite | 3 |
 | B-3305 | Access reviews: scheduled certification campaigns over the matrix; reviewers confirm or revoke each grant; overdue reviews escalate; results in the audit chain | A revoked grant is gone on the member's next request | 5 |
 
-### B-34 Console screens (88 points)
+### B-34 Console screens (90 points)
 
-Screens for everything 1.4.0 and 1.5.0 add, starting from prototype boards. Each live screen joins the Playwright
+Screens for everything 1.4.0 and 1.5.0 add, starting from prototype boards. B-3401 landed on `sprint-29` (2026-10-05): the
+boards for every screen below plus the B-3413 additions are in `design/prototype/` (see `Sprints.md`, Sprint 29). Each live screen joins the Playwright
 suite with axe-core (Standard and Enhanced, light and dark) and the reflow checks for its dialogs and drawers.
 
 | ID | Item | Done when | Pts |
@@ -73,6 +83,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3412 | Roles and access: the role matrix, custom roles with diff, the effective-access matrix with `explain`, access reviews | Every cell's `explain` opens from the matrix | 5 |
 | B-3413 | Identity additions to existing screens: self-registration policy, MFA policy and trusted devices, GitHub stores, CSV import, DID binding | The registration policy changes from Settings | 3 |
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
+| B-3415 | Settings: app passwords for DAV clients (DAV-only scope, device names, last use, revoke; creating one needs a fresh MFA step-up, per the decision below) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
 
 ### B-36 Carried over from 1.4.0 (5 points)
 
@@ -103,6 +114,27 @@ CalDAV had broken filter operators: B-3104 states the fixed behaviour as its tes
 | B-3202 | `COPY` and `MOVE` for files and folders (the platform returned 501), `LOCK` and `UNLOCK` (class 2) for Finder and Office | Moving a folder over WebDAV keeps its versions and shares | 5 |
 | B-3203 | Quota properties (RFC 4331), shares honoured, the `litmus` suite in CI | `litmus` passes its basic, copymove and locks groups | 3 |
 
+### B-42 Platform administration screens (39 points)
+
+Renumbered from B-39 on 2026-10-05: B-39 is Workflows 2 (below), which B-40 and B-41 already reference.
+
+The second half of the exprsn-platform merge: its administration surface (the admin SPA's 22 sections, the legacy
+`admin/` service) mapped onto the console in `design/platform-admin/README.md`, and five admin boards for the concerns
+that had no home: Overview, Jobs and queues, Storage, Configuration, Social and messaging. Live screens follow the B-34
+rules; open questions are answered with `node design/platform-admin/decide.mjs` and recorded under Open decisions.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-4201 | Prototype boards for Overview, Jobs and queues, Storage, Configuration, Social and messaging; `node build.mjs` and the smoke run clean | Every board passes the smoke run in light and dark | 5 |
+| B-4202 | Overview live: `GET /api/admin/overview` (alerts, counters, instances with their `/readyz` checks, next schedules, recent audit, capacity); acknowledge alerts; drain an instance | Draining an instance from the screen stops it claiming jobs | 5 |
+| B-4203 | Jobs and queues live: `GET /api/admin/jobs` with filters, `/queues`, `/schedules` (run now, pause), `/dead-letters` (redrive, discard), `/cache` (namespaces, invalidate); pause by type in `JobQueue` | A paused type stops claiming within one poll and resumes from the screen | 8 |
+| B-4204 | Storage live: stores and health, usage by workspace and user, quarantine listing with rescan, the integrity job `ops.blobs.verify` with findings, purge schedule summary | An orphan found by the job can be deleted from the screen after a dry run | 8 |
+| B-4205 | Configuration live: a settings descriptor generated from `config/index.ts` (name, section, type, default, secret, hot or restart), `GET /api/admin/platform/settings` with per-instance values; overrides only if decided | Two instances with different values show as differing on the screen | 5 |
+| B-4206 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules | A revoked calendar feed answers 404 on its next fetch | 5 |
+| B-4207 | Accessibility and reflow for the five screens; `docs/accessibility.md` updated | No axe or reflow finding on any of the five | 3 |
+
+B-4201 is done on `design/platform-admin`. Sprint placement for the rest (Sprint 31 beside the release, Sprint 30
+displacing WebDAV, or 1.6) is decision Q12 below.
 ### B-37 Model-based memory management (13 points)
 
 Today memory proposals come from rules over a chat turn (`extractProposals`) and the only model memory uses is the
@@ -139,6 +171,79 @@ the weekly bundle. New permissions: `imports:run` (model, ML and knowledge admin
 | B-3806 | Classifier eval sets and imported classifier engines: rows into an eval set with minimum-sample warnings; a text-classification model served by the classifier worker | An imported eval set shows precision and recall per label on the Classifiers screen | 5 |
 | B-3807 | Import screen: the wizard, the Imports queue with cancel, retry and logs, the Repositories tab; entry points on Models, Training, Classifiers and Knowledge; Playwright and axe coverage for every state on the board | Every state on the board is reachable in the e2e suite in light and dark | 8 |
 
+### B-39 Workflows 2 (61 points)
+
+Added 2026-10-05 from the Sprint 29 prototype roll-up (`design/prototype/rollup-1.5.html`), approved by the owner. The
+realigned Workflows board (`design/prototype/js/screens/workflows.js`) already shows every step and trigger below as a
+"1.5 proposal" that refuses to publish with error code `unavailable`; each item removes that refusal. Everything
+follows the 1.4.0 workflow patterns: a step is a kind in `NODE_KINDS` with a zod config in `CONFIGS` and a port schema
+(`server/src/workflows/graph.ts`), validated at publish with the existing error codes (`structure`, `cycle`, `config`,
+`schema`, `label`, `limit`, `reference`, `unavailable`, `unreachable`), run as durable checkpointed jobs (each output
+sealed with the tenant key, resumable after a restart), paused without holding a worker, dry-runnable with mocks,
+replayable from a step, audited under `workflow.*`, and bounded by the run limits (40 steps, fan-out 10, 30 min a
+step, 2 h and 200k tokens a run). Labels propagate along every path; nothing runs below the run's label or above a
+step's ceiling. Trigger chains carry on: app triggers stop at `APPS_TRIGGER_MAX_DEPTH`, plugins at `PLUGIN_MAX_DEPTH`,
+and sub-workflows at `WORKFLOW_MAX_DEPTH` (new; superseded by B-4101's chain context and its one `CHAIN_MAX_DEPTH` across
+kinds once PR #41 lands, with the per-kind limits kept as caps).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3901 | Sub-workflow step (`sub`): a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; `workflow.*` tools stay refused in tool steps, chaining goes through this step; depth capped by the chain context (B-4101) | A parent run resumes with the child's output after the child's approval is decided | 8 |
+| B-3902 | Agent step (`agent`) and skills on model steps: a registry agent runs within its budgets and is awaited like B-1006 in reverse; `skills[]` on a `model` step loads published skills' instructions and tools through the dispatcher | A model step with a skill calls one of the skill's tools and the call passes the `tool-call` checkpoint | 8 |
+| B-3903 | Triggers on the workflow itself: source `event` (a catalogue event with the plugin fan-out rules: workspace, label, rate, loop chain) and source `schedule` (a five-field UTC cron claimed once across instances, no app entity needed) | A `file.uploaded` event starts a run without a plugin; a cron run starts once with two instances | 8 |
+| B-3904 | Domain steps as built-in registry tools (`impl: builtin`, shared by chat, agents and workflows): send a message, post to a feed, write a file version, create a group event, answer a channel session; the plugin broker's `records.*`, `files.read`, `groups.read` and `posts.write` calls confirmed live | A workflow posts to a workspace feed under its label and the post carries the run as its source | 8 |
+| B-3905 | `map` (fan-out over a list with a parallelism cap) and `loop` (bounded iteration) whose items and iterations count toward the run limits | A map over 200 items runs 20 at a time and a loop stops at its cap | 8 |
+| B-3906 | Per-step retry policy, an on-failure edge (`branch: failure`) and a dead-letter view of failed runs with redrive, like moderation's | A failed HTTP step takes the on-failure edge instead of failing the run | 5 |
+| B-3907 | Approval with a form: the step names an app form whose answers (validated like a submission) become the step's output | An approver's answers reach the next step and are audited with the decision | 5 |
+| B-3908 | `notify` and `webhook` steps: in-app and email notices to cleared recipients; outbound webhooks through the tenant's allowed hosts, signed with the tenant's webhook keys | A webhook step is refused at save for a host outside the tenant's list | 5 |
+| B-3909 | Workflow bundles: signed export and import (`exprsn-workflow/1`, like `exprsn-app/1`) with tool, profile and trigger references re-bound on import | A bundle changed after signing is refused with `422 Bundle refused` | 3 |
+| B-3910 | Console: the live Workflows screen matches the realigned board (Triggers and callers tab, record and vault editors, decision-edge labels, the new kinds as they land) and joins the Playwright suite | Every control on the screen is backed by the server | 3 |
+
+### B-40 Agents, tools and skills in chat (40 points)
+
+Added 2026-10-05 at the owner's request. Chat today offers only the tools on its profile's list, read-only ones whose
+`confirm` is `never`, and only when the model decides to call them; write and destructive tools are left out because
+their approval exists only in agent runs; agents run only from the Runs screen; skills reach a model only through an
+agent's definition. This epic lets a person call each of them from a conversation, and reuses what already decides
+them: the registry's publish and label rules, the dispatcher with the tool-call guardrail and its approvals, agent runs
+with their budgets, and skill instructions as agents load them (and as model steps will, B-3902). Every invocation is
+audited, metered to the conversation, sealed with the tenant key and labelled at the higher of the conversation's and
+the entry's label; nothing runs above the conversation's ceiling or the caller's clearance.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-4001 | What a conversation may call: `GET /api/conversations/:id/capabilities` lists the published agents, tools and skills the caller may use there (tenant, workspace, clearance, the conversation's ceiling, the profile's allow-list), with each tool's input schema and side-effect class | An entry above the conversation's ceiling is never listed, and calling it by name is refused the same way | 3 |
+| B-4002 | A person calls a tool: the composer's `/tool` sends arguments (a form from the tool's JSON schema, or text the profile turns into arguments) through the dispatcher and the tool-call guardrail; the call and its result join the conversation as a tool turn the model sees next | A call the guardrail holds shows as held, and runs only when a reviewer approves it in the flag queue | 5 |
+| B-4003 | Write and destructive tools in chat, user- or model-proposed, behind an in-chat approval card: write tools run on the caller's own approval, destructive ones and `confirm: always` ones also need the guardrail's approver when a rule says so; denied and expired cards are recorded | A write tool runs only after its card is approved, and a denied card leaves no side effect | 5 |
+| B-4004 | `@agent` in a conversation starts an agent run bound to it: input is the message plus, when the person allows it, the recent turns within the agent's label; the run's steps stream into a run card; its answer becomes an assistant turn attributed to the agent; budgets, approvals and cancel as in Runs | A run started from chat shows in Runs with a link back, and cancelling it from the chat stops it | 8 |
+| B-4005 | Skills on a conversation: `+skill` adds a published skill's instructions to the conversation's system prompt (sticky until removed, or for one turn), shown as chips; the profile can restrict which skills apply | Removing a skill leaves its instructions out of the very next turn | 3 |
+| B-4006 | The model may hand a turn to an agent: agents on a profile's list are offered as tools (`agent:<name>`), run as in B-4004 within the chain's depth and budgets (B-4101) | An agent offered as a tool cannot start itself again past the chain's depth limit | 5 |
+| B-4007 | Prototype board for the Chat screen additions: the `/` and `@` and `+` pickers, tool, approval and run cards, skill chips, their states and copy; the smoke run clean | The board passes the prototype smoke run in light and dark | 3 |
+| B-4008 | Console: the live Chat screen gets the pickers and cards from B-4007, keyboard-first, with the run card linking to Runs; joins the Playwright suite with axe-core and the reflow checks | An agent run, a held tool call and a skill chip work end to end in the e2e suite with no axe or reflow finding | 8 |
+
+### B-41 Chaining agents, skills, tools and workflows (47 points)
+
+Added 2026-10-05 at the owner's request. Some links exist: agents call tools and load skills, skills name the tools
+they need, agents await workflows published as tools (B-1006), and workflows call tools; Workflows 2 adds sub-workflows
+and agent steps (B-3901, B-3902) and B-40 brings agents, tools and skills into chat. Missing are agents delegating to
+agents, skills built from skills, workflows started from chat, and above all one chain across them: today each kind
+keeps its own depth limit (`PLUGIN_MAX_DEPTH`, `APPS_TRIGGER_MAX_DEPTH`, and the planned workflow and chat-agent
+limits), budgets are per run, nothing checks a cycle across kinds, and no view shows a chain end to end. Rules for
+every link: the principal never changes (a chain acts as the person or service that started it), the label only rises
+(the chain's high-water mark), and nothing runs above a callee's ceiling or the caller's clearance.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-4101 | The chain context: every invocation (chat turn, agent run, workflow run, tool call, skill load, plugin action, app trigger) records its root, parent, depth, principal and label high-water mark; tokens, steps, wall time and cost are charged to the root's budgets; one `CHAIN_MAX_DEPTH` across kinds, with the per-kind limits kept as caps; carried across instances and job retries | A mixed chain (agent → workflow → agent → tool) stops at the depth limit or at the root's budget, whichever comes first, with the same answer on every instance | 8 |
+| B-4102 | Agents delegate to agents: an agent's definition lists the `agents` it may call; each is offered as a tool (`agent:<name>`) and runs as a child run in the chain; a child's answer can be typed by its `outputSchema` | A child run cannot spend more than the parent's remaining budget nor read above the chain's ceiling | 8 |
+| B-4103 | Skills compose: a skill lists the `skills` and `tools` it needs; loading resolves the closure (deduplicated, in order) and offers the required tools to the agent or model step that loads it | Loading a skill offers the tools its sub-skills need, and the closure loads each skill once | 5 |
+| B-4104 | Workflows as first-class callees: agents list `workflows` they may start without publishing them as tools; chat starts one with `/workflow` (a form from its input schema, a run card, approvals in the conversation, as B-40) | A workflow started from chat shows its run card and pauses on an approval card in the conversation | 5 |
+| B-4105 | Chain checks at publish: the registry and workflow publish build the reference graph across agents, skills, tools and workflows; cycles that cannot terminate, references above the referrer's ceiling and unpublished references are refused; a "used by" view before deprecating or retiring an entry | Retiring a skill a published agent uses is refused, naming the agent | 5 |
+| B-4106 | Approvals and failures through the chain: a call held anywhere pauses the chain and is approved where the root is (the conversation's card, the run, or the workflow's approval) with the path shown; a child's failure reaches its parent as a typed error the parent handles (an agent sees it as a tool error, a workflow takes its failure edge, B-3906) | A write tool held three levels down is approved from the root conversation and the chain resumes | 5 |
+| B-4107 | Chain view: `GET /api/chains/:id`, the tree of invocations with timing, tokens, cost, labels and guardrail decisions; links to the audit entries; replay from a node where its kind can replay | The tree's token total equals what was metered for the chain | 3 |
+| B-4108 | Prototype boards: the chain tree in Runs (linked from chat's run cards and workflow runs), the registry editor's delegates, skill dependencies and workflows fields, and the "used by" view; the smoke run clean | The boards pass the prototype smoke run in light and dark | 3 |
+| B-4109 | Console: the live chain tree and registry fields from B-4108, joining the Playwright suite with axe-core and the reflow checks | A three-level chain opens as a tree from its chat run card with no axe or reflow finding | 5 |
+
 ## P2
 
 ### B-29 AT-Protocol personal data server (42 points)
@@ -169,7 +274,7 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 | ID | Item | Pts |
 | --- | --- | --- |
-| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands | — |
+| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 32) | — |
 
 ---
 
@@ -184,6 +289,16 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 ## Open decisions
 
+- [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
+  tenant's own domain).
+- [x] Custom roles: the tenant only (decided 2026-10-05 for the B-3412 board; workspaces reuse tenant roles).
+- [x] Access reviews: the workspace admin reviews by default (decided 2026-10-05); a campaign may name other reviewers.
+- [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
+- [ ] Platform administration screens (B-42, renumbered from B-39): sixteen questions in `design/platform-admin/questions.json` (cache
+  placement, configuration overrides, Overview placement, the social permission, legal-hold exports, group categories,
+  logs, live streaming, job visibility, orphan deletion, tenant templates, sprint placement, icons, instance drain,
+  alert acknowledgement, blob migration). Answer with `node design/platform-admin/decide.mjs`; it prints the lines for
+  this list.
 All six resolved by the owner on 2026-10-05.
 
 - [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant

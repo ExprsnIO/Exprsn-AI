@@ -97,7 +97,7 @@
           + UI.table(['Conversation', 'Runtime', 'Runs', 'Idle', 'Expires', 'Files', ''], [['Reconcile card feed', 'Python 3.13', '6', st.interpExpired ? '30 m' : '12 m', st.interpExpired ? UI.pill('expired', 'danger') : 'in 18 m', 'cleaned.csv, variance.png', UI.btn('Open', { size: 'sm', kind: 'ghost', attrs: 'data-gochat' })], ['Q3 travel overrun', 'Node.js 24', '2', '3 m', 'in 27 m', 'none', UI.btn('Open', { size: 'sm', kind: 'ghost', attrs: 'data-gochat="c1"' })]], { clickable: false, cls: 'bare', minWidth: '0' })
           + '<div class="muted" style="font-size:12px">In chat, a model can run Python or Node repeatedly in a per-session sandbox and return output, files and charts. Sessions expire after 30 idle minutes.</div>')
         + UI.panel('Runtimes', UI.table(['Runtime', 'Image contents', 'Checks before any run'], RUNTIMES.map((r) => [esc(r[0]) + (st.twoRuntimes && !/Node|Python/.test(r[0]) ? ' ' + UI.pill('not offered', 'outline') : ''), esc(r[1]), esc(r[2])]), { clickable: false, cls: 'bare', minWidth: '0' }) + '<div class="muted" style="font-size:12px">Curated images, no network, gVisor or rootless container with a read-only root. Nothing is installed at run time; new packages arrive through the air-gap import path and an image rebuild.</div>')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       if (st.openTemplates) { st.openTemplates = false; setTimeout(() => templateCatalog(ctx), 30); }
       if (bound) return; bound = true;
@@ -107,7 +107,6 @@
       on('input', '[data-search]', (e, t) => { cur.st.query = t.value; const v = t.value; cur.ctx.rerender(); const i = cur.ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       on('click', '[data-rtseg] [data-seg]', (e, t) => { cur.st.filter = t.dataset.seg; cur.ctx.rerender(); });
       on('click', '[data-tab]', (e, t) => { cur.st.tab = t.dataset.tab; cur.ctx.rerender(); });
-      on('click', '.state-card', (e, t) => cur.ctx.app.applyState(+t.dataset.state));
       on('click', 'tr.row[data-check]', (e, t) => {
         const ctx = cur.ctx; const s = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); const name = t.dataset.check; const c = s.checks.find((x) => x[0] === name);
         const detail = name === 'Bandit' ? 'B404 (low): import of subprocess-like module flagged by pattern match on line 14. Informational for a script with no network.' : name === 'Script-generation guardrail' ? (cur.st.removedLine[s.id] ? 'No disallowed modules, secrets or suspicious patterns.' : 'Disallowed module "requests" on line 14. Scripts have no network. Remove the import or promote the script and declare an internal destination.') : name === 'ESLint' ? 'prefer-const (line 3), no-unused-vars (line 4). Warnings do not block a run.' : 'No findings.';

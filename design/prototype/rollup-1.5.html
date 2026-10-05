@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Exprsn-AI 1.5 Prototype Roll-up</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single reading column (72ch) with full-width tables where the data needs it; the prototype's own tokens. */
+:root{--bg:#F7F6F3;--panel:#FFFFFF;--fg:#1D1C1A;--fg2:#3F3D39;--muted:#6E6A63;--line:#E3E0DA;--line2:#EEECE7;--accent:#A8431F;--accent-tint:#F6E6DE;--ok-bg:#E3F1E7;--ok-fg:#1C6A38;--warn-bg:#FBEFD5;--warn-fg:#7A5200;--danger-bg:#F9E1DF;--danger-fg:#A01E18;--info-bg:#E2ECF7;--info-fg:#1B4C8C;--sans:"Source Sans 3",system-ui,-apple-system,Segoe UI,sans-serif;--serif:"Source Serif 4",Georgia,serif;--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#17181B;--panel:#1F2024;--fg:#ECEAE5;--fg2:#C9C6BF;--muted:#9A968E;--line:#2F3137;--line2:#272930;--accent:#E07A52;--accent-tint:#3A251C;--ok-bg:#1B3324;--ok-fg:#8BD3A1;--warn-bg:#3B2E12;--warn-fg:#E8C06A;--danger-bg:#3E1E1C;--danger-fg:#F19A94;--info-bg:#1C2A3E;--info-fg:#9FC2EE;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#17181B;--panel:#1F2024;--fg:#ECEAE5;--fg2:#C9C6BF;--muted:#9A968E;--line:#2F3137;--line2:#272930;--accent:#E07A52;--accent-tint:#3A251C;--ok-bg:#1B3324;--ok-fg:#8BD3A1;--warn-bg:#3B2E12;--warn-fg:#E8C06A;--danger-bg:#3E1E1C;--danger-fg:#F19A94;--info-bg:#1C2A3E;--info-fg:#9FC2EE;color-scheme:dark}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.5;padding-block:32px 64px;padding-inline:16px}
+.wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+header h1{font-family:var(--serif);font-weight:600;font-size:34px;line-height:1.15;margin:0 0 6px;text-wrap:balance}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.sub{color:var(--fg2);max-width:72ch}
+h2{font-family:var(--serif);font-weight:600;font-size:22px;margin:0 0 4px;text-wrap:balance}h3{font-size:15px;font-weight:600;margin:0 0 4px}
+p{margin:0;max-width:72ch}section{display:flex;flex-direction:column;gap:12px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}.stat .n{font-family:var(--serif);font-size:28px;font-weight:600;font-variant-numeric:tabular-nums}.stat .l{font-size:12px;color:var(--muted)}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel)}table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--line);background:var(--panel)}td{padding:9px 12px;border-bottom:1px solid var(--line2);vertical-align:top}tr:last-child td{border-bottom:0}td.c{text-align:center}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--line2);color:var(--fg2);white-space:nowrap}.pill.ok{background:var(--ok-bg);color:var(--ok-fg)}.pill.warn{background:var(--warn-bg);color:var(--warn-fg)}.pill.danger{background:var(--danger-bg);color:var(--danger-fg)}.pill.info{background:var(--info-bg);color:var(--info-fg)}.pill.outline{background:transparent;border:1px solid var(--line);color:var(--fg2)}
+.mono{font-family:var(--mono);font-size:12.5px}a{color:var(--accent)}a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.notice{display:flex;gap:10px;padding:10px 14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);max-width:none}.notice.info{background:var(--info-bg);border-color:transparent;color:var(--fg)}.notice.warn{background:var(--warn-bg);border-color:transparent}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}.card ul{margin:0;padding-left:18px;color:var(--fg2)}.card li{margin:2px 0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:13px;color:var(--fg2)}
+.toc{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px}
+.chk{font-weight:700;color:var(--ok-fg)}.no{color:var(--muted)}.prop{color:var(--warn-fg);font-weight:600}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Exprsn-AI · design/prototype · Sprint 29 · 5 October 2026</div>
+  <h1>1.5 Prototype Roll-up</h1>
+  <p class="sub">What the clickable prototype now covers for release 1.5.0, how the Workflows board lines up with the server's step kinds, skills, tools, models, decision branches, plugins and chaining, and what the 1.5.0 backlog still leaves out. Every screen below opens from <span class="mono">design/prototype/screens/&lt;id&gt;.html</span> or inside <a href="index.html">index.html</a>.</p>
+  <nav class="toc" aria-label="Sections"><a href="#glance">At a glance</a><a href="#boards">Boards by sprint</a><a href="#workflows">Workflows alignment</a><a href="#callers">How runs start</a><a href="#gaps">What is missing from 1.5.0</a><a href="#proposal">Epic B-39</a><a href="#decisions">Decisions taken</a></nav>
+</header>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="stats">
+    <div class="stat"><div class="n">39</div><div class="l">screens in the prototype (27 before Sprint 29; Import arrived with PR #39)</div></div>
+    <div class="stat"><div class="n">11</div><div class="l">new boards for the 1.4.0 domains (B-3401)</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">boards extended: Sign in, Settings, Identity (B-3413) and Workflows</div></div>
+    <div class="stat"><div class="n">175</div><div class="l">design states, applied from the command palette and by the smoke run</div></div>
+    <div class="stat"><div class="n">8,720</div><div class="l">lines of screen modules; smoke clean in light and dark; no sideways scroll at 640 and 320 px</div></div>
+  </div>
+  <div class="notice info"><span>Since Sprint 29 the prototype, like the console, shows no header "States" button and no strip at the foot of a page. States stay reachable with <span class="mono">Ctrl K</span> (group "Design states") and drive <span class="mono">npm run smoke</span>.</span></div>
+</section>
+
+<section id="boards">
+  <h2>Boards by sprint</h2>
+  <p class="sub">Board: the prototype module exists and passes the smoke run. Live: the console screen in <span class="mono">web/</span> is backed by the server. Sprints follow <span class="mono">Backlog-1.5.0.md</span>.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Screen</th><th>Area</th><th>Board</th><th>Live in</th><th>Backlog</th><th>What the board shows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="screens/certificates.html">Certificates</a></td><td>Admin, trust</td><td><span class="pill ok">done</span></td><td>Sprint 29</td><td class="mono">B-3402</td><td>Issuers, certificates, profiles, ACME (EAB keys, accounts, orders), expiry notices, CRL and OCSP</td></tr>
+      <tr><td><a href="screens/vault.html">Vault</a></td><td>Admin, trust</td><td><span class="pill ok">done</span></td><td>Sprint 29</td><td class="mono">B-3403</td><td>KV versions, transit keys, policies with explain and who-can, database engines, roles and leases, rotation schedules</td></tr>
+      <tr><td><a href="screens/plugins.html">Plugins and events</a></td><td>Admin, trust</td><td><span class="pill ok">done</span></td><td>Sprint 29</td><td class="mono">B-3404</td><td>Plugins, grants and lifecycle, install and signed bundles, the event catalogue, runs and logs</td></tr>
+      <tr><td><a href="screens/apps.html">Apps</a></td><td>Workspace</td><td><span class="pill ok">done</span></td><td>Sprint 29</td><td class="mono">B-3407</td><td>Entity designer (every field type, formulas, AI fields, state machine), records grid, forms builder, triggers, bundles</td></tr>
+      <tr><td><a href="screens/files.html">Files</a></td><td>Workspace</td><td><span class="pill ok">done</span></td><td>Sprint 29</td><td class="mono">B-3408</td><td>Folders, upload through quarantine, versions and restore, trash, shares and links, quotas, previews</td></tr>
+      <tr><td><a href="screens/signin.html">Sign in</a>, <a href="screens/settings.html">Settings</a>, <a href="screens/identity.html">Identity</a></td><td>Existing</td><td><span class="pill ok">extended</span></td><td>Sprint 29</td><td class="mono">B-3413</td><td>Self-registration, invitation and verification links, trusted devices, email codes, GitHub and AT-Protocol sign-in; the user's DID; sign-up and MFA policy, sign-ups, invitations, CSV imports</td></tr>
+      <tr><td><a href="screens/moderation.html">Moderation</a></td><td>Admin, review</td><td><span class="pill ok">done</span></td><td>Sprint 30</td><td class="mono">B-3405</td><td>Routed queues with SLA timers, reports, appeals with independence, actions, sanctions, providers in shadow or enforce, dead letters</td></tr>
+      <tr><td><a href="screens/groups.html">Groups and events</a></td><td>Workspace</td><td><span class="pill ok">done</span></td><td>Sprint 30</td><td class="mono">B-3409</td><td>Groups, join modes, requests and invitations, posts, calendar with RSVP, check-in, reminders, cancellation, feed URLs, cases</td></tr>
+      <tr><td><a href="screens/channels.html">Channels</a></td><td>Admin, review</td><td><span class="pill ok">done</span></td><td>Sprint 30</td><td class="mono">B-3410</td><td>Sessions and transcripts, held replies with approve, edit and reject, settings and secrets, email outbox and bounces, exports</td></tr>
+      <tr><td><a href="screens/messages.html">Messages and feed</a></td><td>Workspace</td><td><span class="pill ok">done</span></td><td>Sprint 30</td><td class="mono">B-3411</td><td>Conversations, threads, reactions, pins, attachments, search, summaries; the feed with holds, comments, reposts, bookmarks, trending, digests; blocks, mutes, follows, lists</td></tr>
+      <tr><td><a href="screens/roles.html">Roles and access</a></td><td>Admin</td><td><span class="pill ok">done</span></td><td>Sprint 30</td><td class="mono">B-3412</td><td>Role × permission matrix with routes, custom roles with creator ceiling, dual control and diffs, effective access with explain, access reviews</td></tr>
+      <tr><td><a href="screens/atproto.html">AT-Protocol</a></td><td>Admin</td><td><span class="pill ok">done</span></td><td>Sprint 31</td><td class="mono">B-3406</td><td>Identity and keys, labels, trusted labelers, firehose, DID bindings, and the planned PDS accounts and feed generators</td></tr>
+      <tr><td><a href="screens/import.html">Import</a></td><td>Workspace and admin</td><td><span class="pill ok">done (PR #39)</span></td><td>Sprint 31</td><td class="mono">B-3807</td><td>Model and dataset import wizard from public repositories, the imports queue, repositories; entry points on Models, Training, Classifiers and Knowledge</td></tr>
+      <tr><td><a href="screens/workflows.html">Workflows</a></td><td>Workspace</td><td><span class="pill warn">realigned</span></td><td>live since Sprint 8</td><td><span class="pill outline">not in 1.5.0</span></td><td>Rebuilt on the server's step kinds; triggers and callers; the 1.5 proposals marked (see below)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="workflows">
+  <h2>Workflows: what lines up and what does not</h2>
+  <p class="sub">The old Workflows board predated the server and showed steps the server never got (media, map, loop, agent, script, query, sub-workflow). The rebuilt board uses the eleven step kinds in <span class="mono">server/src/workflows/graph.ts</span> and shows the rest as 1.5 proposals: dashed on the canvas, kept in the draft, refused at publish with error code <span class="mono">unavailable</span>.</p>
+  <div class="legend"><span><span class="chk">✓</span> exists</span><span><span class="prop">proposal</span> shown on the board, not in the server</span><span><span class="no">—</span> not present</span></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Capability</th><th>Server 1.4.0</th><th>Live console</th><th>Prototype board</th><th>1.5.0 backlog</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Model step (profile, prompt, think, text or JSON)</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>Metered and quota-admitted; the profile's label counts toward the path ceiling</td></tr>
+      <tr><td>Decision branches (branch step, true and false edges)</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>Operators eq, ne, gt, gte, lt, lte, contains, truthy, exists; the other side is skipped; the board now labels the edges and offers swap</td></tr>
+      <tr><td>Tool and MCP calls (registry tools, argument mapping, approval for writes)</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>From <span class="mono">GET /workflow-tools</span>; write tools pause for an approver unless an approval step precedes them</td></tr>
+      <tr><td>Script, query and connection steps</td><td class="c">via tools</td><td class="c">via tools</td><td class="c chk">✓ + <span class="prop">proposal</span></td><td class="c no">—</td><td>Scripts are registry tools (<span class="mono">impl: script</span>) and ledger.query is one; a first-class step is only a convenience proposal</td></tr>
+      <tr><td>Guardrail check step with approver and timeout</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>block fails, redact passes on, require-approval pauses</td></tr>
+      <tr><td>Approval step (role, timeout, data shown)</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>Approvals list, live events to approvers, expiry fails the run</td></tr>
+      <tr><td>HTTP step with vault references</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>Private addresses only; Authorization must be <span class="mono">vault:path#key</span>, resolved as the run's principal (B-1705)</td></tr>
+      <tr><td>Record steps (create, update, transition) and app triggers</td><td class="c chk">✓</td><td class="c">partly</td><td class="c chk">✓</td><td class="c no">—</td><td>B-2206: the live screen renders the kind; the board adds the config editor and the Apps cross-links</td></tr>
+      <tr><td>Triggers: manual, API, record, schedule</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>Schedules exist only as an app's cron trigger on an entity</td></tr>
+      <tr><td>Started by a plugin (<span class="mono">call:workflow</span>) with a trigger chain</td><td class="c chk">✓</td><td class="c no">—</td><td class="c chk">✓</td><td class="c no">—</td><td>Shown on the Triggers and callers tab with the chain and depth rules</td></tr>
+      <tr><td>Published as a tool; awaited by an agent run</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>B-1006: the agent's step waits with <span class="mono">meta.awaiting</span>; the board shows the awaited pill and link</td></tr>
+      <tr><td>Workflow chaining (a workflow calls a workflow)</td><td class="c danger">refused</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td><span class="mono">workflow.*</span> tools are refused in a tool step (error code reference); the sub-workflow step is the proposal</td></tr>
+      <tr><td>Agent step (run a registry agent from a workflow)</td><td class="c no">—</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td>Agents call workflows, not the reverse</td></tr>
+      <tr><td>Skills on a model step</td><td class="c no">—</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td>Skills attach to agents in the registry (instructions and tools), not to workflow steps</td></tr>
+      <tr><td>Media presets as steps</td><td class="c no">—</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td>Presets run as jobs from the Media screen</td></tr>
+      <tr><td>Map (fan-out over a list) and bounded loop</td><td class="c no">—</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td>Fan-out is edges (at most 10); graphs are acyclic</td></tr>
+      <tr><td>Catalogue-event trigger (file.uploaded, post.created…)</td><td class="c no">—</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td>Today only through a plugin's call:workflow action</td></tr>
+      <tr><td>Plugin action step (notify, flag, audit, webhook)</td><td class="c no">—</td><td class="c no">—</td><td class="c prop">proposal</td><td class="c no">—</td><td>Plugins call workflows; a workflow cannot call a plugin action or notify users</td></tr>
+      <tr><td>Versions, diff, draft revision conflicts, dry run, replay, cancel, limits</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c chk">✓</td><td class="c no">—</td><td>Diff is computed client-side from the two graphs; no diff route exists</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="callers">
+  <h2>How a run can start today</h2>
+  <div class="grid2">
+    <div class="card"><h3>Exists in 1.4.0</h3><ul><li>Manual from the console or <span class="mono">POST /api/workflows/:id/runs</span> (agents:run)</li><li>An app's record trigger: created, updated, deleted, transitioned (runs as the trigger's owner)</li><li>An app's schedule trigger: five-field UTC cron on an entity</li><li>A plugin's declarative <span class="mono">workflow</span> action or brokered <span class="mono">workflow</span> call (runs as the installer, trigger plugin:&lt;chain&gt;)</li><li>A tool call from an agent run when the workflow is published as a tool; the agent awaits approvals</li><li>Chat, only for read-only workflow tools that need no confirmation</li></ul></div>
+    <div class="card"><h3>Not possible today</h3><ul><li>A catalogue event starting a workflow directly</li><li>A workflow starting another workflow</li><li>A plain cron schedule without an app entity</li><li>A message, post, file, group or channel event with its own trigger kind</li><li>A workflow notifying users, raising a flag or calling an external webhook from a step (HTTP steps reach private addresses only)</li></ul></div>
+  </div>
+</section>
+
+<section id="gaps">
+  <h2>What is missing from 1.5.0</h2>
+  <p class="sub">The 1.5.0 backlog (37 items, 214 points) covers permission matrices and custom roles, the console screens for the 1.4.0 domains, CalDAV, CardDAV and WebDAV, and the AT-Protocol PDS and feed generator. Measured against the features the console now exposes, these gaps remain. Points follow the backlog's scale (1 point is about half a day).</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Gap</th><th>Where it bites</th><th>Today</th><th>Suggested item</th><th>Pts</th><th>Priority</th></tr></thead>
+    <tbody>
+      <tr><td>Workflow chaining: a sub-workflow step, or lifting the ban on workflow tools inside workflows</td><td>Any composed process (onboarding → review → report)</td><td>Refused with error code reference</td><td>Sub-workflow step pinned to a version, child under the parent's label and chain, approvals bubble up, depth cap</td><td>8</td><td><span class="pill danger">P0</span></td></tr>
+      <tr><td>Agent step and skills on model steps</td><td>Workflows cannot use the registry's agents or skills; agents can use workflows</td><td>No step kind; skills are agent-only</td><td>Agent step that awaits the run like B-1006 in reverse; <span class="mono">skills[]</span> on the model step loading instructions and tools</td><td>8</td><td><span class="pill danger">P0</span></td></tr>
+      <tr><td>Catalogue-event triggers for workflows</td><td>Reacting to file.uploaded, post.created, message.sent, group.event.created needs a plugin in between</td><td>Only plugins subscribe to events</td><td>Trigger source <span class="mono">event</span> with the plugin fan-out rules (label, workspace, rate, loop chain)</td><td>5</td><td><span class="pill danger">P0</span></td></tr>
+      <tr><td>Workflow-level schedules</td><td>A monthly report needs an app entity to hang its cron on</td><td>Schedule triggers belong to apps (B-2206); agents have their own schedules</td><td>Trigger source <span class="mono">schedule</span> on the workflow itself, claimed once across instances</td><td>3</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>Steps for the 1.4.0 domains</td><td>Send a message, post to the feed, write a file version, create an event, answer a channel session</td><td>None; the plugin broker's records.read, records.write, files.read, groups.read and posts.write calls were specified as 501 until their domains shipped and need confirming</td><td>Domain steps as registry built-ins (impl builtin) so chat, agents and workflows share them; confirm the broker calls</td><td>8</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>Fan-out over data and bounded loops</td><td>Caption every frame, process every row</td><td>Fan-out is edges; graphs are acyclic</td><td>Map step with a parallelism cap and a bounded loop that counts toward the step limit</td><td>8</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>Error handling on steps</td><td>A failing HTTP call or tool fails the whole run</td><td>Replay from a step by hand</td><td>Per-step retry policy, an on-failure edge, and a dead-letter view like moderation's</td><td>5</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>Human tasks that collect input</td><td>Approvers can only approve or reject</td><td>Approval shows data, takes a decision and a reason</td><td>Approval step with a form (an app form definition) whose answers become the step's output</td><td>5</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>Outbound calls from workflows</td><td>Notifying people or external systems</td><td>HTTP steps reach private addresses only; webhooks are the only outbound path</td><td>A notify step (in-app and email, cleared recipients) and a webhook step through the tenant's allowed hosts and signing keys</td><td>5</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>Workflow export and import</td><td>Moving a workflow between workspaces or tenants</td><td>Apps have signed bundles; workflows do not</td><td>Signed bundle like <span class="mono">exprsn-app/1</span>, with the tool and trigger references re-bound on import</td><td>3</td><td><span class="pill info">P2</span></td></tr>
+      <tr><td>DAV app passwords in the console</td><td>B-3101 adds app passwords on the server; no screen item covered them</td><td>Not in B-34 or B-3413</td><td>Added as <span class="mono">B-3415</span>: a Settings panel for DAV-only app passwords (fresh MFA step-up to create, device names, revoke) and the discovery URLs</td><td>2</td><td><span class="pill ok">added</span></td></tr>
+      <tr><td>Screens list for Sprint 30 and 31 lacks the Workflows realignment</td><td>The live Workflows screen still shows the old palette copy</td><td>Board realigned in Sprint 29; console unchanged</td><td>Bring <span class="mono">web/js/screens/workflows.js</span> to the board (triggers and callers tab, record and vault editors, proposal marking off)</td><td>3</td><td><span class="pill warn">P1</span></td></tr>
+      <tr><td>PDS hosting decision and handle domains</td><td>B-29 cannot start without it</td><td>Decided 5 October</td><td>Opt-in per tenant, enabled by a platform admin; handles on a platform-controlled tenant subdomain; a tenant's own handle domain deferred to 1.6</td><td>—</td><td><span class="pill ok">decided</span></td></tr>
+      <tr><td>DAV app passwords for roles that require MFA</td><td>B-31 clients never pass a second factor</td><td>Decided 5 October</td><td>Allowed, but creating one needs a fresh MFA step-up and the password carries a DAV-only scope</td><td>—</td><td><span class="pill ok">decided</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="grid2">
+    <div class="card"><h3>Deliberately out of 1.5.0 (unchanged)</h3><ul><li>Live streaming (ingest, WebRTC rooms, simulcast)</li><li>Governance voting</li><li>End-to-end-encrypted messaging (conflicts with server-side guardrails)</li><li>SMS one-time codes (paid provider)</li><li>An HSM through PKCS#11 for CA and AT-Protocol keys</li></ul></div>
+    <div class="card"><h3>Covered by 1.5.0 as planned</h3><ul><li>Console screens for every 1.4.0 domain (B-34), accessibility and reflow (B-3414)</li><li>Permission matrices, custom roles, effective access, route registry, access reviews (B-33; the server API is built on sprint-29a)</li><li>CalDAV, CardDAV, WebDAV core, COPY, MOVE, LOCK, quotas, litmus (B-31, B-32)</li><li>AT-Protocol PDS, blobs, firehose out, migration, feed generator (B-29, B-30)</li><li>PostgreSQL record query p95 under 250 ms (B-3601)</li></ul></div>
+  </div>
+</section>
+
+<section id="proposal">
+  <h2>Epic B-39: Workflows 2 (61 points, Sprint 32)</h2>
+  <p class="sub">The workflow gaps above form one epic, approved by the owner on 5 October and recorded in <span class="mono">Backlog-1.5.0.md</span> as B-39 (Sprint 32, migration <span class="mono">034_workflows2</span>; B-37 and B-38 were taken the same day by model-based memory management and the import wizard). Every item follows the 1.4.0 workflow patterns: a kind in <span class="mono">NODE_KINDS</span> with a zod config and port schema, the existing validation codes, durable checkpointed jobs, label propagation and trigger chains. The board already shows every step and trigger as a proposal, so the design review can happen now.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>ID</th><th>Item</th><th>Done when</th><th>Pts</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">B-3901</td><td>Sub-workflow step: a published workflow version runs as a child under the parent's label, principal and trigger chain; the child's approvals pause the parent; depth capped</td><td>A parent run resumes with the child's output after the child's approval</td><td class="c">8</td></tr>
+      <tr><td class="mono">B-3902</td><td>Agent step and skills on model steps: a registry agent runs and is awaited; a model step loads a published skill's instructions and tools</td><td>A model step with a skill calls one of the skill's tools</td><td class="c">8</td></tr>
+      <tr><td class="mono">B-3903</td><td>Event and schedule triggers on the workflow: catalogue events with the plugin fan-out rules; a cron on the workflow itself</td><td>A file.uploaded event starts a run without a plugin</td><td class="c">8</td></tr>
+      <tr><td class="mono">B-3904</td><td>Domain steps as built-in tools: send message, post to feed, file version, create event, channel reply; the plugin broker's domain calls confirmed</td><td>A workflow posts to a workspace feed under its label</td><td class="c">8</td></tr>
+      <tr><td class="mono">B-3905</td><td>Map and bounded loop with parallelism and iteration caps that count toward the run limits</td><td>A map over 200 items runs 20 at a time and stops at the cap</td><td class="c">8</td></tr>
+      <tr><td class="mono">B-3906</td><td>Step retry policy, on-failure edges and a dead-letter view for failed runs with redrive</td><td>A failed HTTP step takes the on-failure edge instead of failing the run</td><td class="c">5</td></tr>
+      <tr><td class="mono">B-3907</td><td>Approval with a form: an app form collects answers that become the step's output</td><td>An approver's answers reach the next step</td><td class="c">5</td></tr>
+      <tr><td class="mono">B-3908</td><td>Notify and webhook steps: in-app and email notices to cleared recipients; outbound webhooks through allowed hosts with the tenant's signing keys</td><td>A webhook step is refused for a host outside the tenant's list</td><td class="c">5</td></tr>
+      <tr><td class="mono">B-3909</td><td>Workflow bundles: signed export and import with tool and trigger references re-bound</td><td>A bundle changed after signing is refused</td><td class="c">3</td></tr>
+      <tr><td class="mono">B-3910</td><td>Console: the live Workflows screen matches the realigned board (triggers and callers tab, record and vault editors, the new step kinds as they land)</td><td>Every control on the screen is backed by the server</td><td class="c">3</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="decisions">
+  <h2>Decisions taken in Sprint 29</h2>
+  <div class="grid2">
+    <div class="card"><h3>Recorded in Backlog-1.5.0.md</h3><ul><li>Custom roles are defined by the tenant only; workspaces reuse tenant roles.</li><li>Access reviews assign both the workspace admin (tenant admin for tenant-level roles) and the member's directory manager; the first decision stands; the admin alone when the manager attribute is empty.</li><li>Also decided the same day: PDS hosting opt-in per tenant on a platform subdomain; DAV app passwords allowed with a fresh MFA step-up and a DAV-only scope; a 500 GB import quota per tenant; licence exceptions by a new legal-review role.</li></ul></div>
+    <div class="card"><h3>Prototype conventions</h3><ul><li>All eleven B-34 boards were built in Sprint 29, not only the Sprint 29 live screens.</li><li>No design-state controls on the page; states live in the command palette and the smoke run.</li><li>Proposed step kinds appear dashed with a "1.5 proposal" pill and refuse to publish, so the board documents the gap instead of hiding it.</li></ul></div>
+  </div>
+</section>
+
+<footer>Built from the sprint-29 worktree on 5 October 2026. Sources: <span class="mono">docs/api.md</span> (Sprints 8, 19, 24 to 28), <span class="mono">server/src/workflows/graph.ts</span>, <span class="mono">server/src/registry/service.ts</span>, <span class="mono">Backlog-1.5.0.md</span>, <span class="mono">docs/security.md</span> known gaps. Points use the backlog's scale and are estimates for discussion.</footer>
+</div>
+</body>
+</html>

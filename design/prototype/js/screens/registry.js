@@ -115,7 +115,7 @@
         + (st.tab === 'review' ? UI.notice('Entries wait here after automated checks (schema, dependency scan, declared egress). A tool admin approves and picks the publish scope; workspace admins then enable entries for members.', 'info') : '')
         + table
         + (agentShown ? agentCard(agentShown) : '')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + inspector;
 
       if (st.openSubmit) { st.openSubmit = false; setTimeout(() => submitEntry(ctx), 30); }
@@ -127,7 +127,6 @@
       on('click', '[data-statusseg] [data-seg]', (e, t) => { cur.st.filter = t.dataset.seg; cur.ctx.rerender(); });
       on('input', '[data-search]', (e, t) => { cur.st.query = t.value; const v = t.value; cur.ctx.rerender(); const i = cur.ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       on('click', 'tr.row[data-entry]', (e, t) => { cur.st.sel = t.dataset.entry; cur.st.harness = null; cur.ctx.rerender(); });
-      on('click', '.state-card', (e, t) => cur.ctx.app.applyState(+t.dataset.state));
       on('click', '[data-harness-open]', () => { cur.st.harnessOpen = true; cur.ctx.rerender(); });
       on('click', '[data-harness-close]', () => { cur.st.harnessOpen = false; cur.st.harness = null; cur.ctx.rerender(); });
       on('click', '[data-harness-run]', () => runHarness(cur.ctx));

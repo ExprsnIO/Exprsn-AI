@@ -396,7 +396,12 @@ table.dt .actions{white-space:nowrap}
     info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01', warn: 'M12 3l10 18H2zM12 10v4M12 17h.01', thumb: 'M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5a2 2 0 0 1 2 2l-1 7a2 2 0 0 1-2 2H7', download: 'M12 4v12M6 10l6 6 6-6M4 20h16',
     filter: 'M4 5h16l-6 8v6l-4-2v-4z', sort: 'M8 4v16M4 8l4-4 4 4M16 20V4M12 16l4 4 4-4', dots: 'M5 12h.01M12 12h.01M19 12h.01', link: 'M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1',
     grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z', clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2', brain: 'M9 4a3 3 0 0 0-3 3v10a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3zM15 4a3 3 0 0 1 3 3v10a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3z',
-    calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6'
+    calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
+    // 1.5.0 screens (Sprint 29 boards)
+    certificates: 'M12 3l2.5 2 3-.5.5 3 2 2.5-2 2.5-.5 3-3-.5L12 17l-2.5-2-3 .5-.5-3L4 10l2-2.5.5-3 3 .5zM9 17l-1 5 4-2 4 2-1-5', vault: 'M4 4h16v16H4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 10v2M20 8h2M20 16h2',
+    plugins: 'M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3', files: 'M3 6h6l2 2h10v11H3z', apps: 'M4 4h16v16H4zM4 9h16M9 9v11', groups: 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M21 20a6 6 0 0 0-6-6',
+    messages: 'M4 4h12v9H8l-4 3zM20 9v9l-3-2h-7', moderation: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4', channels: 'M4 13a8 8 0 0 1 16 0M4 13v4h3v-5H4M20 13v4h-3v-5h3M17 19a4 4 0 0 1-4 2',
+    roles: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16', atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8'
   };
   const icon = (name, size, extra) => {
     const d = ICONS[name] || ICONS.info;
@@ -475,7 +480,9 @@ table.dt .actions{white-space:nowrap}
     spark(values, hiIndex) { const m = Math.max.apply(null, values) || 1; return '<span class="spark" aria-hidden="true">' + values.map((v, i) => '<i style="height:' + Math.max(2, Math.round((v / m) * 22)) + 'px" class="' + (i === hiIndex ? 'hi' : '') + '"></i>').join('') + '</span>'; },
     timeline(items) { return '<div class="timeline">' + items.map((it, i) => '<div class="tl"><div class="dotcol"><i class="' + (it.tone || '') + '"></i>' + (i < items.length - 1 ? '<b></b>' : '') + '</div><div class="tbody"><div style="font-weight:600">' + it.title + '</div>' + (it.text ? '<div class="fg2" style="font-size:12px">' + it.text + '</div>' : '') + (it.meta ? '<div class="muted" style="font-size:12px">' + it.meta + '</div>' : '') + '</div></div>').join('') + '</div>'; },
     listItem(title, sub, opts) { opts = opts || {}; return '<button type="button" class="listlink' + (opts.active ? ' active' : '') + '" ' + (opts.attrs || '') + '><span><span class="t">' + title + '</span>' + (sub ? '<span class="s">' + sub + '</span>' : '') + '</span>' + (opts.right || '') + '</button>'; },
-    states(list) { return '<div class="state-strip">' + list.map((s, i) => '<button type="button" class="state-card" data-state="' + i + '"><div class="st ' + (s.tone || 'neutral') + '">' + esc(s.title) + '</div><div class="sd">' + esc(s.text) + '</div></button>').join('') + '</div>'; }
+    // The design-state strip is no longer rendered (the console never had it; the prototype dropped it in Sprint 29). Kept so older modules still parse.
+    states() { return ''; },
+    statesLegacy(list) { return '<div class="state-strip">' + list.map((s, i) => '<button type="button" class="state-card" data-state="' + i + '"><div class="st ' + (s.tone || 'neutral') + '">' + esc(s.title) + '</div><div class="sd">' + esc(s.text) + '</div></button>').join('') + '</div>'; }
   };
 
   // ---------- Data shared across screens ----------
@@ -501,13 +508,19 @@ table.dt .actions{white-space:nowrap}
     { group: null, items: [
       { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge' }, { id: 'memory', label: 'Memory', icon: 'memory' }, { id: 'workflows', label: 'Workflows', icon: 'workflows' },
-      { id: 'scripts', label: 'Scripts', icon: 'scripts' }, { id: 'media', label: 'Media', icon: 'media' }, { id: 'images', label: 'Images', icon: 'images' }
+      { id: 'scripts', label: 'Scripts', icon: 'scripts' }, { id: 'media', label: 'Media', icon: 'media' }, { id: 'images', label: 'Images', icon: 'images' },
+      // 1.5.0 (Sprint 29 boards): the workspace screens for the 1.4.0 domains
+      { id: 'files', label: 'Files', icon: 'files' }, { id: 'apps', label: 'Apps', icon: 'apps' }, { id: 'groups', label: 'Groups and events', icon: 'groups' }, { id: 'messages', label: 'Messages and feed', icon: 'messages', count: 3 }
     ] },
     { group: 'Admin', items: [
       { id: 'models', label: 'Models', icon: 'models' }, { id: 'profiles', label: 'Profiles', icon: 'profiles' }, { id: 'pools', label: 'Pools', icon: 'pools' },
       { id: 'registry', label: 'Registry', icon: 'registry' }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp' }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails' },
-      { id: 'flags', label: 'Flags', icon: 'flags', count: 6, hot: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers' }, { id: 'connections', label: 'Connections', icon: 'connections' },
-      { id: 'training', label: 'Training', icon: 'training' }, { id: 'tenants', label: 'Tenants', icon: 'tenants' }, { id: 'identity', label: 'Identity', icon: 'identity' },
+      { id: 'flags', label: 'Flags', icon: 'flags', count: 6, hot: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers' },
+      // 1.5.0 (Sprint 29 boards): moderation and customer-service channels sit with the review screens
+      { id: 'moderation', label: 'Moderation', icon: 'moderation', count: 4 }, { id: 'channels', label: 'Channels', icon: 'channels' }, { id: 'connections', label: 'Connections', icon: 'connections' },
+      { id: 'training', label: 'Training', icon: 'training' }, { id: 'tenants', label: 'Tenants', icon: 'tenants' }, { id: 'roles', label: 'Roles and access', icon: 'roles' }, { id: 'identity', label: 'Identity', icon: 'identity' },
+      // 1.5.0 (Sprint 29 boards): the trust screens
+      { id: 'certificates', label: 'Certificates', icon: 'certificates' }, { id: 'vault', label: 'Vault', icon: 'vault' }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins' }, { id: 'atproto', label: 'AT-Protocol', icon: 'atproto' },
       { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
     ] }
   ];
@@ -610,6 +623,8 @@ table.dt .actions{white-space:nowrap}
       items.push({ group: 'Go to', label: 'Prototype map', sub: 'Every screen and state in this prototype', run: () => App.map() });
       items.push({ group: 'Go to', label: 'Design system sheet', sub: 'Shared components', run: () => App.navigate('components') });
       Object.keys(screens).forEach((id) => (screens[id].commands || []).forEach((c) => items.push({ group: 'Commands', label: c.label, sub: c.sub || screens[id].title, run: () => { if (c.route !== false) App.navigate(id, c.params); setTimeout(() => c.run && c.run(App), 60); } })));
+      const cur = screens[state.route]; ((cur && cur.states) || []).forEach((st, i) => items.push({ group: 'Design states (' + cur.title + ')', label: st.title, sub: st.text, run: () => App.applyState(i) }));
+      if (cur && (cur.states || []).length) items.push({ group: 'Design states (' + cur.title + ')', label: 'Reset to the board\'s default state', sub: cur.title, run: () => { state.screenState[cur.id] = {}; App.render(); App.toast('Reset'); } });
       items.push({ group: 'Commands', label: 'Switch theme', sub: 'Light, dark or system', run: () => App.setTheme(App.isDark() ? 'light' : 'dark') });
       items.push({ group: 'Commands', label: 'Sign out', sub: 'End this session', run: () => App.signOut() });
       let active = 0, filtered = items;
@@ -636,7 +651,7 @@ table.dt .actions{white-space:nowrap}
         ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
       const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + ((s.states || []).length ? ' · ' + s.states.length + ' states' : '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
-      App.modal({ cls: 'wide', title: 'Prototype map <span class="pill outline">' + Object.keys(screens).length + ' screens</span>', body: '<p class="fg2" style="margin:0">Every screen from the design boards, wired together. Each screen also carries the states its board listed; open one with the <b>States</b> button in the header.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
+      App.modal({ cls: 'wide', title: 'Prototype map <span class="pill outline">' + Object.keys(screens).length + ' screens</span>', body: '<p class="fg2" style="margin:0">Every screen from the design boards, wired together. Each screen also carries the states its board listed; apply one from the command palette (Ctrl K) while on that screen. The console shows none of these controls.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
     },
 
     // ----- shell rendering -----
@@ -661,7 +676,7 @@ table.dt .actions{white-space:nowrap}
       const crumb = typeof s.crumb === 'function' ? s.crumb(App.stateFor(s.id), state.params) : (s.crumb || [s.section === 'admin' ? 'Admin' : null, s.title]);
       const lbl = typeof s.label === 'function' ? s.label(App.stateFor(s.id), state.params) : s.label;
       $('#header').innerHTML = '<div class="hstack" style="min-width:0">' + UI.iconbtn('menu', 'Menu', { cls: 'menubtn', attrs: 'id="menu-btn"' }) + '<div class="crumbs">' + crumb.filter(Boolean).map((c, i, a) => (i < a.length - 1 ? '<span class="c1">' + esc(c) + '</span><span class="sep">/</span>' : '<span class="c2">' + esc(c) + '</span>')).join('') + (lbl ? UI.label(lbl) : '') + '</div></div>'
-        + '<div class="htools relative">' + ((s.states || []).length ? UI.btn('States', { size: 'sm', icon: 'grid', attrs: 'id="states-btn" title="Design states listed on this board"' }) : '') + '<button type="button" class="cmdbtn" id="cmd-btn"><span>Search or run a command</span><kbd>Ctrl K</kbd></button>' + UI.iconbtn(App.isDark() ? 'sun' : 'moon', App.isDark() ? 'Switch to light theme' : 'Switch to dark theme', { attrs: 'id="theme-btn"' }) + UI.iconbtn('bell', 'Notifications', { attrs: 'id="bell-btn"', dot: true }) + '</div>';
+        + '<div class="htools relative"><button type="button" class="cmdbtn" id="cmd-btn"><span>Search or run a command</span><kbd>Ctrl K</kbd></button>' + UI.iconbtn(App.isDark() ? 'sun' : 'moon', App.isDark() ? 'Switch to light theme' : 'Switch to dark theme', { attrs: 'id="theme-btn"' }) + UI.iconbtn('bell', 'Notifications', { attrs: 'id="bell-btn"', dot: true }) + '</div>';
       $('#cmd-btn').addEventListener('click', () => App.palette());
       $('#theme-btn').addEventListener('click', () => App.setTheme(App.isDark() ? 'light' : 'dark'));
       $('#menu-btn').addEventListener('click', () => { state.navOpen = !state.navOpen; $('#app').classList.toggle('nav-open', state.navOpen); });
@@ -672,14 +687,6 @@ table.dt .actions{white-space:nowrap}
         host.appendChild(pop);
         on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); App.navigate(t.dataset.go); });
         on(pop, 'click', '[data-read]', () => { pop.remove(); $('#bell-btn .dot').remove(); App.toast('Notifications marked read'); });
-      });
-      const sb = $('#states-btn'); if (sb) sb.addEventListener('click', (e) => {
-        e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { ex.remove(); return; }
-        const pop = document.createElement('div'); pop.className = 'popover';
-        pop.innerHTML = '<div class="ph">States to design from this page</div>' + s.states.map((st, i) => '<button type="button" class="pi" data-state="' + i + '"><span class="t" style="color:var(--' + ({ danger: 'danger-fg', warn: 'warn-fg', ok: 'ok-fg', info: 'info-fg' }[st.tone] || 'fg') + ')">' + esc(st.title) + '</span><span class="s">' + esc(st.text) + '</span></button>').join('') + '<div class="divider"></div><button type="button" class="pi" data-reset><span class="t">Reset to the board\'s default state</span></button>';
-        host.appendChild(pop);
-        on(pop, 'click', '[data-state]', (ev, t) => { pop.remove(); App.applyState(+t.dataset.state); });
-        on(pop, 'click', '[data-reset]', () => { pop.remove(); state.screenState[s.id] = {}; App.render(); App.toast('Reset'); });
       });
     },
     applyState(i) {
@@ -819,11 +826,10 @@ table.dt .actions{white-space:nowrap}
         + '<div class="pools-legend"><span><i style="background:var(--meter)"></i>weights</span><span><i style="background:var(--accent)"></i>new version loading</span><span><i style="background:var(--faint)"></i>KV cache</span><span><i style="background:var(--sel);border:1px solid var(--line)"></i>free</span><span class="right">Polled from /api/ps and /api/tags every 5 s. Zone <a href="#" data-go="zones">inference</a>, gpu-east-private.</span></div>'
         + poolPanels
         + UI.panel('gpu-amd and mac-overflow', '<div class="fg2">rocm and metal pools are validated in Phase 5. Mac nodes serve development only until the signed node agent ships.</div>' + UI.kv([['gpu-amd', 'rocm, 2 nodes MI300X 192 GB, ollama/ollama:rocm, zone inference. Evals per class pending.'], ['mac-overflow', 'metal, 3 Mac Studio 192 GB unified, native Ollama over WireGuard. One schedulable unit per Mac, development only.']], 2) + '<div>' + UI.btn('Hardware classes in the plan', { kind: 'ghost', size: 'sm', attrs: 'data-go="platform"' }) + '</div>')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>';
 
       // ---- events ----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-clear]', (e, t) => { st[t.dataset.clear] = null; ctx.rerender(); });
       ctx.on('click', '[data-cancelswap]', () => { st.scheduled = null; ctx.rerender(); ctx.toast('Scheduled swap cancelled. The pointer stays on the current version.'); });

@@ -74,7 +74,7 @@
         + (st.empty ? UI.empty('Nothing remembered yet', 'Memory is labelled facts and summaries that outlive a conversation: your preferences, your current project, team conventions. It stays off until you accept a proposal in chat or add an entry here. Everything can be edited, relabelled or forgotten, and forgetting removes it from every backend and cache.', UI.btn('Add a memory', { kind: 'primary', icon: 'plus', attrs: 'data-add' }) + ' ' + UI.btn('Show the example set', { kind: 'ghost', attrs: 'data-unempty' }))
           : '<div class="toolbar mem-filters">' + UI.search('Search memories', 'data-search', st.query).replace('class="search"', 'class="search" style="width:320px"') + '<span class="relative">' + UI.btn('Type: ' + st.type, { icon: 'chevd', attrs: 'data-pick="type"' }) + '</span><span class="relative">' + UI.btn('State: ' + st.stateF, { icon: 'chevd', attrs: 'data-pick="state"' }) + '</span><span class="muted right" style="font-size:12px">' + esc(retention) + '</span></div>'
           + UI.table(cols, rows.map((m) => ({ cells: cells(m), attrs: 'data-id="' + m.id + '"', selected: m.id === st.sel })), { minWidth: '0', emptyTitle: 'No memories match', emptyText: 'Try another word or clear the filters.' }))
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>'
         + '<aside class="inspector">' + inspector + '</aside>';
 
@@ -146,7 +146,6 @@
         } });
       }
       ctx.on('click', '[data-add]', openAdd);
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.openAdd) { st.openAdd = false; setTimeout(openAdd, 30); }
     }
   });

@@ -109,7 +109,7 @@
         + rows
         + (budgetStop ? '<div class="runs-row"><div class="runs-n">…</div><div class="muted" style="grid-column:2/-1;font-size:12px">Steps 8 to 20 collapsed. The run reached its step limit while looping on ledger.query pagination.</div></div>' : '')
         + answer
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>'
         + '<aside class="inspector"><div class="hstack"><div class="eyebrow grow">Step ' + selStep.n + ', ' + esc(LANES[selStep.lane].toLowerCase()) + '</div>' + (selStep.failed ? UI.pill('failed', 'danger') : selStep.waiting ? UI.pill('waiting', 'info') : '') + '</div>'
         + UI.kv(selStep.kv, 1)
@@ -142,7 +142,6 @@
       ctx.on('click', '[data-raise]', async () => { const ok = await ctx.confirm({ title: 'Raise the step limit and resume', tone: 'primary', ok: 'Raise to 40 and resume', body: '<div class="fg2">The run keeps its checkpoint after step 20. Raising the limit applies to this run only; the agent\'s default stays at 20.</div>', kv: [['Run', '<span class="mono">' + esc(run.id) + '</span>'], ['Owner', esc(run.by)], ['Steps', '20 of 20 used'], ['Tokens', '9,860 of 10,000 used']] }); if (!ok) return; st.resumed = true; ctx.rerender(); ctx.toast('Limit raised to 40. Run ' + esc(run.id) + ' resumed from step 21.', 'ok'); });
       ctx.on('click', '[data-approve]', async () => { const ok = await ctx.confirm({ title: 'Approve jira-internal.create_issue', tag: 'write', tone: 'primary', ok: 'Approve', body: '<div class="fg2">The doing worker runs the call with your delegated token. The action is logged to audit with you as approver.</div>', kv: [['Project', 'FIN'], ['Summary', 'Q3 variance review'], ['Tool ceiling', 'confidential'], ['Waited', '12 min']] }); if (!ok) return; st.decided = 'approve'; ctx.rerender(); ctx.toast('Approved. FIN-1188 created in jira-internal as Mara Okafor.', 'ok'); });
       ctx.on('click', '[data-deny]', async () => { const ok = await ctx.confirm({ title: 'Deny this action', tone: 'danger', ok: 'Deny', body: '<div class="fg2">Nothing is written. The agent receives the denial as data and its next thinking step decides how to report it.</div>' }); if (!ok) return; st.decided = 'deny'; ctx.rerender(); ctx.toast('Denied. The run continues with the denial as data.'); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
 
       function openReplay(from) {
         ctx.modal({ title: 'Replay from step', body: UI.field('Start from', UI.select(steps.map((s) => ({ value: String(s.n), label: 'Step ' + s.n + ', ' + s.title + ' (' + LANES[s.lane].toLowerCase() + ')' })), String(from), 'data-from')) + UI.notice('Replay starts from the checkpoint before the chosen step. Earlier results are reused from the run record; later steps run again as a new run with the same label and budget.', 'info') + UI.kv([['Source run', '<span class="mono">' + esc(run.id) + '</span>'], ['New run', '<span class="mono">' + esc(run.id.slice(0, 3)) + 'b</span>'], ['Budget', stepsMax + ' steps, 10,000 tokens'], ['Label', UI.label(run.label, { sm: true })]], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Replay', { kind: 'primary', attrs: 'data-go' }), onMount(m) {

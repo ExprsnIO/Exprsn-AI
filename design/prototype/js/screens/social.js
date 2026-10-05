@@ -1,0 +1,213 @@
+(function () {
+  const { UI, esc } = App;
+
+  // Sidebar entry, added at load so app.js stays untouched (Sprint 29 asked for that). Sits after Channels, with the other domain policies.
+  (function nav() {
+    const admin = (App.NAV || []).find((g) => g.group === 'Admin'); if (!admin || admin.items.some((i) => i.id === 'social')) return;
+    const item = { id: 'social', label: 'Social and messaging', icon: 'thumb' };
+    const at = admin.items.findIndex((i) => i.id === 'channels'); if (at >= 0) admin.items.splice(at + 1, 0, item); else admin.items.push(item);
+  })();
+
+  // ---- example data: Northwind, 19 Sep 2026 14:10. Groups and conversations are the ones on the Groups and Messages boards. ----
+  const WORKSPACES = ['Finance Ops', 'People Ops', 'Field Sales', 'Legal'];
+  const PROFILES = ['analyst', 'assistant', 'hr-assistant', 'support-fast'];
+  const POLICY0 = () => [
+    { ws: 'Finance Ops', label: 'confidential', guard: true, approver: 'guardrail admins', media: true, maxMedia: '50 MiB', posts: 142, held: 2 },
+    { ws: 'People Ops', label: 'internal', guard: true, approver: 'workspace admins', media: true, maxMedia: '50 MiB', posts: 96, held: 1 },
+    { ws: 'Field Sales', label: 'internal', guard: true, approver: 'workspace admins', media: true, maxMedia: '20 MiB', posts: 211, held: 0 },
+    { ws: 'Legal', label: 'confidential', guard: true, approver: 'guardrail admins', media: false, maxMedia: '—', posts: 8, held: 0 }
+  ];
+  const TAGS0 = () => [
+    { tag: 'monthendclose', posts: 61, delta: 18, excluded: false }, { tag: 'q3flash', posts: 44, delta: 31, excluded: false }, { tag: 'emeakickoff', posts: 37, delta: 37, excluded: false },
+    { tag: 'travelpolicy2027', posts: 29, delta: -4, excluded: false }, { tag: 'showandtell', posts: 22, delta: 6, excluded: false }, { tag: 'vendorchatter', posts: 19, delta: 2, excluded: true }, { tag: 'fridaylunch', posts: 17, delta: 9, excluded: false }
+  ];
+  const DEFAULTS0 = () => [
+    { ws: 'Finance Ops', create: 'workspace admins', visibility: 'private', join: 'request', capacity: 40, reminders: '24 h, 1 h' },
+    { ws: 'People Ops', create: 'any member', visibility: 'public', join: 'open', capacity: 100, reminders: '24 h, 1 h' },
+    { ws: 'Field Sales', create: 'any member', visibility: 'private', join: 'request', capacity: 60, reminders: '48 h, 2 h' },
+    { ws: 'Legal', create: 'workspace admins', visibility: 'hidden', join: 'invite', capacity: 12, reminders: '24 h' }
+  ];
+  const GROUPS0 = () => [
+    { id: 'g-close', name: 'Month-end close', ws: 'Finance Ops', label: 'confidential', visibility: 'private', join: 'request', members: 18, pending: 3, events: 4, reports: 0, owners: ['Felix Brandt', 'Mara Okafor'], created: '12 Jan 2026', feeds: 2, state: 'active' },
+    { id: 'g-travel', name: 'Travel policy working group', ws: 'Finance Ops', label: 'internal', visibility: 'public', join: 'open', members: 31, pending: 0, events: 1, reports: 0, owners: ['Lena Hoffmann'], created: '3 Mar 2026', feeds: 1, state: 'active' },
+    { id: 'g-audit', name: 'Audit liaison', ws: 'Finance Ops', label: 'confidential', visibility: 'hidden', join: 'invite', members: 6, pending: 1, events: 2, reports: 0, owners: ['Felix Brandt'], created: '20 May 2026', feeds: 0, state: 'active' },
+    { id: 'g-board', name: 'Board pack reviewers', ws: 'Finance Ops', label: 'confidential', visibility: 'private', join: 'invite', members: 4, pending: 0, events: 1, reports: 0, owners: ['Mara Okafor'], created: '15 Aug 2026', feeds: 0, state: 'active' },
+    { id: 'g-vendor', name: 'Vendor chatter', ws: 'Finance Ops', label: 'internal', visibility: 'private', join: 'open', members: 9, pending: 0, events: 0, reports: 2, owners: ['Tomasz Weber'], created: '2 Jul 2026', feeds: 0, state: 'hidden' },
+    { id: 'g-champions', name: 'AI champions', ws: 'People Ops', label: 'internal', visibility: 'public', join: 'open', members: 58, pending: 0, events: 3, reports: 0, owners: ['Noor Rahimi', 'Priya Nair'], created: '8 Feb 2026', feeds: 4, state: 'active' },
+    { id: 'g-emea', name: 'EMEA field kickoff', ws: 'Field Sales', label: 'internal', visibility: 'private', join: 'request', members: 22, pending: 5, events: 2, reports: 0, owners: ['Samir Haddad'], created: '1 Sep 2026', feeds: 1, state: 'active' }
+  ];
+  const FEEDS0 = () => [
+    { id: 'cf-311', scope: 'group', owner: 'Month-end close', issuedTo: 'Felix Brandt', issued: '14 Jan 2026', fetched: '19 Sep 06:02', label: 'confidential', state: 'active' },
+    { id: 'cf-312', scope: 'group', owner: 'Month-end close', issuedTo: 'Aisha Bello', issued: '2 Feb 2026', fetched: '18 Sep 22:40', label: 'confidential', state: 'active' },
+    { id: 'cf-340', scope: 'group', owner: 'AI champions', issuedTo: 'Noor Rahimi', issued: '9 Feb 2026', fetched: '19 Sep 09:15', label: 'internal', state: 'active' },
+    { id: 'cf-402', scope: 'user', owner: 'Mara Okafor', issuedTo: 'Mara Okafor', issued: '11 Jun 2026', fetched: '19 Sep 13:58', label: 'confidential', state: 'active' },
+    { id: 'cf-417', scope: 'group', owner: 'EMEA field kickoff', issuedTo: 'Samir Haddad', issued: '1 Sep 2026', fetched: 'never', label: 'internal', state: 'active' },
+    { id: 'cf-298', scope: 'user', owner: 'Tomasz Weber', issuedTo: 'Tomasz Weber', issued: '4 Dec 2025', fetched: '30 Aug 10:11', label: 'internal', state: 'revoked' }
+  ];
+  const RETENTION = [['Finance Ops', '400 days', 'tenant default'], ['People Ops', '180 days', 'workspace override'], ['Field Sales', '400 days', 'tenant default'], ['Legal', 'keep', 'legal hold since 3 Sep 2026']];
+  const ROOMS0 = () => [
+    { kind: 'conversation', rooms: 412, sockets: 188, spark: [14, 18, 22, 19, 31, 27, 24, 29, 35, 30, 26, 28], backlog: 0 },
+    { kind: 'group', rooms: 7, sockets: 44, spark: [2, 3, 1, 4, 6, 3, 2, 5, 4, 3, 2, 4], backlog: 0 },
+    { kind: 'feed', rooms: 5, sockets: 203, spark: [20, 24, 31, 28, 44, 51, 39, 47, 58, 62, 71, 66], backlog: 0 },
+    { kind: 'channel', rooms: 11, sockets: 9, spark: [1, 0, 2, 1, 1, 3, 2, 1, 0, 1, 2, 1], backlog: 0 },
+    { kind: 'job', rooms: 23, sockets: 23, spark: [5, 7, 4, 6, 8, 9, 6, 7, 5, 6, 8, 7], backlog: 0 },
+    { kind: 'flag', rooms: 3, sockets: 6, spark: [0, 1, 0, 0, 2, 1, 0, 1, 0, 0, 1, 0], backlog: 0 }
+  ];
+  const RULES0 = () => [{ ws: 'Finance Ops', rule: 'anyone in the workspace' }, { ws: 'People Ops', rule: 'anyone in the workspace' }, { ws: 'Field Sales', rule: 'contacts only' }, { ws: 'Legal', rule: 'admins only' }];
+  const USERS = ['Felix Brandt', 'Lena Hoffmann', 'Noor Rahimi', 'Jonas Lindqvist', 'Priya Nair', 'Tomasz Weber', 'Samir Haddad', 'Aisha Bello'];
+  const visKind = (v) => v === 'public' ? 'ok' : v === 'hidden' ? 'warn' : '';
+
+  function menu(ctx, anchor, items, active, pick) {
+    const host = anchor.closest('.relative'); const ex = host.querySelector('.dropdown'); ctx.$$('.dropdown').forEach((d) => d.remove()); if (ex) return;
+    const d = document.createElement('div'); d.className = 'dropdown';
+    d.innerHTML = items.map((it) => '<button type="button" data-v="' + esc(it[0]) + '" class="' + (it[0] === active ? 'on' : '') + '">' + esc(it[1]) + '</button>').join('');
+    host.appendChild(d);
+    d.addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (!b) return; d.remove(); pick(b.dataset.v); });
+    setTimeout(() => document.addEventListener('click', function off(ev) { if (!d.contains(ev.target)) { d.remove(); document.removeEventListener('click', off); } }), 0);
+  }
+  const init = (st) => {
+    if (st.policy) return;
+    st.policy = POLICY0(); st.tags = TAGS0(); st.defaults = DEFAULTS0(); st.groups = GROUPS0(); st.feeds = FEEDS0(); st.rooms = ROOMS0(); st.rules = RULES0();
+    st.tab = 'feed'; st.sel = 'g-close'; st.wsFilter = 'all'; st.query = ''; st.digestProfile = 'analyst'; st.digestDay = 'Friday'; st.digestTime = '16:00'; st.digestTop = 10; st.digestLabel = 'internal'; st.digestFell = false;
+    st.embedModel = 'nomic-embed-text'; st.summaryProfile = 'assistant'; st.exports = []; st.realtimeBacklog = false; st.closed = {};
+  };
+  const held = (st) => st.policy.reduce((n, p) => n + p.held, 0);
+
+  App.register({
+    id: 'social', title: 'Social and messaging', section: 'admin', crumb: ['Admin', 'Social and messaging'],
+    summary: 'Policies and health for the feed, groups, messaging and realtime, across workspaces',
+    commands: [
+      { label: 'Send a test digest', sub: 'Social and messaging', run(app) { const s = app.stateFor('social'); init(s); s.tab = 'feed'; s.openDigest = true; app.render(); } },
+      { label: 'Export a conversation', sub: 'Social and messaging', run(app) { const s = app.stateFor('social'); init(s); s.tab = 'messaging'; s.openExport = true; app.render(); } }
+    ],
+    states: [
+      { title: 'Post held by guardrail', tone: 'info', text: 'Three posts wait for review across the workspaces; the held counter links to Moderation. A held post is invisible until approved (B-2704).', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'feed'; st.policy[0].held = 2; st.policy[1].held = 1; ctx.rerender(); } },
+      { title: 'Digest fell back', tone: 'warn', text: 'The weekly digest went out as the ranked list because the profile\'s model failed; the panel says so and names the run.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'feed'; st.digestFell = true; ctx.rerender(); } },
+      { title: 'Semantic search off', tone: 'neutral', text: 'MESSAGING_EMBED_MODEL is unset: search is keyword only. The pill and a notice say so, with the setting to copy.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'messaging'; st.embedModel = ''; ctx.rerender(); } },
+      { title: 'Calendar feed revoked', tone: 'ok', text: 'A revoked signed feed URL answers 404 on its next fetch; the row shows revoked and the audit entry calendar.feed.revoked is written.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'groups'; const f = st.feeds.find((x) => x.id === 'cf-312'); if (f.state !== 'revoked') { f.state = 'revoked'; ctx.rerender(); ctx.toast('Feed cf-312 revoked. The next fetch answers 404; audit event written.', 'ok'); } else ctx.rerender(); } },
+      { title: 'Realtime backlog', tone: 'warn', text: 'The feed room on api-2 is behind: signals queue because the instance stopped claiming work while behind the schema. Overview explains the instance.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'realtime'; st.realtimeBacklog = true; st.rooms[2].backlog = 1840; ctx.rerender(); } }
+    ],
+    render(root, ctx) {
+      const st = ctx.state; init(st);
+      if (ctx.params.tab) { st.tab = ctx.params.tab; delete ctx.params.tab; }
+      if (ctx.params.group) { st.tab = 'groups'; st.sel = ctx.params.group; delete ctx.params.group; }
+      const tabs = UI.tabs([{ id: 'feed', label: 'Feed', count: held(st) || undefined }, { id: 'groups', label: 'Groups and events', count: st.groups.filter((g) => g.state !== 'archived').length }, { id: 'messaging', label: 'Messaging' }, { id: 'realtime', label: 'Realtime' }, { id: 'relations', label: 'Relations' }], st.tab);
+      let body = '', insp = '';
+
+      // ---------------- Feed ----------------
+      if (st.tab === 'feed') {
+        const posts = st.policy.reduce((n, p) => n + p.posts, 0);
+        body += '<div class="stats">' + UI.stat(posts, 'posts today', 'across 4 workspaces') + UI.stat('<a href="#" data-goheld>' + held(st) + '</a>', 'held for review', 'invisible until approved') + UI.stat(1204, 'comments today', 'threaded, refused when a rule would hold') + UI.stat('3.9k', 'reactions today') + UI.stat(st.tags.filter((t) => !t.excluded).length, 'trending tags', 'last run 13:50') + '</div>'
+          + UI.panel('Approval policy by workspace', UI.table(['Workspace', 'Label', 'Posts pass user-input', 'Held posts approved by', 'Edits and comments a rule would hold', 'Media', 'Max media size', { label: 'Held', right: true }], st.policy.map((p, i) => [esc(p.ws), UI.label(p.label, { sm: true }), UI.toggle(p.guard ? 'checked' : 'off', p.guard, 'data-manual data-guard="' + i + '"'), UI.select(['workspace admins', 'guardrail admins', 'moderators'], p.approver, 'data-approver="' + i + '" aria-label="Approver for ' + esc(p.ws) + '"'), '<span class="muted">refused, not held</span>', UI.toggle(p.media ? 'allowed' : 'off', p.media, 'data-manual data-media="' + i + '"'), UI.select(['—', '20 MiB', '50 MiB', '200 MiB'], p.maxMedia, 'data-maxmedia="' + i + '" aria-label="Max media for ' + esc(p.ws) + '"' + (p.media ? '' : ' disabled')), p.held ? '<a href="#" data-goheld>' + p.held + '</a>' : '0']), { clickable: false, minWidth: '900px' })
+            + UI.notice('Posts pass the <span class="mono">user-input</span> guardrail; a held post is invisible until approved. Edits and comments a rule would hold are refused rather than held (B-2704). Media comes from the file store after quarantine.', 'info'))
+          + '<div class="grid2">' + UI.panel('Trending', UI.kv([['Job', '<span class="mono">feed</span> trending, every <span class="mono">FEED_TRENDING_MINUTES</span> = 20'], ['Window', '<span class="mono">FEED_TRENDING_HOURS</span> = 48'], ['Last run', '19 Sep 13:50, 1.2 s, 7 tags'], ['Next run', '14:10']], 2)
+            + UI.table(['Tag', { label: 'Posts', right: true }, { label: 'Change 48 h', right: true }, 'State', ''], st.tags.map((t) => ['<span class="mono">#' + esc(t.tag) + '</span>', t.posts, (t.delta >= 0 ? '+' : '') + t.delta, t.excluded ? UI.pill('excluded', 'warn') : UI.pill('trending', 'ok'), t.excluded ? UI.btn('Include', { size: 'xs', kind: 'ghost', attrs: 'data-include="' + esc(t.tag) + '"' }) : UI.btn('Exclude from trending', { size: 'xs', kind: 'ghost', attrs: 'data-exclude="' + esc(t.tag) + '"' })]), { clickable: false, minWidth: '0', cls: 'bare' })
+            + '<span class="muted" style="font-size:12px">Exclusion list per tenant ' + UI.pill('proposed', 'outline') + ': an excluded tag still appears on posts and in hashtag feeds, never in the trending panel.</span>', { actions: UI.btn('Run trending now', { size: 'sm', attrs: 'data-runtrending' }) })
+          + UI.panel('Weekly digest', (st.digestFell ? UI.notice('<b>Last digest fell back.</b> Run <span class="mono">digest-2026-37</span> on 12 Sep kept the ranked list: profile <span class="mono">' + esc(st.digestProfile) + '</span> answered 503 from the gateway twice. Members received the list without the written summary.', 'warn') : UI.notice('Last digest <span class="mono">digest-2026-37</span> on 12 Sep 16:00: written by <span class="mono">' + esc(st.digestProfile) + '</span>, 4 workspaces, 1,122 recipients.', 'ok'))
+            + '<div class="formgrid">' + UI.field('Profile', UI.select(PROFILES, st.digestProfile, 'data-dprofile'), 'FEED_DIGEST_PROFILE; a published profile. The ranked list is kept if it fails.') + UI.field('Day and time', '<div class="hstack">' + UI.select(['Monday', 'Wednesday', 'Friday'], st.digestDay, 'data-dday aria-label="Digest day"') + UI.select(['09:00', '12:00', '16:00'], st.digestTime, 'data-dtime aria-label="Digest time"') + '</div>', 'Tenant local time, one job per workspace') + UI.field('Posts in the digest', UI.select(['5', '10', '20'], String(st.digestTop), 'data-dtop'), 'FEED_DIGEST_TOP, ranked by reactions and comments') + UI.field('Max label', UI.select(['public', 'internal', 'confidential'], st.digestLabel, 'data-dlabel'), 'FEED_DIGEST_MAX_LABEL; posts above it are left out, not summarised') + '</div>'
+            + '<div class="hstack gap6">' + UI.btn('Send a test digest to me', { size: 'sm', kind: 'primary', attrs: 'data-testdigest' }) + '<span class="muted" style="font-size:11px">Current label ' + UI.label(st.digestLabel, { sm: true }) + '</span></div>') + '</div>';
+      }
+      // ---------------- Groups and events ----------------
+      if (st.tab === 'groups') {
+        const q = st.query.toLowerCase();
+        const rows = st.groups.filter((g) => (st.wsFilter === 'all' || g.ws === st.wsFilter) && (!q || (g.name + ' ' + g.ws).toLowerCase().includes(q)));
+        if (!rows.some((g) => g.id === st.sel)) st.sel = rows.length ? rows[0].id : null;
+        const sel = st.groups.find((g) => g.id === st.sel);
+        body += UI.panel('Defaults by workspace', UI.table(['Workspace', 'Who may create groups', 'Default visibility', 'Default join mode', 'Requests expire', 'Invitations expire', 'Event capacity', 'Reminders'], st.defaults.map((d, i) => [esc(d.ws), UI.select(['any member', 'workspace admins'], d.create, 'data-dcreate="' + i + '" aria-label="Who may create groups in ' + esc(d.ws) + '"'), UI.select(['public', 'private', 'hidden'], d.visibility, 'data-dvis="' + i + '" aria-label="Default visibility for ' + esc(d.ws) + '"'), UI.select(['open', 'request', 'invite'], d.join, 'data-djoin="' + i + '" aria-label="Default join mode for ' + esc(d.ws) + '"'), '<span class="mono">GROUP_REQUEST_DAYS</span> 14', '<span class="mono">GROUP_INVITE_DAYS</span> 30', '<span class="num">' + d.capacity + '</span>', esc(d.reminders)]), { clickable: false, minWidth: '960px' })
+          + UI.notice('Governance voting (the platform\'s proposals and votes) stays deferred: no demand in Exprsn-AI\'s workspaces yet. Groups have owners, moderators and members.', 'info'))
+          + '<div class="toolbar">' + UI.search('Filter groups by name or workspace', 'data-search', st.query) + '<span class="relative">' + UI.btn(st.wsFilter === 'all' ? 'Workspace' : st.wsFilter, { size: 'sm', icon: 'filter', attrs: 'data-menu="ws"', cls: st.wsFilter !== 'all' ? 'active' : '' }) + '</span><span class="muted right" style="font-size:12px">' + rows.length + ' groups, ' + st.groups.reduce((n, g) => n + g.pending, 0) + ' pending requests</span></div>'
+          + UI.table(['Group', 'Workspace', 'Label', 'Visibility', 'Join mode', { label: 'Members', right: true }, { label: 'Pending requests', right: true }, { label: 'Upcoming events', right: true }, { label: 'Open reports', right: true }, 'State'], rows.map((g) => ({ cells: ['<div style="font-weight:600">' + esc(g.name) + '</div>', esc(g.ws), UI.label(g.label, { sm: true }), UI.pill(g.visibility, visKind(g.visibility)), esc(g.join), g.members, g.pending ? '<span style="color:var(--warn-fg)">' + g.pending + '</span>' : '0', g.events, g.reports ? '<span style="color:var(--danger-fg)">' + g.reports + '</span>' : '0', UI.pill(g.state, g.state === 'active' ? 'ok' : g.state === 'hidden' ? 'danger' : 'warn')], attrs: 'data-group="' + g.id + '"', selected: g.id === st.sel })), { minWidth: '1000px', emptyTitle: 'No groups match', emptyText: 'Clear the filter.' })
+          + UI.panel('Calendar feeds', UI.table(['Feed', 'Scope', 'Calendar', 'Issued to', 'Label', 'Issued', 'Last fetched', 'State', ''], st.feeds.map((f) => ['<span class="mono">' + esc(f.id) + '</span>', esc(f.scope), esc(f.owner), esc(f.issuedTo), UI.label(f.label, { sm: true }), esc(f.issued), esc(f.fetched), UI.pill(f.state, f.state === 'active' ? 'ok' : 'danger'), f.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-revoke="' + esc(f.id) + '"' }) : '']), { clickable: false, minWidth: '0', cls: 'bare' })
+            + '<span class="muted" style="font-size:12px">Signed URLs <span class="mono">/calendar/feeds/&lt;id&gt;/&lt;sig&gt;.ics</span> (RFC 5545, UTC, B-2504). HMAC from a derived key; a revoked or bad signature answers 404. Rate <span class="mono">CALENDAR_FEED_PER_MINUTE</span>, feeds at most <span class="mono">CALENDAR_FEED_MAX_LABEL</span>.</span>');
+        if (sel) {
+          insp = '<div class="hstack"><div class="eyebrow grow">Selected group</div>' + UI.pill(sel.state, sel.state === 'active' ? 'ok' : sel.state === 'hidden' ? 'danger' : 'warn') + '</div><div style="font-size:15px;font-weight:600">' + esc(sel.name) + '</div><div class="muted" style="font-size:12px">' + esc(sel.ws) + ' · ' + UI.label(sel.label, { sm: true }) + '</div>'
+            + UI.kv([['Owners', sel.owners.map(esc).join(', ')], ['Created', esc(sel.created)], ['Visibility', esc(sel.visibility) + ', join ' + esc(sel.join)], ['Members', sel.members + (sel.pending ? ', ' + sel.pending + ' waiting' : '')], ['Upcoming events', String(sel.events)], ['Feed URLs issued', String(sel.feeds)], ['Open reports', sel.reports ? '<a href="#" data-goreports>' + sel.reports + '</a>' : 'none']], 1)
+            + (sel.state === 'hidden' ? UI.notice('Hidden by moderation on 18 Sep (F-2301, upheld). Members see a notice, not the posts. Lifting it is a moderation action.', 'danger', UI.btn('Open flag', { size: 'xs', attrs: 'data-goflag' })) : '')
+            + '<div class="hstack wrap gap6">' + UI.btn('Transfer ownership', { size: 'sm', attrs: 'data-transfer', disabled: sel.state === 'archived' }) + UI.btn('Open on Groups', { size: 'sm', kind: 'ghost', attrs: 'data-opengroup' }) + (sel.state !== 'archived' ? UI.btn('Archive group', { size: 'sm', kind: 'danger', attrs: 'data-archive' }) : '') + '</div>'
+            + '<span class="muted" style="font-size:12px">Audit entries: group.updated, group.ownership.transferred, group.archived, calendar.feed.revoked.</span>';
+        }
+      }
+      // ---------------- Messaging ----------------
+      if (st.tab === 'messaging') {
+        const semantic = !!st.embedModel;
+        body += (semantic ? '' : UI.notice('<b>Semantic search is off.</b> <span class="mono">MESSAGING_EMBED_MODEL</span> is unset, so search is keyword only. Set it to an approved embedding model (for example <span class="mono">nomic-embed-text</span>) to index new messages.', 'warn', UI.btn('Copy setting name', { size: 'xs', attrs: 'data-copysetting' })))
+          + '<div class="grid2">' + UI.panel('Retention by workspace', UI.table(['Workspace', 'Messages kept', 'Set by'], RETENTION.map((r) => [esc(r[0]), esc(r[1]), esc(r[2])]), { clickable: false, minWidth: '0', cls: 'bare' }) + '<span class="muted" style="font-size:12px">Retention is set per workspace and per user on Tenants; the <span class="mono">chat.retention</span> sweep removes messages past it. Edits and deletes are audited without the text.</span>', { actions: UI.btn('Open Tenants', { size: 'xs', kind: 'ghost', attrs: 'data-goretention' }) })
+          + UI.panel('Limits', UI.kv([['Members per conversation', '<span class="mono">MESSAGING_MAX_MEMBERS</span> = 200'], ['Attachment size', '<span class="mono">ATTACHMENT_MAX_BYTES</span> = 50 MiB'], ['Attachment types', 'any, through the file store\'s quarantine, type check and scan'], ['Direct conversations', 'one per pair, also under a race (B-2601)']], 1) + '<span class="muted" style="font-size:12px">Attachments come from the file store after quarantine (B-2604); a file still scanning shows as pending in the conversation.</span>') + '</div>'
+          + '<div class="grid2">' + UI.panel('Search, summaries and presence', UI.kv([['Keyword search', UI.pill('on', 'ok')], ['Semantic search', semantic ? UI.pill('semantic on', 'ok') + ' <span class="mono">' + esc(st.embedModel) + '</span>' : UI.pill('keyword only', 'warn')], ['Summaries and digests', UI.select(PROFILES, st.summaryProfile, 'data-sprofile aria-label="Summary profile"') + '<div class="muted" style="font-size:11px"><span class="mono">MESSAGING_SUMMARY_PROFILE</span>, at most <span class="mono">MESSAGING_SUMMARY_MAX_MESSAGES</span> = 400; cites only what the reader can see</div>'], ['Presence', 'the last join or leave, not a live status (B-2603)']], 1))
+          + UI.panel('Relations in messaging', '<div class="stats">' + UI.stat(37, 'blocked pairs', 'a block hides messages, receipts, typing and posts') + UI.stat(118, 'muted conversations', 'per member, with notification rules') + UI.stat(6, 'conversations on legal hold', 'Legal workspace') + '</div>') + '</div>'
+          + UI.panel('Export a conversation for a legal hold', (st.exports.length ? UI.table(['Request', 'Conversation', 'Reason', 'Requested by', 'Approver', 'State'], st.exports.map((x) => ['<span class="mono">' + esc(x.id) + '</span>', '<span class="mono">' + esc(x.conv) + '</span>', esc(x.reason), 'Mara Okafor', esc(x.approver), UI.pill(x.state, 'warn')]), { clickable: false, minWidth: '0', cls: 'bare' }) : '<div class="fg2" style="font-size:13px">No export requests. An export is a job (<span class="mono">conversation.export</span>) that writes the conversation as a sealed CSV for the requester once a second tenant admin approves; the members are not told. Audited <span class="mono">messaging.conversation.exported</span> with the reason and both names.</div>')
+            + '<div>' + UI.btn('Export a conversation', { size: 'sm', kind: 'primary', attrs: 'data-export' }) + '</div>', { actions: UI.pill('dual control', 'outline') });
+      }
+      // ---------------- Realtime ----------------
+      if (st.tab === 'realtime') {
+        const sockets = st.rooms.reduce((n, r) => n + r.sockets, 0);
+        body += (st.realtimeBacklog ? UI.notice('<b>Feed room backlog on api-2.</b> 1,840 signals wait because api-2 stopped claiming work while behind the schema (032_dav). Members on that instance see new posts late; nothing is lost. Overview explains the instance.', 'warn', UI.btn('Open Overview', { size: 'xs', attrs: 'data-gooverview' })) : '')
+          + '<div class="stats">' + UI.stat(sockets, 'sockets connected', 'api-1 ' + (sockets - 97) + ', api-2 97') + UI.stat(st.rooms.reduce((n, r) => n + r.rooms, 0), 'rooms open') + UI.stat(12, 'socket auth failures, last hour', 'expired sessions, 0 bad tokens') + UI.stat('60', 'signals per minute per socket', '<span class="mono">ROOM_SIGNALS_PER_MINUTE</span>') + '</div>'
+          + UI.table(['Room kind', { label: 'Rooms open', right: true }, { label: 'Sockets', right: true }, 'Signals per minute', { label: 'Backlog', right: true }], st.rooms.map((r) => ['<span class="mono">' + esc(r.kind) + '</span>', r.rooms, r.sockets, UI.spark(r.spark, r.spark.length - 1), r.backlog ? '<span style="color:var(--warn-fg)">' + r.backlog.toLocaleString() + '</span>' : '0']), { clickable: false, minWidth: '600px' })
+          + UI.notice('Rooms are decided by the server from the principal (B-2101): a member joins the rooms of their conversations, groups, feeds and channels; removing a member closes their room at once, and revoking a session closes its sockets.', 'info', UI.btn('Sessions', { size: 'xs', attrs: 'data-gosessions' }))
+          + '<div>' + UI.btn('Close a user\'s rooms', { size: 'sm', attrs: 'data-closerooms' }) + ' <span class="muted" style="font-size:12px">What a sanction does: every socket of the user is closed and they rejoin only what their next request allows.</span></div>';
+      }
+      // ---------------- Relations ----------------
+      if (st.tab === 'relations') {
+        body += '<div class="stats">' + UI.stat('2,418', 'follows', 'shared social module') + UI.stat(37, 'blocks', 'ids only, never text') + UI.stat(212, 'mutes', 'a muted author leaves the home feed') + UI.stat(44, 'lists', 'list feeds') + '</div>'
+          + UI.panel('Contact rules by workspace', UI.table(['Workspace', 'Who may start a conversation', ''], st.rules.map((r, i) => [esc(r.ws), UI.select(['anyone in the workspace', 'contacts only', 'admins only'], r.rule, 'data-rule="' + i + '" aria-label="Contact rule for ' + esc(r.ws) + '"'), UI.btn('Apply', { size: 'xs', attrs: 'data-applyrule="' + i + '"' })]), { clickable: false, minWidth: '0', cls: 'bare' }) + '<span class="muted" style="font-size:12px">Contacts are mutual follows. A rule applies to new conversations; existing ones continue. Blocks always win (B-2606).</span>')
+          + UI.panel('Most blocked accounts', UI.table(['Account', { label: 'Blocked by', right: true }, 'Workspace', 'Sanction'], [['<span class="mono">u-4f21</span>', 9, 'Field Sales', UI.pill('warned 12 Sep', 'warn')], ['<span class="mono">u-0b77</span>', 5, 'Finance Ops', 'none'], ['<span class="mono">u-93aa</span>', 4, 'People Ops', UI.pill('suspended to 26 Sep', 'danger')]], { clickable: false, minWidth: '0', cls: 'bare' }) + '<span class="muted" style="font-size:12px">Counts only; who blocked whom is never shown. Sanctions are decided on Moderation.</span>', { actions: UI.btn('Sanctions', { size: 'xs', kind: 'ghost', attrs: 'data-gosanctions' }) });
+      }
+
+      root.innerHTML = '<div class="page">' + UI.pagehead('Social and messaging', 'Policies and health for the feed, groups, messaging and realtime, across every workspace', UI.btn('Send a test digest', { attrs: 'data-testdigest' }) + UI.btn('Export a conversation', { kind: 'primary', attrs: 'data-export' })) + tabs + body + '</div>' + (insp ? '<aside class="inspector w360">' + insp + '</aside>' : '');
+
+      // ---------------- handlers ----------------
+      ctx.on('click', '.tabs [data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const rows = st.groups.filter((g) => (st.wsFilter === 'all' || g.ws === st.wsFilter) && (!st.query || (g.name + ' ' + g.ws).toLowerCase().includes(st.query.toLowerCase()))); const tb = ctx.$('table.dt tbody'); if (tb) ctx.$$('tr[data-group]').forEach((tr) => { tr.style.display = rows.some((g) => g.id === tr.dataset.group) ? '' : 'none'; }); });
+      ctx.on('click', '[data-menu="ws"]', (e, t) => menu(ctx, t, [['all', 'Every workspace']].concat(WORKSPACES.map((w) => [w, w])), st.wsFilter, (v) => { st.wsFilter = v; ctx.rerender(); }));
+      ctx.on('click', 'tr[data-group]', (e, t) => { st.sel = t.dataset.group; ctx.rerender(); });
+      ctx.on('click', '[data-goheld]', (e) => { e.preventDefault(); ctx.navigate('moderation', { tab: 'held' }); });
+      ctx.on('click', '[data-goreports]', (e) => { e.preventDefault(); ctx.navigate('moderation', { tab: 'reports' }); });
+      ctx.on('click', '[data-goflag]', () => ctx.navigate('flags', { id: 'F-2301' }));
+      ctx.on('click', '[data-opengroup]', () => ctx.navigate('groups', { group: st.sel }));
+      ctx.on('click', '[data-goretention]', () => ctx.navigate('tenants', { tab: 'retention' }));
+      ctx.on('click', '[data-gosessions]', () => ctx.navigate('identity', { tab: 'sessions' }));
+      ctx.on('click', '[data-gosanctions]', () => ctx.navigate('moderation', { tab: 'sanctions' }));
+      ctx.on('click', '[data-gooverview]', () => ctx.navigate('overview'));
+      ctx.on('click', '[data-copysetting]', () => { try { navigator.clipboard && navigator.clipboard.writeText('MESSAGING_EMBED_MODEL'); } catch (err) { /* clipboard unavailable from file:// */ } ctx.toast('MESSAGING_EMBED_MODEL copied'); });
+      // feed policy controls
+      ctx.on('click', '[data-guard]', (e, t) => { const p = st.policy[+t.dataset.guard]; if (p.guard) { ctx.confirm({ title: 'Stop checking posts in ' + p.ws, tag: 'weakens moderation', tone: 'danger', body: '<p class="fg2" style="margin:0">Posts in this workspace would publish without the user-input guardrail. The tenant baseline still applies to anything above internal.</p>', ok: 'Stop checking' }).then((ok) => { if (!ok) return; p.guard = false; ctx.rerender(); ctx.toast('Posts in ' + esc(p.ws) + ' no longer pass user-input. Audit event written.', 'warn'); }); } else { p.guard = true; ctx.rerender(); ctx.toast('Posts in ' + esc(p.ws) + ' pass user-input again.', 'ok'); } });
+      ctx.on('click', '[data-media]', (e, t) => { const p = st.policy[+t.dataset.media]; p.media = !p.media; if (!p.media) p.maxMedia = '—'; else if (p.maxMedia === '—') p.maxMedia = '50 MiB'; ctx.rerender(); ctx.toast('Media ' + (p.media ? 'allowed' : 'off') + ' for ' + esc(p.ws) + '.', 'ok'); });
+      ctx.on('change', '[data-approver]', (e, t) => { st.policy[+t.dataset.approver].approver = t.value; ctx.toast('Held posts in ' + esc(st.policy[+t.dataset.approver].ws) + ' are now approved by ' + esc(t.value) + '.', 'ok'); });
+      ctx.on('change', '[data-maxmedia]', (e, t) => { st.policy[+t.dataset.maxmedia].maxMedia = t.value; ctx.toast('Max media size saved.', 'ok'); });
+      ctx.on('click', '[data-exclude]', (e, t) => { const tag = st.tags.find((x) => x.tag === t.dataset.exclude); ctx.confirm({ title: 'Exclude #' + tag.tag + ' from trending', tone: 'info', body: '<p class="fg2" style="margin:0">The tag keeps working on posts and in its hashtag feed. It leaves the trending panel at the next run.</p>', kv: [['Posts, 48 h', String(tag.posts)], ['Next run', '14:10']], ok: 'Exclude' }).then((ok) => { if (!ok) return; tag.excluded = true; ctx.rerender(); ctx.toast('#' + esc(tag.tag) + ' excluded from trending. Audit event written.', 'ok'); }); });
+      ctx.on('click', '[data-include]', (e, t) => { const tag = st.tags.find((x) => x.tag === t.dataset.include); tag.excluded = false; ctx.rerender(); ctx.toast('#' + esc(tag.tag) + ' can trend again.', 'ok'); });
+      ctx.on('click', '[data-runtrending]', () => { ctx.toast('Trending job queued for every workspace.', 'ok'); setTimeout(() => { st.tags.forEach((x) => { x.posts += 1; }); ctx.rerender(); ctx.toast('Trending recomputed: 7 tags, 1.1 s.', 'ok'); }, 900); });
+      ctx.on('change', '[data-dprofile]', (e, t) => { st.digestProfile = t.value; ctx.toast('Digest profile set to ' + esc(t.value) + '.', 'ok'); });
+      ctx.on('change', '[data-dday]', (e, t) => { st.digestDay = t.value; ctx.toast('Digest day saved.', 'ok'); });
+      ctx.on('change', '[data-dtime]', (e, t) => { st.digestTime = t.value; ctx.toast('Digest time saved.', 'ok'); });
+      ctx.on('change', '[data-dtop]', (e, t) => { st.digestTop = +t.value; ctx.toast('FEED_DIGEST_TOP set to ' + esc(t.value) + '.', 'ok'); });
+      ctx.on('change', '[data-dlabel]', (e, t) => { st.digestLabel = t.value; ctx.rerender(); ctx.toast('Digest max label set to ' + esc(t.value) + '.', 'ok'); });
+      const testDigest = () => ctx.confirm({ title: 'Send a test digest to me', tone: 'info', body: '<p class="fg2" style="margin:0">Runs the digest for your workspaces now with profile <span class="mono">' + esc(st.digestProfile) + '</span> and sends it only to you. Nothing is posted to the feed.</p>', kv: [['Recipient', 'Mara Okafor'], ['Workspaces', 'Finance Ops, People Ops'], ['Max label', st.digestLabel]], ok: 'Send test' }).then((ok) => { if (!ok) return; ctx.toast('Test digest queued (job feed digest-test). It arrives in your notifications and by email.', 'ok', 5000); });
+      ctx.on('click', '[data-testdigest]', () => { st.tab = 'feed'; testDigest(); });
+      if (st.openDigest) { st.openDigest = false; setTimeout(testDigest, 50); }
+      // groups
+      ctx.on('change', '[data-dcreate]', (e, t) => { st.defaults[+t.dataset.dcreate].create = t.value; ctx.toast('Group creation in ' + esc(st.defaults[+t.dataset.dcreate].ws) + ': ' + esc(t.value) + '.', 'ok'); });
+      ctx.on('change', '[data-dvis]', (e, t) => { st.defaults[+t.dataset.dvis].visibility = t.value; ctx.toast('Default visibility saved.', 'ok'); });
+      ctx.on('change', '[data-djoin]', (e, t) => { st.defaults[+t.dataset.djoin].join = t.value; ctx.toast('Default join mode saved.', 'ok'); });
+      ctx.on('click', '[data-revoke]', (e, t) => { const f = st.feeds.find((x) => x.id === t.dataset.revoke); ctx.confirm({ title: 'Revoke feed ' + f.id, tag: 'breaks a subscription', tone: 'danger', body: '<p class="fg2" style="margin:0">The signed URL answers 404 on its next fetch. The calendar client of ' + esc(f.issuedTo) + ' stops updating until they subscribe again.</p>', kv: [['Calendar', esc(f.owner)], ['Last fetched', esc(f.fetched)]], ok: 'Revoke' }).then((ok) => { if (!ok) return; f.state = 'revoked'; ctx.rerender(); ctx.toast('Feed ' + esc(f.id) + ' revoked. The next fetch answers 404; audit event written.', 'ok'); }); });
+      ctx.on('click', '[data-transfer]', () => { const g = st.groups.find((x) => x.id === st.sel); ctx.modal({ title: 'Transfer ownership of ' + esc(g.name), body: UI.field('New owner', UI.select(USERS.filter((u) => !g.owners.includes(u)), '', 'data-newowner'), 'A current member. The previous owners become moderators.') + UI.notice('The group\'s members are told. Audited group.ownership.transferred.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Transfer', { kind: 'primary', attrs: 'data-dotransfer' }), onMount(m) { m.querySelector('[data-dotransfer]').addEventListener('click', () => { const who = m.querySelector('[data-newowner]').value; App.closeOverlay(); g.owners = [who]; ctx.rerender(); ctx.toast('Ownership of ' + esc(g.name) + ' transferred to ' + esc(who) + '.', 'ok'); }); } }); });
+      ctx.on('click', '[data-archive]', () => { const g = st.groups.find((x) => x.id === st.sel); ctx.confirm({ title: 'Archive ' + g.name, tag: 'read only', tone: 'danger', body: '<p class="fg2" style="margin:0">Members keep reading the posts and events; nothing new can be posted, joined or scheduled. Calendar feeds for the group keep answering with the past events. Members are told.</p>', kv: [['Members', String(g.members)], ['Feed URLs', String(g.feeds)]], ok: 'Archive' }).then((ok) => { if (!ok) return; g.state = 'archived'; g.pending = 0; ctx.rerender(); ctx.toast(esc(g.name) + ' archived. ' + g.members + ' members notified; audit event written.', 'ok'); }); });
+      // messaging
+      ctx.on('change', '[data-sprofile]', (e, t) => { st.summaryProfile = t.value; ctx.toast('Summary profile set to ' + esc(t.value) + '.', 'ok'); });
+      const openExport = () => ctx.drawer({ title: 'Export a conversation ' + UI.pill('dual control', 'outline'), body: UI.notice('For a legal hold or an investigation. The export is a sealed CSV for you alone, written once a second tenant admin approves. The members are not told. Audited <span class="mono">messaging.conversation.exported</span> with the reason and both names.', 'info')
+        + UI.field('Conversation', UI.select([{ value: 'c-close', label: 'c-close · Close team (Finance Ops, 7 members)' }, { value: 'c-vendors', label: 'c-vendors · Vendor renewals (Finance Ops, 4 members)' }, { value: 'c-g', label: 'c-g · Admins (Northwind)' }, { value: 'c-lena', label: 'c-lena · Lena Hoffmann (direct)' }, { value: 'c-tomasz', label: 'c-tomasz · Tomasz Weber (direct)' }], 'c-vendors', 'data-xconv'), 'Only conversations in workspaces you administer. Attachments are listed, not copied.')
+        + UI.field('Reason', UI.textarea('', { rows: 3, placeholder: 'Case or ticket reference and why the text is needed', attrs: 'data-xreason' }), 'Shown to the approver and kept in the audit chain')
+        + UI.field('Approver', UI.select(['Jonas Lindqvist', 'Felix Brandt'], 'Jonas Lindqvist', 'data-xapprover'), 'Another tenant admin; you cannot approve your own request'),
+        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Submit for approval', { kind: 'primary', attrs: 'data-xsubmit' }),
+        onMount(d) { d.querySelector('[data-xsubmit]').addEventListener('click', () => { const reason = d.querySelector('[data-xreason]').value.trim(); if (!reason) { d.querySelector('[data-xreason]').focus(); ctx.toast('A reason is required.', 'warn'); return; } const conv = d.querySelector('[data-xconv]').value, approver = d.querySelector('[data-xapprover]').value; App.closeOverlay(); st.exports.push({ id: 'xr-' + (1180 + st.exports.length), conv, reason, approver, state: 'waiting for approval' }); st.tab = 'messaging'; ctx.rerender(); ctx.toast('Export request sent to ' + esc(approver) + '. The job runs once approved.', 'ok', 5000); }); } });
+      ctx.on('click', '[data-export]', () => openExport());
+      if (st.openExport) { st.openExport = false; setTimeout(openExport, 50); }
+      // realtime
+      ctx.on('click', '[data-closerooms]', () => ctx.modal({ title: 'Close a user\'s rooms', body: UI.field('User', UI.select(USERS, USERS[0], 'data-cuser'), 'Every socket of the user is closed on every instance; they rejoin only what their next request allows.') + UI.notice('This is what a sanction does. It does not end the user\'s session; revoke it on Identity if that is what you mean.', 'warn'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Close rooms', { kind: 'danger', attrs: 'data-doclose' }), onMount(m) { m.querySelector('[data-doclose]').addEventListener('click', () => { const who = m.querySelector('[data-cuser]').value; App.closeOverlay(); st.rooms.forEach((r) => { if (r.sockets > 2) r.sockets -= 1; }); ctx.rerender(); ctx.toast('Rooms of ' + esc(who) + ' closed on api-1 and api-2. Audit event written.', 'ok'); }); } }));
+      // relations
+      ctx.on('change', '[data-rule]', (e, t) => { st.rules[+t.dataset.rule].pending = t.value; });
+      ctx.on('click', '[data-applyrule]', (e, t) => { const r = st.rules[+t.dataset.applyrule]; const next = r.pending || r.rule; ctx.confirm({ title: 'Apply the contact rule for ' + r.ws, tone: 'info', body: '<p class="fg2" style="margin:0">New conversations in ' + esc(r.ws) + ' may be started by <b>' + esc(next) + '</b>. Existing conversations continue; blocks always win.</p>', ok: 'Apply' }).then((ok) => { if (!ok) { ctx.rerender(); return; } r.rule = next; delete r.pending; ctx.rerender(); ctx.toast('Contact rule for ' + esc(r.ws) + ' applied. Audit event written.', 'ok'); }); });
+    }
+  });
+})();

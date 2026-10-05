@@ -1,0 +1,203 @@
+{
+  "title": "Exprsn-platform administration screens",
+  "doc": "design/platform-admin/README.md",
+  "items": [
+    {
+      "id": "Q1", "kind": "question", "screen": "Jobs and queues",
+      "title": "Where does the tenant cache live?",
+      "context": "The platform had a Prefetch section of its own. Exprsn-AI's B-2102 tenant cache is smaller: a store (Redis or memory), nine namespaces, hit rates and invalidations. The board puts it on Jobs and queues as a fifth tab.",
+      "options": [
+        { "key": "tab", "label": "A tab on Jobs and queues", "default": true },
+        { "key": "screen", "label": "Its own Cache screen in the Admin group" },
+        { "key": "overview", "label": "A panel on Overview only" }
+      ]
+    },
+    {
+      "id": "Q2", "kind": "question", "screen": "Configuration",
+      "title": "May the console change settings?",
+      "context": "The platform stored database overrides of environment settings, each hot or restart-required. Exprsn-AI reads everything from the environment and files and masks secrets. The board shows a read-only registry with per-instance values, and a Propose override drawer under dual control that the Overrides disabled state replaces with a notice.",
+      "options": [
+        { "key": "readonly", "label": "Read-only view of the environment", "default": true },
+        { "key": "dual", "label": "Database overrides for every setting, dual control" },
+        { "key": "hot", "label": "Overrides only for hot settings, dual control" }
+      ]
+    },
+    {
+      "id": "Q3", "kind": "question", "screen": "Overview",
+      "title": "Where does Overview sit?",
+      "context": "The board makes Overview the first item of the Admin group and leaves Platform as it is (imports, mirrors, certificates, secrets health, backups). The platform's Overview and Platform were separate too.",
+      "options": [
+        { "key": "first", "label": "First in the Admin group; Platform unchanged", "default": true },
+        { "key": "replace", "label": "Replace Platform; fold its five tabs into Overview" },
+        { "key": "last", "label": "Beside Platform at the end of the group" }
+      ]
+    },
+    {
+      "id": "Q4", "kind": "question", "screen": "Social and messaging",
+      "title": "Which permission governs social and messaging policies?",
+      "context": "Feed approval, group defaults, messaging limits and contact rules are tenant policies. The board uses tenant:manage, and platform:manage for the Realtime tab. A new permission would let a tenant delegate these without the rest of tenant:manage.",
+      "options": [
+        { "key": "tenant", "label": "tenant:manage (and platform:manage for Realtime)", "default": true },
+        { "key": "social", "label": "A new social:manage permission" },
+        { "key": "moderation", "label": "moderation:manage, since most of it is about held content" }
+      ]
+    },
+    {
+      "id": "Q5", "kind": "question", "screen": "Social and messaging",
+      "title": "Who may export another member's conversation?",
+      "context": "A legal hold needs a transcript the members did not ask for. The board's drawer asks for the conversation, a reason and a second platform admin, and audits messaging.conversation.exported.",
+      "options": [
+        { "key": "dual", "label": "Dual control: a second platform admin approves", "default": true },
+        { "key": "single", "label": "One tenant admin with a reason, audited" },
+        { "key": "none", "label": "Not offered in the console; CLI only" }
+      ]
+    },
+    {
+      "id": "Q6", "kind": "question", "screen": "Social and messaging",
+      "title": "Do groups get categories?",
+      "context": "The platform's groups module had twelve categories and city-based discovery. Exprsn-AI groups live inside workspaces, which already group them; the board has no categories.",
+      "options": [
+        { "key": "none", "label": "No categories; workspaces are the grouping", "default": true },
+        { "key": "tags", "label": "Free tags on groups, filterable" },
+        { "key": "categories", "label": "A tenant-managed category list" }
+      ]
+    },
+    {
+      "id": "Q7", "kind": "question", "screen": "Overview",
+      "title": "Should the console show server logs?",
+      "context": "The legacy admin service had a Logs page. Exprsn-AI exports traces and metrics (Sprint 22) and keeps logs on the host; a log view would need redaction of tenant content and a retention rule of its own.",
+      "options": [
+        { "key": "none", "label": "No logs in the console; traces and metrics only", "default": true },
+        { "key": "tail", "label": "The last lines per instance, redacted, platform:manage" },
+        { "key": "link", "label": "A link to the deployment's log system (Grafana, Loki)" }
+      ]
+    },
+    {
+      "id": "Q8", "kind": "question", "screen": "Scope",
+      "title": "Live streaming administration?",
+      "context": "The platform's Live section (streams, rooms, destinations, the ffmpeg fan-out queue) is the one admin area with no Exprsn-AI home. Backlog-1.5.0.md keeps live streaming deferred because it needs SRS or Cloudflare Stream plus RTMP and TURN.",
+      "options": [
+        { "key": "deferred", "label": "Stays deferred; no board", "default": true },
+        { "key": "board", "label": "Design a board now against SRS" },
+        { "key": "board-cf", "label": "Design a board now against Cloudflare Stream" }
+      ]
+    },
+    {
+      "id": "Q9", "kind": "question", "screen": "Jobs and queues",
+      "title": "Who sees which jobs?",
+      "context": "Jobs carry a tenant. The board shows system admins every tenant's jobs with a tenant filter, and tenant admins only their own, with the platform schedules visible to system admins only.",
+      "options": [
+        { "key": "both", "label": "System admins see all with a tenant filter; tenant admins see their own", "default": true },
+        { "key": "tenant", "label": "Tenant-scoped only; platform jobs on Platform" },
+        { "key": "platform", "label": "platform:manage only; tenant admins see nothing here" }
+      ]
+    },
+    {
+      "id": "Q10", "kind": "question", "screen": "Storage",
+      "title": "Deleting orphan blobs needs what?",
+      "context": "An orphan is an object nothing references. Deleting one is irreversible unless a backup has it. The board runs a dry run first, then one platform admin confirms with a reason.",
+      "options": [
+        { "key": "dryrun", "label": "Dry run, then one admin with a reason", "default": true },
+        { "key": "dual", "label": "Dual control after the dry run" },
+        { "key": "job", "label": "Only the scheduled job deletes, after a grace period" }
+      ]
+    },
+    {
+      "id": "Q11", "kind": "question", "screen": "Tenants",
+      "title": "Tenant provisioning templates?",
+      "context": "The platform provisioned organisations from templates (enterprise, team, personal) through a saga that also issued CA material. Exprsn-AI creates tenants from the Tenants screen and the CLI. A Create from template action could seed workspaces, roles, profiles and a zone.",
+      "options": [
+        { "key": "tenants", "label": "Add Create from template to the Tenants screen", "default": true },
+        { "key": "cli", "label": "Leave provisioning to the CLI" },
+        { "key": "later", "label": "Later; file a 1.6 item" }
+      ]
+    },
+    {
+      "id": "Q12", "kind": "question", "screen": "Planning",
+      "title": "Which sprint takes B-4202 to B-4207?",
+      "context": "The live screens are 34 points after this design's boards. Sprint 31 holds the PDS, the feed generator and the release at 65 points; Sprint 30 holds the domain screens and DAV at 73.",
+      "options": [
+        { "key": "s31", "label": "Sprint 31, beside the release", "default": true },
+        { "key": "s30", "label": "Sprint 30, moving WebDAV (B-32) to Sprint 31" },
+        { "key": "1.6", "label": "1.6; the boards alone ship in 1.5.0" }
+      ]
+    },
+    {
+      "id": "Q13", "kind": "question", "screen": "Prototype",
+      "title": "Who adds the five icons to app.js?",
+      "context": "The sidebar icons live in app.js, which another session is editing on sprint-29. The boards reuse existing icons (grid, clock, upload, settings, thumb) and add their own nav entries at load time, so this branch touches neither app.js nor app.css.",
+      "options": [
+        { "key": "later", "label": "The sprint-29 session adds overview, jobs, storage, configuration, social when the screens go live", "default": true },
+        { "key": "now", "label": "This branch edits app.js now and takes the merge" },
+        { "key": "keep", "label": "Keep the reused icons" }
+      ]
+    },
+    {
+      "id": "Q14", "kind": "question", "screen": "Overview",
+      "title": "Drain an instance from the console?",
+      "context": "Drain stops an instance claiming jobs and taking new streams; it finishes what it has. The board offers it from the inspector with a confirm, platform:manage and a recent sign-in, audited platform.instance.drained. Restart stays out of the console.",
+      "options": [
+        { "key": "console", "label": "From the console with confirm and a recent sign-in", "default": true },
+        { "key": "cli", "label": "CLI only; the console shows state" },
+        { "key": "dual", "label": "From the console under dual control" }
+      ]
+    },
+    {
+      "id": "Q15", "kind": "question", "screen": "Overview",
+      "title": "Acknowledging an alert is for whom?",
+      "context": "An acknowledged alert leaves the Overview list until its condition clears and returns. The board acknowledges tenant-wide and audits platform.alert.acknowledged.",
+      "options": [
+        { "key": "tenant", "label": "Tenant-wide, audited", "default": true },
+        { "key": "admin", "label": "Per administrator" },
+        { "key": "snooze", "label": "Tenant-wide with a snooze period, then it returns" }
+      ]
+    },
+    {
+      "id": "Q16", "kind": "question", "screen": "Storage",
+      "title": "Migrate the blob store from the console?",
+      "context": "The platform migrated files between backends from its File Vault admin. The board shows Migrate to another store as a proposal: a job copies objects to a second store and switches reads when complete.",
+      "options": [
+        { "key": "design", "label": "Design it as proposed on the Stores tab", "default": true },
+        { "key": "cli", "label": "CLI only (backup:restore into the new store)" },
+        { "key": "drop", "label": "Drop it from the board" }
+      ]
+    },
+    {
+      "id": "C1", "kind": "concern", "screen": "Branch",
+      "title": "This branch starts from the committed sprint-29 head",
+      "context": "design/platform-admin branches from a5c5bd5 so the boards can link to the eleven Sprint 29 boards. The Exprsn-AI-s29 worktree has uncommitted edits (the state strip removal across all boards, app.js and CONTRACT.md). Merging this branch into sprint-29 after those land is clean because this branch adds files and only appends to shell.html, README.md and Backlog-1.5.0.md.",
+      "options": [
+        { "key": "ack", "label": "Acknowledged; merge into sprint-29 after its pending commit", "default": true },
+        { "key": "main", "label": "Rebase onto main instead; links to the eleven boards go dead in the prototype" },
+        { "key": "wait", "label": "Hold the PR until sprint-29 is merged into main" }
+      ]
+    },
+    {
+      "id": "C2", "kind": "concern", "screen": "Prototype",
+      "title": "Nav entries are injected at load time",
+      "context": "Each new module inserts its sidebar entry into App.NAV before the first render, instead of editing the NAV table in app.js. It works because app.js renders on DOMContentLoaded, after every screen script has run. The live console will add the entries to its NAV table with permissions, as every other screen does.",
+      "options": [
+        { "key": "ack", "label": "Acknowledged for the prototype", "default": true },
+        { "key": "appjs", "label": "Edit app.js now instead (see Q13)" }
+      ]
+    },
+    {
+      "id": "C3", "kind": "concern", "screen": "Backlog",
+      "title": "Backlog-1.5.0.md gains an epic on this branch",
+      "context": "B-42 (seven items, 39 points) is appended under P1 and the sprint table is left as it is until Q12 is answered. The design/import-wizard branch appends B-38 to the same file, so whichever merges second resolves a small conflict at the end of the P1 section.",
+      "options": [
+        { "key": "ack", "label": "Acknowledged", "default": true },
+        { "key": "readme", "label": "Keep B-42 in the README only; do not touch the backlog file" }
+      ]
+    },
+    {
+      "id": "C4", "kind": "concern", "screen": "Scope",
+      "title": "Not designed: Live, governance voting, server logs",
+      "context": "Three platform admin areas have no board: Live streaming and governance voting are deferred in Backlog-1.5.0.md, and server logs have no console home (Q7, Q8). Everything else in the platform's admin navigation maps to a live screen, a Sprint 29 board or one of the five new boards.",
+      "options": [
+        { "key": "ack", "label": "Acknowledged", "default": true },
+        { "key": "more", "label": "Something else is missing; note it" }
+      ]
+    }
+  ]
+}

@@ -102,7 +102,7 @@
         + (st.quarantine && kb.id === 'finance' ? UI.notice('<b>invoice-scan.pdf</b> is held in quarantine until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn', '<a href="#" data-doc="invoice-scan.pdf">Details</a>') : '')
         + UI.tabs([{ id: 'sources', label: 'Sources' }, { id: 'documents', label: 'Documents' }, { id: 'index', label: 'Index' }, { id: 'access', label: 'Access' }, { id: 'test', label: 'Test search' }], st.tab)
         + body
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>';
 
       // ---- events ----
@@ -159,7 +159,6 @@
       }
       ctx.on('click', '[data-newkb]', () => ctx.modal({ title: 'New knowledge base', body: UI.field('Name', UI.input('', { placeholder: 'Treasury KB', attrs: 'data-name' })) + UI.field('Label floor', UI.select(['public', 'internal', 'confidential'], 'internal')) + UI.field('Embedding model', UI.select(['nomic-embed-text', 'bge-m3'], 'nomic-embed-text'), 'Changing it later builds a new index beside the old one.') + UI.field('Shared with', UI.select(['Finance Ops members', 'Curators only'], 'Finance Ops members')), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { const n = m.querySelector('[data-name]').value.trim(); if (!n) { ctx.toast('Give it a name.'); return; } App.closeOverlay(); if (!KBS.find((k) => k.name === n)) { const id = 'kb' + (KBS.length + 1); KBS.push({ id, name: n, sub: '0 documents', label: 'internal', status: 'draft', embed: 'nomic-embed-text', index: 'v1', chunks: '0', built: 'not yet' }); SOURCES[id] = []; DOCS[id] = []; st.kb = id; } ctx.rerender(); ctx.toast('Created ' + esc(n) + '. Add a source to start indexing.', 'ok'); }); } }));
       ctx.on('click', '[data-addprincipal]', () => ctx.modal({ title: 'Share ' + esc(kb.name), body: UI.field('Principal', UI.select(['Field Sales (workspace)', 'People Ops (workspace)', 'Contracts agent (agent)', 'Sam Reyes (user)'], 'Field Sales (workspace)')) + UI.field('Access', UI.select(['read', 'manage'], 'read')) + UI.notice('Sharing does not lift the clearance filter: readers still see only chunks at or below their clearance.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Share', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { App.closeOverlay(); ACCESS[3] = ['Field Sales', 'read', 'shared by Mara Okafor', UI.pill('active', 'ok')]; ctx.rerender(); ctx.toast('Shared with Field Sales. Audit entry written.', 'ok'); }); } }));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-fromdataset]', () => ctx.navigate('import', { kind: 'dataset', target: 'knowledge' }));
       if (st.openAdd) { st.openAdd = false; setTimeout(openAdd, 30); }
     }
