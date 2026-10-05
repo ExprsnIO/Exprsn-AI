@@ -119,6 +119,12 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): a PUT waits for its scan (run in the request on the database
+  queue, up to 30 seconds for a BullMQ worker); a scan that does not finish in time leaves the file unreadable until it
+  does, and the client sees a success without an ETag. Finder's AppleDouble and `.DS_Store` files are accepted and
+  discarded rather than stored. Locks are advisory to the API: the console and `/api/files` do not check WebDAV locks.
+  Range requests are not supported (whole files only). MOVE across workspaces is refused.
+
 - The chain context and Workflows 2's sub-workflow, agent, map and loop steps (1.5.0, Sprint 32, B-4101, B-3901,
   B-3902, B-3905). The chain covers what runs on this server; what leaves it (a webhook receiver or an MCP server that
   calls the API back) starts a new chain, bounded only by its own rate limits. A chat turn is a chain node only when its

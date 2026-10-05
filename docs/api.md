@@ -3933,3 +3933,9 @@ callers, dead letters and bundles of Sprint 32b. Two server changes back it:
 | --- | --- |
 | `GET /api/workflows/:id/callers` | `agents:run`. What else starts the workflow, for the Triggers and callers tab: `{workflowId, appTriggers: [{id, kind: record \| schedule, app, appName, appTitle, entity, entityTitle, events, cron, ownerId, ownerName, enabled, nextRunAt, lastRunAt, lastRunId, lastResult}] (apps the caller is cleared for), workflows: [{workflowId, workflow, label, publishedVersion, step, stepTitle, kind: sub \| map \| loop, version, in: draft \| published \| published and draft}] (other workflows of the workspace that run it), tools: [{id, name, version, status, sideEffect, label, workflowVersion}], plugins: [{id, key, name, version, state, maxLabel, installedBy, installedByName}] (granted call:workflow), lastRuns: {<kind>: {runId, at, state, trigger, count}}}`. `lastRuns` counts the last 500 runs (not dry runs) by kind of start (`manual`, `api`, `record`, `schedule`, `event`, `plugin`, `workflow`, `tool`, `replay`), the caller's own unless they hold `workflows:manage`. The workflow's own event or schedule trigger is `GET /workflows/:id/triggers` |
 | `GET /api/events/catalogue` | Also readable with `workflows:manage` (besides `webhooks:manage` and `plugins:manage`): the editor picks an event trigger's type from it |
+
+## Sprint 34b (1.5.0): WebDAV for the file store (B-3201 to B-3203)
+
+No new JSON routes. `/dav/files/` serves the file store to WebDAV clients (`docs/dav.md`), with the app passwords'
+`webdav` scope and `files:read` / `files:write`; `LOCK` and `UNLOCK` join the DAV methods (`DAV: 1, 2, 3, …`).
+Migration `036c_dav_files`.
