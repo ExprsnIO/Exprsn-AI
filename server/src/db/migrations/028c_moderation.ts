@@ -179,7 +179,8 @@ export async function up(knex: Knex): Promise<void> {
     t.string('flag_id', 26).nullable();
     t.integer('latency_ms').nullable();
     t.bigInteger('created_at').notNullable();
-    t.index(['tenant_id', 'provider_id', 'created_at']);
+    // Named: the generated name (67 characters) is over MySQL's 64-character limit for identifiers.
+    t.index(['tenant_id', 'provider_id', 'created_at'], 'mod_provider_verdicts_tenant_provider_created');
     t.index(['tenant_id', 'object_hash']);
   });
 }
