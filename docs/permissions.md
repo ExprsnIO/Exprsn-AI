@@ -81,7 +81,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:sanction` | yes | 3 | x | x |  |  | x |  |  |  |  |  |  |  |  |
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |
-| `firehose:manage` | yes | 7 | x | x |  |  | x |  |  |  |  |  |  |  |  |
+| `firehose:manage` | yes | 15 | x | x |  |  | x |  |  |  |  |  |  |  |  |
 | `apps:design` | yes | 17 | x | x |  |  |  |  |  |  | x |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |
@@ -962,12 +962,20 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 ### `firehose:manage`
 
 - `DELETE /api/atproto/firehose/{id}`
+- `DELETE /api/atproto/feeds/{id}`
+- `DELETE /api/atproto/feeds/{id}/publication`
+- `GET /api/atproto/feeds`
+- `GET /api/atproto/feeds/{id}`
+- `GET /api/atproto/feeds/{id}/skeleton`
 - `GET /api/atproto/firehose`
 - `GET /api/atproto/firehose/{id}`
+- `PATCH /api/atproto/feeds/{id}`
 - `PATCH /api/atproto/firehose/{id}`
+- `POST /api/atproto/feeds`
 - `POST /api/atproto/firehose`
 - `POST /api/atproto/firehose/{id}/start`
 - `POST /api/atproto/firehose/{id}/stop`
+- `PUT /api/atproto/feeds/{id}/publication`
 
 ### `apps:design`
 
@@ -1356,6 +1364,8 @@ No sign-in: health checks, sign-in itself, protocol endpoints (OIDC, SAML, ACME,
 - `GET /api/auth/sign-in-options`
 - `GET /api/public/channels/session`
 - `GET /atproto/{key}/did.json`
+- `GET /atproto/{key}/xrpc/app.bsky.feed.describeFeedGenerator`
+- `GET /atproto/{key}/xrpc/app.bsky.feed.getFeedSkeleton`
 - `GET /atproto/{key}/xrpc/com.atproto.label.queryLabels`
 - `GET /auth/negotiate`
 - `GET /calendar/feeds/{id}/{file}`
@@ -1411,6 +1421,8 @@ No sign-in: health checks, sign-in itself, protocol endpoints (OIDC, SAML, ACME,
 - `GET /t/{tenant}/saml/sso`
 - `GET /trainer/v1/artifacts/{grant}/{name}`
 - `GET /webhooks/keys/{tenant}`
+- `GET /xrpc/app.bsky.feed.describeFeedGenerator`
+- `GET /xrpc/app.bsky.feed.getFeedSkeleton`
 - `GET /xrpc/com.atproto.label.queryLabels`
 - `HEAD /pki/acme/{tenant}/new-nonce`
 - `POST /api/auth/email/resend`

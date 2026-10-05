@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { cborDecode, cborDecodeFirst } from './cbor.js';
+import type { CommitOp, CommitProof } from './commit.js';
 import { Cid, readVarint } from './encoding.js';
 
 /*
@@ -36,6 +37,8 @@ export interface FirehoseMessage {
   /** When the event happened upstream (ms), for the lag metric. */
   time: number | null;
   ops: RecordOp[];
+  /** subscribeRepos `#commit` frames: what the commit verification (B-3604, `commit.ts`) needs. */
+  proof?: CommitProof;
 }
 
 /** `fatal`: the stream ends (an error frame); otherwise only the one message is unusable and is skipped. */
@@ -138,14 +141,17 @@ export function parseRepoFrame(data: Buffer): Parsed {
   const did = typeof body.repo === 'string' && DID_RE.test(body.repo) ? body.repo : null;
   if (!did || !Array.isArray(body.ops)) return { message: { cursor: seq, time, ops: [] } };
   let blocks = new Map<string, Buffer>();
+  let unreadable = false;
   if (Buffer.isBuffer(body.blocks) && body.blocks.length) {
     try {
       blocks = readCar(body.blocks);
     } catch {
-      blocks = new Map(); // records unreadable: the ops are still seen, without text
+      blocks = new Map(); // records unreadable: the ops are still seen, without text (and the commit fails to verify)
+      unreadable = true;
     }
   }
   const ops: RecordOp[] = [];
+  const proofOps: CommitOp[] = [];
   for (const op of body.ops.slice(0, 1000)) {
     if (!isObj(op) || typeof op.path !== 'string' || typeof op.action !== 'string' || !ACTIONS.has(op.action)) continue;
     const slash = op.path.indexOf('/');
@@ -164,8 +170,10 @@ export function parseRepoFrame(data: Buffer): Parsed {
       }
     }
     ops.push({ did, collection, rkey, action: op.action as RecordOp['action'], cid, record });
+    proofOps.push({ action: op.action as CommitOp['action'], path: op.path, cid });
   }
-  return { message: { cursor: seq, time, ops } };
+  const proof: CommitProof = { repo: did, rev: typeof body.rev === 'string' ? body.rev : null, commit: body.commit instanceof Cid ? body.commit : null, blocks, ops: proofOps, tooBig: body.tooBig === true, unreadable };
+  return { message: { cursor: seq, time, ops, proof } };
 }
 
 const MAX_TEXT = 20_000;

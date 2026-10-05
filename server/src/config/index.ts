@@ -563,6 +563,16 @@ const base = z.object({
     FIREHOSE_IDLE_MS: z.coerce.number().int().min(100).max(3_600_000).default(90_000),
     FIREHOSE_MAX_PER_TENANT: z.coerce.number().int().min(0).max(1000).default(10),
     /**
+     * Sprint 31 (B-3604, B-3001 to B-3003): a subscription audits at most FIREHOSE_REJECT_AUDITS relay commits that
+     * failed verification a minute (the rest are counted and summed in the next audit). A tenant has at most
+     * FEEDS_MAX_PER_TENANT feed generators, each keeping at most FEED_ITEMS_MAX posts; feed indexes are pruned to their
+     * retention every FEED_PRUNE_MINUTES (0: never).
+     */
+    FIREHOSE_REJECT_AUDITS: z.coerce.number().int().min(0).max(10_000).default(20),
+    FEEDS_MAX_PER_TENANT: z.coerce.number().int().min(0).max(1000).default(20),
+    FEED_ITEMS_MAX: z.coerce.number().int().min(10).max(10_000_000).default(50_000),
+    FEED_PRUNE_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /**
      * Sprint 27 (B-2201 to B-2208): low-code apps. Public form submissions are limited per address to
      * APPS_PUBLIC_FORM_PER_MINUTE (each form also has its own limit). A CSV import is at most APPS_IMPORT_MAX_BYTES (it
      * travels in the JSON body, so within the API's 256 kB limit) and APPS_IMPORT_MAX_ROWS rows; an export at most

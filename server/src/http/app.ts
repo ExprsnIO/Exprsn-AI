@@ -48,6 +48,8 @@ import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
 import { firehoseRoutes } from '../routes/firehose.js';
+import { atprotoFeedRoutes } from '../routes/atproto-feeds.js';
+import { atprotoFeedPublicRoutes } from '../routes/atproto-feeds-public.js';
 import { identityPolicyRoutes, signupPublicRoutes } from '../routes/signup.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
@@ -165,6 +167,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(pkiPublicRoutes(s));
   // Sprint 25 (B-2004): the plugin broker, for handler runs' scoped tokens only.
   app.use(pluginBrokerRoutes(s));
+  // 1.5.0, Sprint 31 (B-3001, B-3003): the feed generator's XRPC (public, rate-limited; service JWTs verified). Before
+  // the routes below, so /atproto/<key>/xrpc/app.bsky.feed.* is counted once against the per-address limit.
+  app.use(atprotoFeedPublicRoutes(s));
   // Sprint 25 (B-1609, B-1610): DID documents, handle resolution and queryLabels (public, rate-limited).
   app.use(atprotoPublicRoutes(s));
   // Sprint 27c (B-2504): signed iCalendar feeds (public; the URL's signature is the credential, rate-limited).
@@ -256,6 +261,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(identityPolicyRoutes(s));
   // Sprint 27 (B-1908): AT-Protocol firehose subscriptions.
   api.use(firehoseRoutes(s));
+  // 1.5.0, Sprint 31 (B-3001 to B-3003): custom feed generators over the firehose.
+  api.use(atprotoFeedRoutes(s));
   // Sprint 27c (B-2501 to B-2505): groups, posts, events, RSVPs, reminders and calendar feeds.
   api.use(groupRoutes(s));
   // Sprint 28a (B-2301 to B-2304): customer-service channels, sessions, held replies, exports.
