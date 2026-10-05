@@ -45,9 +45,10 @@ from prototype data to live only when every control on it is backed by the serve
 | 33 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.5.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Runs, Registry, Chat, Settings, Files | Planned |
 | — | Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (B-43, 1.5.0 or 1.6) | Models | Unscheduled (approved 2026-10-05) |
-| 35 | Platform administration live screens; tenant provisioning templates (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants | Planned |
-| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
-| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
+| 35 | Platform administration live screens; tenant provisioning templates; prompt-injection defence; SCIM (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants, Guardrails, Identity | Planned |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; MCP server and authorization; AI inventory (1.6.0) | Groups and events, Storage, Apps, Vault, Tools, Catalogue | Planned |
+| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; red-team harness; usage and cost analytics; compliance log export; agent identities (1.6.0) | Messages and feed, Settings, Identity, Vault, Evaluations, Analytics (new), Agents | Planned |
+| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; release (1.6.0) | Settings, Agents, Chat, Images | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -65,9 +66,11 @@ planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server featu
 identity work. Sprints 29 to 34 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
 features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, model-based memory management, the model
 and dataset import wizard, an AT-Protocol PDS and feed generator, Workflows 2, agents, tools and skills in chat, and chaining them
-with workflows, user profiles and presence. Sprints 35 to 37 are planned in the [1.6.0 backlog](Backlog-1.6.0.md): the
+with workflows, user profiles and presence. Sprints 35 to 38 are planned in the [1.6.0 backlog](Backlog-1.6.0.md): the
 platform administration screens, groups depth, tenant templates, blob deduplication, vault extras and capability tokens
-(groomed 2026-10-05 with `design/grooming/groom.mjs`).
+(groomed 2026-10-05 with `design/grooming/groom.mjs`), and the industry gaps from the 2026-10-05 research:
+prompt-injection defence, red-teaming, MCP server and authorization, SCIM, an AI inventory, usage analytics,
+compliance export, DLP and eDiscovery, agent identities and handoffs, image provenance and versioned artifacts.
 
 ---
 
