@@ -7819,7 +7819,7 @@
         "tags": [
           "admin/connections"
         ],
-        "summary": "mysql\\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?} | Registers; the credential is sealed with the tenant key and never returned. With baoRole (PostgreSQL and MySQL; needs OPENBAO_AD",
+        "summary": "mysql\\|opensearch\\|mongodb, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?} | Registers; the credential is sealed with the tenant key and never returned. With baoRole (PostgreSQL and MySQL; needs O",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
