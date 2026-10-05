@@ -40,6 +40,11 @@
         "type": "http",
         "scheme": "basic",
         "description": "DAV clients (B-3101): the account's username and an app password (exai_d1_...), over HTTPS; accepted at /dav only"
+      },
+      "pdsBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A PDS access token (at+jwt) from com.atproto.server.createSession or createAccount (B-2901); accepted at /xrpc only. refreshSession and deleteSession take the refresh token (refresh+jwt) instead"
       }
     },
     "schemas": {
@@ -7410,6 +7415,361 @@
             "type": "integer"
           }
         }
+      },
+      "PdsAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "deactivated",
+              "takendown"
+            ]
+          },
+          "stateReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "takedownAction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "migrating": {
+            "type": "boolean"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "didMethod": {
+            "enum": [
+              "plc",
+              "web"
+            ]
+          },
+          "signingKey": {
+            "type": "string",
+            "description": "did:key of the repo signing key (held by the signer or OpenBao)"
+          },
+          "rotationKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "custody": {
+            "enum": [
+              "signer",
+              "openbao"
+            ]
+          },
+          "curve": {
+            "enum": [
+              "secp256k1",
+              "p256"
+            ]
+          },
+          "rev": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "records": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "deactivatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "takendownAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "did",
+          "handle",
+          "state",
+          "userId",
+          "didMethod",
+          "signingKey",
+          "custody",
+          "curve",
+          "createdAt"
+        ]
+      },
+      "PdsHosting": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "handleDomain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inviteRequired": {
+            "type": "boolean"
+          },
+          "blobMaxBytes": {
+            "type": "integer"
+          },
+          "blobTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enabledBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabledAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "inviteRequired",
+          "blobMaxBytes",
+          "blobTypes"
+        ]
+      },
+      "PdsInvite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "usesMax": {
+            "type": "integer"
+          },
+          "uses": {
+            "type": "integer"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disabledAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "expired",
+              "used",
+              "disabled"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "hint",
+          "usesMax",
+          "uses",
+          "state"
+        ]
+      },
+      "PdsAppPassword": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "privileged": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "lastUsedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revokedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "revoked"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "privileged",
+          "state"
+        ]
+      },
+      "PdsFeedRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "hosted",
+              "external"
+            ]
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          },
+          "rkey": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "cid": {
+            "type": "string"
+          },
+          "serviceDid": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "target",
+          "repo",
+          "rkey",
+          "uri",
+          "cid",
+          "serviceDid"
+        ]
+      },
+      "XrpcError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ],
+        "description": "AT-Protocol XRPC error"
       }
     },
     "responses": {
@@ -40783,6 +41143,3287 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/admin/pds/tenants": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "platform:manage and a recent sign-in. Every tenant's PDS hosting, and the service: its DID, endpoint, handle domain, zone, key custody and the relays' last requestCrawl",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "tenants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "service": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "tenants",
+                    "service"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/tenants/{tid}": {
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "platform:manage and a recent sign-in. Enables or disables PDS hosting for a tenant (opt-in per tenant). Enabling is refused when the zone (default PDS_ZONE) has no egress or the deployment is air-gapped, or when no signer or OpenBao holds keys; disabling while active accounts remain is refused. Audited pds.hosting.enabled / pds.hosting.disabled",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "zone": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$"
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsHosting"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/crawl": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "platform:manage and a recent sign-in. Sends com.atproto.sync.requestCrawl to every relay in PDS_RELAYS now (normally at most every PDS_CRAWL_MINUTES after a change). Audited pds.crawl.requested",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    },
+                    "relays": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "relay": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "error": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "skipped": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "relay"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "host",
+                    "relays"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. The tenant's hosting settings, its accounts by state, and the service (DID, endpoint, subscribeRepos URL, newest seq, key custody)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PdsHosting"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "accounts": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        },
+                        "service": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/settings": {
+      "patch": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Blob limits within the platform's (PDS_BLOB_MAX_BYTES, PDS_BLOB_TYPES) and whether createAccount needs an invite code even under an open sign-up policy. Audited pds.settings.updated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "inviteRequired": {
+                    "type": "boolean"
+                  },
+                  "blobMaxBytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1024
+                  },
+                  "blobTypes": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsHosting"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/accounts": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. The accounts the PDS hosts for the tenant, newest first",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "active",
+                "deactivated",
+                "takendown"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "part of a handle, or a DID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PdsAccount"
+                      }
+                    }
+                  },
+                  "required": [
+                    "accounts"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/accounts/{id}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. One hosted account",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/accounts/{id}/deactivate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Deactivates an account (RepoDeactivated; sessions end; an #account event). Audited pds.account.deactivated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/accounts/{id}/activate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Activates a deactivated account (a migrated one only once its DID names this PDS). Audited pds.account.activated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/accounts/{id}/takedown": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Takes the repo down as a moderation action on the pds-repo object (B-1903, appealable): RepoTakendown, blobs not served, sessions revoked, !takedown published on the DID by the tenant's labeler (B-1610). Audited moderation.action.applied and pds.account.takendown",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "$ref": "#/components/schemas/PdsAccount"
+                    },
+                    "action": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "account",
+                    "action"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/accounts/{id}/restore": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Reverses the moderation action keeping the repo down; the !takedown label is withdrawn. Audited moderation.action.reversed and pds.account.restored",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "$ref": "#/components/schemas/PdsAccount"
+                    },
+                    "action": {
+                      "type": "object"
+                    },
+                    "restored": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "account",
+                    "action",
+                    "restored"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/invites": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. The tenant's invite codes (never the codes themselves)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "invites": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PdsInvite"
+                      }
+                    }
+                  },
+                  "required": [
+                    "invites"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. A new invite code for createAccount (needed under a closed or approval sign-up policy, B-1801); shown once. Audited pds.invite.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "usesMax": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "default": 1
+                  },
+                  "expiresInDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 365
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 200
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PdsInvite"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "notice": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/invites/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Disables an invite code. Audited pds.invite.disabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disabled"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/feed-generators": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. The app.bsky.feed.generator records published for the tenant (B-3004)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "records": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PdsFeedRecord"
+                      }
+                    }
+                  },
+                  "required": [
+                    "records"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Publishes (or replaces) an app.bsky.feed.generator record naming the generator's service DID, into a repo the PDS hosts for the tenant or an external account (its app password is used once, never stored; addresses go through the service URL checks). Audited pds.feed.published",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "target": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "hosted"
+                          },
+                          "accountId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "accountId"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "external"
+                          },
+                          "identifier": {
+                            "type": "string"
+                          },
+                          "appPassword": {
+                            "type": "string"
+                          },
+                          "pdsUrl": {
+                            "type": "string",
+                            "format": "uri"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "identifier",
+                          "appPassword"
+                        ]
+                      }
+                    ]
+                  },
+                  "serviceDid": {
+                    "type": "string"
+                  },
+                  "rkey": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "acceptsInteractions": {
+                    "type": "boolean"
+                  },
+                  "contentMode": {
+                    "enum": [
+                      "app.bsky.feed.defs#contentModeUnspecified",
+                      "app.bsky.feed.defs#contentModeVideo"
+                    ]
+                  }
+                },
+                "required": [
+                  "target",
+                  "serviceDid",
+                  "rkey",
+                  "displayName"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsFeedRecord"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/pds/feed-generators/{id}/withdraw": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/pds"
+        ],
+        "summary": "pds:manage. Deletes a published generator record (an external one needs its identifier and an app password again). Audited pds.feed.withdrawn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "identifier": {
+                    "type": "string"
+                  },
+                  "appPassword": {
+                    "type": "string"
+                  },
+                  "pdsUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Withdrawn"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link, a browser session. Whether the tenant hosts AT-Protocol accounts, the caller's account and app passwords",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "hosting": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "handleDomain": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "endpoint": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "enabled"
+                      ]
+                    },
+                    "account": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/PdsAccount"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "appPasswords": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PdsAppPassword"
+                      }
+                    }
+                  },
+                  "required": [
+                    "hosting",
+                    "account",
+                    "appPasswords"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link and a recent sign-in. Creates the caller's account: keys in the signer or OpenBao, a did:plc, the handle <name>.<tenant>.<pds domain>. Audited pds.account.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "handle": {
+                    "type": "string",
+                    "description": "a name, or the full handle under the tenant's domain"
+                  }
+                },
+                "required": [
+                  "handle"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds/handle": {
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link and a recent sign-in. Changes the handle within the tenant's domain (a PLC operation and an #identity event). Audited pds.account.handle_changed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "handle": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "handle"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds/deactivate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Deactivates the caller's account. Audited pds.account.deactivated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds/activate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Activates the caller's account. Audited pds.account.activated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdsAccount"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds/app-passwords": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link, a recent sign-in, and a fresh second factor when the account has one. An app password (xxxx-xxxx-xxxx-xxxx) for Bluesky clients; privileged ones may move the account. Shown once. Audited pds.app_password.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "privileged": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PdsAppPassword"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "password": {
+                          "type": "string"
+                        },
+                        "identifier": {
+                          "type": "string"
+                        },
+                        "server": {
+                          "type": "string"
+                        },
+                        "notice": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "password"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds/app-passwords/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link. Revokes an app password and its sessions at once. Audited pds.app_password.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/pds/plc-token": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "atproto:link and a recent sign-in. A single-use code (15 minutes) for com.atproto.identity.signPlcOperation, to move the account to another PDS. Audited pds.plc.token_issued",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    },
+                    "notice": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/xrpc/com.atproto.server.describeServer": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The PDS's DID, the handle domains it offers and whether an invite code is required. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.server.createAccount": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A new account and Exprsn-AI user under the tenant's sign-up policy (an invite code under a closed or approval policy), or, with did and a service token, an account migrating in (deactivated until activated). Returns a session. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "accessJwt": {
+                      "type": "string"
+                    },
+                    "refreshJwt": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "type": "string"
+                    },
+                    "did": {
+                      "type": "string"
+                    },
+                    "didDoc": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "accessJwt",
+                    "refreshJwt",
+                    "handle",
+                    "did"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.server.createSession": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A session from a handle, DID or email and an app password (the Exprsn-AI password is never accepted here). See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "accessJwt": {
+                      "type": "string"
+                    },
+                    "refreshJwt": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "type": "string"
+                    },
+                    "did": {
+                      "type": "string"
+                    },
+                    "active": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "accessJwt",
+                    "refreshJwt",
+                    "did"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.server.refreshSession": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Spends the refresh token (Authorization: Bearer refresh+jwt) once and returns the next pair. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "accessJwt": {
+                      "type": "string"
+                    },
+                    "refreshJwt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accessJwt",
+                    "refreshJwt"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.server.deleteSession": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Ends the session of a refresh token. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.server.getSession": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The session's account. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.server.activateAccount": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Activates the account (a migrated one once its DID names this PDS); sequences #account and, after a migration, #sync. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.server.deactivateAccount": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Deactivates the account. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.server.checkAccountStatus": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Migration progress: activation, DID, repo, records and blobs. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.server.getServiceAuth": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "An inter-service JWT signed with the account's repo key (createAccount at another PDS needs a privileged app password). See docs/pds.md",
+        "parameters": [
+          {
+            "name": "aud",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exp",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "lxm",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.identity.resolveHandle": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The DID of a handle (this PDS's accounts, then DNS or HTTPS through the service URL checks). See docs/pds.md",
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "did": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "did"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.identity.getRecommendedDidCredentials": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The rotation key, handle, signing key and endpoint the DID should name for the account to live here. See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.identity.requestPlcOperationSignature": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Tells the user to get the move code from the console (a privileged app password). See docs/pds.md",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.identity.signPlcOperation": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A PLC operation signed with this PDS's rotation key, given the console's single-use code (a privileged app password). See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "operation": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.identity.submitPlcOperation": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Sends a signed operation naming this PDS, the account's signing key and rotation key and its handle to the PLC directory. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.identity.updateHandle": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Changes the handle within the tenant's domain. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.repo.createRecord": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Creates a record (lexicon-validated; validate true requires a known lexicon, false skips) in one signed commit. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "uri": {
+                      "type": "string"
+                    },
+                    "cid": {
+                      "type": "string"
+                    },
+                    "commit": {
+                      "type": "object"
+                    },
+                    "validationStatus": {
+                      "enum": [
+                        "valid",
+                        "unknown"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "uri",
+                    "cid"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.repo.putRecord": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Creates or replaces a record at a key. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "uri": {
+                      "type": "string"
+                    },
+                    "cid": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "uri",
+                    "cid"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.repo.deleteRecord": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Deletes a record (no change when it does not exist). See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.repo.applyWrites": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Up to 200 creates, updates and deletes in one commit. See docs/pds.md",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "commit": {
+                      "type": "object"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "commit",
+                    "results"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.repo.uploadBlob": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A blob (the raw body): type from the bytes, the tenant's size and type limits, ClamAV; stored sealed. Refused when the scan fails (BlobRejected) or ClamAV is unreachable (503). See docs/pds.md",
+        "parameters": {
+          "required": true,
+          "content": {
+            "*/*": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "blob": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "blob"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": [
+            {
+              "pdsBearer": []
+            }
+          ],
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.repo.importRepo": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A migrating account's repo (a CAR file, at most PDS_IMPORT_MAX_BYTES), verified against the DID's signing key and committed with this account's key. See docs/pds.md",
+        "parameters": {
+          "required": true,
+          "content": {
+            "application/vnd.ipld.car": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "description": "OK"
+        },
+        "responses": {
+          "200": [
+            {
+              "pdsBearer": []
+            }
+          ],
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.repo.listMissingBlobs": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Blobs the imported records use that are not here yet. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "pdsBearer": []
+          }
+        ]
+      }
+    },
+    "/xrpc/com.atproto.repo.getRecord": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A record (RepoTakendown, RepoDeactivated, RecordNotFound). See docs/pds.md",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "a DID or handle"
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rkey",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cid",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "uri": {
+                    "type": "string"
+                  },
+                  "cid": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "uri",
+                  "value"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.repo.listRecords": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A collection's records by record key, newest first unless reverse. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "a DID or handle"
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "cursor": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "records"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.repo.describeRepo": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The repo's handle, DID document and collections. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "a DID or handle"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.getRepo": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The repo as a CAR file (or the blocks after a rev with since). See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A CAR v1 file",
+          "content": {
+            "application/vnd.ipld.car": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.getRecord": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A record with its proof: the commit, the MST path and the record, as a CAR file. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rkey",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A CAR v1 file",
+          "content": {
+            "application/vnd.ipld.car": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.getBlocks": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Blocks by CID as a CAR file without a root (BlockNotFound when one is missing). See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          },
+          {
+            "name": "cids",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A CAR v1 file",
+          "content": {
+            "application/vnd.ipld.car": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.getBlob": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "A blob that passed its scan, with its sniffed type and a sandboxing CSP (never one that failed, nor a taken-down repo's). See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          },
+          {
+            "name": "cid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The blob",
+          "content": {
+            "*/*": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.listBlobs": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The CIDs of the ready blobs the repo's records use. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "cids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "cursor": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "cids"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.getLatestCommit": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "The repo's head commit CID and rev. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          }
+        ],
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "cid": {
+                    "type": "string"
+                  },
+                  "rev": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "cid",
+                  "rev"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.getRepoStatus": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Whether the repo is active, and why not. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "the repo's DID"
+          }
+        ],
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "did": {
+                    "type": "string"
+                  },
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "rev": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "did",
+                  "active"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/xrpc/com.atproto.sync.listRepos": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "xrpc"
+        ],
+        "summary": "Every repo the PDS hosts, with its head. See docs/pds.md",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "repos": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "cursor": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repos"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {},
+                  "required": []
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An XRPC error (400, 401, 403, 404, 413, 429, 500, 503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XrpcError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     }
   }

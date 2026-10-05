@@ -573,6 +573,46 @@ const base = z.object({
     FEED_ITEMS_MAX: z.coerce.number().int().min(10).max(10_000_000).default(50_000),
     FEED_PRUNE_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
     /**
+     * 1.5.0, Sprint 31 (B-2901 to B-2906): the AT-Protocol personal data server. PDS_PUBLIC_URL is the PDS's public
+     * https base (default ATPROTO_PUBLIC_URL, then PUBLIC_URL): accounts' DID documents name it as their
+     * `#atproto_pds` and relays crawl it. Handles are `<name>.<tenant>.<PDS_HANDLE_DOMAIN>` (default the PDS host
+     * name; the operator points a wildcard DNS record for each tenant at the server). Hosting is enabled per tenant by
+     * a platform admin, in PDS_ZONE (the zone must have egress to the network: relays and the PLC directory).
+     * PDS_RELAYS (comma-separated https URLs) are asked to crawl the PDS (`requestCrawl`) at most every
+     * PDS_CRAWL_MINUTES after a change; subscribeRepos replays PDS_BACKFILL_HOURS of events to a cursor, with at most
+     * PDS_SUBSCRIBERS_MAX open streams per instance. Blobs are at most PDS_BLOB_MAX_BYTES (a tenant may lower it) and
+     * of the PDS_BLOB_TYPES MIME types. Access tokens last PDS_ACCESS_MINUTES, refresh tokens PDS_REFRESH_DAYS.
+     * XRPC calls are capped per address by PDS_RATE_PER_MINUTE and repo writes per account by PDS_WRITES_PER_HOUR. A
+     * repo imported by a migration (`importRepo`, read whole to verify it) is at most PDS_IMPORT_MAX_BYTES.
+     */
+    PDS_PUBLIC_URL: z.url().optional(),
+    PDS_HANDLE_DOMAIN: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .max(200)
+      .regex(/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/)
+      .optional(),
+    PDS_ZONE: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).default('edge'),
+    PDS_RELAYS: z
+      .string()
+      .default('')
+      .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean))
+      .pipe(z.array(z.url()).max(20)),
+    PDS_CRAWL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(20),
+    PDS_BACKFILL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(72),
+    PDS_SUBSCRIBERS_MAX: z.coerce.number().int().min(1).max(100_000).default(200),
+    PDS_BLOB_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024).default(50 * 1024 * 1024),
+    PDS_BLOB_TYPES: z
+      .string()
+      .default('image/png,image/jpeg,image/webp,image/gif,video/mp4')
+      .transform((v) => v.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)),
+    PDS_ACCESS_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(60),
+    PDS_REFRESH_DAYS: z.coerce.number().int().min(1).max(365).default(60),
+    PDS_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(3000),
+    PDS_WRITES_PER_HOUR: z.coerce.number().int().min(1).max(1_000_000).default(5000),
+    PDS_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024).default(64 * 1024 * 1024),
+    /**
      * Sprint 27 (B-2201 to B-2208): low-code apps. Public form submissions are limited per address to
      * APPS_PUBLIC_FORM_PER_MINUTE (each form also has its own limit). A CSV import is at most APPS_IMPORT_MAX_BYTES (it
      * travels in the JSON body, so within the API's 256 kB limit) and APPS_IMPORT_MAX_ROWS rows; an export at most

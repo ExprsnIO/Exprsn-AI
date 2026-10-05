@@ -5,6 +5,7 @@ import { createApp, type AppState } from './http/app.js';
 import { createLogger } from './observability/index.js';
 import { attachRealtime } from './realtime/socket.js';
 import { attachLabelStream } from './atproto/stream.js';
+import { attachRepoStream } from './atproto/pds/sequencer.js';
 import { createServices, startSchedules } from './services.js';
 import { bootstrap } from './bootstrap.js';
 import { schemaStatus } from './db/schema.js';
@@ -38,6 +39,8 @@ async function main(): Promise<void> {
   const realtime = attachRealtime(server, services);
   // Sprint 25 (B-1610): com.atproto.label.subscribeLabels, a plain WebSocket next to Socket.io.
   const labelStream = attachLabelStream(server, services);
+  // 1.5.0, Sprint 31 (B-2904): the PDS's com.atproto.sync.subscribeRepos.
+  const repoStream = attachRepoStream(server, services);
   if (cfg.WORKERS_ENABLED) {
     services.jobs.start();
     startSchedules(services);
@@ -68,6 +71,7 @@ async function main(): Promise<void> {
     stopWatch();
     server.closeIdleConnections();
     await labelStream.close();
+    await repoStream.close();
     await realtime.close(); // also stops the HTTP server accepting new connections
     await services.close();
     await db.destroy();

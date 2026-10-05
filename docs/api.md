@@ -3514,3 +3514,56 @@ names the feed. The generator is `{ready, reason, did, method, endpoint, service
 
 Audit actions are in the event catalogue's `atproto.*` group. Configuration: `FIREHOSE_REJECT_AUDITS` (20),
 `FEEDS_MAX_PER_TENANT` (20), `FEED_ITEMS_MAX` (50,000), `FEED_PRUNE_MINUTES` (15; 0 never).
+
+## Sprint 31 (1.5.0): the AT-Protocol PDS (B-2901 to B-2906, B-3004)
+
+Exprsn-AI hosts AT-Protocol repositories. The protocol endpoints are at `/xrpc` and are described, with hosting,
+accounts, the firehose, migration and how labels apply, in [`docs/pds.md`](pds.md). This section lists the JSON API.
+New permission `pds:manage` (tenant admins): the tenant's hosting settings, its accounts, invite codes and published
+feed generator records. Members manage their own account with `atproto:link`. Turning hosting on or off is
+`platform:manage` with a recent sign-in. Errors from the PDS carry `error` (the XRPC error name) as an extension.
+Every change is audited (`pds.*`; the event catalogue's `pds.*` group, catalogue version 7). Migration `033_pds`.
+
+An account view is `{id, did, handle, state: active|deactivated|takendown, stateReason, takedownAction, migrating,
+userId, username?, email, didMethod: plc|web, signingKey, rotationKey (did:key), custody: signer|openbao, curve:
+secp256k1|p256, rev, commit, records?, createdAt, updatedAt, deactivatedAt, takendownAt}`. A hosting view is
+`{enabled, zone, handleDomain, inviteRequired, blobMaxBytes, blobTypes, enabledBy, enabledAt, updatedAt}`.
+
+### Hosting (platform admins)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/pds/tenants` | Every tenant's hosting view (with `tenantId`, `slug`, `name`) and the service: `{did, endpoint, handleDomain, zone, custody, relays: [{relay, lastAt, lastStatus, lastError}]}` |
+| `PUT /api/admin/pds/tenants/:tid` | `{enabled, zone?}`. Enabling fixes the handle domain `<tenant>.<PDS_HANDLE_DOMAIN>`; refused (`409`) in an air-gapped deployment, a zone without egress, without a signer or OpenBao, or when the domain is not a usable domain. Disabling is refused while active accounts remain. Audited `pds.hosting.enabled` / `pds.hosting.disabled` |
+| `POST /api/admin/pds/crawl` | Sends `com.atproto.sync.requestCrawl` to every relay in `PDS_RELAYS` now: `{host, relays: [{relay, status, error}]}`. Audited `pds.crawl.requested` |
+
+### The tenant's PDS (`pds:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/pds` | The hosting view, `accounts` counted by state, and `service: {did, endpoint, subscribeRepos, seq, custody, curves}` |
+| `PATCH /api/admin/pds/settings` | `{inviteRequired?, blobMaxBytes? (null: the platform's), blobTypes? (null: the platform's)}`, within `PDS_BLOB_MAX_BYTES` and `PDS_BLOB_TYPES`. Audited `pds.settings.updated` |
+| `GET /api/admin/pds/accounts?state&q&limit&before` | `{accounts: [view]}`, newest first; `q` matches part of a handle or a whole DID |
+| `GET /api/admin/pds/accounts/:id` | One account view |
+| `POST /api/admin/pds/accounts/:id/deactivate` | `{reason}`. The repo answers `RepoDeactivated`, sessions end. Audited `pds.account.deactivated` |
+| `POST /api/admin/pds/accounts/:id/activate` | Audited `pds.account.activated` (a migrated account only once its DID names this PDS) |
+| `POST /api/admin/pds/accounts/:id/takedown` | `{reason}`. A moderation action on the `pds-repo` object (B-1903; the owner is told and may appeal): `RepoTakendown`, blobs not served, sessions revoked, `!takedown` published on the DID (B-1610). Answers `{account, action}`. Audited `moderation.action.applied`, `pds.account.takendown` |
+| `POST /api/admin/pds/accounts/:id/restore` | `{reason}`. Reverses that action: the previous state, the label withdrawn. Answers `{account, action, restored}`. Audited `moderation.action.reversed`, `pds.account.restored` |
+| `GET /api/admin/pds/invites` | `{invites: [{id, hint, usesMax, uses, note, createdBy, createdAt, expiresAt, disabledAt, state: active\|expired\|used\|disabled}]}` (never the codes) |
+| `POST /api/admin/pds/invites` | `{usesMax? (1), expiresInDays?, note?}`: `201` with the view and `code` (shown once). Audited `pds.invite.created` |
+| `DELETE /api/admin/pds/invites/:id` | Disables the code (`204`). Audited `pds.invite.disabled` |
+| `GET /api/admin/pds/feed-generators` | `{records: [{id, target: hosted\|external, accountId, repo, rkey, uri, cid, serviceDid, displayName, createdBy, createdAt, updatedAt}]}` (B-3004) |
+| `POST /api/admin/pds/feed-generators` | `{target: {kind: 'hosted', accountId} \| {kind: 'external', identifier, appPassword, pdsUrl?}, serviceDid, rkey, displayName, description?, acceptsInteractions?, contentMode?}`: publishes (or replaces) the `app.bsky.feed.generator` record naming `serviceDid`; the external app password is used once and never stored. `201` with the record view. Audited `pds.feed.published` |
+| `POST /api/admin/pds/feed-generators/:id/withdraw` | `{identifier?, appPassword?, pdsUrl?}` (needed for an external record): deletes the record (`204`). Audited `pds.feed.withdrawn` |
+
+### One's own account (`atproto:link`, a browser session)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/pds` | `{hosting: {enabled, handleDomain, endpoint}, account: view \| null, appPasswords: [{id, name, privileged, createdAt, lastUsedAt, revokedAt, state}]}` |
+| `POST /api/me/pds` | `{handle}` (a name, or the full handle): creates the account (recent sign-in). `201` with the view. Audited `pds.account.created` |
+| `PUT /api/me/pds/handle` | `{handle}` within the tenant's domain (recent sign-in). Audited `pds.account.handle_changed` |
+| `POST /api/me/pds/deactivate`, `POST /api/me/pds/activate` | The account's own state |
+| `POST /api/me/pds/app-passwords` | `{name, privileged?}`: a recent sign-in and, when the user has a second factor, one confirmed within `STEPUP_WINDOW_SECONDS` (`401` with `step_up` and `factor` otherwise). `201` with the view, `password` (`xxxx-xxxx-xxxx-xxxx`, shown once), `identifier` and `server`. At most 50 live. Audited `pds.app_password.created` |
+| `DELETE /api/me/pds/app-passwords/:id` | Revokes it and its sessions at once (`204`). Audited `pds.app_password.revoked` |
+| `POST /api/me/pds/plc-token` | A single-use code for `com.atproto.identity.signPlcOperation` (moving the account to another PDS), valid 15 minutes, shown once (recent sign-in): `201 {token, expiresAt}`. Audited `pds.plc.token_issued` |

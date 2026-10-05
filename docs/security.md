@@ -137,6 +137,28 @@ filter, private `/tmp`, only the state directory writable.
   feed is named, until B-3004 records its publication, by any `at://` authority with its record key. The feed
   generator needs the tenant's own identity; the platform identity serves none.
 
+- The AT-Protocol PDS (1.5.0, Sprint 31, `docs/pds.md`): what a hosted repository holds is public by protocol and
+  served to anyone, including relays and AppViews that keep copies Exprsn-AI cannot withdraw; a takedown stops this
+  PDS serving the repo and publishes `!takedown`, but copies elsewhere remain until their operators act on the label
+  or the `#account` event. Hosting is off by default and enabled per tenant by a platform admin. Each commit rebuilds
+  the repo's Merkle search tree from its record list (canonical by construction, and checked against the interop
+  vectors), so the cost of a write grows with the repo's size; very large repos (hundreds of thousands of records)
+  write slowly. The repo's blocks are stored as base64 in the database, not in the blob store. Record content is not
+  sealed at rest (it is public, and the commit signature covers its exact bytes); blobs are sealed like files. Records
+  are not run through the guardrails or the moderation check when written: moderation acts on reports and on the
+  repo as a whole (`pds-repo`), not record by record, and labels from other labelers are not applied to what the PDS
+  serves. Sessions come from app passwords only; the Exprsn-AI password is never accepted over XRPC, and there is no
+  OAuth sign-in to the PDS, no email confirmation or password reset over XRPC, no `app.bsky.*` proxying to an AppView
+  and no preferences, so Bluesky clients that read timelines through their PDS need the AppView configured on their
+  side. Access tokens are HS256 under a key derived from `SESSION_SECRET` (rotating it ends every PDS session). Handles
+  live only under the tenant's subdomain of `PDS_HANDLE_DOMAIN`, resolved over HTTPS (the operator's wildcard DNS); a
+  tenant's own domain waits for 1.6. `createAccount` creates the Exprsn-AI user before the AT-Protocol account, so a
+  PLC directory that fails at that moment leaves a user without a PDS account (they create it from the console). The
+  move code for `signPlcOperation` is shown in the console instead of emailed. Blobs are typed from their first bytes
+  (PNG, JPEG, WebP, GIF, MP4) and scanned by ClamAV when configured; a video's content is not otherwise inspected. The
+  interop run against the reference AppView (`interop/run.ts`, the CI `interop` job) uses `@atproto/dev-env`, which
+  has no separate relay: the AppView reads the PDS directly, and the relay side is covered by the relay double.
+
 - Model-based memory management (1.5.0, Sprint 30): the tenant's memory profile reads the user's chat messages and
   agent runs' tasks and answers (through the gateway, within the profile's label and the pool's ceiling). The text is
   sent as JSON data with an instruction to treat it as such, and only a strictly valid JSON answer is used, but a

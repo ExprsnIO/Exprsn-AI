@@ -65,6 +65,7 @@ for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
 npm run loadtest:platform -- --help        # webhook, records, OCSP and firehose load test (docs/loadtest.md)
 helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
+INTEROP_PG_URL=postgres://… npx --prefix interop tsx interop/run.ts   # the PDS against the reference AppView (cd interop && npm ci first)
 cd e2e && npm ci && CHROME=/opt/pw-browsers/chromium npx playwright test   # console end-to-end suite across every screen
                                            # (starts its own server on SQLite with the test fakes; see e2e/README.md)
 ```
@@ -200,6 +201,13 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `service-jwt.ts` (inter-service JWTs) and `feeds.ts` (feed generators over the firehose, `s.feedGenerators`), with
   `routes/atproto-feeds.ts` and the public XRPC in `routes/atproto-feeds-public.ts`; the AT-Protocol interop vectors
   are in `server/test/fixtures/atproto/`, and `test/sprint31b-fakes.ts` has an MST writer and repos that sign commits.
+
+  `/api/me/app-passwords`; the conformance fixtures are in `server/test/fixtures/dav/`); **`atproto/pds/`** (the
+  AT-Protocol PDS, `docs/pds.md`: `service.ts` hosting, accounts, sessions and state, `repo-store.ts` commits and
+  reads, `mst.ts`, `car.ts`, `repo.ts`, `tid.ts` the repository format, `lexicon.ts` with `lexicon-docs.ts` and
+  `lexjson.ts`, `syntax.ts`, `blobs.ts`, `sequencer.ts` (subscribeRepos), `migration.ts`, `feeds.ts`, `tokens.ts`;
+  routes in `routes/pds-xrpc.ts` at `/xrpc` and `routes/pds.ts` under `/api`; interop fixtures in
+  `server/test/fixtures/atproto-interop/` and `atproto-ref/`; `interop/run.ts` runs it against the reference AppView).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
