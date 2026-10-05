@@ -34,7 +34,16 @@ export const PERMISSIONS = [
   // manage: review queues, external providers and the dead-letter queue.
   'moderation:check', 'moderation:report', 'moderation:appeal', 'moderation:review', 'moderation:sanction', 'moderation:manage',
   // 1.4.0 (Sprint 26a, B-1801): invite people into the inviter's workspaces, with roles the inviter may grant
-  'members:invite'
+  'members:invite',
+  // 1.4.0 (Sprint 27, B-1908): AT-Protocol firehose subscriptions whose posts go through the moderation check
+  'firehose:manage',
+  // 1.4.0 (Sprint 27, B-22): low-code apps. design: apps, entities, forms, triggers, bundles and drafts; records:read
+  // and records:write: the records of the apps in one's workspaces, within one's clearance.
+  'apps:design', 'records:read', 'records:write',
+  // 1.4.0 (Sprint 27c, B-25): groups and events in one's workspaces. read: see groups, their content and events;
+  // write: create groups, join, post, RSVP and keep calendar feeds (what a member may do in a group is its group role);
+  // manage: act as owner of every group in the workspaces one may act in.
+  'groups:read', 'groups:write', 'groups:manage'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -61,21 +70,25 @@ const MEMBER: readonly Permission[] = [
   // Sprint 26d: the file store in their workspaces.
   'files:read', 'files:write',
   // Sprint 26 (B-1902, B-1903): report anything they can see, appeal what was done to their own objects.
-  'moderation:report', 'moderation:appeal'
+  'moderation:report', 'moderation:appeal',
+  // Sprint 27 (B-2202): the records of the apps in their workspaces.
+  'records:read', 'records:write',
+  // Sprint 27c (B-25): groups and events in their workspaces, with the rights of their group role.
+  'groups:read', 'groups:write'
 ];
 
 const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
-  { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage'], requiresMfa: true, grantableBy: ADMINS },
+  { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'tool-admin', name: 'Tool admin', description: 'Registry review, MCP servers and tool approvals.', permissions: ['tools:manage', 'agents:manage', 'mcp:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'knowledge-curator', name: 'Knowledge curator', description: 'Knowledge bases, sources, relabelling and workspace memory.', permissions: ['knowledge:read', 'knowledge:manage', 'prompts:manage'], requiresMfa: false, grantableBy: ADMINS },
   { id: 'ml-admin', name: 'ML admin', description: 'Training jobs, datasets and approvals for confidential data.', permissions: ['training:submit', 'training:manage', 'models:read'], requiresMfa: true, grantableBy: ADMINS },
-  { id: 'workflow-admin', name: 'Workflow admin', description: 'Publishes workflows and scripts as tools.', permissions: ['workflows:manage', 'scripts:run'], requiresMfa: true, grantableBy: ADMINS },
+  { id: 'workflow-admin', name: 'Workflow admin', description: 'Publishes workflows and scripts as tools, and designs low-code apps.', permissions: ['workflows:manage', 'scripts:run', 'apps:design', 'records:read', 'records:write'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'connection-admin', name: 'Connection admin', description: 'Data connections, credentials and schema allow-lists.', permissions: ['connections:manage', 'secrets:read', 'secrets:write'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'flag-reviewer', name: 'Flag reviewer', description: 'Works the review queue within their clearance.', permissions: ['flags:review', 'moderation:review'], requiresMfa: false, grantableBy: ADMINS },
   { id: 'member', name: 'Member', description: 'Chat, knowledge and tools within their clearance.', permissions: MEMBER, requiresMfa: false, grantableBy: [...ADMINS, 'identity-admin'] },

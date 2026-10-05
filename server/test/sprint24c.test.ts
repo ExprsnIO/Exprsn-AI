@@ -62,7 +62,7 @@ describe('event catalogue (B-2001)', () => {
     expect(res.body.version).toBeGreaterThanOrEqual(2);
     expect(res.body.groups.map((g: { pattern: string }) => g.pattern)).toEqual(expect.arrayContaining(['record.*', 'file.*', 'group.*', 'message.*', 'post.*', 'plugin.*', 'flag.*', 'job.*']));
     const rec = res.body.types.find((t: { type: string }) => t.type === 'record.created');
-    expect(rec).toMatchObject({ group: 'record.*', version: 1, status: 'reserved', since: '1.4.0' });
+    expect(rec).toMatchObject({ group: 'record.*', version: 1, status: 'emitted', since: '1.4.0' }); // emitted since Sprint 27 (B-22)
     expect(rec.schema.required).toContain('record');
     expect(res.body.types.find((t: { type: string }) => t.type === 'job.failed')).toMatchObject({ status: 'emitted' });
     expect(res.body.auditActions.schema.required).toEqual(expect.arrayContaining(['action', 'seq', 'hash']));
@@ -277,41 +277,43 @@ describe('realtime rooms for the new domains (B-2101)', () => {
   const join = (sock: Socket, kind: string, id: string) => new Promise<{ ok: boolean; label?: string; error?: string }>((r) => sock.emit('room.join', { kind, id }, r));
   const GROUP = '01J0GR0P000000000000000000';
 
-  it('removing a group member closes their room at once; others keep receiving', async () => {
+  // Groups register the real `group` authoriser since Sprint 27c (tested in sprint27c-groups.test.ts); the mechanism is
+  // exercised here with a synthetic `feed` domain.
+  it('removing a member closes their room at once; others keep receiving', async () => {
     const ws = await h.s.tenants.createWorkspace(h.tenantId, 'Ops', 'internal');
-    h.s.rooms.register('group', async (p, id) => (members.get(id)?.has(p.userId) ? { label: 'internal', workspaceId: ws.id } : null));
+    h.s.rooms.register('feed', async (p, id) => (members.get(id)?.has(p.userId) ? { label: 'internal', workspaceId: ws.id } : null));
     const ann = await person('ann');
     const bob = await person('bob');
     const eve = await person('eve');
     members.set(GROUP, new Set([ann.user.id, bob.user.id]));
-    expect(await join(ann.sock, 'group', GROUP)).toEqual({ ok: true, label: 'internal' });
-    expect(await join(bob.sock, 'group', GROUP)).toMatchObject({ ok: true });
-    expect(await join(eve.sock, 'group', GROUP)).toMatchObject({ ok: false });
-    expect(await join(eve.sock, 'feed', GROUP)).toMatchObject({ ok: false }); // no authoriser for feeds yet
+    expect(await join(ann.sock, 'feed', GROUP)).toEqual({ ok: true, label: 'internal' });
+    expect(await join(bob.sock, 'feed', GROUP)).toMatchObject({ ok: true });
+    expect(await join(eve.sock, 'feed', GROUP)).toMatchObject({ ok: false });
+    expect(await join(eve.sock, 'channel', GROUP)).toMatchObject({ ok: false }); // no authoriser for channels yet
     expect(await join(eve.sock, 'spaceship', GROUP)).toMatchObject({ ok: false });
-    expect(() => h.s.rooms.emit({ tenantId: h.tenantId, kind: 'group', id: GROUP, event: 'session.revoked', data: {} })).toThrow(/group\.<name>/);
+    expect(() => h.s.rooms.emit({ tenantId: h.tenantId, kind: 'feed', id: GROUP, event: 'session.revoked', data: {} })).toThrow(/feed\.<name>/);
 
-    h.s.rooms.emit({ tenantId: h.tenantId, kind: 'group', id: GROUP, event: 'group.post', data: { n: 1 } });
-    await until(() => ann.got.some((g) => g.event === 'group.post') && bob.got.some((g) => g.event === 'group.post'));
-    expect(ann.got.find((g) => g.event === 'group.post')!.data).toEqual({ kind: 'group', id: GROUP, n: 1 });
+    h.s.rooms.emit({ tenantId: h.tenantId, kind: 'feed', id: GROUP, event: 'feed.post', data: { n: 1 } });
+    await until(() => ann.got.some((g) => g.event === 'feed.post') && bob.got.some((g) => g.event === 'feed.post'));
+    expect(ann.got.find((g) => g.event === 'feed.post')!.data).toEqual({ kind: 'feed', id: GROUP, n: 1 });
 
     // Bob is removed: the domain changes membership and says so; the very next event no longer reaches him.
     members.get(GROUP)!.delete(bob.user.id);
-    h.s.rooms.accessChanged({ tenantId: h.tenantId, kind: 'group', id: GROUP, userIds: [bob.user.id] });
-    h.s.rooms.emit({ tenantId: h.tenantId, kind: 'group', id: GROUP, event: 'group.post', data: { n: 2 } });
-    await until(() => bob.got.some((g) => g.event === 'room.closed') && ann.got.filter((g) => g.event === 'group.post').length === 2);
-    expect(bob.got.filter((g) => g.event === 'group.post').map((g) => g.data.n)).toEqual([1]);
-    expect(bob.got.find((g) => g.event === 'room.closed')!.data).toEqual({ kind: 'group', id: GROUP });
-    expect(eve.got.some((g) => g.event === 'group.post')).toBe(false);
+    h.s.rooms.accessChanged({ tenantId: h.tenantId, kind: 'feed', id: GROUP, userIds: [bob.user.id] });
+    h.s.rooms.emit({ tenantId: h.tenantId, kind: 'feed', id: GROUP, event: 'feed.post', data: { n: 2 } });
+    await until(() => bob.got.some((g) => g.event === 'room.closed') && ann.got.filter((g) => g.event === 'feed.post').length === 2);
+    expect(bob.got.filter((g) => g.event === 'feed.post').map((g) => g.data.n)).toEqual([1]);
+    expect(bob.got.find((g) => g.event === 'room.closed')!.data).toEqual({ kind: 'feed', id: GROUP });
+    expect(eve.got.some((g) => g.event === 'feed.post')).toBe(false);
 
     // Losing the workspace the grant came through closes the room too.
     await h.s.tenants.addMember(ws.id, ann.user.id);
     members.get(GROUP)!.delete(ann.user.id);
     h.s.bus.publish(TOPICS.workspaceMembership, { tenantId: h.tenantId, userId: ann.user.id, workspaceIds: [ws.id] });
-    h.s.rooms.emit({ tenantId: h.tenantId, kind: 'group', id: GROUP, event: 'group.post', data: { n: 3 } });
+    h.s.rooms.emit({ tenantId: h.tenantId, kind: 'feed', id: GROUP, event: 'feed.post', data: { n: 3 } });
     await until(() => ann.got.some((g) => g.event === 'room.closed'));
     await sleep(50);
-    expect(ann.got.filter((g) => g.event === 'group.post').map((g) => g.data.n)).toEqual([1, 2]);
+    expect(ann.got.filter((g) => g.event === 'feed.post').map((g) => g.data.n)).toEqual([1, 2]);
   });
 
   it('a raised label removes readers below it, and a member still entitled is let back in', async () => {

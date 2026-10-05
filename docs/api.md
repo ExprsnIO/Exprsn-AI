@@ -2529,3 +2529,283 @@ then mappings, then memberships), auditing each change (`user.created`, `user.up
 - `exprsn-ai users import <file.csv> [--dry-run] [--send-invites] [--tenant <slug>] [--json]`: the same import, in the
   process, as the operator (no role ceiling, like `admin:create`); prints the report. Exit codes: 0 done, 1 refused or
   failed, 3 conflicts or errors in the file, 64 usage.
+
+## Sprint 27 (1.4.0): AT-Protocol firehose ingest (B-1908)
+
+A tenant subscribes to a Jetstream (JSON over WebSocket, cursor `time_us`) or a relay's
+`com.atproto.sync.subscribeRepos` (DAG-CBOR frames with records in CAR blocks, cursor `seq`). Each record operation that
+passes the filters (a collection on the allow-list, an author on the DID allow-list when there is one, and a
+deterministic sample by the record's `at://` URI) and has text (a post's text and image alt text; names and descriptions
+for other records) goes through the moderation check (B-1901) as an `atproto-post` object, checkpoint `user-input`,
+with the subscription's workspace and label: a verdict of flag or worse raises the post's one flag in that workspace's
+queue, and a verdict of warn or worse becomes signed labels on the post's URI from the tenant's labeler (B-1610; the
+platform's when the tenant has none). Deletes and records without text advance the cursor and are not checked.
+
+The consumer runs on one worker instance at a time: every `FIREHOSE_TICK_MS` each instance claims or renews a lease on
+the running subscriptions, and only the holder connects (a lease lasts three ticks; a stopping instance gives its leases
+back at once). Messages are handled in order from a bounded queue; when `FIREHOSE_QUEUE_MAX` wait, the socket is paused
+until half have been handled. The cursor (the last message handled) is stored every `FIREHOSE_CHECKPOINT_MS` and when
+the consumer stops; a restart connects with `?cursor=<stored>` and skips messages at or before it. A disconnect, an
+error frame (`{op: -1}`, shown as `lastError`) or `FIREHOSE_IDLE_MS` without a message reconnects from the cursor with
+backoff (500 ms doubling, up to `FIREHOSE_BACKOFF_MAX_MS`). The endpoint is a service URL (B-901): checked when saved and
+at every connection. Metrics: `exprsn_firehose_events_total{result}`, `exprsn_firehose_reconnects_total`,
+`exprsn_firehose_pauses_total`, and per subscription `exprsn_firehose_queue_depth`, `exprsn_firehose_connected`,
+`exprsn_firehose_paused`, `exprsn_firehose_lag_seconds`.
+
+### Subscriptions (`firehose:manage`)
+
+A subscription is `{id, name, protocol: jetstream | subscribe-repos, endpoint, collections, dids, sampleRate, workspaceId,
+label, state: running | stopped, status: idle | waiting | connecting | streaming | backoff | error, held, cursor,
+cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed}, reconnects, rev, live,
+createdAt, updatedAt}`. `held` says whether an instance holds its lease now (`waiting`: running but not yet taken);
+`live` is `{connected, paused, queue, pauses, cursor}` when the instance answering is the holder, else null. Counts are
+stored with the cursor. Subscriptions labelled above the caller's clearance are not shown (`404`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/firehose` | `{subscriptions: [subscription]}` |
+| `POST /api/atproto/firehose` `{name, protocol, endpoint, collections?, dids?, sampleRate?, workspaceId?, label?, start?}` | B-1908. `endpoint` is `wss://`, `ws://`, `https://` or `http://` (dialled as WebSocket); for Jetstream a bare host gets `/subscribe`, for subscribeRepos the path gets `/xrpc/com.atproto.sync.subscribeRepos`. `collections` are NSIDs or `prefix.*` (default `[app.bsky.feed.post]`, at most 100); `dids` up to 10,000 `did:plc` or `did:web` authors (null: everyone; Jetstream also receives both lists as `wantedCollections` and `wantedDids`); `sampleRate` in (0, 1] (default 1); `label` defaults to `public` (`403` above the caller's clearance). A refused endpoint is `400` with `step: endpoint`; a name in use or more than `FIREHOSE_MAX_PER_TENANT` subscriptions `409`. Stopped unless `start: true`. Audited `atproto.firehose.created`. `201` |
+| `GET /api/atproto/firehose/:id` | The subscription and its status |
+| `PATCH /api/atproto/firehose/:id` `{name?, protocol?, endpoint?, collections?, dids?, sampleRate?, workspaceId?, label?, cursor?: null}` | Changes move `rev`; a running consumer restarts with them from its cursor. `cursor: null` starts again from live, only once the subscription is stopped and no instance holds it (`409` otherwise); changing the protocol needs it (a cursor of one means nothing to the other). Audited `atproto.firehose.updated` |
+| `DELETE /api/atproto/firehose/:id` | The holder stops at its next tick. Audited `atproto.firehose.deleted`. `204` |
+| `POST /api/atproto/firehose/:id/start`, `POST /api/atproto/firehose/:id/stop` `{}` | Sets what the admin wants; the instances act on it at once over the bus (a stop stores the cursor and gives the lease back). Audited `atproto.firehose.started`, `atproto.firehose.stopped` |
+
+Audit actions are in the event catalogue's `atproto.*` group.
+
+## Sprint 27b (1.4.0): low-code data apps (B-2201 to B-2208)
+
+An app belongs to a tenant, and to one of its workspaces unless it is tenant-wide (`workspaceId: null`); members of
+that workspace (every tenant member for a tenant-wide app) see it within their clearance, others get `404`. The app's
+label is the highest label its records may carry; an entity's label is its records' default and lowest one. Reading
+apps and records needs `records:read`, writing records `records:write` (both held by members); designing apps,
+entities, forms and triggers, and exports, imports and drafts, `apps:design` (workflow admins and tenant admins).
+`:app` is an app's id or name (the current workspace's app first, then a tenant-wide one), `:entity` and `:form` an id
+or name within the app. Record values are sealed with the tenant key; fields marked `indexed` (or `unique`) are also
+kept in a clear index, and only those can be filtered, sorted, searched and aggregated (`docs/security.md`). Every
+change is audited (`app.*`); record changes are also emitted as `record.created`, `record.updated` (with `fields`),
+`record.deleted` and `record.transitioned` (with `from`, `to`), fire the entity's triggers, and queue the AI fill.
+
+Field types (`definition.fields[]`, each `{name, type, title?, description?, required?, indexed?, unique?}`):
+`string` (`maxLength` (≤ 255 when indexed or unique), `minLength`, `pattern` (RE2), `multiline`), `number` (`min`,
+`max`, `integer`), `boolean`, `date` (`YYYY-MM-DD`, or with `withTime` an ISO date and time with a zone), `enum`
+(`options: [{value, label?}]`), `reference` (`entity`: a record of another entity of the app), `lookup` (`source`:
+`static` with `options`, `entity` with `entity` and `display`, `user`, `workspace`), `file` (a file-store id the writer
+can read), `json` (`maxBytes`), `formula` (`expression`, computed on write from the entity's other fields; functions
+`if`, `coalesce`, `isblank`, `concat`, `upper`, `lower`, `trim`, `len`, `left`, `right`, `mid`, `contains`,
+`replace`, `round`, `floor`, `ceil`, `abs`, `min`, `max`, `sum`, `number`, `text`, `today`, `now`, `year`, `month`,
+`day`, `add_days`, `days_between`; operators `+ - * / % & = != < <= > >= and or not`; no other names), `ai`
+(`profile`, `prompt` with `{{field}}` placeholders, `maxLength`: filled by the `apps.ai-fill` job, failing soft).
+`definition.states` (optional): `{initial, states: [{name, title?}], transitions: [{name?, from: [state | "*"], to,
+roles?}]}`; a new record starts in `initial`, and only listed transitions are allowed. Names reserved for record
+properties (`id`, `state`, `label`, `version`, timestamps) cannot be field names.
+
+A record is `{id, app, entity, label, state, values, version, source: api | form | import | workflow, aiState:
+pending | filled | failed | null, aiError, createdBy, updatedBy, createdAt, updatedAt}`. Filters are `{field, op,
+value}` with `op` one of `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in` (a list of up to 100), `contains`, `startsWith`,
+`exists` (`value: false` for missing), combined with `{and: […]}`, `{or: […]}` and `{not: …}` (at most 4 levels and 30
+conditions); text compares lower-cased, `ne` and `not` include records without the value; system fields `id`,
+`state`, `createdAt`, `updatedAt`, `createdBy` can be used too. Sorts are `[{field, dir: asc | desc}]` (at most 3),
+empty values last, then the record id. Invalid values answer `400` with `problems: [{field, message}]`; a duplicate
+unique value `409` with `field`; a stale `version` `409`.
+
+### Apps and entities
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps` | `records:read`. `{apps: [{id, name, title, description, label, workspaceId, scope, createdBy, updatedBy, createdAt, updatedAt}]}`: the apps the caller can see |
+| `POST /api/apps` `{name, title?, description?, label?, workspaceId?}` | `apps:design`. B-2201. `workspaceId` defaults to the current workspace; `null` makes the app tenant-wide. The label must clear the caller and fit the workspace ceiling. Names are unique per workspace (and tenant-wide). Audited `app.created`. `201` app |
+| `GET /api/apps/:app` | `records:read`. The app with `entities` (`{id, name, title, label, definition, rev}`), `forms`, and for designers `triggers` |
+| `PATCH /api/apps/:app` `{title?, description?, label?}` | `apps:design`. Lowering the label is refused while entities or records are above it. Audited `app.updated` |
+| `DELETE /api/apps/:app` | `apps:design`. Deletes the app with its entities, records, forms, triggers and transfers. Audited `app.deleted` with counts. `204` |
+| `POST /api/apps/:app/entities` `{name, title?, label?, definition}` | `apps:design`. B-2201, B-2203, B-2204. The definition is checked whole (names, formulas, references to the app's entities, AI prompt placeholders, state machine, roles); the first problem is the `detail`, all are in `problems`. Audited `app.entity.created`. `201` entity |
+| `GET /api/apps/:app/entities/:entity` | `records:read`. The entity |
+| `PATCH /api/apps/:app/entities/:entity` `{title?, label?, definition?, rev?}` | `apps:design`. With records present, a field's type cannot change, an existing field cannot become unique, and a state a record holds cannot be removed (`409`). A change to the indexed, unique or formula fields reindexes every record in the `apps.reindex` job (`reindexJob`). Audited `app.entity.updated` |
+| `DELETE /api/apps/:app/entities/:entity` | `apps:design`. Refused while another entity refers to it; deletes its records, forms and triggers. Audited `app.entity.deleted`. `204` |
+| `GET /api/apps/:app/entities/:entity/fields/:field/options?q=&limit=` | `records:read`. B-2203: the options of an enum or lookup field, or the records a reference may point to (`{value: id, label: title field}`), users of the tenant (`user` lookups), the caller's workspaces (`workspace` lookups). `{options: [{value, label}]}` |
+
+### Records (B-2202)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/entities/:entity/records?filter=<json>&sort=field:dir,…&q=&limit=&offset=` | `records:read`. The records the caller is cleared for (hidden ones left out). `{total, limit, offset, records}` |
+| `POST /api/apps/:app/entities/:entity/records/query` `{filter?, sort?, q?, limit?, offset?}` | `records:read`. The same as a body. `q` searches the indexed text fields (lower-cased, `%` and `_` literal). `limit` ≤ 200, `offset` ≤ 100,000 |
+| `POST /api/apps/:app/entities/:entity/records/aggregate` `{filter?, q?, groupBy?, metrics: [{op: count} \| {op: sum \| avg \| min \| max, field}]}` | `records:read`. Groups by an indexed field or `state`; metrics over indexed number, date and boolean fields. `{groupBy, metrics, groups: [{key, values}]}`, ordered by key with empty last, at most 1000 groups |
+| `POST /api/apps/:app/entities/:entity/records` `{values, label?}` | `records:write`. Values are validated (unknown and computed fields refused), formulas computed, references, lookups and files checked against what the writer may see, then sealed; unique values are claimed in the same transaction. The label is between the entity's and the app's and within the caller's clearance. Audited `app.record.created`; `record.created`. `201` record |
+| `POST /api/apps/:app/entities/:entity/records/bulk` `{create?: [{values, label?}], update?: [{id, values, version?}], delete?: [id]}` | `records:write`. Up to `APPS_BULK_MAX` operations, all validated and sealed first and written in one transaction: any problem (a duplicate, a stale version) writes nothing and names the operation (`op`, `index`). Audited once, `app.records.bulk`; one event per record. `{created, updated, deleted}` |
+| `POST /api/apps/:app/entities/:entity/records/import` `{csv, dryRun?}` | `records:write`. A CSV whose header names fields (and optionally `label`; `id`, `state` and timestamps are ignored), at most `APPS_IMPORT_MAX_BYTES` and `APPS_IMPORT_MAX_ROWS`; an unknown column is `400`. Runs as the `apps.import` job: each row is a record of its own, so bad rows are reported (`report: [{row, problem}]`, up to 500) and the rest written; a dry run only validates (uniqueness too). The sealed CSV is dropped once the job has run. Audited `app.records.import.queued`, then `app.records.imported` or `app.records.import.checked`. `202 {id, jobId}` |
+| `POST /api/apps/:app/entities/:entity/records/export` `{filter?, q?, sort?}` | `records:read`. Runs as the `apps.export` job, as the caller, with what they may read when it runs: a CSV (`id, state, label, createdAt, updatedAt`, then every field; cells starting with `= + - @` are prefixed with `'`) sealed into the blob store, at most `APPS_EXPORT_MAX_ROWS` records. Audited `app.records.export.queued`, `app.records.exported`. `202 {id, jobId}` |
+| `GET /api/apps/transfers/:id` | `records:read`. An import or export the caller started (designers see all): `{id, kind, state, dryRun, summary, report, error, jobId, createdAt, finishedAt, download}` |
+| `GET /api/apps/transfers/:id/download` | `records:read`. The export's CSV (`text/csv`, attachment), only for the person who asked and within their clearance. Audited `app.records.downloaded` |
+| `GET /api/apps/:app/entities/:entity/records/:id` | `records:read`. The record |
+| `PATCH /api/apps/:app/entities/:entity/records/:id` `{values, version?}` | `records:write`. Changes the fields given (`null` empties one); `version` guards against overwriting a newer write. Audited `app.record.updated` with the changed `fields`; `record.updated`. A change to an AI field's inputs clears it until the fill job runs again |
+| `DELETE /api/apps/:app/entities/:entity/records/:id` | `records:write`. Audited `app.record.deleted`; `record.deleted`. `204` |
+| `POST /api/apps/:app/entities/:entity/records/:id/transition` `{to, version?, note?}` | `records:write`. B-2204. Moves the record along a transition its entity lists (and, when the transition names `roles`, only for holders of one). An illegal transition is `409 Illegal transition` with `from`, `to` and `allowed`. Audited `app.record.transitioned`; `record.transitioned` |
+
+### Forms (B-2205)
+
+A form lists an entity's fields in order: `definition: {fields: [{field, required?, label?, help?, visibleIf?: {field,
+op: eq | ne | in | truthy | falsy, value?}}], submitLabel?, successMessage?}`; a condition reads a field earlier on the
+form, and the form must ask for every field the entity requires. On every submission the server keeps only the fields
+the form lists and shows given the earlier answers; anything else is dropped (and counted in the audit), never written.
+Every text value passes the `user-input` guardrail checkpoint: a block or a hold refuses the submission (`422`), a
+redaction is written redacted.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/forms` | `records:read`. `{forms: [{id, name, title, entity, definition, public, ratePerMinute, createdAt, updatedAt}]}` |
+| `POST /api/apps/:app/forms` `{name, title?, entity, definition, ratePerMinute?}` | `apps:design`. Audited `app.form.created`. `201` form |
+| `GET /api/apps/:app/forms/:form` | `records:read`. The form and `shown`: what it shows (each field's label, type, options, limits, condition) |
+| `PATCH /api/apps/:app/forms/:form` `{title?, definition?, ratePerMinute?}` | `apps:design`. Audited `app.form.updated` |
+| `DELETE /api/apps/:app/forms/:form` | `apps:design`. Audited `app.form.deleted`. `204` |
+| `POST /api/apps/:app/forms/:form/public` `{enabled}` | `apps:design`. Makes the form public with a new link token, shown once (`exa_…`; an older link stops working), or private again. A public form cannot ask for files, references or user, workspace or record lookups. Audited `app.form.published`, `app.form.link.rotated`, `app.form.unpublished`. `{public, token}` |
+| `POST /api/apps/:app/forms/:form/submit` `{values}` | `records:write`. A signed-in submission: a record with `source: form`. Audited `app.form.submitted` (and `app.record.created`). `201 {id, dropped}` |
+
+Public (no session, at `/api/public`, `X-Robots-Tag: noindex`; the token travels in the body):
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/public/forms/open` `{token}` | What the form shows (`{title, submitLabel, fields}`), never other fields of the entity. `404` for an unknown or private link |
+| `POST /api/public/forms/submit` `{token, values}` | Limited per address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form (`ratePerMinute`), then `429` with `Retry-After`. The record is written by no one (`createdBy: null`, `source: form`). Audited `app.form.submitted` with `public: true`, the address and the dropped field names. `201 {submitted: true, message, dropped}` |
+
+### Triggers and workflow record steps (B-2206)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/triggers` | `apps:design`. `{triggers: [{id, kind, entity, events, cron, schedule, workflowId, workflow, ownerId, enabled, nextRunAt, lastRunAt, lastRunId, lastResult}]}` |
+| `POST /api/apps/:app/triggers` `{entity, kind: record \| schedule, events?, cron?, workflow, enabled?}` | `apps:design`. A record trigger fires on `created`, `updated`, `deleted` or `transitioned` records of the entity; a schedule trigger on a five-field UTC cron. `workflow` (id or name) must be published and visible in the caller's current workspace. The trigger runs as its creator. Audited `app.trigger.created`. `201` trigger |
+| `PATCH /api/apps/:app/triggers/:id` `{enabled?, events?, cron?}` | `apps:design`. Audited `app.trigger.updated` |
+| `DELETE /api/apps/:app/triggers/:id` | `apps:design`. Audited `app.trigger.deleted`. `204` |
+
+A record event becomes an `apps.trigger` job per matching trigger; the job starts the workflow's published version
+(trigger `record`) as the owner, with the input `{event, app, entity, record: {id, state, label, version, values},
+fields?, from?, to?, trigger: {id, depth}}` (no values for `deleted`). Schedules start it with `{event: schedule, app,
+entity, dueAt, trigger}` (trigger `schedule`); each due time is claimed once across instances. The owner must still be
+active, hold `agents:run` and `records:read`, belong to the workflow's workspace and be cleared for the record, and the
+record must not be above the workflow's label; otherwise the trigger records a skip (`lastResult`, audited
+`app.trigger.skipped`). Runs that start are audited `app.trigger.fired`. A workflow's trigger node may say `source:
+record` or `schedule`.
+
+Workflow graphs have a `record` node: `config: {action: create | update | transition, app, entity, record?: template,
+values?: {field: template}, to?}`; it writes as the run's owner (who needs `records:write`), outputs `{id, state,
+label, values}`, and is mocked in dry runs. A new record is at least the run's label; writing a record below the run's
+label blocks the step. The step passes the run's trigger depth on: chains stop at `APPS_TRIGGER_MAX_DEPTH`, and a
+workflow's own record steps never fire that workflow's triggers.
+
+### AI fields, drafts and bundles (B-2207, B-2208)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/drafts` `{kind: entity \| workflow, prompt, profile, label?}` | `apps:design`. A local model, through the gateway and the named published profile, drafts an entity definition or a workflow graph from the description (which passes `user-input` first). The draft is validated like a saved one and never saved: `{kind, draft, valid, problems}`. An answer that is not JSON is `422`; an unreachable model `503`. Audited `app.draft.created` |
+| `GET /api/apps/:app/export` | `apps:design`. The app's design as a signed bundle: `{format: exprsn-app/1, exportedAt, app, entities, forms, key, signature}` (an HMAC over the canonical JSON of the rest with the KMS key `key`). No records, triggers or form links. Audited `app.exported` |
+| `POST /api/apps/import` `{bundle, name?, workspaceId?}` | `apps:design`. Verifies the signature over exactly what arrived before reading anything else: a bundle changed after signing, signed elsewhere or naming another key is `422 Bundle refused`, audited `app.import.refused`. Then creates the app (under `name` if given) with its entities and forms (forms private); a name in use is `409` and leaves nothing behind. Audited `app.imported`. `201` app |
+
+AI fields: after a create, or an update of other fields, the record's `aiState` is `pending` and the `apps.ai-fill` job
+asks the field's profile with its prompt (placeholders filled from the record), as the person who last wrote the
+record (their `inference:invoke` and clearance) or, for a public form's record, with only the profile's label checked;
+the answer passes `model-output`. Any error (the model down, the profile unpublished, the guardrails holding the
+answer) leaves the field empty and the record saved, with `aiState: failed` and `aiError`, audited
+`app.record.ai.failed`; a filled field is audited `app.record.ai.filled` and emitted as `record.updated`.
+
+Records are moderation objects (type `record`): a takedown hides the record from every list and read, an upheld appeal
+shows it again.
+
+## Sprint 27c (1.4.0): groups and events (B-2501 to B-2505)
+
+Groups live inside one workspace, and workspace membership stays the outer boundary: every route starts from the
+workspaces the caller may act in now, so a group outside them is `404` (it cannot be seen, joined or reported), and a
+member who leaves the workspace loses its groups at once, whatever their group role. `groups:read` sees groups, their
+content and events; `groups:write` creates groups, joins, posts, RSVPs and keeps calendar feeds (both held by
+members and tenant admins); what someone may do inside a group is their **group role**: `owner` (settings, roles,
+delete), `moderator` (requests, invitations, removing members, hiding posts, events, check-in, cases) or `member`
+(posts, RSVPs). `groups:manage` (tenant admins) acts as owner of every group in the workspaces the holder may act in.
+A group's `visibility` is `public` (listed and readable by everyone in the workspace; posting needs membership),
+`private` (listed; content for members) or `hidden` (known only to members, invitees and managers); its `joinMode` is
+`open`, `request` or `invite`. Its `label` (at most the workspace ceiling, default `internal`) is the label of all its
+content: nobody below it sees the content or joins. Descriptions, posts and event titles, descriptions and locations
+are sealed with the tenant key. Refusals for a reader carry `step`: `group` (join first), `group-role` (with
+`right`), `clearance`, `join-mode`, `workspace`, `invitee`, `guardrails`. Every route answers `Cache-Control:
+no-store`. Changes are audited under `group.*` and `calendar.feed.*`; the catalogue events `group.created`,
+`group.updated`, `group.deleted`, `group.member.added`, `group.member.removed`, `group.post.created`,
+`group.post.deleted`, `group.event.created`, `group.event.updated` and `group.event.cancelled` are emitted to
+webhooks and plugins (ids only).
+
+### Groups, members, requests and invitations (B-2501)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups?workspace=&mine=true` | `groups:read`. The groups the caller may know of in their workspaces (or one): `[{id, workspaceId, name, description, visibility, joinMode, label, state, role, actingRole, members, …}]`; `description` is null where the caller may not read the content |
+| `POST /api/groups` `{workspaceId?, name, description?, visibility?: private, joinMode?: request, label?}` | `groups:write`. In a workspace the caller may act in (default the current one), label at most the workspace ceiling (`422`) and the caller's clearance (`403`). The creator is the owner. `201` with the group |
+| `GET /api/groups/:id` | `groups:read`. The group with the caller's `role`, `actingRole` and member count |
+| `PATCH /api/groups/:id` `{name?, description?, visibility?, joinMode?, label?}` | Owner. A raised label raises its posts and events; sockets in the group's room are checked again |
+| `DELETE /api/groups/:id` | Owner. The group is deleted (`state: deleted`), pending requests cancelled, reminders stopped |
+| `GET /api/groups/:id/members` | Readers of the content. `[{userId, username, displayName, role, joinedAt}]` |
+| `PATCH /api/groups/:id/members/:userId` `{role: owner \| moderator \| member}` | Owner. A group keeps at least one owner (`409`) |
+| `DELETE /api/groups/:id/members/:userId` | Leave (one's own id) or remove (moderators remove members, owners anyone). The last owner cannot leave (`409`). The member's sockets leave the group's room at once |
+| `POST /api/groups/:id/join` | `open`: `200 {joined: true, role}`. `request`: `202 {requested: true, request}` (the same pending request again if there is one; moderators are notified). `invite`: `403` (`step: join-mode`) unless the caller holds an invitation, which this accepts. Outside the workspace or below the label: `404` |
+| `POST /api/groups/:id/invites` `{userId, role?: member}` | Moderators (owners for `moderator` and `owner`). The invitee must be active, in the group's workspace and cleared for its label (`422`, `step: workspace`); one pending invitation or request per user (`409`). Expires after `GROUP_INVITE_DAYS`. `201` with the invitation; the invitee is notified |
+| `GET /api/groups/:id/requests?state=` | Moderators. Requests and invitations (default `pending`; expired ones are marked so) |
+| `GET /api/group-requests` | The caller's pending requests and the invitations waiting for them: `[{id, groupId, groupName, kind: request \| invite, role, state, expiresAt, …}]` |
+| `POST /api/group-requests/:id/accept` | An invitation by its invitee; a request by a moderator. The workspace boundary and label are checked again now (`422`); expired is `410` |
+| `POST /api/group-requests/:id/decline` | The same people. `200` with the request |
+| `DELETE /api/group-requests/:id` | Withdraw: the requester their request, a moderator an invitation |
+
+### Posts and cases (B-2505)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups/:id/posts?before=&limit=` | Readers. Newest first: `[{id, groupId, authorId, authorName, body, label, state, createdAt, updatedAt}]`; moderators also see hidden posts (`body: null`) |
+| `POST /api/groups/:id/posts` `{body}` | Members (up to 10,000 characters). Screened at the `user-input` guardrail checkpoint (`422`, `step: guardrails` on a block; a redaction is stored redacted). `201` with the post |
+| `DELETE /api/group-posts/:id` | Its author, or a moderator |
+| `GET /api/groups/:id/cases?state=` | Moderators. The flags on the group's content (reports and moderation checks through B-19), within clearance: `[{id, ref, kind, state, severity, objectType, objectId, label, ruleName, dueAt, createdAt}]` |
+
+Group content is moderated through the moderation API (Sprint 26c) with three registered types: `group-post` (hidden
+posts are shown to nobody but the group's moderators), `group` (its name and description; a hidden group is closed to
+everyone but managers and its owners) and `group-event` (a hidden event is left out of calendars and its reminders are
+not sent). `POST /api/moderation/reports {type: group-post, id}` by anyone who can read the post files a flag in the
+group's workspace queue; a reviewer's hide and an upheld appeal work as for any object.
+
+### Events, RSVPs and check-in (B-2502)
+
+Times are given as an instant with an offset (`2026-11-03T08:00:00Z`) or as a wall-clock time (`2026-11-03T09:00`) or
+date (all-day events) in `timeZone`, an IANA zone name (`Europe/Berlin`, `UTC`; offsets and unknown names are `400`).
+They are stored in UTC with the zone. A wall-clock time that occurs twice takes the earlier instant; one in a
+daylight-saving gap moves forward by the gap. Events last at most 31 days. Readers of the group read its events.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups/:id/events?from=&to=&includeCancelled=` | Readers. Events overlapping the window (default from a day ago, a year long) |
+| `POST /api/groups/:id/events` `{title, description?, location?, start, end? \| durationMinutes?, timeZone, allDay?, capacity?, maxGuests?, reminders?}` | Moderators. `reminders` are up to five offsets in minutes before the start (at most 28 days). `201 {id, title, startsAt, endsAt, timeZone, localStart, localEnd, allDay, capacity, maxGuests, reminders, label, state, sequence, attendance, myRsvp, canManage, …}` |
+| `GET /api/calendar/events?from=&to=` | The caller's calendar: events of their groups and events they RSVPed to (going or maybe), still readable now; at most 400 days |
+| `GET /api/calendar/events/:id` | With `attendance {going, maybe, guests, checkedIn}` and the caller's `myRsvp` |
+| `PATCH /api/calendar/events/:id` | Moderators; the event fields, all optional. A change attendees see moves `sequence`; a new time or reminder list reschedules the reminders |
+| `POST /api/calendar/events/:id/cancel` `{reason?}` | Moderators. Stops the reminders and notifies **every attendee** (going or maybe), in the console (`event.cancelled`) and by email (`event-notice`: the time and a link, never the event's title or the reason). `200` with the event and `notified` |
+| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`) |
+| `GET /api/calendar/events/:id/attendees` | Readers see who is going or maybe; moderators also the declined and check-ins |
+| `POST /api/calendar/events/:id/check-in` `{userId, checkedIn?: true}` | Moderators. Someone without an RSVP is added as going (if they can read the event) |
+| `GET /api/calendar/events/:id/reminders` | Moderators. `[{id, minutesBefore, fireAt, state: scheduled \| sending \| sent \| cancelled \| skipped, recipients, sentAt}]` |
+
+### Reminders (B-2503)
+
+Each reminder offset is a row and a `calendar.reminder` job queued with `runAt` at its time. The queue claims a job
+with a conditional update, so one instance runs it however many poll the database (tested with two instances on one
+database); the reminder row also moves `scheduled` → `sending` → `sent` with a compare-and-set, so a retried or
+duplicated job never sends twice. At its time the job notifies the attendees (going or maybe) who can still read the
+event, in the console (`event.reminder`) and by email, and is audited `group.event.reminded`. A cancelled, hidden or
+moved event's reminders are cancelled or skipped.
+
+### Calendar feeds (B-2504)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/calendar/feeds` | `groups:read`. The caller's feeds: `[{id, kind, targetId, name, url, createdAt, revokedAt, lastUsedAt}]` |
+| `POST /api/calendar/feeds` `{kind: event \| group \| user, targetId?}` | `groups:write`. An event or group the caller can read, or their own calendar. `201` with the `url`. Audited `calendar.feed.created` |
+| `DELETE /api/calendar/feeds/:id` | Revoke (the owner, or a `groups:manage` holder). Audited `calendar.feed.revoked` |
+| `GET /calendar/feeds/:id/:signature.ics` | Public, outside `/api`: no session or cookie, rate-limited per address (`CALENDAR_FEED_PER_MINUTE`). `text/calendar` (RFC 5545: UTC times, all-day dates in the event's zone, escaped and folded). The signature is an HMAC-SHA256 over the feed's id, tenant, owner, kind and target with a key derived from `SESSION_SECRET` (HKDF). A bad signature, an unknown or revoked feed, or an owner who is disabled, sanctioned or no longer entitled is the same `404`. The feed is rendered as its owner at every fetch (workspace, group and clearance); a user feed covers the last 30 days and the next year, cancelled events as `STATUS:CANCELLED`. Events above `CALENDAR_FEED_MAX_LABEL` (default `internal`) appear as `Busy (<label>)` without details |
+
+### Realtime (B-2101)
+
+The `group` room kind: a socket joins with `room.join {kind: group, id}` when its user can read the group's content.
+Events: `group.updated`, `group.member.added`, `group.member.removed`, `group.member.role`, `group.post.created`,
+`group.post.deleted`, `group.event.created`, `group.event.updated`, `group.event.cancelled`, `group.event.rsvp`,
+`group.event.check-in` (ids, never content). Removing a member closes their room at once; a visibility or label change
+checks everyone in it again; leaving the workspace closes it.

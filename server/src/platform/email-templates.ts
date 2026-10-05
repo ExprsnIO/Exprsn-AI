@@ -69,6 +69,12 @@ const TEMPLATES = {
     body: ['Hello {{name}},', '{{event}} (account {{username}}, {{time}}).', '{{detail}}', '{{next}}', '{{link}}'],
     required: ['name', 'username', 'product', 'event', 'time', 'detail', 'next', 'link']
   },
+  // Sprint 27c (B-2502, B-2503): event cancellations and reminders. Only the time, never the event's sealed title.
+  'event-notice': {
+    subject: '{{product}}: {{event}}',
+    body: ['Hello {{name}},', '{{event}}.', '{{detail}}', 'Open the event in the console for the details:', '{{link}}'],
+    required: ['name', 'product', 'event', 'when', 'detail', 'link']
+  },
   notification: {
     subject: '{{title}}',
     body: ['{{title}}', 'Open the console:', '{{link}}'],

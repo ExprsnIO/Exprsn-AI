@@ -545,6 +545,31 @@ filter, private `/tmp`, only the state directory writable.
   which the job failed. External providers receive the object's text (up to 32,000 characters) and its type; the
   zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
   rules. Notices carry the moderator's reason, not the moderated content.
+- Firehose ingest (1.4.0, Sprint 27, B-1908): tested against a local Jetstream and relay double only, not yet against
+  the public Jetstream or a live relay. Records from subscribeRepos are read from the commit's CAR blocks without
+  verifying the commit signature or the repository's Merkle tree against the author's DID document, so a relay could
+  hand over records an author never wrote; Jetstream carries no proofs at all. Trust the endpoint you subscribe to.
+  Ingested posts are an unregistered moderation type (`atproto-post`): they are checked with their text and get a flag
+  and labels, but cannot be reported, hidden or appealed through the object registry (Exprsn-AI does not store them),
+  and a deleted post's labels are not withdrawn. Images and video are not fetched; only text and alt text are checked.
+  The flag stores the post text (sealed, as for any flag). A consumer is held by one instance through a lease of three
+  `FIREHOSE_TICK_MS`; after a crash another instance takes over when the lease runs out and resumes from the last
+  stored cursor (at most `FIREHOSE_CHECKPOINT_MS` old), so posts handled since are checked again (a check is idempotent
+  per post: one flag). A failed check is retried three times and then counted as `failed` and skipped.
+- Groups and events (1.4.0, Sprint 27c). Workspace membership is checked on every request, so a member who leaves
+  the workspace loses its groups at once, but their membership and RSVP rows stay (they come back if the user
+  rejoins the workspace). Group names are stored in the clear (like file names); descriptions, posts and event titles,
+  descriptions and locations are sealed. In-app notices name the group, which a notification row stores in the clear;
+  emails carry only the time and a link. Calendar feed URLs are bearer credentials: anyone holding one reads the
+  owner's events up to `CALENDAR_FEED_MAX_LABEL` (above it, busy time only) until the owner revokes it, and calendar
+  programs fetch them over the network, so a URL in a mail client or third-party calendar should be treated as
+  shared. Feed signatures use a key derived from `SESSION_SECRET`; rotating it invalidates every feed (there is no
+  per-feed key rotation other than revoking and creating a new one). Feed fetches are not audited one by one (they
+  record `lastUsedAt`); creation and revocation are. Events have no recurrence and no VTIMEZONE (times are UTC, which
+  RFC 5545 allows); a wall-clock time in a daylight-saving gap moves forward by the gap. Reminders go to attendees
+  who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
+  default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
+  (no edit, no attachments, no threads); the workspace feed is B-27.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off
@@ -560,6 +585,36 @@ filter, private `/tmp`, only the state directory writable.
   restricts OAuth app access hides its membership until the app is approved there. Step-up re-authentication through
   GitHub is not offered (GitHub has no `prompt=login`); GitHub accounts step up with a second factor. CSV imports create accounts with a
   password nobody knows: the users need an invitation link (`sendInvites`) or a reset by an admin.
+- Low-code apps (1.4.0, Sprint 27, B-22). Records are sealed with the tenant key (the record id as associated data),
+  but sealed values cannot be filtered in SQL, so the design is deliberate: a designer marks the fields that may be
+  filtered, sorted, searched and aggregated `indexed`, and those values (lower-cased text, numbers, dates as epoch
+  milliseconds, booleans) are also stored **in clear** in `app_record_values`, readable by anyone with database
+  access. Mark only fields that are not sensitive; everything else (notes, JSON, unindexed text, AI fields unless
+  marked) stays only in the sealed record. A `unique` field stores an unkeyed SHA-256 of the entity, field and
+  normalised value in `app_unique_values`; a low-entropy value (a small number, a common word) can be guessed from
+  it by someone with database access. Indexed text is compared lower-cased after Unicode NFC, byte-wise (no accent
+  folding, no locale collation: `é` sorts after `z`), and is at most 255 characters, so an indexed text field has a
+  `maxLength` of at most 255; uniqueness is case-insensitive. Filters cover a tested subset (`eq`, `ne`, `gt`, `gte`,
+  `lt`, `lte`, `in`, `contains`, `startsWith`, `exists`, with `and`, `or`, `not`); there is no PostgreSQL-only fast
+  path. Offset pagination stops at 100,000. An existing field cannot become unique while the entity has records, and
+  a field's type cannot change then. Formulas are parsed and walked (no `eval`), read only the entity's own non-computed
+  fields, and give null on any error; they are computed on write (and by the reindex job), so `today()` and `now()`
+  are the time of the last write. AI fields are filled by a job after the write, fail soft (an error leaves the field
+  empty, recorded in `aiError` and audited) and are cleared when their inputs change until the job fills them again; a
+  record written by a public form is filled with no person behind it (only the profile's label is checked). Public
+  forms take only listed, visible fields, never files, references or user, workspace or record lookups, are limited per
+  address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form, and screen every text value at `user-input`; a held value is
+  refused rather than held for review. A form's link token is shown once and stored as an HMAC with `SESSION_SECRET`,
+  so rotating that secret ends every public form link. Triggers run as their owner with what the owner holds when they
+  fire; chains stop at `APPS_TRIGGER_MAX_DEPTH`, and a workflow's own record steps never fire its own triggers, but two
+  workflows that update each other's entities stop only at that depth. A trigger's run input holds the record's values,
+  sealed in the run like any workflow input. App bundles are signed with an HMAC key in the KMS
+  (`<OPENBAO_KEY_PREFIX>app-bundles`), so they verify only on installations that share that key (the same `DATA_KEY`
+  or OpenBao transit key); bundles between unrelated installations would need the offline-signed import bundles
+  (B-2005), which do not carry apps yet. Bundles carry the design only (no records, triggers or form links). CSV
+  exports are sealed in the blob store until downloaded by the person who asked, and are not deleted afterwards; the
+  CSV of an import is dropped from its row once the job has run. A CSV import travels in the JSON body, so it is at
+  most `APPS_IMPORT_MAX_BYTES` (200 kB by default, under the API's 256 kB limit).
 - Gateway slots: a chat turn's own requests (embeddings, guard-model verdicts on the streamed text and on tool results,
   tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
   receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and

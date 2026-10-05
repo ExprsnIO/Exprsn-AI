@@ -28,8 +28,8 @@ repeat them; webhook delivery is dropped from the plugins epic entirely.
 | 24 | Trust foundations: CA issuance, OCSP, secrets, plugin catalogue, core | B-2101–B-2104, B-1601–B-1604, B-1701–B-1703, B-2001–B-2002 | 78 | `026_pki_secrets`, `026b_secrets`, `026c_core` | **Done** |
 | 25 | ACME server, AT-Protocol trust, leases, plugins | B-1605–B-1611, B-1704–B-1706, B-2003–B-2005 | 77 | `027_acme`, `027b_atproto`, `027c_leases`, `027d_plugins` | **Done** |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation, file store | B-1801–B-1805, B-1807–B-1808, B-1901–B-1907, B-2401–B-2405 | 81 | `028_identity`, `028b_atproto_accounts`, `028c_moderation`, `028d_files` | **Done** |
-| 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps` | Next |
-| 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels_social` | Planned |
+| 27 | Firehose, low-code apps, groups and events | B-1908, B-2201–B-2208, B-2501–B-2505 | 71 | `029_apps`, `029b_firehose`, `029c_groups` | **Done** |
+| 28 | Customer-service channels, messaging, feed, load test, release | B-2301–B-2304, B-1806, B-2105, B-2601–B-2606, B-2701–B-2705, B-2801 | 84 | `030_channels_social` | Next |
 
 ### Progress
 
@@ -94,6 +94,30 @@ its own slot for guard-model verdicts, tool-result screens and embeddings).
 | B-1901 to B-1907 | Done | Checks with one flag per object, a registry of moderated object types (now including files), reports, appeals that restore objects and negate labels, sanctions enforced on the next request, routed queues with SLA escalation and a dead-letter queue, shadow and enforce external providers, notices |
 | B-2401 to B-2405 | Done | Streamed, sealed, scanned files with versions and trash; shares and use-limited links (the platform's BUG-020 fixed); quotas; sandboxed previews; search and folder knowledge sources. Files are moderation objects (wired at merge) |
 
+
+**Sprint 27: done** (71 points), built as three parallel parts with migrations `029_apps`, `029b_firehose` and
+`029c_groups`, merged onto `main` after #32 to #35. Unit suite 750 passed and 1 skipped across 61 files; the PostgreSQL
+integration tests (apps, groups and the rest of the suite) ran against throwaway servers, MySQL in CI. Event catalogue
+version 3: `record.*`, `app.*` and `group.*` are now emitted. New permissions: `firehose:manage`, `apps:design`,
+`records:read`, `records:write`, `groups:read`, `groups:write` and `groups:manage`. Records, groups, group events and
+group posts are moderation object types.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| B-1908 | Done | Per-tenant Jetstream or relay `subscribeRepos` subscriptions; one consumer per subscription through a lease, bounded queue with backpressure, cursor checkpoints, backoff; posts go through the moderation check and become labels. Tested against local doubles only; relay commits are not signature-verified (known gap) |
+| B-2201 | Done | Typed fields, validation; a duplicate unique value is refused, also under a race (SQLite, PostgreSQL) |
+| B-2202 | Done | Records sealed with the tenant key; fields marked `indexed` are copied in clear to `app_record_values` for filter, sort, search and aggregation. The same 19 queries return the same rows on SQLite and PostgreSQL; MySQL in CI. CSV import and export as jobs (import limited to about 200 kB in the JSON body) |
+| B-2203 | Done | Lookups and a formula parser with no eval; a formula cannot reach a global |
+| B-2204 | Done | Per-entity state machine; illegal transitions refused, transitions audited and emitted |
+| B-2205 | Done | Forms with conditional fields; public forms keep only listed fields, are rate-limited and pass `user-input` (a held value is refused rather than queued, known gap) |
+| B-2206 | Done | Record-event and schedule triggers; a `record` workflow step; chains stop at `APPS_TRIGGER_MAX_DEPTH` |
+| B-2207 | Done | AI fields fail soft (a model error leaves the field empty and the record saved); natural-language drafts of entities and flows |
+| B-2208 | Done | App design bundles signed with a KMS HMAC key; a tampered bundle is refused. Bundles verify only where the key is shared and carry no records |
+| B-2501 | Done | Visibility, open, request and invite joining with expiring requests and invitations, owner, moderator and member roles, a `group` realtime room; a user outside the workspace cannot join |
+| B-2502 | Done | IANA zones stored as UTC plus zone, RSVPs with guests and capacity, attendees, check-in; cancelling notifies every attendee in-app and by email. Two simultaneous RSVPs can both take the last place (known gap) |
+| B-2503 | Done | `calendar.reminder` queue jobs; two instances on one database send a reminder once (SQLite and PostgreSQL) |
+| B-2504 | Done | RFC 5545 feeds per event, group and user (UTC, no VTIMEZONE, no recurrence) at `/calendar/feeds/<id>/<sig>.ics`; HMAC signatures from a derived key, revocable; a bad signature is refused |
+| B-2505 | Done | Small sealed group posts; a report on a group post makes a flag and a case |
 
 The order follows the dependencies: the event catalogue (B-2001) before record triggers (B-2206); the moderation API
 (B-1901) before the labeler (B-1610), the firehose (B-1908), held replies (B-2302) and the moderation of files,
@@ -289,12 +313,12 @@ A feed for a workspace or group, not a public social network.
 | Item | Why |
 | --- | --- |
 | Live streaming (ingest, WebRTC rooms, simulcast) | Needs SRS or Cloudflare Stream plus RTMP and TURN infrastructure; about 60 routes on its own |
-| AT-Protocol PDS and custom feed generator | Hosting user repositories is a separate product decision; the platform only planned them (FEAT-037 to FEAT-040) |
-| CalDAV/CardDAV and WebDAV | Large protocol surfaces, partly broken in the platform (CalDAV operators; directory COPY and MOVE return 501) |
+| AT-Protocol PDS and custom feed generator | Planned for 1.5.0: B-29 and B-30 in [Backlog-1.5.0.md](Backlog-1.5.0.md) (Sprint 31) |
+| CalDAV/CardDAV and WebDAV | Planned for 1.5.0: B-31 and B-32 in [Backlog-1.5.0.md](Backlog-1.5.0.md) (Sprint 30) |
 | Governance voting | No demand in Exprsn-AI's workspaces yet |
 | End-to-end-encrypted messaging | Conflicts with server-side guardrails and AI features |
 | SMS one-time codes | Needs a paid SMS provider; scaffolding only in the platform |
-| Console screens for all of the above | The APIs come first; the screens follow the prototype contract in a later release |
+| Console screens for the 1.4.0 features | Planned for 1.5.0: B-34 in [Backlog-1.5.0.md](Backlog-1.5.0.md) (Sprints 29 to 31), with permission matrices (B-33) |
 
 Not carried over from the platform: its CA bearer tokens, service-HMAC headers, `PLATFORM_ADMIN_EMAILS` allow-list,
 open sockets and dev-only token bypasses.
@@ -302,13 +326,13 @@ open sockets and dev-only token bypasses.
 ## Open decisions
 
 - [ ] Team size and the Sprint 24 start date (the plan assumes about five engineers).
-- [ ] Do messaging (B-26) and the workspace feed (B-27) belong in Exprsn-AI, or in a separate product?
+- [x] Messaging (B-26) and the workspace feed (B-27) stay in Exprsn-AI, in Sprint 28.
 - [x] CA and AT-Protocol key custody: the signer or OpenBao, as planned (Sprint 24; an HSM through PKCS#11 stays
   open). Each tenant gets its own service DID and labeler, with a platform fallback (Sprint 25).
 - [x] One intermediate CA per tenant, as the platform's ADR 0003 (Sprint 24).
 - [x] Built-in dynamic database credentials need an admin login to each target database: only `connections:manage`
   holders register one, in a zone whose ceiling covers the target database (Sprint 25).
-- [ ] Customer-service email: IMAP polling, a provider webhook, or both.
+- [x] Customer-service email (B-2303): both IMAP polling and provider webhooks.
 
 ## Risks
 

@@ -158,6 +158,21 @@ export interface WorkflowDeps {
   vault?: { check(p: Principal, refs: string[]): Promise<void>; read(p: Principal, ref: string, via: string): Promise<string> };
 }
 
+/** 1.4.0 (B-2206): a record step with its templates rendered. */
+export interface RecordStep {
+  action: 'create' | 'update' | 'transition';
+  app: string;
+  entity: string;
+  record: string | null;
+  values: Record<string, unknown>;
+  to: string | null;
+}
+
+/** 1.4.0 (B-2206): what runs a record step (the low-code apps), installed with `useRecords`. */
+export interface RecordStepRunner {
+  runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number }): Promise<{ output: Record<string, unknown>; label: Label }>;
+}
+
 const TERMINAL: RunState[] = ['succeeded', 'failed', 'rejected', 'cancelled'];
 const DONE: StepState[] = ['passed', 'failed', 'skipped', 'blocked'];
 const JOB = 'workflow.run';
@@ -231,9 +246,16 @@ function compare(op: string, left: unknown, right: unknown): boolean {
  * Approvals and waits pause a run without holding a worker; deciding or reaching the time enqueues it again.
  */
 export class WorkflowService implements WorkflowToolRunner {
+  private records: RecordStepRunner | null = null;
+
   constructor(private readonly d: WorkflowDeps) {
     d.jobs.register(JOB, (p, ctx) => this.execute(String(p.runId), ctx), { timeoutMs: RUN_JOB_TIMEOUT });
     d.jobs.register('workflow.approval-timeout', (p) => this.expireApproval(String(p.approvalId)), { timeoutMs: 60_000 });
+  }
+
+  /** 1.4.0 (B-2206): record steps go to the low-code apps. */
+  useRecords(r: RecordStepRunner): void {
+    this.records = r;
   }
 
   // ---------- sealing ----------
@@ -956,6 +978,21 @@ export class WorkflowService implements WorkflowToolRunner {
       }
       case 'tool':
         return this.runTool(run, p, n, step, c);
+      case 'record': {
+        const cfg = configOf(n as WfNode & { kind: 'record' });
+        const rendered: RecordStep = { action: cfg.action, app: cfg.app, entity: cfg.entity, record: cfg.record != null ? renderText(cfg.record, c.scope) : null, values: Object.fromEntries(Object.entries(cfg.values).map(([k, t]) => [k, render(t, c.scope)])), to: cfg.to ?? null };
+        if (dry) return { output: { id: rendered.record ?? 'mock-record', state: rendered.to, label: c.label, values: rendered.values }, detail: { mocked: true, action: cfg.action } };
+        if (!this.records) throw new StepFailed('Record steps are not available on this server.');
+        // A run a trigger started carries its depth; the record step passes it on so chains of triggers end.
+        const depth = Number((c.input as { trigger?: { depth?: unknown } } | null)?.trigger?.depth ?? 0) || 0;
+        try {
+          const r = await this.records.runStep(p, rendered, { label: c.label, workflowId: run.workflow_id, runId: run.id, depth });
+          return { output: r.output, detail: { action: cfg.action, app: cfg.app, entity: cfg.entity, record: r.output.id } };
+        } catch (err) {
+          if (err instanceof HttpProblem && err.status === 403 && /label/i.test(err.detail ?? '')) throw new StepBlocked(err.detail ?? err.title);
+          throw err;
+        }
+      }
     }
   }
 

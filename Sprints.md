@@ -36,8 +36,11 @@ from prototype data to live only when every control on it is backed by the serve
 | 24 | Trust foundations: CA issuance and OCSP, tenant secrets, the event catalogue and plugin manifests, core (1.4.0) | — (server only) | **Done** |
 | 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | **Done** |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | **Done** |
-| 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | Next |
-| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | Planned |
+| 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
+| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | Next |
+| 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | Planned |
+| 30 | Domain screens; CalDAV, CardDAV and WebDAV (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new) | Planned |
+| 31 | AT-Protocol PDS and feed generator, release (1.5.0) | AT-Protocol (new) | Planned |
 
 Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
 Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
@@ -52,7 +55,8 @@ signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a 
 `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
 [1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
 planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
-identity work.
+identity work. Sprints 29 to 31 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
+features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, and an AT-Protocol PDS and feed generator.
 
 ---
 
