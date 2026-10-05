@@ -112,6 +112,25 @@ CalDAV had broken filter operators: B-3104 states the fixed behaviour as its tes
 | B-3202 | `COPY` and `MOVE` for files and folders (the platform returned 501), `LOCK` and `UNLOCK` (class 2) for Finder and Office | Moving a folder over WebDAV keeps its versions and shares | 5 |
 | B-3203 | Quota properties (RFC 4331), shares honoured, the `litmus` suite in CI | `litmus` passes its basic, copymove and locks groups | 3 |
 
+### B-39 Platform administration screens (39 points)
+
+The second half of the exprsn-platform merge: its administration surface (the admin SPA's 22 sections, the legacy
+`admin/` service) mapped onto the console in `design/platform-admin/README.md`, and five admin boards for the concerns
+that had no home: Overview, Jobs and queues, Storage, Configuration, Social and messaging. Live screens follow the B-34
+rules; open questions are answered with `node design/platform-admin/decide.mjs` and recorded under Open decisions.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3901 | Prototype boards for Overview, Jobs and queues, Storage, Configuration, Social and messaging; `node build.mjs` and the smoke run clean | Every board passes the smoke run in light and dark | 5 |
+| B-3902 | Overview live: `GET /api/admin/overview` (alerts, counters, instances with their `/readyz` checks, next schedules, recent audit, capacity); acknowledge alerts; drain an instance | Draining an instance from the screen stops it claiming jobs | 5 |
+| B-3903 | Jobs and queues live: `GET /api/admin/jobs` with filters, `/queues`, `/schedules` (run now, pause), `/dead-letters` (redrive, discard), `/cache` (namespaces, invalidate); pause by type in `JobQueue` | A paused type stops claiming within one poll and resumes from the screen | 8 |
+| B-3904 | Storage live: stores and health, usage by workspace and user, quarantine listing with rescan, the integrity job `ops.blobs.verify` with findings, purge schedule summary | An orphan found by the job can be deleted from the screen after a dry run | 8 |
+| B-3905 | Configuration live: a settings descriptor generated from `config/index.ts` (name, section, type, default, secret, hot or restart), `GET /api/admin/platform/settings` with per-instance values; overrides only if decided | Two instances with different values show as differing on the screen | 5 |
+| B-3906 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules | A revoked calendar feed answers 404 on its next fetch | 5 |
+| B-3907 | Accessibility and reflow for the five screens; `docs/accessibility.md` updated | No axe or reflow finding on any of the five | 3 |
+
+B-3901 is done on `design/platform-admin`. Sprint placement for the rest (Sprint 31 beside the release, Sprint 30
+displacing WebDAV, or 1.6) is decision Q12 below.
 ### B-37 Model-based memory management (13 points)
 
 Today memory proposals come from rules over a chat turn (`extractProposals`) and the only model memory uses is the
@@ -265,6 +284,16 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 ## Open decisions
 
+- [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
+  tenant's own domain).
+- [x] Custom roles: the tenant only (decided 2026-10-05 for the B-3412 board; workspaces reuse tenant roles).
+- [x] Access reviews: the workspace admin reviews by default (decided 2026-10-05); a campaign may name other reviewers.
+- [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
+- [ ] Platform administration screens (B-39): sixteen questions in `design/platform-admin/questions.json` (cache
+  placement, configuration overrides, Overview placement, the social permission, legal-hold exports, group categories,
+  logs, live streaming, job visibility, orphan deletion, tenant templates, sprint placement, icons, instance drain,
+  alert acknowledgement, blob migration). Answer with `node design/platform-admin/decide.mjs`; it prints the lines for
+  this list.
 All six resolved by the owner on 2026-10-05.
 
 - [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant
