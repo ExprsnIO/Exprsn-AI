@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 4;
+export const CATALOGUE_VERSION = 5;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -66,7 +66,9 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'channel.*', description: 'Customer-service channels: sessions started, escalated, closed and purged; customer messages received; replies held, sent and rejected; bounces; and audit actions for channels, secrets, held-reply decisions, exports and mail failures (never customer text)' },
   { pattern: 'message.*', description: 'Messaging (Sprint 28b): sent, edited, deleted (ids only, never the text)' },
   { pattern: 'messaging.*', description: 'Messaging (Sprint 28b): conversations created, changed and deleted; members added, removed and their roles and settings; messages sent, forwarded, edited, deleted, pinned; reactions; summaries (audit actions; never the text)' },
-  { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
+  { pattern: 'post.*', description: 'Workspace feed posts (Sprint 28c): published, edited, deleted, held for review' },
+  // 1.4.0, Sprint 28c (B-2701 to B-2705)
+  { pattern: 'feed.*', description: 'Workspace feed: posts created, held, approved, rejected, updated and deleted; comments, reactions and bookmarks; digest settings, requests and digests written (audit actions; never the content)' },
   // 1.4.0, Sprint 28b (B-2606 with B-2702)
   { pattern: 'social.*', description: 'Social relations: blocks, mutes, follows, lists and contact rules made or removed, and admin views of a user’s relations (audit actions)' },
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
@@ -91,7 +93,7 @@ const approval = {
     obj({ kind: { const: 'agent' }, run: str(64), agent: str(200) })
   ]
 };
-// Domain events (files emitted since Sprint 26d, records and groups since Sprint 27, messages since Sprint 28b, the others reserved): ids and names only; content stays in the
+// Domain events (files emitted since Sprint 26d, records and groups since Sprint 27, messages since Sprint 28b, posts since Sprint 28c, the others reserved): ids and names only; content stays in the
 // tenant, sealed, and is fetched through the API.
 const record = (extra: Record<string, JsonSchema> = {}) => obj({ app: id26, entity: str(120), record: id26, workspace: nullable(id26), actor: nullable(id26), ...extra });
 const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folder: nullable(id26), workspace: id26, version: { type: 'integer', minimum: 1 }, actor: nullable(id26), ...extra });
@@ -150,10 +152,10 @@ export const EVENT_TYPES: EventType[] = [
   { type: 'message.sent', group: 'message.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A message was sent', data: message({ thread: nullable(id26) }) },
   { type: 'message.edited', group: 'message.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A message was edited', data: message() },
   { type: 'message.deleted', group: 'message.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A message was deleted', data: message() },
-  { type: 'post.created', group: 'post.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A post was published', data: post() },
-  { type: 'post.updated', group: 'post.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A post was edited', data: post() },
-  { type: 'post.deleted', group: 'post.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A post was deleted', data: post() },
-  { type: 'post.held', group: 'post.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A post waits in the flag queue before publishing', data: post({ flag: { type: 'string', pattern: '^F-\\d+$' } }) }
+  { type: 'post.created', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was published', data: post() },
+  { type: 'post.updated', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was edited', data: post() },
+  { type: 'post.deleted', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was deleted', data: post() },
+  { type: 'post.held', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post waits in the flag queue before publishing', data: post({ flag: { type: 'string', pattern: '^F-\\d+$' } }) }
 ];
 
 /** Audit actions: the data is the audit entry (without the tenant's content, which audit entries never carry). */

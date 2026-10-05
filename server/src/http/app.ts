@@ -55,6 +55,7 @@ import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
 import { socialRoutes } from '../routes/social.js';
 import { messagingRoutes } from '../routes/messaging.js';
+import { feedRoutes } from '../routes/feed.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -255,6 +256,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(socialRoutes(s));
   // Sprint 28b (B-2601 to B-2605): person-to-person messaging.
   api.use(messagingRoutes(s));
+  // Sprint 28c (B-2701 to B-2705): the workspace feed.
+  api.use(feedRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

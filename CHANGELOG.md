@@ -2,35 +2,6 @@
 
 ## 1.4.0 (in progress)
 
-### Customer-service channels and email one-time codes (Sprint 28a, B-2301 to B-2304, B-1806)
-
-- Chat channels (B-2301): a channel in a workspace answers customers with a published profile or agent (prompt and
-  profile; never its tools) at the channel's label, checked against the workspace ceiling and the profile's and agent's
-  labels when saved and enforced by the gateway's pool ceilings when answering. Customers use the public endpoints at
-  `/api/public/channels` anonymously or with an identity assertion the channel's site signs (an identified customer
-  resumes their open session), with a session token scoped to one session, and rate limits per address and per session.
-  Every customer message passes `user-input` and every answer `model-output`; a model failure tells the customer a
-  person will follow up and escalates the session. New permissions `channels:manage` (tenant admins) and
-  `channels:review` (tenant and guardrail admins, flag reviewers). Migration `030_channels`.
-- Held replies (B-2302): answers wait for a reviewer when the channel reviews every answer, when it reviews escalated
-  sessions (the default) and the customer asked for a person, or when a guardrail requires approval. Each is a `hold`
-  flag; a reviewer approves, edits or rejects it (`/api/channels/held`, or approve and reject in the flag queue), and
-  only then does the customer receive it, as edited (the model's text is kept as the original).
-- Email channels (B-2303): inbound by IMAP polling (one `channels.imap-poll` job per channel per tick, read-only,
-  with a UID cursor) and by signed webhooks (a generic JSON shape with an HMAC header per channel, and Mailgun routes
-  and events); threaded into sessions by Message-ID together with the sender's address; answers from an outbox of
-  `channels.send` jobs over the channel's SMTP server or `SMTP_URL`, with `In-Reply-To`, `References` and
-  `Auto-Submitted`; bounces from delivery reports and provider events recorded once and marked on the outbox. Mail
-  credentials are vault references. New dependencies: `imapflow` and `mailparser` (and `@types/mailparser`).
-- Retention and exports (B-2304): per-channel retention in days with a `channels.retention` purge job; transcripts as
-  CSV per session, or a whole channel through a `channels.export` job sealed in the blob store.
-- Channel sessions and messages are moderation object types (`channel-session`, `channel-message`). Event catalogue
-  version 4: `channel.*` events are emitted. Settings `CHANNELS_*`.
-- Email one-time codes as a second factor (B-1806): enrol the account's address with a code
-  (`POST /api/me/mfa/email`), then `POST /api/auth/mfa/email/send` and `POST /api/auth/mfa/email` at sign-in. Codes
-  are HMAC-stored, single use, bound to the pending session, sent at most `MFA_EMAIL_SENDS_PER_HOUR` times an hour,
-  and wrong codes count in the same lockout as TOTP codes: a sixth wrong code is refused like a sixth wrong TOTP code.
-
 ### AT-Protocol firehose ingest (Sprint 27, B-1908)
 
 - AT-Protocol firehose ingest (B-1908, Sprint 27): per-tenant subscriptions to a Jetstream or a relay's
@@ -81,6 +52,35 @@
 - Migration `029c_groups`; new settings `GROUP_INVITE_DAYS`, `GROUP_REQUEST_DAYS`, `CALENDAR_FEED_PER_MINUTE`,
   `CALENDAR_FEED_MAX_LABEL`.
 
+### Customer-service channels and email one-time codes (Sprint 28a, B-2301 to B-2304, B-1806)
+
+- Chat channels (B-2301): a channel in a workspace answers customers with a published profile or agent (prompt and
+  profile; never its tools) at the channel's label, checked against the workspace ceiling and the profile's and agent's
+  labels when saved and enforced by the gateway's pool ceilings when answering. Customers use the public endpoints at
+  `/api/public/channels` anonymously or with an identity assertion the channel's site signs (an identified customer
+  resumes their open session), with a session token scoped to one session, and rate limits per address and per session.
+  Every customer message passes `user-input` and every answer `model-output`; a model failure tells the customer a
+  person will follow up and escalates the session. New permissions `channels:manage` (tenant admins) and
+  `channels:review` (tenant and guardrail admins, flag reviewers). Migration `030_channels`.
+- Held replies (B-2302): answers wait for a reviewer when the channel reviews every answer, when it reviews escalated
+  sessions (the default) and the customer asked for a person, or when a guardrail requires approval. Each is a `hold`
+  flag; a reviewer approves, edits or rejects it (`/api/channels/held`, or approve and reject in the flag queue), and
+  only then does the customer receive it, as edited (the model's text is kept as the original).
+- Email channels (B-2303): inbound by IMAP polling (one `channels.imap-poll` job per channel per tick, read-only,
+  with a UID cursor) and by signed webhooks (a generic JSON shape with an HMAC header per channel, and Mailgun routes
+  and events); threaded into sessions by Message-ID together with the sender's address; answers from an outbox of
+  `channels.send` jobs over the channel's SMTP server or `SMTP_URL`, with `In-Reply-To`, `References` and
+  `Auto-Submitted`; bounces from delivery reports and provider events recorded once and marked on the outbox. Mail
+  credentials are vault references. New dependencies: `imapflow` and `mailparser` (and `@types/mailparser`).
+- Retention and exports (B-2304): per-channel retention in days with a `channels.retention` purge job; transcripts as
+  CSV per session, or a whole channel through a `channels.export` job sealed in the blob store.
+- Channel sessions and messages are moderation object types (`channel-session`, `channel-message`). Event catalogue
+  version 4: `channel.*` events are emitted. Settings `CHANNELS_*`.
+- Email one-time codes as a second factor (B-1806): enrol the account's address with a code
+  (`POST /api/me/mfa/email`), then `POST /api/auth/mfa/email/send` and `POST /api/auth/mfa/email` at sign-in. Codes
+  are HMAC-stored, single use, bound to the pending session, sent at most `MFA_EMAIL_SENDS_PER_HOUR` times an hour,
+  and wrong codes count in the same lockout as TOTP codes: a sixth wrong code is refused like a sixth wrong TOTP code.
+
 ### Social relations and messaging (Sprint 28, B-2601 to B-2606)
 
 - Social relations shared by messaging and the workspace feed (`/api/social`, `server/src/social/`): blocks that work
@@ -106,6 +106,31 @@
   summaries and catch-up digests from a profile, citing only messages the reader can see.
 - New settings `MESSAGING_MAX_MEMBERS`, `MESSAGING_EMBED_MODEL`, `MESSAGING_SUMMARY_PROFILE`,
   `MESSAGING_SUMMARY_MAX_MESSAGES`, `ROOM_SIGNALS_PER_MINUTE`; the messaging tables are in migration `030b_social`.
+
+### Workspace feed (Sprint 28, B-2701 to B-2705)
+
+- A feed for a workspace or a group (`/api/feed`, `server/src/feed/`): posts with media from the file store (only
+  files that passed quarantine; they raise the post's label), threaded comments, reactions, plain and quoted reposts
+  that stay in the original's workspace and group, and bookmarks. Bodies, comments and digest summaries are sealed
+  with the tenant key. A comment, reaction or repost on a deleted post is refused (`409`). New permissions
+  `feed:read` and `feed:write` (members and tenant admins) and `feed:manage` (tenant admins); audit actions `feed.*`.
+  Migration `030c_feed`.
+- Home (the caller and the people they follow), workspace, group, user, list, hashtag and bookmark feeds with cursor
+  pagination. The relations are the shared ones of `/api/social`: a muted author leaves the home feed; a block,
+  either way, hides posts, comments and reposted originals in every feed and refuses comments, reactions and reposts.
+- Realtime: the `feed` room kind (a workspace, a group, or one's own home room). A new post reaches open feeds without
+  a reload, as ids only, leaving out people below its label and everyone in a block with the author; followers' home
+  rooms get it up to `FEED_HOME_FANOUT_MAX`.
+- Posts pass the `user-input` guardrail checkpoint before publishing: a held post waits in the Flags queue (a `hold`
+  flag), invisible to everyone but its author until a reviewer approves it, and stays invisible when rejected. Posts
+  and comments are moderation object types (`feed-post`, `feed-comment`). The `post.*` catalogue events are now
+  emitted (catalogue version 5, with the `feed.*` group for the audit actions).
+- Hashtags extracted at publishing and counted by the `feed.trending` job per workspace and label (a reader sees only
+  what their clearance reaches); a weekly workspace digest (`feed.digest`) of the week's top posts, ranked by
+  reactions, comments and reposts and summarised by a profile through the gateway, with per-workspace settings.
+  Settings `FEED_*`.
+- Group feeds are feed posts targeted at the group; the group notices of Sprint 27 (`/api/groups/:id/posts`) stay as
+  they are.
 
 ## Unreleased
 

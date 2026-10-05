@@ -110,6 +110,7 @@ import nodemailer from 'nodemailer';
 import { SocialService } from './social/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
+import { FeedService } from './feed/service.js';
 
 export interface Services {
   cfg: Config;
@@ -251,6 +252,8 @@ export interface Services {
   messaging: MessagingService;
   /** 1.4.0, Sprint 28b (B-2605): keyword and semantic search, thread summaries and catch-up digests. */
   messagingInsights: MessagingInsights;
+  /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
+  feed: FeedService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -507,6 +510,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     social: new SocialService(() => s),
     messaging: new MessagingService(() => s, { maxMembers: cfg.MESSAGING_MAX_MEMBERS, embedModel: cfg.MESSAGING_EMBED_MODEL || null }),
     messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
+    // 1.4.0, Sprint 28c: the workspace feed.
+    feed: new FeedService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -622,6 +627,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 28b (B-2601 to B-2605): the conversation room (authoriser, signals, presence), embeddings, messages as
   // moderation objects.
   s.messaging.init();
+  // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
+  s.feed.init();
+  s.feed.digests.registerJobs();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -682,4 +690,5 @@ export function startSchedules(s: Services): void {
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
+  s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
 }
