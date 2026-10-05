@@ -44,6 +44,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | Planned |
 | 33 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.5.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Runs, Registry, Chat, Settings, Files | Planned |
+| — | Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (B-43, 1.5.0 or 1.6) | Models | Unscheduled (approved 2026-10-05) |
 | 35 | Platform administration live screens; tenant provisioning templates (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants | Planned |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |

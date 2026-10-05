@@ -127,7 +127,7 @@ export class SqlProvider implements IdentityProvider {
 
   private async findRow(username: string, steps?: Step[]): Promise<Row | null> {
     const c = this.cfg.columns;
-    const cols = [c.id, c.username, c.passwordHash, c.displayName, c.email, c.disabled, c.groups].filter((x): x is string => !!x);
+    const cols = [c.id, c.username, c.passwordHash, c.displayName, c.email, c.disabled, c.groups, c.manager].filter((x): x is string => !!x);
     const rows = await timed(
       steps,
       `Query ${this.cfg.table}`,
@@ -162,7 +162,8 @@ export class SqlProvider implements IdentityProvider {
       username,
       displayName: c.displayName && row[c.displayName] ? String(row[c.displayName]) : username,
       email: c.email && row[c.email] ? String(row[c.email]) : null,
-      groups
+      groups,
+      ...(c.manager ? { manager: row[c.manager] == null || row[c.manager] === '' ? null : String(row[c.manager]) } : {})
     };
   }
 
@@ -197,7 +198,7 @@ export class SqlProvider implements IdentityProvider {
       const db = await this.db(steps);
       await timed(steps, `Connect (${this.cfg.dialect})`, () => db.raw('select 1'));
       const c = this.cfg.columns;
-      const cols = [c.id, c.username, c.passwordHash, c.displayName, c.email, c.disabled, c.groups].filter((x): x is string => !!x);
+      const cols = [c.id, c.username, c.passwordHash, c.displayName, c.email, c.disabled, c.groups, c.manager].filter((x): x is string => !!x);
       await timed(steps, `Read columns of ${this.cfg.table}`, () => db(this.cfg.table).select(cols).limit(0));
       return true;
     } catch {

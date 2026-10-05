@@ -133,14 +133,36 @@ export class UserRepo {
     return this.db('user_identities').where({ user_id: userId }).select('provider_id', 'external_id', 'last_seen_at');
   }
 
-  async upsertIdentity(userId: string, providerId: string, externalId: string, groups: string[]): Promise<void> {
+  /**
+   * Links a user to their identity in a store. `manager` (1.5.0, B-3305) is the manager the store names, when the
+   * caller read one from the store (null: the store names none); undefined leaves the stored value as it is.
+   */
+  async upsertIdentity(userId: string, providerId: string, externalId: string, groups: string[], manager?: string | null): Promise<void> {
     const t = Date.now();
     const existing = await this.identity(providerId, externalId);
+    const m = manager === undefined ? {} : { manager_ref: manager ? manager.slice(0, 512) : null };
     if (existing) {
-      await this.db('user_identities').where({ id: existing.id }).update({ groups: JSON.stringify(groups), last_seen_at: t });
+      await this.db('user_identities').where({ id: existing.id }).update({ groups: JSON.stringify(groups), last_seen_at: t, ...m });
     } else {
-      await this.db('user_identities').insert({ id: ulid(), user_id: userId, provider_id: providerId, external_id: externalId, groups: JSON.stringify(groups), last_seen_at: t });
+      await this.db('user_identities').insert({ id: ulid(), user_id: userId, provider_id: providerId, external_id: externalId, groups: JSON.stringify(groups), last_seen_at: t, ...m });
     }
+  }
+
+  /**
+   * 1.5.0 (B-3305): the user's manager, when a store they are linked to names one and that manager is an active user
+   * of the same tenant linked to the same store (matched on the external id, ignoring case). Null otherwise.
+   */
+  async managerOf(tenantId: string, userId: string): Promise<string | null> {
+    const refs = (await this.db('user_identities').where({ user_id: userId }).whereNotNull('manager_ref').select('provider_id', 'manager_ref')) as { provider_id: string; manager_ref: string }[];
+    for (const r of refs) {
+      const m = (await this.db('user_identities as i')
+        .join('users as u', 'u.id', 'i.user_id')
+        .where({ 'i.provider_id': r.provider_id, 'u.tenant_id': tenantId, 'u.state': 'active' })
+        .whereRaw('LOWER(i.external_id) = ?', [r.manager_ref.toLowerCase()])
+        .first('u.id')) as { id: string } | undefined;
+      if (m && m.id !== userId) return m.id;
+    }
+    return null;
   }
 
   // ---- group mappings ----

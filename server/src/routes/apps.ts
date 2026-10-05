@@ -22,7 +22,8 @@ const queryBody = z
     sort: sortSchema.optional(),
     q: z.string().trim().min(1).max(200).optional(),
     limit: z.number().int().min(1).max(200).default(50),
-    offset: z.number().int().min(0).max(100_000).default(0)
+    offset: z.number().int().min(0).max(100_000).default(0),
+    cursor: z.string().min(1).max(16_000).optional()
   })
   .strict();
 
@@ -159,16 +160,17 @@ export function appRoutes(s: Services): Router {
 
   // ---------- records ----------
 
-  const list = async (req: Request, input: { filter?: Filter; sort?: Sort; q?: string; limit: number; offset: number }) => {
-    const out = await a.query(principalOf(req), param(req, 'app'), param(req, 'entity'), input);
-    return { total: out.total, limit: out.limit, offset: out.offset, records: out.records };
+  const list = async (req: Request, input: { filter?: Filter; sort?: Sort; q?: string; limit: number; offset: number; cursor?: string | undefined }) => {
+    const { cursor, ...rest } = input;
+    const out = await a.query(principalOf(req), param(req, 'app'), param(req, 'entity'), { ...rest, ...(cursor ? { cursor } : {}) });
+    return { total: out.total, limit: out.limit, offset: out.offset, nextCursor: out.nextCursor, records: out.records };
   };
 
   r.get('/apps/:app/entities/:entity/records', read, async (req, res) => {
-    const q = parseBody(z.object({ filter: z.string().max(20_000).optional(), sort: z.string().max(300).optional(), q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).max(100_000).default(0) }), req.query);
+    const q = parseBody(z.object({ filter: z.string().max(20_000).optional(), sort: z.string().max(300).optional(), q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).max(100_000).default(0), cursor: z.string().min(1).max(16_000).optional() }), req.query);
     const filter = filterParam(q.filter);
     const sort = sortParam(q.sort);
-    res.json(await list(req, { ...(filter ? { filter } : {}), ...(sort ? { sort } : {}), ...(q.q ? { q: q.q } : {}), limit: q.limit, offset: q.offset }));
+    res.json(await list(req, { ...(filter ? { filter } : {}), ...(sort ? { sort } : {}), ...(q.q ? { q: q.q } : {}), ...(q.cursor ? { cursor: q.cursor } : {}), limit: q.limit, offset: q.offset }));
   });
 
   r.post('/apps/:app/entities/:entity/records/query', read, async (req, res) => {

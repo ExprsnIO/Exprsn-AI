@@ -27,6 +27,14 @@ declare module 'express-serve-static-core' {
   }
 }
 
+/** 1.5.0 (B-3304): properties `requireAuth` and `requirePermission` set on the handlers they return. */
+export const AUTH_TAG = Symbol.for('exprsn.requiresAuth');
+export const PERMISSION_TAG = Symbol.for('exprsn.permission');
+export const ANY_PERMISSION_TAG = Symbol.for('exprsn.anyPermission');
+
+/** 1.5.0 (B-3304): marks a handler that passes when the caller holds any one of `perms` (as the registry declares it). */
+export const declaresAnyOf = <T extends RequestHandler>(handler: T, perms: readonly Permission[]): T => Object.assign(handler, { [ANY_PERMISSION_TAG]: [...perms] });
+
 export const cookieName = (secure: boolean): string => (secure ? '__Host-exai_sid' : 'exai_sid');
 
 export function setSessionCookie(res: Response, s: Services, token: string, expiresAt: number): void {
@@ -53,7 +61,8 @@ export async function loadPrincipal(
   userId: string,
   via: { session?: SessionRow; apiKey?: ApiKeyRow }
 ): Promise<Principal | null> {
-  const [user, tenant] = await Promise.all([s.users.get(tenantId, userId), s.tenants.byId(tenantId)]);
+  // 1.5.0 (B-3302): custom roles resolve like built-in ones only once the roles in force are loaded.
+  const [user, tenant] = await Promise.all([s.users.get(tenantId, userId), s.tenants.byId(tenantId), s.customRoles.ready]);
   if (!user || user.state !== 'active' || !tenant || tenant.state !== 'active') return null;
   // Sprint 26 (B-1904): work done as a sanctioned user in the background (schedules, plugins) stops too.
   if (!via.session && !via.apiKey && (await s.moderation.blocking(tenantId, userId))) return null;
@@ -182,7 +191,7 @@ export function csrfProtection(s: Services): RequestHandler {
 /** Requires a signed-in caller whose session has finished sign-in (or is in one of `stages`). */
 export function requireAuth(opts: { stages?: SessionStage[]; sessionOnly?: boolean } = {}): RequestHandler {
   const stages = opts.stages ?? ['active'];
-  return (req, _res, next) => {
+  const handler: RequestHandler = (req, _res, next) => {
     if (!req.principal) throw unauthorized();
     if (opts.sessionOnly && !req.authSession) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
     if (req.authSession && !stages.includes(req.authSession.stage)) {
@@ -191,6 +200,8 @@ export function requireAuth(opts: { stages?: SessionStage[]; sessionOnly?: boole
     }
     next();
   };
+  // 1.5.0 (B-3304): tagged, so the route permission registry's test can tell an authenticated route from a public one.
+  return Object.assign(handler, { [AUTH_TAG]: true });
 }
 
 /**
@@ -220,10 +231,10 @@ export const principalOf = (req: Request): Principal => {
  * when it is a denial. Admin roles additionally need an MFA-verified session.
  */
 export function requirePermission(s: Services, action: Permission, resourceOf?: (req: Request) => Resource): RequestHandler {
-  return async (req, _res, next) => {
+  const handler: RequestHandler = async (req, _res, next) => {
     const p = principalOf(req);
     const decision = authorize(p, action, resourceOf ? resourceOf(req) : {});
-    if (decision.allow && p.kind === 'user' && !p.mfa && rolesRequireMfa(p.roles)) {
+    if (decision.allow && p.kind === 'user' && !p.mfa && rolesRequireMfa(p.roles, p.tenantId)) {
       Object.assign(decision, { allow: false, step: 'mfa', reason: 'Admin roles need a session verified with a second factor' });
     }
     if (!decision.allow) {
@@ -240,6 +251,19 @@ export function requirePermission(s: Services, action: Permission, resourceOf?: 
     }
     next();
   };
+  // 1.5.0 (B-3304): tagged with its permission, which the route permission registry's test compares with the table.
+  return Object.assign(handler, { [PERMISSION_TAG]: action });
+}
+
+/**
+ * Passes when the caller holds any of the permissions: the first one held is checked as requirePermission checks it
+ * (MFA for admin roles, denials audited); when none is held, the denial names the first.
+ */
+export function requireAnyPermission(s: Services, perms: readonly Permission[]): RequestHandler {
+  return declaresAnyOf((req, res, next) => {
+    const held = effectivePermissions(principalOf(req));
+    return requirePermission(s, perms.find((x) => held.has(x)) ?? perms[0]!)(req, res, next);
+  }, perms);
 }
 
 export function parseBody<T extends z.ZodType>(schema: T, data: unknown): z.infer<T> {

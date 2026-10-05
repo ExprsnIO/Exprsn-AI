@@ -88,7 +88,7 @@ export class LdapProvider implements IdentityProvider {
           scope: 'sub',
           filter,
           sizeLimit: 2,
-          attributes: ['dn', this.cfg.usernameAttribute, this.cfg.displayNameAttribute, this.cfg.emailAttribute, 'memberOf']
+          attributes: ['dn', this.cfg.usernameAttribute, this.cfg.displayNameAttribute, this.cfg.emailAttribute, this.cfg.managerAttribute, 'memberOf']
         }),
       (r) => `${r.searchEntries.length} match${r.searchEntries.length === 1 ? '' : 'es'} under ${this.cfg.userBase}`
     );
@@ -119,7 +119,8 @@ export class LdapProvider implements IdentityProvider {
       username: first(entry[this.cfg.usernameAttribute]) ?? username,
       displayName: first(entry[this.cfg.displayNameAttribute]) ?? username,
       email: first(entry[this.cfg.emailAttribute]),
-      groups
+      groups,
+      manager: first(entry[this.cfg.managerAttribute])
     };
   }
 

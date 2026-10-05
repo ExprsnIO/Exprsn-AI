@@ -44,7 +44,7 @@ export async function provision(users: UserRepo, tenantId: string, provider: Pro
   if (user.state !== 'active') return { status: 'refused', reason: 'disabled', user };
 
   const clearance = user.clearance_direct ? highest(mappedClearance, user.clearance_direct) : mappedClearance;
-  await users.upsertIdentity(user.id, provider.id, ext.externalId, ext.groups);
+  await users.upsertIdentity(user.id, provider.id, ext.externalId, ext.groups, ext.manager);
   await users.setRoles(user.id, 'mapping', mappedRoles);
   await users.setWorkspaceMemberships(user.id, 'mapping', mapped.workspaces);
   const patch = { display_name: ext.displayName, email: ext.email, clearance, last_login_at: Date.now(), mfa_required: user.mfa_required || rolesRequireMfa(roles) };

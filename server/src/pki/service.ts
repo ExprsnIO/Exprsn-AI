@@ -7,7 +7,7 @@ import { json } from '../db/knex.js';
 import { platformTenant } from '../ops/common.js';
 import type { Scheduler } from '../platform/jobs.js';
 import type { Services } from '../services.js';
-import { ROLES } from '../authz/permissions.js';
+import { rolesGranting } from '../authz/permissions.js';
 import { AcmeServer } from './acme.js';
 import { fromPem, pem } from './asn1.js';
 import { buildPkcs12 } from './pkcs12.js';
@@ -926,8 +926,7 @@ export class PkiService {
       const u = (await this.db('users').where({ id: cert.requested_by, tenant_id: cert.tenant_id, state: 'active' }).first('id')) as { id: string } | undefined;
       if (u) return [u.id];
     }
-    const roles = ROLES.filter((r) => r.permissions.includes('pki:manage')).map((r) => r.id);
-    return this.s().notifications.usersWithRoles(cert.tenant_id, roles);
+    return this.s().notifications.usersWithRoles(cert.tenant_id, rolesGranting('pki:manage', cert.tenant_id).filter((r) => r !== 'system-admin'));
   }
 
   /**

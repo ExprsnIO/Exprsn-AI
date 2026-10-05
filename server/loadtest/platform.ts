@@ -42,7 +42,7 @@ const { values: opt } = parseArgs({
     port: { type: 'string', default: '0' },
     duration: { type: 'string', default: '15' },
     concurrency: { type: 'string', default: '16' },
-    users: { type: 'string', default: '64' },
+    users: { type: 'string', default: '128' },
     targets: { type: 'string', default: 'reference' },
     // webhooks
     endpoints: { type: 'string', default: '10' },
@@ -67,7 +67,7 @@ const USAGE = `Usage: npx tsx server/loadtest/platform.ts [options]
   --port <n>               Port for the application (default: a free one)
   --duration <s>           Seconds of load in each measured phase (default 15)
   --concurrency <n>        Concurrent clients for records and OCSP (default 16)
-  --users <n>              Signed-in users the record clients rotate through (default 64; each has the API limit)
+  --users <n>              Signed-in users the record clients rotate through (default 128; each has the API limit)
   --targets <set>          reference (docs/loadtest.md) or ci (looser, for shared runners) (default reference)
 
   Webhooks:
@@ -468,6 +468,7 @@ async function records(app: App): Promise<Record<string, unknown>> {
 
   // Phase 3: filtered, sorted, paged queries on the indexed fields.
   const queryLat: number[] = [];
+  const bodyLat: number[][] = [[], [], []];
   let rows = 0;
   n = 0;
   const queryWall = await closedLoop(CONCURRENCY, DURATION_MS, async () => {
@@ -481,6 +482,7 @@ async function records(app: App): Promise<Record<string, unknown>> {
     const r = await api(url, session(), 'POST', `${base}/query`, bodies[i % bodies.length]);
     if (r.status === 200) {
       queryLat.push(performance.now() - t);
+      bodyLat[i % bodies.length]!.push(performance.now() - t);
       rows += (r.body.records as unknown[] | undefined)?.length ?? 0;
     } else err(`query: HTTP ${r.status} ${String(r.body.title ?? '')}`);
   });
@@ -492,7 +494,7 @@ async function records(app: App): Promise<Record<string, unknown>> {
     concurrency: CONCURRENCY,
     create: { n: createLat.length, perSecond: createLat.length / createWall, latencyMs: stats(createLat) },
     update: { n: updateLat.length, perSecond: updateLat.length / updateWall, latencyMs: stats(updateLat) },
-    query: { n: queryLat.length, perSecond: queryLat.length / queryWall, latencyMs: stats(queryLat), rowsPerQuery: queryLat.length ? rows / queryLat.length : 0 },
+    query: { n: queryLat.length, perSecond: queryLat.length / queryWall, latencyMs: stats(queryLat), rowsPerQuery: queryLat.length ? rows / queryLat.length : 0, byBody: bodyLat.map(stats) },
     duplicatesRefused,
     duplicatesAccepted,
     stored,
@@ -507,6 +509,7 @@ async function records(app: App): Promise<Record<string, unknown>> {
   out('Low-code record writes');
   out(`  ${CONCURRENCY} clients over ${sessions.length} users, ${DURATION_MS / 1000} s per phase`);
   for (const [k, v] of [['create', result.create], ['update', result.update], ['query', result.query]] as const) out(`  ${k.padEnd(7)} ${String(v.n).padStart(6)} at ${v.perSecond.toFixed(1)}/s, p50 ${f1(v.latencyMs.p50)} p95 ${f1(v.latencyMs.p95)} p99 ${f1(v.latencyMs.p99)} max ${f1(v.latencyMs.max)} ms`);
+  out(`  query p95 by body: and(stage eq, amount gte) by amount desc ${f1(result.query.byBody[0]!.p95)}, title startsWith by title ${f1(result.query.byBody[1]!.p95)}, due range by due with offset ${f1(result.query.byBody[2]!.p95)} ms`);
   out(`  ${result.query.rowsPerQuery.toFixed(1)} rows per query; duplicate titles refused ${duplicatesRefused}, accepted ${duplicatesAccepted}; ${stored} records stored for ${ids.length} created`);
   if (errors.size) for (const [k, v] of errors) out(`  error ${v} x ${k}`);
   out();

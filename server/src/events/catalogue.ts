@@ -48,7 +48,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
   { pattern: 'user.*', description: 'Accounts created, synced and disabled (audit actions)' },
   { pattern: 'auth.*', description: 'Sign-ins and second factors (audit actions)' },
-  { pattern: 'authz.*', description: 'Authorisation denials (audit actions)' },
+  { pattern: 'authz.*', description: 'Authorisation denials; since 1.5.0 also custom roles created, proposed, approved, rejected, withdrawn, updated and retired (authz.role.*) and access reviews created, opened, confirmed, revoked, escalated, closed and cancelled (authz.review.*) (audit actions)' },
   { pattern: 'chat.*', description: 'Chat failures and shares (audit actions)' },
   { pattern: 'conversation.*', description: 'Conversation shares, exports and deletions (audit actions)' },
   { pattern: 'billing.*', description: 'Statements and price books (audit actions)' },

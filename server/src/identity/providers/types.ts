@@ -10,6 +10,8 @@ export interface ExternalUser {
   displayName: string;
   email: string | null;
   groups: string[];
+  /** 1.5.0 (B-3305): the user's manager as the store names them (their external id there: an LDAP DN, a SQL row key). */
+  manager?: string | null;
 }
 
 export type AuthResult =
@@ -91,6 +93,8 @@ export const ldapConfigSchema = z
     usernameAttribute: z.string().default('uid'),
     displayNameAttribute: z.string().default('cn'),
     emailAttribute: z.string().default('mail'),
+    /** 1.5.0 (B-3305): the attribute holding the DN of the user's manager (access reviews assign them). */
+    managerAttribute: z.string().default('manager'),
     groupMode: z.enum(['memberOf', 'search']).default('search'),
     groupBase: z.string().optional(),
     groupFilter: z.string().default('(|(member={{dn}})(uniqueMember={{dn}})(memberUid={{username}}))'),
@@ -117,7 +121,9 @@ export const sqlConfigSchema = z
         /** Truthy means disabled. */
         disabled: identifier.optional(),
         /** Comma-separated or JSON-array group list on the user row. */
-        groups: identifier.optional()
+        groups: identifier.optional(),
+        /** 1.5.0 (B-3305): the manager's key (the value of the id column, or the username when there is none). */
+        manager: identifier.optional()
       })
       .strict(),
     groupTable: z.object({ table: identifier, userColumn: identifier, groupColumn: identifier }).strict().optional(),

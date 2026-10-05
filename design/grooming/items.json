@@ -414,7 +414,7 @@
       "doneWhen": "A channel inside a group has its own members and feed; the discovery page never shows a group above the viewer's clearance."
     },
     {
-      "id": "B-4301",
+      "id": "B-5101",
       "group": "New: platform features without a plan",
       "title": "User profiles: avatar, bio, profile page",
       "points": 8,
@@ -425,7 +425,7 @@
       "doneWhen": "Opening an author from a post shows their profile; an avatar that fails the scan is never shown."
     },
     {
-      "id": "B-4302",
+      "id": "B-5102",
       "group": "New: platform features without a plan",
       "title": "Presence status: available, away, busy, offline",
       "points": 3,

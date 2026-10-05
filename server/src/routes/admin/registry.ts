@@ -5,7 +5,7 @@ import { actorFrom } from '../../audit/chain.js';
 import { authorize } from '../../authz/policy.js';
 import { LABELS } from '../../authz/labels.js';
 import type { Permission } from '../../authz/permissions.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
+import { declaresAnyOf, ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { badRequest, conflict, notFound } from '../../http/problem.js';
 import { entryView, ENTRY_KINDS, ENTRY_STATUSES, MAX_BUDGETS, SIDE_EFFECTS, type EntryKind, type EntryRow } from '../../registry/service.js';
 import type { Services } from '../../services.js';
@@ -31,9 +31,10 @@ export function registryAdminRoutes(s: Services): Router {
   const reg = s.registry;
 
   /** The permission for the entry kind in the body or the loaded entry, checked like requirePermission. */
-  const forKind = (kindOf: (req: Request) => Promise<EntryKind> | EntryKind): RequestHandler => async (req, res, next) => {
-    await requirePermission(s, permFor(await kindOf(req)))(req, res, next);
-  };
+  const forKind = (kindOf: (req: Request) => Promise<EntryKind> | EntryKind): RequestHandler =>
+    declaresAnyOf(async (req, res, next) => {
+      await requirePermission(s, permFor(await kindOf(req)))(req, res, next);
+    }, ['tools:manage', 'agents:manage']);
   const entryKind = async (req: Request) => (await load(req)).kind;
 
   const audit = (req: Request, action: string, e: Pick<EntryRow, 'id' | 'name' | 'version' | 'kind'>, detail?: Record<string, unknown>) => {
