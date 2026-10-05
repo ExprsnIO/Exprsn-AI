@@ -104,6 +104,13 @@ import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
+import { ChannelService } from './channels/service.js';
+import type { ChannelIo, ChannelMailer } from './channels/mail.js';
+import nodemailer from 'nodemailer';
+import { SocialService } from './social/service.js';
+import { MessagingService } from './messaging/service.js';
+import { MessagingInsights } from './messaging/insights.js';
+import { FeedService } from './feed/service.js';
 
 export interface Services {
   cfg: Config;
@@ -237,6 +244,16 @@ export interface Services {
   groups: GroupService;
   /** 1.4.0, Sprint 27c (B-2502 to B-2504): group events, RSVPs, check-in, reminders and signed iCalendar feeds. */
   calendar: CalendarService;
+  /** 1.4.0, Sprint 28a (B-2301 to B-2304): customer-service channels: sessions, held replies, email, retention. */
+  channels: ChannelService;
+  /** 1.4.0, Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules, shared by messaging and the feed. */
+  social: SocialService;
+  /** 1.4.0, Sprint 28b (B-2601 to B-2604): direct and group conversations, sealed messages, receipts, presence, mutes. */
+  messaging: MessagingService;
+  /** 1.4.0, Sprint 28b (B-2605): keyword and semantic search, thread summaries and catch-up digests. */
+  messagingInsights: MessagingInsights;
+  /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
+  feed: FeedService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -266,6 +283,8 @@ export interface ServiceOverrides {
   previewRenderer?: PreviewRenderer;
   /** Sprint 26 (B-1906): external moderation providers (tests use a fake). */
   moderationProviders?: ModerationProviderClient;
+  /** Sprint 28a (B-2303): the channels' IMAP fetcher and SMTP transports (tests use fakes; never a real mailbox). */
+  channelIo?: Partial<ChannelIo>;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -327,7 +346,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
   // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
-  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
+  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
@@ -435,7 +454,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     account: new AccountService(() => s),
     // Sprint 13 services read their collaborators through `s`.
     integrations: new TenantIntegrations(db),
-    webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS }),
+    webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS, endpointConcurrency: Math.max(1, Math.floor(cfg.JOB_CONCURRENCY / 2)) }),
     prompts: new PromptService(() => s),
     sharing: new ConversationSharing(() => s),
     billing: new BillingService(
@@ -482,6 +501,17 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
+    // 1.4.0, Sprint 28a: customer-service channels. Without SMTP settings of its own a channel sends through SMTP_URL.
+    channels: new ChannelService(() => s, {
+      platform: overrides.mail ? { sendMail: (m) => overrides.mail!.sendMail(m) } : cfg.SMTP_URL ? (nodemailer.createTransport(cfg.SMTP_URL) as unknown as ChannelMailer) : null,
+      ...overrides.channelIo
+    }),
+    // 1.4.0, Sprint 28b: social relations.
+    social: new SocialService(() => s),
+    messaging: new MessagingService(() => s, { maxMembers: cfg.MESSAGING_MAX_MEMBERS, embedModel: cfg.MESSAGING_EMBED_MODEL || null }),
+    messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
+    // 1.4.0, Sprint 28c: the workspace feed.
+    feed: new FeedService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -591,6 +621,15 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 27c (B-2501 to B-2505): the group room authoriser, group content as moderation objects, reminder jobs.
   s.groups.init();
   s.calendar.registerJobs();
+  // Sprint 28a (B-2301 to B-2304): channel jobs (replies, IMAP polls, the outbox, retention, exports); sessions and
+  // their messages as moderation objects.
+  s.channels.init();
+  // Sprint 28b (B-2601 to B-2605): the conversation room (authoriser, signals, presence), embeddings, messages as
+  // moderation objects.
+  s.messaging.init();
+  // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
+  s.feed.init();
+  s.feed.digests.registerJobs();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -650,4 +689,6 @@ export function startSchedules(s: Services): void {
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
+  s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
 }

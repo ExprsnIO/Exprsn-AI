@@ -18,7 +18,7 @@ import type { BillingProvider } from './stripe.js';
 
 export const METERS = ['prompt_tokens', 'output_tokens', 'thinking_tokens', 'gpu_seconds', 'requests', 'calc_calls'] as const;
 export type Meter = (typeof METERS)[number];
-export const USAGE_KINDS = ['chat', 'compare', 'api', 'load', 'embed', 'training', 'agent', 'workflow', 'image', 'media'] as const;
+export const USAGE_KINDS = ['chat', 'compare', 'api', 'load', 'embed', 'training', 'agent', 'workflow', 'image', 'media', 'channel'] as const;
 
 export interface PriceItem {
   /** What the item prices: one model (by name), one profile (by name), or anything. */

@@ -1,6 +1,6 @@
 # Exprsn-AI Helm chart
 
-Chart version `1.3.0`, application version `1.3.0`. Kubernetes 1.27 or later.
+Chart version `1.4.0`, application version `1.4.0`. Kubernetes 1.27 or later.
 
 The chart runs the Exprsn-AI application server as a Deployment behind a Service and an Ingress. Everything the
 server depends on is external and referenced from `values.yaml`:

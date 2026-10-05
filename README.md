@@ -2,7 +2,7 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** version `1.3.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+**Status:** version `1.4.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
 and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
 the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
 rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
@@ -27,7 +27,13 @@ the application, KMS-held webhook keys, HTTP Message Signatures and CI steps tha
 requests, a Responses API subset, profile evaluations with a publish gate and scheduled agent runs; OpenTelemetry
 tracing, Prometheus rules and Grafana dashboards, safe rolling upgrades, key escrow, zones applied in-cluster and an NTP
 quorum; and S3 and web-crawl knowledge sources, PostgreSQL row security, webhook order across instances, proration and
-Stripe refunds, and axe-core in the accessibility checks. See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
+Stripe refunds, and axe-core in the accessibility checks. Sprints 24 to 28 make up 1.4.0, the server features of exprsn-platform
+re-implemented here: a certificate authority with OCSP and an ACME server, a secrets vault with dynamic database
+leases, the event catalogue and plugins; AT-Protocol keys, DIDs, a labeler, sign-in and firehose ingest; moderation
+actions and appeals, a file store, low-code data apps, groups and events with iCalendar feeds, customer-service chat and
+email channels, person-to-person messaging, a workspace feed, and a load test of the event and data paths. Their
+console screens come in 1.5.0 ([Backlog-1.5.0.md](Backlog-1.5.0.md)). See [Sprints.md](Sprints.md) and
+[CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 

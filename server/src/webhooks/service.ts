@@ -138,6 +138,12 @@ export interface WebhookOptions {
   retryBaseMs: number;
   breakerThreshold: number;
   breakerCooldownMs: number;
+  /**
+   * B-2105: attempts one instance has in flight at once to an endpoint whose last attempt failed (the rest wait for
+   * one of them to finish), so a failing or hanging endpoint cannot take every job slot while its breaker is still
+   * closed. Healthy endpoints are not limited. Unset: no limit.
+   */
+  endpointConcurrency?: number;
 }
 
 export const webhookView = (w: WebhookRow, cooldownMs: number) => ({
@@ -211,6 +217,8 @@ export class WebhookService {
   private readonly offs: (() => void)[] = [];
   /** Emits per tenant, one after another, so deliveries are queued in the order events happened on this instance. */
   private readonly lanes = new Map<string, Promise<unknown>>();
+  /** B-2105: start times of this instance's attempts in flight, per webhook. */
+  private readonly inflight = new Map<string, number[]>();
   /** This instance, as the holder of ordered endpoints' delivery leases (B-1504). */
   readonly instance = `${hostname().slice(0, 30)}:${process.pid}:${randomBytes(4).toString('hex')}`;
 
@@ -427,24 +435,40 @@ export class WebhookService {
       return { deferred: 'circuit open' };
     }
 
-    if (w.ordered && d.seq != null) {
-      const lease = await this.takeLease(w, d);
-      if (!lease.ok) {
-        // Another instance is sending this endpoint's head: look again shortly (or when its lease runs out).
-        await this.schedule(d, Math.min(lease.until, now + 1000) + Math.floor(Math.random() * 100));
-        return { deferred: 'lease held by another instance' };
+    if (!(w.ordered && d.seq != null)) {
+      // B-2105: an endpoint that is failing gets at most endpointConcurrency attempts at once from this instance; the
+      // rest wait until the oldest of them has had its timeout, by when the breaker has usually opened.
+      const slots = this.inflight.get(w.id) ?? [];
+      if (w.failures > 0 && slots.length >= (this.o.endpointConcurrency ?? Infinity)) {
+        await this.schedule(d, Math.max(now + 50, Math.min(...slots) + this.o.timeoutMs) + Math.floor(Math.random() * 250));
+        return { deferred: 'endpoint failing and busy' };
       }
+      slots.push(now);
+      this.inflight.set(w.id, slots);
       try {
-        // Another job for the same delivery may have sent it while this one waited for the lease.
-        const fresh = await s.db('webhook_deliveries').where({ id: d.id }).first();
-        if (!fresh || fresh.state !== 'pending') return { skipped: 'delivery already handled' };
-        return await this.attempt(w, deliveryFromRow(fresh));
+        return await this.attempt(w, d);
       } finally {
-        await this.releaseLease(w.id, d.id);
-        await this.kick(w.id, w.tenant_id);
+        slots.splice(slots.indexOf(now), 1);
+        if (!slots.length && this.inflight.get(w.id) === slots) this.inflight.delete(w.id);
       }
     }
-    return this.attempt(w, d);
+
+    // An ordered webhook's head: sent only by the instance holding the endpoint's lease.
+    const lease = await this.takeLease(w, d);
+    if (!lease.ok) {
+      // Another instance is sending this endpoint's head: look again shortly (or when its lease runs out).
+      await this.schedule(d, Math.min(lease.until, now + 1000) + Math.floor(Math.random() * 100));
+      return { deferred: 'lease held by another instance' };
+    }
+    try {
+      // Another job for the same delivery may have sent it while this one waited for the lease.
+      const fresh = await s.db('webhook_deliveries').where({ id: d.id }).first();
+      if (!fresh || fresh.state !== 'pending') return { skipped: 'delivery already handled' };
+      return await this.attempt(w, deliveryFromRow(fresh));
+    } finally {
+      await this.releaseLease(w.id, d.id);
+      await this.kick(w.id, w.tenant_id);
+    }
   }
 
   /** One attempt at a delivery, its outcome recorded and the next attempt scheduled. */
@@ -504,18 +528,27 @@ export class WebhookService {
 
     if (ok) {
       await s.db('webhook_deliveries').where({ id: d.id }).update({ state: 'succeeded', attempts: attempt, status_code: status, error: null, next_attempt_at: null, duration_ms: duration, delivered_at: t });
-      await s.db('webhooks').where({ id: w.id }).update({ failures: 0, breaker: 'closed', opened_at: null, last_delivery_at: t, last_status: String(status) });
-      if (w.breaker === 'open') await this.breakerAudit(w, 'webhook.breaker.closed', { after: w.failures });
+      // Only the attempt that finds the breaker open closes it (and says so once).
+      const closed = await s.db('webhooks').where({ id: w.id, breaker: 'open' }).update({ failures: 0, breaker: 'closed', opened_at: null, last_delivery_at: t, last_status: String(status) });
+      if (!closed) await s.db('webhooks').where({ id: w.id }).update({ failures: 0, last_delivery_at: t, last_status: String(status) });
+      if (closed) await this.breakerAudit(w, 'webhook.breaker.closed', { after: w.failures });
       this.forget(w.tenant_id);
       if (w.ordered && d.seq == null) await this.kick(w.id, w.tenant_id);
       return { delivered: status, attempt };
     }
 
-    const failures = w.failures + 1;
-    // A trial after the cool-down that fails reopens the breaker at once; otherwise it opens at the threshold.
-    const open = w.breaker === 'open' || failures >= this.o.breakerThreshold;
-    await s.db('webhooks').where({ id: w.id }).update({ failures, breaker: open ? 'open' : 'closed', opened_at: open ? t : null, last_delivery_at: t, last_status: status ? String(status) : 'error' });
-    if (open && w.breaker !== 'open') await this.breakerAudit(w, 'webhook.breaker.opened', { failures, error });
+    // B-2105: the count goes up in the database, so attempts failing at the same time all count; only the attempt that
+    // moves the breaker from closed to open announces it.
+    await s.db('webhooks')
+      .where({ id: w.id })
+      .update({ failures: s.db.raw('failures + 1'), last_delivery_at: t, last_status: status ? String(status) : 'error' });
+    const failures = Number(((await s.db('webhooks').where({ id: w.id }).first('failures')) as { failures: number | string } | undefined)?.failures ?? w.failures + 1);
+    // A trial after the cool-down that fails reopens the breaker at once (a new cool-down); otherwise it opens at the threshold.
+    if (w.breaker === 'open') await s.db('webhooks').where({ id: w.id }).update({ breaker: 'open', opened_at: t });
+    else if (failures >= this.o.breakerThreshold) {
+      const opened = await s.db('webhooks').where({ id: w.id, breaker: 'closed' }).update({ breaker: 'open', opened_at: t });
+      if (opened) await this.breakerAudit(w, 'webhook.breaker.opened', { failures, error });
+    }
     this.forget(w.tenant_id);
     const retry = !permanent && attempt < this.o.maxAttempts;
     const next = retry ? t + this.backoff(attempt) : null;

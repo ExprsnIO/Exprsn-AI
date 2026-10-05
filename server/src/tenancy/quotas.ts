@@ -21,7 +21,7 @@ export interface UsageInput {
   workspaceId: string | null;
   userId: string | null;
   apiKeyId?: string | null;
-  kind: 'chat' | 'compare' | 'api' | 'load' | 'embed' | 'training' | 'agent' | 'workflow' | 'image' | 'media';
+  kind: 'chat' | 'compare' | 'api' | 'load' | 'embed' | 'training' | 'agent' | 'workflow' | 'image' | 'media' | 'channel';
   profileId?: string | null;
   model?: string | null;
   poolId?: string | null;

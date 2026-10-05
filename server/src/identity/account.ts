@@ -195,6 +195,7 @@ export class AccountService {
     n += await this.signIns.purge();
     n += await this.s().identityPolicy.purge(); // Sprint 26a: expired trusted devices
     n += await this.s().db('email_verifications').where('expires_at', '<', t - 7 * 24 * 3600_000).delete();
+    n += await this.s().mfa.purgeEmailCodes(); // Sprint 28a (B-1806): used and expired email codes
     return n;
   }
 

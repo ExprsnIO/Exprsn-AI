@@ -53,6 +53,9 @@ import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
+import { socialRoutes } from '../routes/social.js';
+import { messagingRoutes } from '../routes/messaging.js';
+import { feedRoutes } from '../routes/feed.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -65,6 +68,8 @@ import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
 import { fileRoutes, publicFileRoutes } from '../routes/files.js';
 import { appRoutes } from '../routes/apps.js';
 import { publicAppRoutes } from '../routes/apps-public.js';
+import { channelRoutes } from '../routes/channels.js';
+import { publicChannelRoutes } from '../routes/channels-public.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -245,11 +250,21 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(firehoseRoutes(s));
   // Sprint 27c (B-2501 to B-2505): groups, posts, events, RSVPs, reminders and calendar feeds.
   api.use(groupRoutes(s));
+  // Sprint 28a (B-2301 to B-2304): customer-service channels, sessions, held replies, exports.
+  api.use(channelRoutes(s));
+  // Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules.
+  api.use(socialRoutes(s));
+  // Sprint 28b (B-2601 to B-2605): person-to-person messaging.
+  api.use(messagingRoutes(s));
+  // Sprint 28c (B-2701 to B-2705): the workspace feed.
+  api.use(feedRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
   // Sprint 16: anonymous share links, signed-out and sessionless, ahead of the authenticated API.
   // Sprint 26d (B-2402): anonymous file links, on the same rules.
+  // Sprint 28a (B-2301, B-2303): customer sessions and mail webhooks (first: the webhooks read their raw body).
+  app.use('/api/public', publicChannelRoutes(s));
   app.use('/api/public', publicFileRoutes(s));
   app.use('/api/public', publicAppRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));

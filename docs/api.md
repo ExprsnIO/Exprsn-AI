@@ -2809,3 +2809,392 @@ Events: `group.updated`, `group.member.added`, `group.member.removed`, `group.me
 `group.post.deleted`, `group.event.created`, `group.event.updated`, `group.event.cancelled`, `group.event.rsvp`,
 `group.event.check-in` (ids, never content). Removing a member closes their room at once; a visibility or label change
 checks everyone in it again; leaving the workspace closes it.
+
+## Sprint 28a (1.4.0): customer-service channels (B-2301 to B-2304) and email one-time codes (B-1806)
+
+A channel lives in one workspace and answers customers with a published **profile** or **agent** (the agent's profile
+and system prompt; customer channels never run an agent's tools), at the channel's **label**. The label must fit under
+the workspace ceiling, the caller's clearance and the profile's (and agent's) label when the channel is saved, and the
+gateway only leases a pool cleared for it when a customer is answered, so an answer never comes from a model or pool
+below the channel's label. Every customer message passes the `user-input` guardrail checkpoint and every answer the
+`model-output` checkpoint at that label. Transcripts are sealed per row with the tenant key; customer names, addresses
+and subjects too.
+
+`channels:manage` (tenant admins) creates and changes channels; `channels:review` (tenant admins, guardrail admins and
+flag reviewers) works their sessions. Both only within the caller's workspaces and clearance (anything else is `404`).
+Changes are audited under `channel.*`; the catalogue events `channel.session.started`, `channel.session.escalated`,
+`channel.session.closed`, `channel.session.purged`, `channel.message.received`, `channel.reply.held`,
+`channel.reply.sent`, `channel.reply.rejected` and `channel.bounce.recorded` (catalogue version 4) carry ids only.
+Reviewers' consoles get `channels.changed` on the `channels:review` permission room.
+
+### Channels (`channels:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/channels?workspace=` | `channels:manage` or `channels:review`. The channels in the caller's workspaces at or below their clearance |
+| `POST /api/channels` `{workspaceId?, kind: chat \| email, name, label, target: {kind: profile \| agent, name}, instructions?, reviewMode?: escalated, allowAnonymous?: true, messagesPerMinute?: 10, sessionsPerHour?: 10, retentionDays?: 30, greeting?, email?}` | Creates a channel. The binding is checked (`403` with `step: clearance` or `zone`; `422` with `step: target` when the profile or agent cannot answer at the label). `email` (email channels only): `{address, fromName?, imap?: {host, port?: 993, secure?: true, user, passwordRef, mailbox?: INBOX}, smtp?: {host, port?: 465, secure?: true, user, passwordRef}, mailgunKeyRef?}`; credentials are `vault:<path>#<key>` references only (`400` otherwise), checked readable for the caller at save (B-1705) and resolved as them at use; hosts are checked against the service address rules and the tenant's allowed hosts at every connection. `201` with the channel, its `publicKey`, the webhook URLs (email) and, **once**, `secrets: {identitySecret, webhookSecret?}` |
+| `GET /api/channels/:id` | The channel (no secrets) |
+| `PATCH /api/channels/:id` | Any of the create fields but `kind` and `workspaceId`, and `state: active \| paused`. A changed label, target or mail settings is checked again. Pausing refuses new sessions and ends customer tokens until it is active again |
+| `DELETE /api/channels/:id` | Deletes the channel (`state: deleted`) and closes its open sessions |
+| `POST /api/channels/:id/secrets` `{which: identity \| webhook}` | A new secret, shown once; the old one stops working at once |
+| `POST /api/channels/:id/poll` | Polls the channel's IMAP mailbox now (a `channels.imap-poll` job). `202 {jobId}` |
+| `POST /api/channels/:id/purge` | Runs the retention purge now (a `channels.retention` job). `202 {jobId}` |
+
+`reviewMode`: `never` (answers go straight to the customer unless a guardrail holds them), `escalated` (the default:
+once a session is escalated, every answer waits for a reviewer) or `always` (every answer waits).
+
+### Sessions, held replies and exports (`channels:review`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/channels/:id/sessions?state=&before=&limit=` | Newest activity first: `[{id, state: open \| escalated \| closed \| hidden, label, customer: {kind, name, email, externalId}, subject, escalatedAt, escalation, messages, lastActivityAt, …}]` |
+| `GET /api/channels/:id/sessions/:sessionId` | The session with its `transcript` (`[{id, seq, role: customer \| assistant \| agent \| notice, state: delivered \| held \| rejected \| hidden, via, text, original, flag, authorId, …}]`; `original` is the model's text of a reply a reviewer edited) and its email `outbox` (`queued \| sent \| failed \| bounced`) |
+| `POST /api/channels/:id/sessions/:sessionId/messages` `{text}` | A person answers (role `agent`, delivered at once; by email for email sessions) |
+| `POST /api/channels/:id/sessions/:sessionId/close` | Closes the session (the customer's token stops working) |
+| `GET /api/channels/:id/sessions/:sessionId/transcript.csv` | The transcript as CSV (`channel, session, seq, time, role, state, via, label, text, original`; a leading `= + - @` is made inert). Audited `channel.transcript.exported` |
+| `POST /api/channels/:id/exports` `{from?, to?}` | Every session created in the window (ISO 8601; at most 10,000 sessions, those within the caller's clearance) as one CSV, built by a `channels.export` job and sealed in the blob store. `202 {jobId}` |
+| `GET /api/channels/exports/:jobId` | The finished export, for the person who started it. Audited `channel.transcript.exported` |
+| `GET /api/channels/:id/bounces` | `[{id, outboxId, kind: hard \| soft \| complaint, status, reason, source: imap \| generic \| mailgun, createdAt}]` |
+| `GET /api/channels/held` | Held replies in the caller's workspaces and clearance, oldest first, with their flag |
+| `POST /api/channels/held/:messageId/decide` `{decision: approve \| edit \| reject, text?, reason?}` | B-2302. `approve` delivers the reply as written; `edit` delivers `text` instead (the model's text is kept as `original`); `reject` withdraws it and tells the customer a person will follow up. The reply's `hold` flag records the decision (`approved` or `rejected`) through the flag queue (reviewer clearance as there). Email sessions get the delivered reply by email. Audited `channel.reply.sent` (with `edited`), `channel.reply.edited`, `channel.reply.rejected` |
+
+A held reply is a `hold` flag (`source_kind: channel-message`, checkpoint `model-output` when a guardrail held it,
+`channel-review` when the channel's review mode did) in the workspace's flag queue: `GET /api/flags/:ref` shows it
+under `held`, and `POST /api/flags/:ref/decide {decision: approved | rejected}` (`flags:review`) approves or rejects it
+too (audited `channel.hold.approved` / `channel.hold.rejected`); editing needs the channel route. A session escalates
+when the customer asks for a person, a guardrail asks for review of their message (`require-approval` at
+`user-input`), a guardrail blocks an answer or the model cannot answer; reviewers holding `channels:review` in the
+workspace are notified. Sessions (`channel-session`: hiding ends the customer's token) and messages
+(`channel-message`: hiding removes the message from what the customer and the model see) are moderation object types.
+
+### Customers (public, `/api/public/channels`)
+
+No session cookie is read or set; answers carry `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/public/channels/sessions` `{channel: <publicKey>, identity?, name?}` | Starts a session on an active chat channel (`404` otherwise). Anonymous unless the channel requires an identity (`allowAnonymous: false`, `401` without one). `identity` is an assertion the channel's site signs: `<base64url(JSON {sub, name?, email?, exp})>.<base64url(HMAC-SHA256(identitySecret, first part))>`, `exp` in seconds and at most a day ahead; an identified customer comes back to their open session (`resumed: true`). Rate-limited per address: `CHANNELS_SESSIONS_PER_HOUR` across channels and the channel's `sessionsPerHour` (`429`). `201 {token, expiresAt, resumed, session: {id, channel, state, label, escalated}, messages}` |
+| `GET /api/public/channels/session?after=` | `Authorization: Bearer <token>`. The session and its messages after a sequence number: the customer's own, delivered answers, notices; a held answer shows as `{state: pending, text: null}` until a reviewer decides. Poll this for answers released by review |
+| `POST /api/public/channels/session/messages` `{text}` | Up to 8,000 characters; at most `messagesPerMinute` per session (`429`). A guardrail block is `422` (audited `channel.message.refused`). Answers when the reply is ready: `201 {message: {seq}, reply: {seq, role, state: delivered \| pending, text}, session: {state, escalated}}`. When the model cannot answer, the reply is a notice that a person will follow up and the session escalates |
+| `POST /api/public/channels/session/escalate` `{reason?}` | Asks for a person: the session escalates (reviewers are notified) |
+| `POST /api/public/channels/session/close` | Ends the session and its token |
+
+The session token (`cst_…`) is HMAC-signed with a key derived from `SESSION_SECRET` and names one tenant, channel and
+session; it lasts `CHANNELS_SESSION_HOURS` and stops working as soon as the session is closed or hidden or the channel
+is paused or deleted.
+
+### Email channels (B-2303)
+
+Mail arrives by IMAP polling and by provider webhooks (both may be configured for one channel):
+
+- **IMAP**: every `CHANNELS_IMAP_POLL_SECONDS` a `channels.imap-poll` job per channel (one per tick across instances)
+  opens the mailbox read-only, reads up to `CHANNELS_IMAP_BATCH` messages above the last UID seen (another poll
+  follows at once when more wait) and keeps the cursor with the mailbox's UIDVALIDITY (a new UIDVALIDITY reads from
+  the start; Message-IDs keep anything from being taken twice). Implicit TLS, or STARTTLS which is then required.
+  Messages over 10 MB are skipped.
+- **Webhooks** at `POST /api/public/channels/:publicKey/email/generic` and `…/email/mailgun`, rate-limited per channel
+  (`CHANNELS_WEBHOOK_PER_MINUTE`); the signature is checked over the raw body before anything is parsed (`401`), and
+  a replay inside the tolerance window is acknowledged as `duplicate`. Answers `200 {accepted, result: {action:
+  started | joined | duplicate | ignored | bounce, session?}}`.
+  - Generic: headers `X-Exprsn-Timestamp: <unix seconds>` (within `CHANNELS_WEBHOOK_TOLERANCE_SECONDS`) and
+    `X-Exprsn-Signature: v1=<hex HMAC-SHA256(webhookSecret, "<timestamp>.<raw body>")>`; JSON body `{type: message,
+    from, fromName?, subject?, text, messageId, inReplyTo?, references?}`, or `{type: message, raw: "<RFC 5322
+    message>"}`, or `{type: bounce, id?, recipient, messageId?, kind?: hard | soft | complaint, status?, reason?}`.
+  - Mailgun: inbound routes (`forward()` to the URL; `application/x-www-form-urlencoded`, so without attachments) and
+    event webhooks (JSON; `failed` and `complained` become bounces, others are acknowledged), both verified with
+    HMAC-SHA256 of `timestamp + token` under the Mailgun webhook signing key named by `mailgunKeyRef`. Without it the
+    endpoint is `404`.
+
+A message joins a session when its `In-Reply-To` or `References` name a Message-ID of that session (one the customer
+sent or one of our replies) **and** it comes from that session's customer address; a closed session reopens. Anything
+else starts a new session, so a forged `In-Reply-To` from another sender never reads into someone else's thread.
+Automatic mail (`Auto-Submitted`, `Precedence: bulk/list/junk`, `List-Id`, mailer daemons) and mail from the channel's
+own address are ignored. The quoted part of a reply is dropped. Answers are generated by a `channels.reply` job and
+sent from the outbox by a `channels.send` job (five attempts; then `failed`, audited `channel.mail.failed`) through
+the channel's SMTP server, or the server's `SMTP_URL` when it has none, from the channel's address with `In-Reply-To`
+and `References` threading and `Auto-Submitted: auto-replied` on model-written answers. Delivery status reports
+(RFC 3464, by IMAP) and provider bounce events are recorded once each and mark the outbox row `bounced` (audited
+`channel.bounce.recorded`).
+
+### Retention (B-2304)
+
+Each channel has `retentionDays` (default 30, `null` keeps sessions). A `channels.retention` job per tenant every
+`CHANNELS_RETENTION_SWEEP_MINUTES` deletes sessions whose last activity is older than the period, with their
+messages, threads and outbox rows; open review flags of their held replies are closed as rejected. Audited
+`channel.session.purged` per channel with the count, and emitted as the event of the same name.
+
+### Email one-time codes (B-1806)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/me/mfa/email` `{label?}` | Enrolling or active browser sessions. Adds the account's email address as a factor: sends a six-digit code to it (`503` without SMTP, `409` without an address or with an email factor already). `201 {id, sentTo (masked), expiresAt}` |
+| `POST /api/me/mfa/email/:id/confirm` `{code}` | Confirms the factor (a wrong code counts in the account's lockout like a wrong password; `400` with `attempts_remaining`). Like the other factors, the first one completes an enrolling sign-in. `201 {enrolled, stage, recoveryCodes, csrf?}` |
+| `POST /api/auth/mfa/email/send` | A pending (`mfa`) session: sends a code to the confirmed email factor. `200 {sentTo, expiresAt}`. Audited `auth.mfa.email_sent` |
+| `POST /api/auth/mfa/email` `{code, rememberDevice?}` | Completes the second factor like `POST /api/auth/mfa/totp`: wrong codes count in the pending session's lockout, and the fifth wrong code (of any factor) ends the pending session, so the sixth is refused like a sixth wrong TOTP code |
+
+Codes are stored as an HMAC, valid for `MFA_EMAIL_CODE_MINUTES`, work once and only for the session they were sent
+for; a new code replaces the previous one. At most `MFA_EMAIL_SENDS_PER_HOUR` codes are sent per user (`429`). The
+code is in the body of the email, never its subject. `GET /api/auth/session` lists `email` among the `mfa.methods`.
+
+## Sprint 28b (1.4.0): social relations (B-2606, shared with the feed's B-2702)
+
+Blocks, mutes, follows, lists and contact rules, per tenant and per user; messaging (B-26) and the workspace feed
+(B-27) both enforce them. `social:read` sees one's own relations, `social:write` changes them (both held by members and
+tenant admins), `social:manage` (tenant admins) sees anyone's. Every route answers `Cache-Control: no-store`; changes
+are audited under `social.*` (the people involved, never more).
+
+- A **block** works in both directions: neither person can start a conversation with or message the other, each
+  other's messages, posts and socket events (typing, presence, new messages and posts) are left out for the other, and
+  blocking ends follows both ways. The blocked person is never told: to them it reads as "does not accept messages
+  from you", the same words as a contact rule.
+- A **mute** is one-way and private, for a number of minutes or until removed: the muted person's posts leave the
+  muter's home feed and their messages notify the muter of nothing.
+- **Follows** and **list** members must share a workspace with the caller (else `404`, as if unknown); blocks and
+  mutes may name anyone active in the tenant. Someone in a block with the caller cannot be followed or listed (`409`
+  for the blocker, `404` for the blocked).
+- The **contact rule** says who may start a conversation with a user or add them to one: `workspace` (anyone who
+  shares a workspace with them, the default), `following` (only people they follow) or `nobody`.
+
+Limits per user: 5,000 blocks, mutes and follows each, 100 lists of up to 1,000 people.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/social/settings` | `{contactRule: workspace \| following \| nobody}` |
+| `PUT /api/social/settings` `{contactRule}` | Sets the caller's contact rule (audited `social.contact-rule.updated` when it changes) |
+| `GET /api/social/users/:id` | The caller's relation with one person: `{userId, blocking, muting, following, followedBy, canMessage}`. Someone outside the caller's workspaces is `404` unless the caller blocked or muted them. Being blocked by them shows only as `canMessage: false` |
+| `GET /api/social/blocks` | `[{userId, username, displayName, createdAt}]` |
+| `POST /api/social/blocks` `{userId}` | `201 {userId, blocked: true, created: true}`; `200` with `created: false` when already blocked; `422` for oneself |
+| `DELETE /api/social/blocks/:userId` | Unblocks (`404` when there was no block) |
+| `GET /api/social/mutes` | `[{userId, username, displayName, expiresAt, createdAt}]` (live mutes) |
+| `POST /api/social/mutes` `{userId, minutes?}` | Mutes for `minutes` (at most a year) or until unmuted; muting again sets the new end. `201` |
+| `DELETE /api/social/mutes/:userId` | Unmutes |
+| `GET /api/social/following` | `[{userId, username, displayName, since}]` |
+| `GET /api/social/followers` | The caller's followers, same shape |
+| `POST /api/social/following` `{userId}` | Follows (`201`; `200` when already following) |
+| `DELETE /api/social/following/:userId` | Unfollows |
+| `GET /api/social/lists` | `[{id, name, description, members, createdAt, updatedAt}]` |
+| `POST /api/social/lists` `{name, description?}` | `201`; a name the caller already uses (any case) is `409` |
+| `GET /api/social/lists/:id` | The list with `people: [{userId, username, displayName}]`; someone else's list is `404` |
+| `PATCH /api/social/lists/:id` `{name?, description?}` | Renames or describes it |
+| `DELETE /api/social/lists/:id` | Deletes it |
+| `POST /api/social/lists/:id/members` `{userId}` | Adds someone (`201`; `200` when already in it) |
+| `DELETE /api/social/lists/:id/members/:userId` | Takes them off |
+| `GET /api/social/admin/users/:id` | `social:manage`. `{userId, username, contactRule, blocks, blockedBy, mutes, following, followers, lists}` (user ids and a list count); audited `social.relations.viewed` |
+
+For other modules, `server/src/social/service.ts` (`s.social`) has the shared checks: `isBlocked(tenantId, a, b)`
+(either direction), `blockedWith` and `blockedAmong`, `mutedBy`, `isMuted`, `following`, `followers`, `isFollowing`,
+`hiddenFor` (blocked and muted together, for feeds), `listMembers` and `inList`, `contactRule`, `mayContact` and
+`requireContact`, and `emitToRoom`, which publishes a realtime room event with everyone in a block with the actor left
+out (`exceptUserIds` on the room event), so the filter applies on every instance. Every change is also published on
+the bus (`social.relation {tenantId, kind: block | mute | follow, userId, targetId, on}`).
+
+## Sprint 28b (1.4.0): messaging (B-2601 to B-2605)
+
+Person-to-person conversations inside the tenant, sealed at rest with the tenant key (no end-to-end encryption, so
+search, summaries and moderation work). `messages:read` reads one's conversations, `messages:write` starts them, sends,
+edits, reacts and pins (both held by members and tenant admins); what a member may do inside a conversation is their
+**role**: `owner` (title, roles, delete), `admin` (add and remove members, pin, delete others' messages, title) or
+`member` (send, react, receipts). Nobody reads a conversation they are not in: there is no administrator view
+(moderation reads reported messages). Every route answers `Cache-Control: no-store`.
+
+- A **direct** conversation is between two people, one per pair: starting one again, from either side, returns the
+  first (`200`), also when both start it at once (a unique key on the pair). It has no workspace: the two must share
+  one now (else `404`), and in it both may pin. A **group** conversation lives in one workspace; everyone in it must be
+  a member of that workspace now. Workspace membership is the outer boundary, as for groups: losing it hides the
+  conversation at once.
+- Starting a conversation or adding someone follows their **contact rule** and refuses a block (`403`, `step:
+  contact`, the same words either way; see social relations above). A direct conversation takes no messages while
+  either person blocks the other. In a group conversation, messages, reactions, receipts and socket events of people
+  in a block with the reader are left out of everything the reader gets.
+- The `label` (default `internal`, at most the workspace ceiling, or for a direct conversation the highest ceiling of
+  the shared workspaces) is set at creation; everyone in the conversation must be cleared for it (`422`).
+- A member added to a group conversation reads messages from the moment they were added.
+
+Refusals carry `step`: `contact`, `self`, `workspace`, `clearance`, `conversation-role` (with `right`), `author`,
+`guardrails`. Changes are audited under `messaging.*` without any message text (a deleted message leaves
+`messaging.message.deleted` with the author and edit count); the catalogue events `message.sent`, `message.edited` and
+`message.deleted` (ids only) are emitted to webhooks and plugins (catalogue version 4).
+
+### Conversations and members (B-2601)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/messaging/conversations?workspace=` | The caller's conversations still within their workspaces and clearance, latest activity first: `[{id, kind, workspaceId, title, label, role, members, unread, muted, mutedUntil, notify, lastReadId, lastMessageAt, with?, …}]` (`with` is the other person of a direct conversation) |
+| `POST /api/messaging/conversations` `{kind: direct, userId, label?}` | `201` with a new direct conversation, or `200` with the existing one for the pair |
+| `POST /api/messaging/conversations` `{kind: group, workspaceId?, title?, memberIds, label?}` | `201`; in a workspace the caller may act in (default the current one), with people from that workspace (`422`, `step: workspace`) who accept the caller (`403`). At most `MESSAGING_MAX_MEMBERS` people. The creator is the owner |
+| `GET /api/messaging/conversations/:id` | The conversation with `people: [{userId, username, displayName, role, joinedAt, lastSeenAt}]` |
+| `PATCH /api/messaging/conversations/:id` `{title}` | Owner or admin of a group conversation (`409` for a direct one) |
+| `DELETE /api/messaging/conversations/:id` | Owner. The conversation is deleted and its messages' bodies, terms and vectors removed |
+| `GET /api/messaging/conversations/:id/members` | The people |
+| `POST /api/messaging/conversations/:id/members` `{userId, role?: member}` | Owner or admin (owners for `admin` and `owner`). `201` |
+| `PATCH /api/messaging/conversations/:id/members/:userId` `{role}` | Owner. A conversation keeps at least one owner (`409`) |
+| `DELETE /api/messaging/conversations/:id/members/:userId` | Leave (one's own id) or remove (admins remove members, owners anyone). The last owner cannot leave (`409`). Their sockets leave the room at once |
+
+### Messages (B-2602)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/messaging/conversations/:id/messages?before=&thread=&limit=` | Newest first. Without `thread`, the main timeline (thread replies left out); with `thread=<first message id>`, the thread. `[{id, conversationId, authorId, authorName, body, state: sent \| hidden \| deleted, label, replyTo, threadId, replyCount, forwardedFrom, attachments: [{fileId, name, type, size, state}], reactions: [{emoji, count, mine}], pinned, pinnedAt, pinnedBy, edited, editedAt, createdAt}]`; deleted and hidden messages are tombstones (`body: null`) |
+| `POST /api/messaging/conversations/:id/messages` `{body, replyTo?, threadId?, attachments?}` | Up to 10,000 characters, screened at the `user-input` guardrail checkpoint (`422`, `step: guardrails`; a redaction is stored redacted), sealed. `threadId` puts it in the thread of that message (threads are one level deep); `replyTo` quotes a message. `201` |
+| `GET /api/messaging/conversations/:id/pins` | Pinned messages |
+| `PATCH /api/messaging/messages/:id` `{body}` | Its author; screened again. Audited with the edit number and length |
+| `DELETE /api/messaging/messages/:id` | Its author, or an owner or admin. The body, attachments, keyword terms, vector and reactions are deleted; the row stays as a tombstone |
+| `POST /api/messaging/messages/:id/reactions` `{emoji}` | An emoji or a `:name:` (no spaces, up to 32 characters). `201` |
+| `DELETE /api/messaging/messages/:id/reactions/:emoji` | Takes the caller's reaction back |
+| `POST /api/messaging/messages/:id/pin`, `DELETE …/pin` | Owner or admin (anyone in a direct conversation) |
+| `POST /api/messaging/messages/:id/forward` `{conversationId}` | Copies a message (and its attachments, checked again) into another conversation the caller writes in; a message above that conversation's label is `422`. `201` with the new message (`forwardedFrom`) |
+
+### Receipts, typing and presence (B-2603)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/messaging/conversations/:id/read` `{messageId}` | Moves the caller's read mark forward (never back); reading also counts as delivered |
+| `POST /api/messaging/conversations/:id/delivered` `{messageId}` | Moves the delivered mark forward |
+| `GET /api/messaging/conversations/:id/receipts` | `[{userId, lastReadId, lastReadAt, deliveredId, deliveredAt, lastSeenAt}]` without people in a block with the caller |
+
+The `conversation` room kind: a socket joins with `room.join {kind: conversation, id}` when its user is a member,
+inside the boundary and cleared. Events (ids, never text): `conversation.message.created {messageId, authorId,
+threadId}`, `conversation.message.edited`, `conversation.message.deleted`, `conversation.reaction`,
+`conversation.pin`, `conversation.member.added`, `conversation.member.removed`, `conversation.member.role`,
+`conversation.updated`, `conversation.read {userId, messageId}`, `conversation.delivered`, `conversation.typing
+{userId, typing}` and `conversation.presence {userId, state: online | offline, at}` (sent when a socket joins or
+leaves the room). A socket in the room sends `room.signal {kind: conversation, id, signal: typing | read | delivered,
+data: {typing?, messageId?}}` (at most `ROOM_SIGNALS_PER_MINUTE` a minute; the acknowledgement is `{ok}`). Every event
+from a person leaves out the sockets of everyone in a block with them, on every instance (the platform's BUG-080):
+a blocked user receives no typing, presence, receipt or message event from the person they blocked or who blocked
+them.
+
+### Attachments and notifications (B-2604)
+
+Attachments are files from the file store (`PUT /api/files/uploads`): only a file the sender can read whose current
+version passed its quarantine scan (`409` while it is pending), labelled at most the conversation's label, and in the
+conversation's workspace (or, in a direct conversation, a workspace both people share; `422`, `step: workspace`), so
+everyone reads it through the file store. At most 10 a message.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/messaging/conversations/:id/settings` `{muted?, mutedMinutes?, notify?: all \| mentions \| none}` | The caller's own: `muted: true` until unmuted, `mutedMinutes` for a while, `muted: false` to unmute. `{conversationId, muted, mutedUntil, notify}` |
+
+A new message notifies (in the console, `kind: message`, naming the sender, never the text or the title) every other
+member except those who muted the conversation, whose rule is `none`, whose rule is `mentions` and who were not named
+(`@username`), who muted the sender, or who are in a block with the sender.
+
+### Search, summaries and digests (B-2605)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/messaging/conversations/:id/search?q=&mode=keyword \| semantic \| hybrid&limit=` | Over the messages the caller can see (since they joined, not deleted or hidden, none from people in a block with them). Keyword ranks by keyed-hash terms; semantic by the embeddings of `MESSAGING_EMBED_MODEL` (an approved embedding model; without it `semantic` and `hybrid` are `409` and the default is `keyword`); hybrid fuses both by reciprocal rank. The messages with `score {fused, keyword, semantic}` |
+| `POST /api/messaging/conversations/:id/summary` `{threadId?, profile?, limit?}` | Also needs `inference:invoke`. A summary of a thread, or of the latest messages (up to `MESSAGING_SUMMARY_MAX_MESSAGES`), from the profile (default `MESSAGING_SUMMARY_PROFILE`). `{conversationId, kind: thread \| recent, profile, messages, from, to, summary, citations: [{n, messageId}]}` |
+| `POST /api/messaging/conversations/:id/digest` `{profile?}` | Also needs `inference:invoke`. A catch-up digest of the messages from others after the caller's read mark; `summary: null` when there are none |
+
+Only the messages the caller can see are numbered and sent to the model; citations `[n]` in its answer are kept only
+when they name one of them (others are removed from the text), so a summary never cites a message its reader cannot
+see. The answer passes the `model-output` guardrail checkpoint; a model that is down or refused is `503`. Audited
+`messaging.summary.created` (counts only).
+
+Messages are moderated through the moderation API with the registered type `dm-message`: anyone who can see a message
+may report it (`POST /api/moderation/reports {type: dm-message, id}`); a hidden message shows to its conversation as a
+tombstone and leaves search.
+
+## Sprint 28c (1.4.0): the workspace feed (B-2701 to B-2705)
+
+A feed for a workspace or a group, not a public social network. Workspace membership stays the outer boundary: every
+route starts from the workspaces the caller may act in now and their clearance, so a post outside them is `404`.
+`feed:read` reads feeds, posts, comments, trending tags and digests; `feed:write` posts, comments, reacts, reposts and
+bookmarks (both held by members and tenant admins); `feed:manage` (tenant admins) removes anyone's posts and comments
+in the holder's workspaces and sets and runs a workspace's digest. Every route answers `Cache-Control: no-store`.
+
+- A **post** belongs to one workspace, or is targeted at a group of it (`groupId`): the group feed, with the group's
+  rights (members post and comment, moderators remove, readers read; a private group's posts never reach the workspace
+  feed). The group's Sprint 27 notices (`/api/groups/:id/posts`) stay as they are, beside the group feed.
+- **Labels**: a workspace post is `internal` by default (or the `label` asked for), at most the workspace ceiling
+  (`422`) and the author's clearance (`403`); a group post carries the group's label. **Media** are files from the file
+  store (`media: [fileId]`, at most 10) in the post's workspace (`422` otherwise) that passed quarantine (`409` while
+  pending or rejected); they raise the post's label to theirs. A **repost** carries the original's label and stays in
+  its workspace and group, so the audience never widens.
+- Bodies, comments and digest summaries are **sealed** with the tenant key. Posts and comments are at most
+  `FEED_POST_MAX_CHARS` characters.
+- **Relations** come from the shared social module (Sprint 28b): a block, either way, hides the other's posts,
+  comments and reposts' originals in every feed and refuses comments, reactions and reposts on their posts (`404`, as
+  if they did not exist), and their user feed is `404`; a mute takes the muted person's posts out of the muter's home
+  feed only. Someone sharing no workspace with the caller is unknown to them.
+- **Guardrails** (B-2704): a post's text passes the `user-input` checkpoint before it is published. A block is `422`
+  (`step: guardrail`), a redaction is stored redacted, and a hold (`require-approval`) keeps the post `held`: `202`,
+  seen only by its author, with a hold flag (`checkpoint: user-input`, source `feed-post`) in the Flags queue. A
+  reviewer's `POST /api/flags/:ref/decide {decision: approved}` publishes it (the author is notified; a reviewer cannot
+  decide on their own post), `rejected` withdraws it (`state: rejected`, still seen only by its author). Edits and
+  comments do not wait for review: a hold refuses them (`422`).
+
+Pages are `{items, nextCursor}`, newest first by publication time; pass `cursor` (opaque) and `limit` (1 to 100,
+default 20) for the next page; a cursor the server did not give out is `400`. A post is `{id, workspaceId, groupId,
+author: {id, username, displayName}, body, label, state: held | published | rejected | hidden, repostOf, original,
+media: [{fileId, name, type, size, available}], tags, counts: {comments, reposts, reactions: {<kind>: n}}, mine:
+{reactions, bookmarked, reposted}, createdAt, publishedAt, editedAt}`; `original` is the reposted post as the caller
+may see it now, or `null` (blocked, gone or out of reach). Media are downloaded through the file routes
+(`/api/files/:id/content`).
+
+### Feeds (B-2703)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/feed/home?cursor=&limit=` | `feed:read`. The caller's posts and those of the people they follow (`/api/social/following`), in every workspace and group they may read, minus muted people |
+| `GET /api/feed/workspaces/:id` | A workspace's feed (its posts not targeted at a group). `404` outside the caller's workspaces |
+| `GET /api/feed/groups/:id` | A group's feed (feed posts targeted at it): readers of the group's content (`403`, `step: group`, to non-members of a private group) |
+| `GET /api/feed/users/:id` | A person's posts the caller may read; `404` when they share no workspace or are in a block with the caller |
+| `GET /api/feed/lists/:id` | The posts of the people on one of the caller's lists (`/api/social/lists`); someone else's list is `404` |
+| `GET /api/feed/tags/:tag?workspace=` | Posts with a hashtag (any case), in one workspace or all the caller's |
+| `GET /api/feed/bookmarks` | The caller's bookmarks, most recently saved first (posts they can no longer see are left out) |
+| `GET /api/feed/trending?workspace=&limit=` | `{tags: [{tag, posts, people}], computedAt, windowStart}`, from the last `feed.trending` run, counting only posts at labels the caller is cleared for |
+
+### Posts, reposts, comments, reactions and bookmarks (B-2701)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/feed/posts` `{workspaceId?, groupId?, body?, media?, label?}` | `feed:write`. In the current workspace when neither is named. Text or media are needed (`422`). Hashtags are extracted when published. `201` with the post, or `202` when held for review. Audited `feed.post.created` or `feed.post.held`; catalogue events `post.created`, `post.held` |
+| `GET /api/feed/posts/:id` | `feed:read`. One post (held and rejected ones for their author only) |
+| `PATCH /api/feed/posts/:id` `{body}` | The author. Checked again (a hold refuses); re-tags the post; `editedAt` is set. Audited `feed.post.updated`; event `post.updated` |
+| `DELETE /api/feed/posts/:id` | The author, a moderator of its group, or `feed:manage` in its workspace. `{id, state: deleted}`. Audited `feed.post.deleted`; event `post.deleted` |
+| `POST /api/feed/posts/:id/repost` `{body?}` | Reposts into the original's workspace or group (group members only). Plain (no text): once per person (`200` with the existing repost), and a plain repost of a plain repost reposts the original. With text it is a post of its own (guardrails, holds). `201`, `202` when held |
+| `DELETE /api/feed/posts/:id/repost` | Takes back the caller's plain repost of the post |
+| `GET /api/feed/posts/:id/comments?cursor=&limit=` | Oldest first: `{items: [{id, postId, parentId, author, body, state, createdAt}], nextCursor}`; threads are built from `parentId`. Comments by people in a block with the caller are left out |
+| `POST /api/feed/posts/:id/comments` `{body, parentId?}` | A comment, or a reply to a comment on the same post (`404` otherwise). **A comment on a deleted post is refused** (`409`, problem+json), as are reactions and reposts; a post waiting for review takes none (`409`). Group posts take comments from members. `201`. Audited `feed.comment.created` |
+| `DELETE /api/feed/comments/:id` | The comment's author, the post's author, a moderator of the group, or `feed:manage`. Audited `feed.comment.deleted` |
+| `PUT /api/feed/posts/:id/reactions/:kind` | `kind`: `like`, `celebrate`, `support`, `insightful`, `funny`. `201 {postId, kind, added: true}`, `200` with `added: false` when already there. Audited `feed.reaction.added` |
+| `DELETE /api/feed/posts/:id/reactions/:kind` | Removes it. Audited `feed.reaction.removed` |
+| `PUT /api/feed/posts/:id/bookmark` | Saves it (`201`; `200` when already saved). Audited `feed.bookmark.added` |
+| `DELETE /api/feed/posts/:id/bookmark` | Removes the bookmark, also of a post that is gone. Audited `feed.bookmark.removed` |
+
+Posts and comments are moderation objects (Sprint 26c): `feed-post` (a hidden post leaves every feed) and
+`feed-comment`. `POST /api/moderation/reports {type: feed-post, id}` by anyone who can read the post files a flag in
+its workspace's queue; a reviewer's hide and an upheld appeal work as for any object.
+
+### Trending and the weekly digest (B-2705)
+
+The `feed.trending` job (every `FEED_TRENDING_MINUTES`, per tenant) counts the hashtags of workspace posts published
+in the last `FEED_TRENDING_HOURS`, per workspace, tag and label (group posts are left out). The `feed.digest` job
+(checked hourly) writes, for each workspace with a digest profile, the digest of the last complete week (Monday 00:00
+UTC to Monday) once: its `FEED_DIGEST_TOP` workspace posts labelled up to `FEED_DIGEST_MAX_LABEL`, ranked by reactions
+\+ 2 × comments + 3 × reposts, and a summary the profile writes through the gateway (the answer passes the
+`model-output` checkpoint). A model failure keeps the ranked list (`state: failed`, `error`); a week without posts is
+`empty`. Members cleared for the digest's label are notified (`feed`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/feed/workspaces/:id/digests` | `feed:read`. `[{id, workspaceId, weekStart, weekEnd, label, state: ready \| empty \| failed, posts, createdAt}]`, newest first, within the caller's clearance |
+| `GET /api/feed/digests/:id` | `{id, workspaceId, weekStart, weekEnd, label, state, profile, error, summary, posts: [{id, score, reactions, comments, reposts, post}], createdAt}`; `post` is the post as the caller may see it now, or `null` |
+| `GET /api/feed/workspaces/:id/settings` | `feed:manage`. `{digestEnabled, digestProfile, effectiveProfile, updatedBy, updatedAt}`; `effectiveProfile` falls back to `FEED_DIGEST_PROFILE` |
+| `PUT /api/feed/workspaces/:id/settings` `{digestEnabled?, digestProfile?}` | `feed:manage`. A profile that does not resolve to a published profile is `422`. Audited `feed.settings.updated` |
+| `POST /api/feed/workspaces/:id/digest` `{}` | `feed:manage`. Queues a digest of the last seven days now: `202 {jobId, workspaceId}`; `409` without a digest profile. Audited `feed.digest.requested`; the job audits `feed.digest.created` |
+
+### Realtime (B-2703)
+
+The `feed` room kind (B-2101), joined with `room.join {kind: feed, id}` by `feed:read` holders:
+
+- `id` = a workspace the caller may act in: its feed. Events `feed.post.created`, `feed.post.updated`,
+  `feed.post.deleted` and `feed.comment.created` (`{postId, authorId, workspaceId, groupId, repostOf}` or `{postId,
+  commentId, parentId, authorId}`: ids only; the client fetches the post through the API). People below the post's
+  label and everyone in a block with the author are left out on every instance.
+- `id` = a group whose content the caller reads: its group feed, the same events.
+- `id` = the caller's own user id: their home room. A new post reaches the home rooms of the author's followers who
+  may read it and did not mute the author (`feed: home` in the data), up to `FEED_HOME_FANOUT_MAX` followers; the
+  others see it on their next load. A person's feed (`/api/feed/users/:id`) updates from the workspace rooms.

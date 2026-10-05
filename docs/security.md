@@ -451,14 +451,16 @@ filter, private `/tmp`, only the state directory writable.
   Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
   retention yet).
 - Event catalogue (1.4.0): an emitted event that does not match its schema is still delivered (counted and logged),
-  so a receiver must still validate what it gets. The `record`, `file`, `group`, `message` and `post` types are
-  reserved, not emitted.
+  so a receiver must still validate what it gets. The `post` types are reserved, not emitted (the `record`, `file`,
+  `group` and `message` types are emitted since their domains shipped).
 - Read-through cache (1.4.0): with Redis, cached values sit in Redis unsealed, so only ids and settings are cached,
   never tenant content (today: each tenant's list of enabled plugins). A Redis failure makes reads go to the database
   (`exprsn_cache_errors_total`); a cached value can outlive a change on an instance that missed the bus message by at
   most its tier's TTL.
-- Realtime rooms (1.4.0): the generic mechanism is in place, but no domain registers an authoriser yet, so every
-  `room.join` is refused until messaging, groups, feeds or channels ship.
+- Realtime rooms (1.4.0): groups (`group`) and messaging (`conversation`) register authorisers; a `room.join` for a
+  kind nobody registered (`feed`, `channel` until they ship) is refused. Client signals into a room (`room.signal`:
+  typing and receipts) are accepted only from a socket in that room, capped per socket (`ROOM_SIGNALS_PER_MINUTE`),
+  and relayed only as the domain decides.
 - Database leases (1.4.0, B-1704): the built-in engines hold an admin login to each target database (sealed, or a
   `vault:` reference read as the user who registered the engine), so whoever can act as that user's vault policy can
   make accounts there; registration needs `connections:manage` and a zone whose ceiling covers the engine. Only
@@ -570,6 +572,77 @@ filter, private `/tmp`, only the state directory writable.
   who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
   default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
   (no edit, no attachments, no threads); the workspace feed is B-27.
+- Customer-service channels (1.4.0, Sprint 28a, B-23). Customer sessions are public by design: the channel's public
+  key is not a secret, so anyone can start an anonymous session on a chat channel that allows them, limited per client
+  address (`CHANNELS_SESSIONS_PER_HOUR` and the channel's own `sessionsPerHour`) and per session
+  (`messagesPerMinute`); behind a proxy the address is only as good as `TRUST_PROXY`. Set the channel's label to what
+  anonymous people may receive (`public` or `internal`): the label limits the profile, agent and pool that answer, not
+  what a customer may type. Channels answer from the profile's or agent's prompt only: no knowledge retrieval, memory
+  or tools (an agent's tools never run for a customer). Session tokens are bearer credentials for one session (HMAC
+  with a key derived from `SESSION_SECRET`, `CHANNELS_SESSION_HOURS`); they cannot be revoked one by one except by
+  closing or hiding the session. Identity assertions are signed by the channel's site with the channel's identity
+  secret (shown once); a leaked secret lets anyone act as any customer of that channel until it is rotated, and
+  assertions carry no audience or nonce, so one is replayable until its `exp` (at most a day). Customers poll for
+  answers released by review; there is no customer socket. Transcripts, customer names, addresses and subjects are
+  sealed; the `customer_key` that threads email is an HMAC (with `SESSION_SECRET`) of the address, so rotating that
+  secret breaks threading for earlier customers (their next mail starts a new session). Email threading trusts
+  `In-Reply-To`/`References` only together with the sender address, which a spoofed `From` can still forge where the
+  receiving mail server does not enforce SPF/DKIM/DMARC; an attacker who knows a customer's address and one of the
+  thread's Message-IDs could add a message to that session (they still never see the replies, which go to the real
+  address). IMAP polls read the mailbox read-only and never mark or move messages; messages over 10 MB are skipped.
+  The imapflow adapter itself is exercised only against a fake fetcher in the unit tests, not a real IMAP server.
+  Mailgun inbound is form-encoded only (routes that forward attachments post multipart, which is refused with `415`);
+  Postmark, SendGrid and others use the generic shape through a relay. Bounces from IMAP are read from RFC 3464
+  delivery reports only (not from free-text bounce mails). Held replies use the flag queue: a reviewer who can see the
+  flag and holds `flags:review` can approve or reject it there; only `channels:review` holders can edit. Retention is
+  per channel on last activity; purged sessions' open review flags are closed as rejected directly (without a flag
+  event). Channel CSV exports are sealed in the blob store until downloaded by the person who asked, and not deleted
+  afterwards, like app exports.
+- Email one-time codes (1.4.0, Sprint 28a, B-1806). An email factor is weaker than TOTP or a passkey: whoever reads
+  the mailbox has the factor, and email travels through servers outside the deployment. It is offered because some
+  users have nothing else; roles that require a second factor accept it too (the MFA policy does not tell factors
+  apart yet). The address is the account's address at enrolment, kept sealed in the factor, so a later change of the
+  account's address does not move the factor (remove and enrol again). Codes are six digits, valid for
+  `MFA_EMAIL_CODE_MINUTES`, single use, bound to the pending session they were sent for, and their wrong guesses count
+  in the same lockout as TOTP codes. Step-up re-authentication does not take email codes yet.
+- Social relations (1.4.0, Sprint 28b, B-2606). Blocks, mutes, follows and lists are stored in the clear (user ids
+  only) and audited under `social.*`, so tenant auditors and `social:manage` holders can see who blocked or follows
+  whom (an admin's view of one user's relations is itself audited). A block is checked when a message, post or socket
+  event is raised: events already relayed before the block are not withdrawn, and a socket already in a room keeps
+  receiving other people's events there (only the blocked pair's events to each other are left out). The contact rule
+  applies when a conversation is started or a person added; a conversation that already exists keeps working until
+  one of the two blocks the other.
+- Messaging (1.4.0, Sprint 28b, B-26). Messages and conversation titles are sealed with the tenant key (the row id as
+  associated data); there is no end-to-end encryption, by design, so the server (and so a tenant's operators with the
+  key) can read them, which is what lets search, summaries and moderation work. The keyword index holds keyed hashes
+  of words (as knowledge does), which reveal which messages share a word to someone with database access but not the
+  word; vectors for semantic search (`MESSAGING_EMBED_MODEL`) are stored unsealed in the vector store, like knowledge
+  vectors, and are approximately invertible. A deleted message keeps its row as a tombstone (author, times, edit count)
+  and loses its body, attachments list, terms, vector and reactions; earlier sealed bodies of an edited message are
+  overwritten, not kept, and backups taken before the delete still hold them until they expire. Attachments are file
+  ids from the file store: a file must have passed its scan and lie in a workspace every member can read it through,
+  but trashing, re-labelling or taking down the file later is the file store's business (the message shows its state).
+  Direct conversations have no workspace: they need the two people to share one now, so losing that common workspace
+  hides the conversation from both. A member added to a group conversation reads from the moment they were added.
+  Receipts, typing and presence are not audited (they are not changes to content); presence is the time a socket last
+  joined or left the room, not a live status, and reflects only sockets in that conversation's room. Summaries and
+  digests send the visible messages (up to `MESSAGING_SUMMARY_MAX_MESSAGES`, each cut to 2,000 characters) to the
+  profile's model through the gateway and meter it like workflow model calls; they run in the request, not as a job.
+  Notifications name the sender (and that it was a group conversation), never the text or the title.
+- Workspace feed (1.4.0, Sprint 28c, B-27). Post bodies, comments and digest summaries are sealed; hashtags (lower
+  case), reactions, bookmarks, the trending counts and each digest's ranked post ids are stored in the clear so they
+  can be queried and counted. Realtime feed events carry ids only and are filtered when raised: people whose stored
+  clearance is below the post's label and everyone in a block with the author are left out, but someone who joined a
+  workspace room learns that a post id exists before fetching it (the fetch applies clearance, blocks and group
+  membership again). A block hides content from the moment it is made; events already relayed are not withdrawn, and
+  a digest summary written before a block may still name the blocked person (its post list is filtered at read). The
+  digest is written by a model from the posts' text: it is screened at `model-output`, but a summary can misstate a
+  post. Only posts wait for review: an edit or comment that a rule would hold is refused instead, and a quoted repost
+  is held like a post. Group posts' hashtags are left out of trending; a workspace's trending tags are visible to its
+  members at each label they are cleared for, so a tag used only in internal posts is visible to every internal
+  reader. The home fan-out uses stored workspace and group membership: tenant admins who read every workspace get
+  their followed people's posts on the next load rather than live. Comments are not threaded beyond `parentId` (no
+  depth limit) and send no notifications.
 - Identity gaps (1.4.0, Sprint 26a). Self-registration is closed unless a tenant admin opens it; its accounts get only
   the member, flag-reviewer or knowledge-curator roles. Sign-up answers say whether a username or address is taken
   (as most registration forms do); they are throttled per client address and per address. Email verification is off

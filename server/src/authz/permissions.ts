@@ -43,7 +43,20 @@ export const PERMISSIONS = [
   // 1.4.0 (Sprint 27c, B-25): groups and events in one's workspaces. read: see groups, their content and events;
   // write: create groups, join, post, RSVP and keep calendar feeds (what a member may do in a group is its group role);
   // manage: act as owner of every group in the workspaces one may act in.
-  'groups:read', 'groups:write', 'groups:manage'
+  'groups:read', 'groups:write', 'groups:manage',
+  // 1.4.0 (Sprint 28a, B-23): customer-service channels. manage: channels, their settings, secrets and retention;
+  // review: work customer sessions in one's workspaces (transcripts, held replies, replies as a person, CSV exports).
+  'channels:manage', 'channels:review',
+  // 1.4.0 (Sprint 28b, B-2606 with B-2702): social relations shared by messaging and the feed. read: one's own blocks,
+  // mutes, follows, followers, lists and contact rule; write: change them; manage: see any user's relations (audited).
+  'social:read', 'social:write', 'social:manage',
+  // 1.4.0 (Sprint 28b, B-26): person-to-person messaging. read: one's conversations and their messages; write: start
+  // conversations, send, edit, react and pin (what a member may do inside one is their conversation role).
+  'messages:read', 'messages:write',
+  // 1.4.0 (Sprint 28c, B-27): the workspace feed. read: the feeds, posts and comments of one's workspaces and groups,
+  // trending tags and digests; write: post, comment, react, repost and bookmark; manage: remove anyone's posts and
+  // comments in the workspaces one may act in, and set and run each workspace's digest.
+  'feed:read', 'feed:write', 'feed:manage'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -74,23 +87,29 @@ const MEMBER: readonly Permission[] = [
   // Sprint 27 (B-2202): the records of the apps in their workspaces.
   'records:read', 'records:write',
   // Sprint 27c (B-25): groups and events in their workspaces, with the rights of their group role.
-  'groups:read', 'groups:write'
+  'groups:read', 'groups:write',
+  // Sprint 28b (B-2606): their own blocks, mutes, follows, lists and contact rule.
+  'social:read', 'social:write',
+  // Sprint 28b (B-26): their own conversations.
+  'messages:read', 'messages:write',
+  // Sprint 28c (B-27): the feeds of their workspaces and groups.
+  'feed:read', 'feed:write'
 ];
 
 const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
-  { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage'], requiresMfa: true, grantableBy: ADMINS },
+  { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage', 'channels:review'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'tool-admin', name: 'Tool admin', description: 'Registry review, MCP servers and tool approvals.', permissions: ['tools:manage', 'agents:manage', 'mcp:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'knowledge-curator', name: 'Knowledge curator', description: 'Knowledge bases, sources, relabelling and workspace memory.', permissions: ['knowledge:read', 'knowledge:manage', 'prompts:manage'], requiresMfa: false, grantableBy: ADMINS },
   { id: 'ml-admin', name: 'ML admin', description: 'Training jobs, datasets and approvals for confidential data.', permissions: ['training:submit', 'training:manage', 'models:read'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'workflow-admin', name: 'Workflow admin', description: 'Publishes workflows and scripts as tools, and designs low-code apps.', permissions: ['workflows:manage', 'scripts:run', 'apps:design', 'records:read', 'records:write'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'connection-admin', name: 'Connection admin', description: 'Data connections, credentials and schema allow-lists.', permissions: ['connections:manage', 'secrets:read', 'secrets:write'], requiresMfa: true, grantableBy: ADMINS },
-  { id: 'flag-reviewer', name: 'Flag reviewer', description: 'Works the review queue within their clearance.', permissions: ['flags:review', 'moderation:review'], requiresMfa: false, grantableBy: ADMINS },
+  { id: 'flag-reviewer', name: 'Flag reviewer', description: 'Works the review queue within their clearance.', permissions: ['flags:review', 'moderation:review', 'channels:review'], requiresMfa: false, grantableBy: ADMINS },
   { id: 'member', name: 'Member', description: 'Chat, knowledge and tools within their clearance.', permissions: MEMBER, requiresMfa: false, grantableBy: [...ADMINS, 'identity-admin'] },
   { id: 'auditor', name: 'Auditor', description: 'Reads the audit chain and usage. Nothing else.', permissions: ['audit:read', 'usage:read'], requiresMfa: true, grantableBy: ADMINS }
 ];

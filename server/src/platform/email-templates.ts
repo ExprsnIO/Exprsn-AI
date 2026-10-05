@@ -101,6 +101,17 @@ const TEMPLATES = {
       'The link works once. If you were not expecting this, ignore this message.'
     ],
     required: ['product', 'actor', 'email', 'tenant', 'days', 'link']
+  },
+  // Sprint 28a (B-1806): an email one-time code (to sign in or to add the address as a second factor).
+  'mfa-code': {
+    subject: 'Your {{product}} one-time code',
+    body: [
+      'Hello {{name}},',
+      'Your one-time code for the account {{username}} on {{product}} is {{code}}. It is valid for {{minutes}} minutes and works once.',
+      '{{purpose}}',
+      'If you did not ask for a code, someone may know your password: change it, and review your sessions and second factors in Settings.'
+    ],
+    required: ['name', 'username', 'product', 'code', 'minutes', 'purpose']
   }
 } satisfies Record<string, Template>;
 
