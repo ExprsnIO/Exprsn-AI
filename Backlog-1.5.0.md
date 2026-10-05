@@ -29,7 +29,7 @@ the same policy pipeline.
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3701–B-3703, B-3602 | 76 | `032_dav`, `032c_memory` | Planned |
-| 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `032b_imports`, `033_pds_feeds` | Planned |
+| 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `033_pds`, `033b_feeds`, `033c_imports` | Planned |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
 | 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3606, B-3501 | 66 | `036_chains`, `036b_profiles` | Planned |
