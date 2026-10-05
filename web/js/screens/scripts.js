@@ -101,7 +101,7 @@
         + '<div class="muted" style="font-size:12px;margin-top:auto">Promotion path: draft (this workspace, versioned), tested (a clean run of the current version), promoted tool (tool-admin review in the Registry).</div></div>';
 
       let page;
-      if (!st.sel) page = '<div class="page scripts-page">' + UI.pagehead('Scripts', 'Sandboxed scripts and the promotion path to a registry tool', '') + UI.empty('No scripts in this workspace', 'Scripts run in a disposable container with no network. Start from a template or write one.', UI.btn('From template', { kind: 'primary', attrs: 'data-templates' })) + runtimesPanel() + statesStrip(this.states) + '</div>';
+      if (!st.sel) page = '<div class="page scripts-page">' + UI.pagehead('Scripts', 'Sandboxed scripts and the promotion path to a registry tool', '') + UI.empty('No scripts in this workspace', 'Scripts run in a disposable container with no network. Start from a template or write one.', UI.btn('From template', { kind: 'primary', attrs: 'data-templates' })) + runtimesPanel() + '</div>';
       else if (!s) page = '<div class="page">' + (st.script && st.script.error ? UI.problem('The script could not be loaded', st.script.error.message, st.script.error.problem && st.script.error.problem.trace_id) : UI.notice('Loading…', 'info')) + '</div>';
       else {
         const stage = s.status === 'draft' ? 0 : s.status === 'tested' || s.status === 'in_review' ? 1 : 2;
@@ -141,7 +141,7 @@
           + '<div class="scripts-side">' + UI.tabs([{ id: 'checks', label: 'Checks' }, { id: 'dry', label: 'Dry run' }, { id: 'output', label: 'Output' }], st.tab) + side + '</div></div>'
           + UI.panel('Runs', UI.table(['Run', 'Version', 'Result', 'Duration', 'Started'], (st.runs || []).map((r) => ({ cells: ['<span class="mono">' + esc(shortId(r.id)) + '</span>', 'v' + r.version, runPill(r.state, r.exitCode), esc(secs(r.durationMs)), esc(when(r.createdAt))], attrs: 'data-runrow="' + esc(r.id) + '"', selected: run && run.id === r.id })), { cls: 'bare', minWidth: '0', emptyTitle: 'No runs yet', emptyText: 'Each run is a job in a fresh sandbox.' }))
           + runtimesPanel()
-          + statesStrip(this.states) + '</div>';
+          + '</div>';
       }
 
       root.innerHTML = '<style>'
@@ -157,7 +157,6 @@
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-langseg] [data-seg]', (e, t) => { st.filter = t.dataset.seg; ctx.rerender(); });
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-templates]', () => templateCatalog());
       ctx.on('click', '[data-new]', () => newScript(null));
       ctx.on('click', '[data-goreg]', (e) => { e.preventDefault(); if (s && s.registry) ctx.navigate('registry', { entry: s.registry.id }); });
@@ -188,7 +187,6 @@
       if (st.openTemplates) { st.openTemplates = false; setTimeout(templateCatalog, 30); }
       if (st.openTemplate != null) { const i = st.openTemplate; st.openTemplate = null; setTimeout(() => newScript(TEMPLATES[i]), 30); }
 
-      function statesStrip(states) { return '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(states) + '</div>'; }
       function runtimesPanel() {
         return UI.panel('Runtimes', UI.table(['Runtime', 'Image', 'Checks before any run'], (rt.languages || []).map((l) => [esc(LANG[l] || l), '<span class="mono">' + esc((rt.images && rt.images[l]) || (l === 'python' ? 'SCRIPT_IMAGE_PYTHON' : 'SCRIPT_IMAGE_NODE')) + '</span>', 'script guardrail, blocked modules, secrets scan']), { clickable: false, cls: 'bare', minWidth: '0' })
           + UI.kv([['Sandbox', esc(rt.runner === 'none' ? 'none configured: runs are refused' : rt.runner) + ' ' + UI.pill(rt.available ? 'answering' : 'not answering', rt.available ? 'ok' : 'danger')], ['Default limits', rt.defaults ? esc(rt.defaults.timeoutSeconds + ' s, ' + rt.defaults.memoryMb + ' MB, ' + rt.defaults.cpus + ' CPU, ' + rt.defaults.pids + ' processes, ' + rt.defaults.outputKb + ' KB output') : '']], 2)

@@ -307,12 +307,6 @@ table.dt .actions{white-space:nowrap}
 .spark{display:inline-flex;align-items:flex-end;gap:2px;height:22px}
 .spark i{display:block;width:4px;background:var(--meter);border-radius:1px}
 .spark i.hi{background:var(--accent)}
-.state-strip{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
-.state-card{display:flex;flex-direction:column;gap:6px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;cursor:pointer;text-align:left;font-family:inherit}
-.state-card:hover{border-color:var(--muted)}
-.state-card .st{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
-.state-card .st.danger{color:var(--danger-fg)}.state-card .st.warn{color:var(--warn-fg)}.state-card .st.ok{color:var(--ok-fg)}.state-card .st.info{color:var(--info-fg)}.state-card .st.neutral{color:var(--fg2)}
-.state-card .sd{font-size:13px;color:var(--fg2)}
 
 /* ---------- Overlays ---------- */
 .overlay{position:fixed;inset:0;background:rgba(26,26,25,.35);display:flex;align-items:flex-start;justify-content:center;padding:80px 16px 16px;z-index:50;overflow:auto}

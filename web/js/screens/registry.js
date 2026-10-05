@@ -166,7 +166,7 @@
         + (st.tab === 'review' ? UI.notice('Entries wait here after their automated checks (schema, required fields, description, side effect, secrets scan). A tool admin other than the author approves and picks the publish scope.', 'info') : '')
         + table
         + (agentShown ? agentCard(agentShown) : '')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + inspector;
 
       // ---- events ----
@@ -174,7 +174,6 @@
       ctx.on('click', '[data-statusseg] [data-seg]', (e, t) => { st.filter = t.dataset.seg; ctx.rerender(); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', 'tr.row[data-entry]', (e, t) => { st.sel = t.dataset.entry; st.harness = null; st.harnessArgs = null; st.problem = null; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-harness-open]', () => { st.harnessOpen = true; ctx.rerender(); });
       ctx.on('click', '[data-harness-close]', () => { st.harnessOpen = false; st.harness = null; ctx.rerender(); });
       ctx.on('input', '[data-args]', (e, t) => { st.harnessArgs = { id: sel.id, text: t.value }; });

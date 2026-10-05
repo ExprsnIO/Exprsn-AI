@@ -111,8 +111,9 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   sign-in and all 26 signed-in screens, in Standard and Enhanced, light and dark, against the e2e server's seeded data.
   No violations remain; the last findings fixed were low-contrast helper text on Classifiers, an unfocusable scrolling
   YAML block on Profiles, and toggles that picked up the browser's grey button background in dark mode.
-- **In CI** since 1.2.0 (B-1101, B-1102): the Playwright suite checks every screen, each of its design states (the
-  "States" popover, which also opens the drawers and dialogs the boards describe), the sign-in screen and a streaming
+- **In CI** since 1.2.0 (B-1101, B-1102): the Playwright suite checks every screen, each of its design states (applied
+  through `App.applyState`, which also opens the drawers and dialogs the boards describe; the console no longer shows a
+  control for them), the sign-in screen and a streaming
   chat answer, in light and dark, and fails on any finding (`e2e/tests/y-accessibility.spec.ts`). It uses an in-page
   checker (`e2e/tests/support/a11y.ts`) modelled on axe-core's WCAG A/AA rules: contrast with alpha and opacity, names,
   roles and ARIA references, required parents and children, one tab panel per tab list, aria-hidden focus, scrolling

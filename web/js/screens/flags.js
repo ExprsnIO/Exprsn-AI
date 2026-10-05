@@ -138,7 +138,7 @@
         + '<div class="flags-list">' + list.map((x) => UI.listItem(esc(titleOf(x)), esc(x.kind === 'report' && x.note ? x.note.replace(/^Reporter chose /, '').split('.')[0] + ', ' + timeText(x) : cpText(x.checkpoint) + ', ' + timeText(x)), { active: x.ref === st.sel && !st.forceEmpty, attrs: 'data-flag="' + esc(x.ref) + '"', right: x.restricted ? UI.pill('reassign', 'info') : UI.pill(x.severity, x.severity === 'high' ? 'danger' : x.severity === 'medium' ? 'warn' : '') })).join('') + (list.length ? '' : st.items.length ? UI.empty('No flags match', 'Clear the severity filter to see the rest of the queue.') : '') + '</div>'
         + (st.other ? '<div class="muted" style="font-size:12px;padding:4px 8px">' + st.other + ' more in workspaces you also review. <a href="#" data-other>Show</a></div>' : '') + '</div>'
         + '<div class="page">' + (st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-demook' })) : '') + main
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---- keyboard shortcuts while this screen is shown ----
       root.setAttribute('tabindex', '-1');
@@ -180,7 +180,6 @@
       ctx.on('click', '[data-goaudit]', (e) => { e.preventDefault(); ctx.navigate('usage-audit'); });
       ctx.on('click', '[data-other]', (e) => { e.preventDefault(); ctx.toast('Queues of other workspaces open in their own workspace context. Switch workspace from the sidebar.'); });
       ctx.on('click', '[data-reload]', () => { st.forceEmpty = false; st.breached = false; st.lastDecision = null; st.loaded = false; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 

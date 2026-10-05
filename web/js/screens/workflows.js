@@ -247,9 +247,8 @@
       if (!st.wfId) {
         root.innerHTML = '<div class="page">' + UI.pagehead('Workflows', 'Graphs of model, transform, check and approval steps, run durably')
           + UI.empty('No workflows in this workspace', manage ? 'Create one to start from a manual trigger.' : 'A workflow admin creates and publishes them; you can then run them here.', manage ? UI.btn('New workflow', { kind: 'primary', icon: 'plus', attrs: 'data-new' }) : '')
-          + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+          + '</div>';
         ctx.on('click', '[data-new]', newWorkflow);
-        ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
         return;
       }
       if ((!st.wf || st.wf.id !== st.wfId) && st.wfLoading !== st.wfId && !st.wfError) loadWorkflow(st.wfId);
@@ -467,7 +466,7 @@
         + ((wf.tools || []).length ? '<span class="muted" style="font-size:12px">As a tool: ' + wf.tools.map((x) => (App.can('tools:manage') ? '<a href="#" data-gotool="' + esc(x.id) + '">' + esc(x.name) + ' ' + esc(x.version) + '</a>' : esc(x.name) + ' ' + esc(x.version)) + ' ' + UI.pill(x.status.replace('_', ' '), x.status === 'published' ? 'ok' : x.status === 'in_review' ? 'info' : '')).join(', ') + '</span>' : '')
         + '<span class="muted right" style="font-size:12px">' + nodes.length + ' steps, ' + graph.edges.length + ' edges' + (viewing ? '' : blocking ? ', <span style="color:var(--danger-fg)">' + blocking + ' problem' + (blocking === 1 ? '' : 's') + '</span>' : v.warnings.length ? ', ' + v.warnings.length + ' warning' + (v.warnings.length === 1 ? '' : 's') : ', valid') + '</span></div>'
         + UI.panel('Run history', UI.table(['Run', 'Trigger', 'Started', 'Duration', 'Label', 'State'], runs.map((r) => ({ cells: ['<span class="mono">' + esc(shortId(r.id)) + '</span>', esc(r.mode === 'dry' ? 'dry run, ' + (r.createdByName || '') : r.trigger === 'replay' ? 'replay of ' + shortId(r.replayOf) : r.trigger + ', ' + (r.createdByName || '')), esc(when(r.startedAt || r.createdAt)), r.startedAt ? dur((r.finishedAt || Date.now()) - r.startedAt) : '—', UI.label(r.label, { sm: true }), runPill(runState(r))], attrs: 'data-run="' + esc(r.id) + '"', selected: st.runId === r.id })), { cls: 'bare', minWidth: '0', emptyTitle: 'No runs yet', emptyText: wf.publishedVersion ? 'Start a run of the published version, or dry run the draft.' : 'Dry run the draft, or publish it and start a run.' }), { actions: UI.btn('Open in Runs', { size: 'sm', kind: 'ghost', attrs: 'data-goruns' }), cls: 'pad0' }).replace('class="panel pad0"', 'class="panel" style="padding:14px"')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector w300 wf-insp" aria-label="Inspector">' + insp + '</aside>';
 
       // ---------- editing ----------
@@ -789,7 +788,6 @@
         if (e.key === 'Escape') { st.connectFrom = null; ctx.rerender(); refocus(); return; }
         if ((e.key === 'Delete' || e.key === 'Backspace') && editable) { e.preventDefault(); removeSel(); }
       });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.autoRun) { st.autoRun = false; if (manage) setTimeout(() => openRunModal(true), 50); }
     }
   });

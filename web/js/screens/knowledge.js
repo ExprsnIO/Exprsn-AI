@@ -165,7 +165,6 @@
           + (quarantinedDocs.length ? UI.notice('<b>' + esc(quarantinedDocs[0].name) + '</b>' + (quarantinedDocs.length > 1 ? ' and ' + (quarantinedDocs.length - 1) + ' more are' : ' is') + ' held in quarantine until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn', '<a href="#" data-doc="' + esc(quarantinedDocs[0].id) + '">Details</a>') : '')
           + UI.tabs([{ id: 'sources', label: 'Sources' }, { id: 'documents', label: 'Documents' }, { id: 'index', label: 'Index' }, { id: 'access', label: 'Access' }, { id: 'test', label: 'Test search' }], st.tab) : UI.pagehead('Knowledge', 'Knowledge bases, sources, documents and labels', ''))
         + body
-        + '<div style="margin-top:6px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div>';
 
       // ---- events ----
@@ -177,7 +176,7 @@
       ctx.on('click', '[data-dismissnote]', () => { st.demoNote = null; ctx.rerender(); });
       ctx.on('click', '[data-dismissfail]', () => { st.failedOpen = false; ctx.rerender(); });
       ctx.on('click', '[data-copy]', (e, t) => { if (navigator.clipboard) navigator.clipboard.writeText(t.dataset.copy).then(() => toast('Trace ID copied.'), () => toast('Copy failed.', 'warn')); });
-      if (!kb) { ctx.on('click', '[data-newkb]', () => newKb()); ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state)); if (st.openAdd) st.openAdd = false; return; }
+      if (!kb) { ctx.on('click', '[data-newkb]', () => newKb()); if (st.openAdd) st.openAdd = false; return; }
 
       const search = async () => {
         const i = ctx.$('#kb-q'); if (i) st.query = i.value;
@@ -387,7 +386,6 @@
           });
         } });
       });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.openAdd) { st.openAdd = false; if (manage) setTimeout(openAdd, 30); }
     }
   });

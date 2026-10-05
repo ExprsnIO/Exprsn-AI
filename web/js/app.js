@@ -125,7 +125,6 @@
     spark(values, hiIndex) { const m = Math.max.apply(null, values) || 1; return '<span class="spark" aria-hidden="true">' + values.map((v, i) => '<i style="height:' + Math.max(2, Math.round((v / m) * 22)) + 'px" class="' + (i === hiIndex ? 'hi' : '') + '"></i>').join('') + '</span>'; },
     timeline(items) { return '<div class="timeline">' + items.map((it, i) => '<div class="tl"><div class="dotcol"><i class="' + (it.tone || '') + '"></i>' + (i < items.length - 1 ? '<b></b>' : '') + '</div><div class="tbody"><div style="font-weight:600">' + it.title + '</div>' + (it.text ? '<div class="fg2" style="font-size:12px">' + it.text + '</div>' : '') + (it.meta ? '<div class="muted" style="font-size:12px">' + it.meta + '</div>' : '') + '</div></div>').join('') + '</div>'; },
     listItem(title, sub, opts) { opts = opts || {}; return '<button type="button" class="listlink' + (opts.active ? ' active' : '') + '" ' + (opts.attrs || '') + '><span><span class="t">' + title + '</span>' + (sub ? '<span class="s">' + sub + '</span>' : '') + '</span>' + (opts.right || '') + '</button>'; },
-    states(list) { return '<div class="state-strip">' + list.map((s, i) => '<button type="button" class="state-card" data-state="' + i + '"><div class="st ' + (s.tone || 'neutral') + '">' + esc(s.title) + '</div><div class="sd">' + esc(s.text) + '</div></button>').join('') + '</div>'; }
   };
 
   // ---------- Data shared across screens ----------
@@ -466,8 +465,8 @@
         ['Models and training', ['models', 'profiles', 'pools', 'training']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
         ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit']], ['Platform administration', ['tenants', 'directories', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
-      const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s && App.canOpen(id) ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + ((s.states || []).length ? ' · ' + s.states.length + ' states' : '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
-      App.modal({ cls: 'wide', title: 'Screen map', body: '<p class="fg2" style="margin:0">Every screen you can open. Screens marked as prototype data still show the design boards\' example content; the <b>States</b> button shows the states each board lists.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
+      const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s && App.canOpen(id) ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
+      App.modal({ cls: 'wide', title: 'Screen map', body: '<p class="fg2" style="margin:0">Every screen you can open. Screens marked as prototype data still show the design boards\' example content.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
     },
 
     // ----- popovers -----
@@ -507,7 +506,7 @@
       // Re-rendering the header replaces its buttons; keep keyboard focus on the one that had it (theme, bell).
       const had = document.activeElement && $('#header').contains(document.activeElement) ? document.activeElement.id : null;
       $('#header').innerHTML = '<div class="hstack" style="min-width:0">' + UI.iconbtn('menu', 'Menu', { cls: 'menubtn', attrs: 'id="menu-btn" aria-controls="sidebar" aria-expanded="' + (state.navOpen ? 'true' : 'false') + '"' }) + '<nav class="crumbs" aria-label="Breadcrumb">' + crumb.filter(Boolean).map((c, i, a) => (i < a.length - 1 ? '<span class="c1">' + esc(c) + '</span><span class="sep" aria-hidden="true">/</span>' : '<span class="c2" aria-current="page">' + esc(c) + '</span>')).join('') + (lbl ? UI.label(lbl) : '') + '</nav></div>'
-        + '<div class="htools relative">' + ((s.states || []).length ? UI.btn('States', { size: 'sm', icon: 'grid', attrs: 'id="states-btn" title="Design states listed on this board" aria-haspopup="dialog" aria-expanded="false"' }) : '') + '<button type="button" class="cmdbtn" id="cmd-btn" aria-label="Search or run a command" aria-keyshortcuts="Control+K" aria-haspopup="dialog"><span>Search or run a command</span><kbd aria-hidden="true">Ctrl K</kbd></button>' + UI.iconbtn(App.isDark() ? 'sun' : 'moon', App.isDark() ? 'Switch to light theme' : 'Switch to dark theme', { attrs: 'id="theme-btn"' }) + UI.iconbtn('bell', DATA.notifications.length ? 'Notifications, ' + DATA.notifications.length + ' unread' : 'Notifications', { attrs: 'id="bell-btn" aria-haspopup="dialog" aria-expanded="false"', dot: DATA.notifications.length > 0 }) + '</div>';
+        + '<div class="htools relative">' + '<button type="button" class="cmdbtn" id="cmd-btn" aria-label="Search or run a command" aria-keyshortcuts="Control+K" aria-haspopup="dialog"><span>Search or run a command</span><kbd aria-hidden="true">Ctrl K</kbd></button>' + UI.iconbtn(App.isDark() ? 'sun' : 'moon', App.isDark() ? 'Switch to light theme' : 'Switch to dark theme', { attrs: 'id="theme-btn"' }) + UI.iconbtn('bell', DATA.notifications.length ? 'Notifications, ' + DATA.notifications.length + ' unread' : 'Notifications', { attrs: 'id="bell-btn" aria-haspopup="dialog" aria-expanded="false"', dot: DATA.notifications.length > 0 }) + '</div>';
       if (had) { const f = document.getElementById(had); if (f) f.focus(); }
       $('#cmd-btn').addEventListener('click', () => App.palette());
       $('#theme-btn').addEventListener('click', () => App.setTheme(App.isDark() ? 'light' : 'dark'));
@@ -520,14 +519,6 @@
         const markRead = (ids) => api('POST', '/api/me/notifications/read', ids ? { ids } : {}).catch((err) => App.fail(err, 'Could not mark read'));
         on(pop, 'click', '[data-go]', (ev, t) => { pop.remove(); DATA.notifications = DATA.notifications.filter((n) => n.id !== t.dataset.nid); markRead([t.dataset.nid]); App.renderHeader(); if (t.dataset.go && App.canOpen(t.dataset.go)) App.navigate(t.dataset.go); });
         on(pop, 'click', '[data-read]', () => { pop.remove(); DATA.notifications = []; markRead(); App.renderHeader(); });
-      });
-      const sb = $('#states-btn'); if (sb) sb.addEventListener('click', (e) => {
-        e.stopPropagation(); const host = $('#header .htools'); const ex = $('.popover', host); if (ex) { App.closePopovers(); return; }
-        const trigger = e.currentTarget; const pop = document.createElement('div'); pop.className = 'popover';
-        pop.innerHTML = '<div class="ph">States to design from this page</div>' + s.states.map((st, i) => '<button type="button" class="pi" data-state="' + i + '"><span class="t" style="color:var(--' + ({ danger: 'danger-fg', warn: 'warn-fg', ok: 'ok-fg', info: 'info-fg' }[st.tone] || 'fg') + ')">' + esc(st.title) + '</span><span class="s">' + esc(st.text) + '</span></button>').join('') + '<div class="divider"></div><button type="button" class="pi" data-reset><span class="t">Reset to the board\'s default state</span></button>';
-        App.openPopover(trigger, host, pop);
-        on(pop, 'click', '[data-state]', (ev, t) => { pop.remove(); App.applyState(+t.dataset.state); });
-        on(pop, 'click', '[data-reset]', () => { pop.remove(); state.screenState[s.id] = {}; App.render(); App.toast('Reset'); });
       });
     },
     applyState(i) {
@@ -717,7 +708,7 @@
     const sk = e.target.closest && e.target.closest('#skip-link');
     if (sk) { e.preventDefault(); const m = $('#main'); if (m) { const h = m.querySelector('h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus(); } else m.focus(); } }
   });
-  document.addEventListener('click', (e) => { if (!e.target.closest('.popover') && !e.target.closest('#tenant-btn') && !e.target.closest('#bell-btn') && !e.target.closest('#states-btn')) App.closePopovers(); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.popover') && !e.target.closest('#tenant-btn') && !e.target.closest('#bell-btn')) App.closePopovers(); });
   // generic behaviours: toggles, tabs, segs, chips
   document.addEventListener('click', (e) => {
     const tg = e.target.closest('.toggle'); if (tg && !tg.dataset.manual) { tg.classList.toggle('on'); tg.setAttribute('aria-checked', tg.classList.contains('on') ? 'true' : 'false'); }

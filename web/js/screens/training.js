@@ -232,7 +232,6 @@
         + UI.pagehead('Training', 'TypeScript orchestrates and governs, Python GPU workers train, Ollama serves only the approved, converted result', UI.btn('Schedule recurring', { attrs: 'data-recurring', disabled: !manage }) + UI.btn('Submit job', { kind: 'primary', attrs: 'data-newjob' }))
         + UI.tabs([{ id: 'jobs', label: 'Jobs', count: jobs.length }, { id: 'datasets', label: 'Datasets', count: datasets.length }, { id: 'schedules', label: 'Schedules' }, { id: 'evals', label: 'Evals', count: evals.length }], st.tab)
         + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div>' + inspector;
 
       // ---- events ----
@@ -242,7 +241,6 @@
       ctx.on('click', '[data-segs] [data-seg]', (e, t) => { st.stateFilter = t.dataset.seg; ctx.rerender(); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', 'tr.row[data-job]', (e, t) => { st.selected = t.dataset.job; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-model]', (e, t) => { e.preventDefault(); ctx.navigate('models', { model: t.dataset.model }); });
       ctx.on('click', '[data-clear]', (e, t) => { st[t.dataset.clear] = true; ctx.rerender(); });

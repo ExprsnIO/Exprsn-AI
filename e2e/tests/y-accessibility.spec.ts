@@ -3,8 +3,8 @@ import { expectAccessible } from './support/a11y';
 import { expectAxeClean } from './support/axe';
 import { SCREENS } from './support/sweep';
 
-// B-1101: the in-page WCAG A/AA check on every screen, on each of its design states (the States popover, which also
-// opens the screens' drawers and dialogs), and on a streaming chat answer, in light and dark. Runs after the primary
+// B-1101: the in-page WCAG A/AA check on every screen, on each of its design states (applied through
+// App.applyState, which also opens the screens' drawers and dialogs; the console has no visible control for them), and on a streaming chat answer, in light and dark. Runs after the primary
 // specs (file order), so screens hold data.
 //
 // B-1506: axe-core runs on the same page loads beside the in-page checker, in Standard (WCAG 2.2 A/AA) and then in

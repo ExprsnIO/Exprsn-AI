@@ -246,7 +246,7 @@
         + '<div class="hstack"><div class="eyebrow">' + esc(cpLabel) + ' checkpoint</div><span class="muted" style="font-size:12px">' + UI.pill(shown ? 'v' + shown.version + ' ' + shown.status : 'empty') + '</span><span class="right muted" style="font-size:12px">Precedence: platform baseline, tenant, workspace, agent. The most restrictive result wins.</span></div>'
         + UI.table(cols, rows, { minWidth: '760px', emptyTitle: 'No rules at this checkpoint', emptyText: 'Add a rule or pick another checkpoint.' })
         + editor + replay
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       if (st.focusTest) { st.focusTest = false; const p = ctx.$('[data-testpane]'); if (p) { p.scrollIntoView({ block: 'center' }); p.style.outline = '2px solid var(--accent)'; setTimeout(() => { p.style.outline = ''; }, 1600); } ctx.toast('Live test runs the draft rule on the sample. Edit the sample to try your own text.'); }
 
@@ -391,7 +391,6 @@
       ctx.on('click', '[data-goflags]', (e) => { e.preventDefault(); ctx.navigate('flags'); });
       ctx.on('click', '[data-gopools]', (e) => { e.preventDefault(); ctx.navigate('pools'); });
       ctx.on('click', '[data-demook]', () => { st.demoNote = null; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 })();

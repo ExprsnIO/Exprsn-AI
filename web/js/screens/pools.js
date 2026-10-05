@@ -259,11 +259,9 @@
           + '<span class="right">Live from the gateway, which polls each instance\'s /api/version, /api/ps and /api/tags. Updated ' + esc(clock(st.at)) + '.</span></div>' : '')
         + (st.refreshError ? UI.notice('The last refresh failed: ' + esc(st.refreshError.message) + '. Showing the previous snapshot.', 'warn', UI.btn('Retry', { size: 'sm', attrs: 'data-reload' })) : '')
         + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
         + '</div>';
 
       // ---------- events ----------
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-reload]', reload);
       ctx.on('click', '[data-clearnote]', (e, t) => { delete st.notes[t.dataset.clearnote]; ctx.rerender(); });

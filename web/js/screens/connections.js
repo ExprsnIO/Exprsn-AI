@@ -185,13 +185,12 @@
           + UI.notice('Read-only is enforced by the database account and a read-only transaction. The query parser is advisory.', 'ok')
           + UI.tabs([{ id: 'settings', label: 'Settings' }, { id: 'allow', label: 'Schema allow-list' }, { id: 'sync', label: 'Sync', count: conn.syncs.length }, { id: 'browser', label: 'Browser' }], st.tab)
           + (st.tab === 'settings' ? settings() : st.tab === 'allow' ? allow() : st.tab === 'sync' ? sync() : browser()))
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---- events ----
       ctx.on('click', '[data-register]', () => openRegister());
       ctx.on('click', '[data-conn]', (e, t) => { st.conn = t.dataset.conn; st.editing = false; ctx.rerender(); });
       ctx.on('click', '[data-dismissnote]', () => { st.demoNote = null; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (!conn) return;
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
       ctx.on('click', '[data-obj]', (e, t) => { st.treeOpen = t.dataset.obj; st.sqlBy[conn.id] = isSql(conn) ? 'SELECT *\nFROM ' + t.dataset.obj + '\nLIMIT ' + conn.rowLimit + ';' : 'POST /' + t.dataset.obj + '/_search\n{\n  "size": ' + conn.rowLimit + ',\n  "query": { "match_all": {} }\n}'; delete st.results[conn.id]; st.editing = false; st.tab = 'browser'; ctx.rerender(); });

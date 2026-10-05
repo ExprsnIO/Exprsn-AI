@@ -175,7 +175,7 @@
         + '<div class="page">' + UI.pagehead('Images', 'Jobs run one per GPU on the image pool and never evict chat models')
         + (st.honest ? UI.notice('<b>Honest waiting.</b> Each card shows its queue position or the real denoising step reported by the worker. There is no spinner and no invented percentage.', 'info') : '')
         + (cards.length ? '<div class="images-grid">' + cards.map(card).join('') + '</div>' : UI.empty('No images yet', provider ? 'Write a prompt and generate. Each image is one job on ' + esc(provider.label) + '.' : 'An image worker has to be configured first.'))
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector w300" aria-label="Inspector"><div class="eyebrow">Selected image</div>' + insp
         + (sel ? '<div class="divider"></div><div class="eyebrow">Prompt</div><div class="fg2" style="font-size:12px">' + esc(sel.prompt || '') + '</div>' + UI.kv([['Size', esc(sel.width + ' x ' + sel.height)], ['Provider', esc(backendLabel(sel.backend).split(',')[0])]], 2) : '') + '</aside>';
 
@@ -262,7 +262,6 @@
           } });
       };
       ctx.on('click', '[data-download]', openDownload);
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.openDownload) { st.openDownload = false; setTimeout(openDownload, 50); }
     }
   });
