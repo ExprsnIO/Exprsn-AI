@@ -1,0 +1,16 @@
+// Generates repo.json with the reference implementation (npm i @atproto/repo@0.11.0 @atproto/crypto; node gen-repo.mjs).
+import { Repo, MemoryBlockstore, WriteOpAction, getFullRepo } from '@atproto/repo';
+import { Secp256k1Keypair } from '@atproto/crypto';
+import * as ui8 from 'uint8arrays';
+const kp = await Secp256k1Keypair.import('9085d2bef69286a6cbb51623c8fa258629945cd55ca705cc4e66700396894e0c');
+const did = 'did:plc:hnh3tcejlpahnoxb7ieqdpmu';
+const storage = new MemoryBlockstore();
+let repo = await Repo.create(storage, did, kp, [
+  { action: WriteOpAction.Create, collection: 'app.bsky.feed.post', rkey: '3jzfcijpj2z2a', record: { $type: 'app.bsky.feed.post', text: 'hello', createdAt: '2026-10-05T00:00:00.000Z' } },
+  { action: WriteOpAction.Create, collection: 'app.bsky.feed.post', rkey: '3jzfcijpj2z2b', record: { $type: 'app.bsky.feed.post', text: 'world', createdAt: '2026-10-05T00:00:01.000Z' } },
+  { action: WriteOpAction.Create, collection: 'app.bsky.actor.profile', rkey: 'self', record: { $type: 'app.bsky.actor.profile', displayName: 'Alice' } },
+]);
+const chunks = [];
+for await (const c of getFullRepo(storage, repo.cid)) chunks.push(c);
+const car = Buffer.concat(chunks);
+console.log(JSON.stringify({ did, commit: repo.cid.toString(), data: repo.commit.data.toString(), rev: repo.commit.rev, sig: Buffer.from(repo.commit.sig).toString('hex'), car: car.toString('base64'), pub: kp.did() }));
