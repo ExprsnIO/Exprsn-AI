@@ -68,6 +68,11 @@ interface Block {
 
 class Retry extends Error {}
 
+const isDeadlock = (err: unknown): boolean => {
+  const e = err as { code?: unknown; errno?: unknown } | null;
+  return !!e && (e.code === 'ER_LOCK_DEADLOCK' || e.errno === 1213 || e.code === '40P01' || e.code === 'SQLITE_BUSY');
+};
+
 export class RepoStore {
   private limiter: Limiter | null = null;
 
@@ -198,15 +203,32 @@ export class RepoStore {
     if (writes.length > MAX_WRITES) throw new XrpcError(400, 'InvalidRequest', `Too many writes. Max: ${MAX_WRITES}`);
     const l = await this.writeLimiter().consume(account.id, writes.length);
     if (!l.allowed) throw new XrpcError(429, 'RateLimitExceeded', 'Too many writes to this repo; slow down.', { 'Retry-After': String(Math.max(1, Math.ceil(l.resetMs / 1000))) });
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await this.commitOnce(by, account.id, writes, o);
-      } catch (err) {
-        if (err instanceof Retry && attempt < 4) continue;
-        if (err instanceof Retry) throw new XrpcError(409, 'Conflict', 'The repo changed while this commit was made; try again.');
-        throw err;
+    // One commit at a time per repo on this instance; across instances the compare-and-swap on rev decides.
+    return this.serially(account.id, async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await this.commitOnce(by, account.id, writes, o);
+        } catch (err) {
+          // A lost compare-and-swap, or a deadlock the database broke (MySQL 1213, PostgreSQL 40P01): start again.
+          if ((err instanceof Retry || isDeadlock(err)) && attempt < 6) continue;
+          if (err instanceof Retry) throw new XrpcError(409, 'Conflict', 'The repo changed while this commit was made; try again.');
+          throw err;
+        }
       }
-    }
+    });
+  }
+
+  private readonly queues = new Map<string, Promise<unknown>>();
+
+  private serially<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.queues.get(key) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.catch(() => undefined);
+    this.queues.set(key, tail);
+    void tail.then(() => {
+      if (this.queues.get(key) === tail) this.queues.delete(key);
+    });
+    return run;
   }
 
   private async commitOnce(by: PdsActor, accountId: string, writes: WriteInput[], o: { validate?: boolean | undefined; swapCommit?: string | undefined }) {
@@ -250,8 +272,9 @@ export class RepoStore {
     await this.db.transaction(async (trx) => {
       const swapped = await trx('pds_accounts').where({ id: a.id, rev: a.rev }).update({ commit_cid: signed.cid.toString(), rev, data_cid: tree.root.cid.toString(), updated_at: now });
       if (!swapped) throw new Retry();
-      const touched = ops.map((op) => sha256hex(op.key));
-      await trx('pds_records').where({ account_id: a.id }).whereIn('path_hash', touched).delete();
+      // Only rows that exist are deleted (a delete that matches nothing takes gap locks on MySQL).
+      const replaced = ops.filter((op) => op.prev).map((op) => sha256hex(op.key));
+      if (replaced.length) await trx('pds_records').where({ account_id: a.id }).whereIn('path_hash', replaced).delete();
       const live = ops.filter((op) => op.action !== 'delete');
       if (live.length) {
         await trx('pds_records').insert(live.map((op) => ({ account_id: a.id, path_hash: sha256hex(op.key), coll_hash: sha256hex(op.collection), collection: op.collection, rkey: op.rkey, cid: op.cid!.toString(), height: keyHeight(op.key), rev, created_at: now, updated_at: now })));
@@ -262,7 +285,7 @@ export class RepoStore {
       // A record block goes when no record (under any key) still has its CID.
       for (const op of ops) if (op.prev && op.prev !== op.cid?.toString() && !(await trx('pds_records').where({ account_id: a.id, cid: op.prev }).first('cid'))) gone.push(op.prev);
       for (let i = 0; i < gone.length; i += 200) await trx('pds_blocks').where({ account_id: a.id }).whereIn('cid', gone.slice(i, i + 200)).delete();
-      await trx('pds_blob_refs').where({ account_id: a.id }).whereIn('path_hash', touched).delete();
+      if (replaced.length) await trx('pds_blob_refs').where({ account_id: a.id }).whereIn('path_hash', replaced).delete();
       const refs = live.flatMap((op) => op.blobs.map((cid) => ({ account_id: a.id, cid, path_hash: sha256hex(op.key), rev })));
       if (refs.length) await trx('pds_blob_refs').insert(refs);
       await sequence(trx, [{ did: a.did, type: 'commit', body }]);

@@ -1,0 +1,17 @@
+{
+  "name": "exprsn-ai-interop",
+  "private": true,
+  "description": "B-2906: Exprsn-AI's PDS against the reference AT-Protocol development environment (PLC directory and Bluesky AppView). Not a workspace member.",
+  "type": "module",
+  "scripts": {
+    "test": "tsx run.ts"
+  },
+  "devDependencies": {
+    "@atproto/bsky": "0.1.1",
+    "@atproto/crypto": "0.5.7",
+    "@atproto/dev-env": "0.6.11",
+    "@atproto/repo": "0.11.0",
+    "@did-plc/lib": "0.0.4",
+    "tsx": "4.23.15"
+  }
+}

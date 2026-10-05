@@ -175,3 +175,22 @@ describe('TIDs (B-2902)', () => {
     for (const line of fixture('atproto-interop/syntax/tid_syntax_valid.txt').split('\n').filter((l) => l && !l.startsWith('#'))) expect(TID_RE.test(line.trim()), line).toBe(true);
   });
 });
+
+describe('DID documents in the legacy key form (B-2905, B-2906)', () => {
+  it('reads the #atproto key whether the document is Multikey or the legacy uncompressed form', async () => {
+    const { PdsMigration } = await import('../src/atproto/pds/migration.js');
+    const { base58Encode } = await import('../src/atproto/encoding.js');
+    const did = 'did:plc:hnh3tcejlpahnoxb7ieqdpmu';
+    const k = keyFromScalar('secp256k1', Buffer.from('9085d2bef69286a6cbb51623c8fa258629945cd55ca705cc4e66700396894e0c', 'hex'));
+    const jwk = createPublicKey(k.privateKey).export({ format: 'jwk' });
+    const uncompressed = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x!, 'base64url'), Buffer.from(jwk.y!, 'base64url')]);
+    const doc = (type: string, publicKeyMultibase: string) => ({ '@context': [], id: did, alsoKnownAs: [], service: [], verificationMethod: [{ id: '#atproto', type, controller: did, publicKeyMultibase }] });
+    const multikey = 'zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme';
+    expect(PdsMigration.signingKeyOf(doc('Multikey', multikey))).toBe(multikey);
+    // As the reference PLC directory of @atproto/dev-env renders it.
+    expect(PdsMigration.signingKeyOf(doc('EcdsaSecp256k1VerificationKey2019', 'z' + base58Encode(uncompressed)))).toBe(multikey);
+    const bad = Buffer.from(uncompressed);
+    bad[64]! ^= 1;
+    expect(PdsMigration.signingKeyOf(doc('EcdsaSecp256k1VerificationKey2019', 'z' + base58Encode(bad)))).toBeNull();
+  });
+});

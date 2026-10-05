@@ -2,6 +2,36 @@
 
 ## 1.5.0 (in progress)
 
+### The AT-Protocol personal data server (Sprint 31, B-2901 to B-2906, B-3004)
+
+- Exprsn-AI hosts AT-Protocol repositories, described in `docs/pds.md`. Hosting is off until a platform admin enables
+  it per tenant (`PUT /api/admin/pds/tenants/{tid}`), and is refused in an air-gapped deployment or a PDS zone without
+  egress: repositories are public by protocol. New permission `pds:manage` (tenant admins); members keep their own
+  account under `atproto:link`. Migration `033_pds`; new settings `PDS_*`; the event catalogue (version 7) lists a
+  `pds.*` group.
+- Accounts are tied to Exprsn-AI users: a did:plc whose repo and rotation keys live in the signer or OpenBao, a handle
+  `<name>.<tenant>.<PDS_HANDLE_DOMAIN>` that resolves to it (`/.well-known/atproto-did`, `resolveHandle`), created from
+  the console or by `com.atproto.server.createAccount`, which follows the tenant's sign-up policy with invite codes
+  for closed and approval policies (B-1801). Bluesky clients sign in with app passwords made in the console; the
+  Exprsn-AI password never works over XRPC. Sessions are refresh-once token pairs (B-2901).
+- Repositories: the Merkle search tree, signed version 3 commits, DAG-CBOR and CAR, matched byte for byte against the
+  AT-Protocol interop fixtures and the reference implementation; `com.atproto.repo` writes (`createRecord`,
+  `putRecord`, `deleteRecord`, `applyWrites`) validated against the bundled Bluesky lexicons; reads and the
+  `com.atproto.sync` exports (`getRepo`, `getRecord`, `getBlocks`, `listBlobs`, `getBlob`, `getLatestCommit`,
+  `getRepoStatus`, `listRepos`) (B-2902).
+- Blobs stream through the attachment quarantine, typed from their bytes, limited per tenant, scanned by ClamAV and
+  sealed at rest; a blob that fails the scan is never served (B-2903).
+- The firehose: a sequencer whose seq is taken in each commit's transaction, `com.atproto.sync.subscribeRepos` with
+  cursors, a backfill window and sync 1.1 commit proofs, and `requestCrawl` to the relays in `PDS_RELAYS` (B-2904).
+- Deactivation, takedowns as moderation actions on `pds-repo` objects (`RepoTakendown`, `!takedown` published by the
+  tenant's labeler, appealable), and account migration into and out of Exprsn-AI with signed PLC operations (B-2905).
+- Interop: `interop/run.ts` and the CI `interop` job run the PDS against the reference development environment's PLC
+  directory and Bluesky AppView; a post written to Exprsn-AI's PDS appears in the AppView (B-2906).
+- `app.bsky.feed.generator` records published to a hosted repo or an external account
+  (`POST /api/admin/pds/feed-generators`), naming the feed generator's service DID (B-3004).
+- Moderation gains `takeDown` and `reverse` for direct admin actions; self-registration takes an AT-Protocol invite
+  code in place of an invitation.
+
 ### Model-based memory management (Sprint 30, B-3701 to B-3703)
 
 - Per-tenant memory settings under `GET`/`PUT /api/memory/settings` (`knowledge:manage`, audited as

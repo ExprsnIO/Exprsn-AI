@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { ulid } from 'ulid';
 import { hmac } from '../../crypto/index.js';
 import type { Services } from '../../services.js';
-import { parseMultikey } from '../crypto.js';
+import { decompressPublicKey, multikey, parseMultikey, type Curve } from '../crypto.js';
+import { base58Decode } from '../encoding.js';
 import { plcOperationCid, signPlcOperation, verifyPlcOperation, type DidDocument, type PlcOperation, type PlcService } from '../did.js';
 import { handlesOf, pdsOf } from '../handles.js';
 import { verifyRepoCar, RepoError } from './repo.js';
@@ -52,10 +53,29 @@ export class PdsMigration {
     return d;
   }
 
-  /** The `#atproto` signing key a DID document names. */
+  /**
+   * The `#atproto` signing key a DID document names, as a Multikey (`z…` with its multicodec prefix). Documents in the
+   * legacy form (`EcdsaSecp256k1VerificationKey2019` / `EcdsaSecp256r1VerificationKey2019`: the key's bytes in base58btc
+   * without a multicodec, uncompressed), which older PLC directories still render, are read too.
+   */
   static signingKeyOf(doc: DidDocument): string | null {
     const vm = (Array.isArray(doc.verificationMethod) ? doc.verificationMethod : []).find((v) => v && (v.id === '#atproto' || v.id === `${doc.id}#atproto`));
-    return vm && typeof vm.publicKeyMultibase === 'string' ? vm.publicKeyMultibase : null;
+    if (!vm || typeof vm.publicKeyMultibase !== 'string') return null;
+    const legacy: Record<string, Curve> = { EcdsaSecp256k1VerificationKey2019: 'secp256k1', EcdsaSecp256r1VerificationKey2019: 'p256' };
+    const curve = legacy[vm.type];
+    if (!curve) return vm.publicKeyMultibase;
+    try {
+      if (!vm.publicKeyMultibase.startsWith('z') || vm.publicKeyMultibase.length > 200) return null;
+      const raw = base58Decode(vm.publicKeyMultibase.slice(1));
+      if (raw.length === 33 && (raw[0] === 2 || raw[0] === 3)) return multikey(curve, raw);
+      if (raw.length !== 65 || raw[0] !== 4) return null;
+      const compressed = Buffer.concat([Buffer.from([raw[64]! & 1 ? 3 : 2]), raw.subarray(1, 33)]);
+      // The point must be on the curve, and its y the one given (not merely of the same parity).
+      const y = Buffer.from(decompressPublicKey(curve, compressed).export({ format: 'jwk' }).y ?? '', 'base64url');
+      return y.equals(raw.subarray(33)) ? multikey(curve, compressed) : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Checks the inter-service token that comes with `createAccount` for an existing DID. */
