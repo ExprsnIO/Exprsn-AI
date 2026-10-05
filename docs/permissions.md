@@ -85,12 +85,12 @@ An admin permission is any permission outside the member baseline: a custom role
 | `apps:design` | yes | 17 | x | x |  |  |  |  |  |  | x |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |
-| `groups:read` | no | 13 | x | x |  |  |  |  |  |  |  |  |  | x |  |
+| `groups:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |
 | `groups:write` | no | 19 | x | x |  |  |  |  |  |  |  |  |  | x |  |
 | `groups:manage` | yes | 0 | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:manage` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |
-| `social:read` | no | 8 | x | x |  |  |  |  |  |  |  |  |  | x |  |
+| `social:read` | no | 9 | x | x |  |  |  |  |  |  |  |  |  | x |  |
 | `social:write` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |
 | `social:manage` | yes | 1 | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |
@@ -1016,6 +1016,7 @@ No route requires it directly; handlers and services check it.
 - `GET /api/group-requests`
 - `GET /api/groups`
 - `GET /api/groups/{id}`
+- `GET /api/groups/{id}/candidates`
 - `GET /api/groups/{id}/cases`
 - `GET /api/groups/{id}/events`
 - `GET /api/groups/{id}/members`
@@ -1082,6 +1083,7 @@ No route requires it directly; handlers and services check it.
 - `GET /api/social/lists`
 - `GET /api/social/lists/{id}`
 - `GET /api/social/mutes`
+- `GET /api/social/people`
 - `GET /api/social/settings`
 - `GET /api/social/users/{id}`
 
