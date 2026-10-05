@@ -80,6 +80,11 @@ jobs:
         image: redis:7
         ports: ["6379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 3s --health-timeout 3s --health-retries 20
+      mongodb:
+        image: mongo:8
+        env: { MONGO_INITDB_ROOT_USERNAME: root, MONGO_INITDB_ROOT_PASSWORD: root }
+        ports: ["27017:27017"]
+        options: --health-cmd "mongosh --quiet -u root -p root --eval 'db.runCommand({ ping: 1 }).ok'" --health-interval 3s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -111,6 +116,7 @@ jobs:
           TEST_LDAP_INSECURE: "true"
           TEST_LDAP_BIND_PW: dev-ldap-admin
           TEST_REDIS_URL: redis://127.0.0.1:6379
+          TEST_MONGODB_URL: mongodb://root:root@127.0.0.1:27017/?authSource=admin
 
   image:
     name: Container image

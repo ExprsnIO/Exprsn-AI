@@ -8,6 +8,7 @@ import { badRequest, conflict, forbidden } from '../http/problem.js';
 import { docView, indexView, SCHEDULES, SOURCE_KINDS, sourceView } from '../knowledge/service.js';
 import { replicationView } from '../knowledge/replication.js';
 import { ROLE_NAME } from '../connections/drivers.js';
+import { allowed as allowedObject } from '../connections/service.js';
 import type { Services } from '../services.js';
 
 const id26 = z.string().length(26);
@@ -74,7 +75,11 @@ export function knowledgeRoutes(s: Services): Router {
   r.get('/knowledge/connections', read, async (req, res) => {
     const p = principalOf(req);
     if (!effectivePermissions(p).has('knowledge:manage')) throw forbidden('Adding a source needs the knowledge curator role.', { step: 'role', action: 'knowledge:manage' });
-    res.json((await s.connections.list(p.tenantId)).filter((c) => c.engine === 'postgres' || c.engine === 'mysql').map((c) => ({ id: c.id, name: c.name, engine: c.engine, label: c.label, objects: c.allow_list, columns: Object.fromEntries((c.schema ?? []).filter((o) => c.allow_list.includes(o.name)).map((o) => [o.name, o.columns.map((x) => x.name)])) })));
+    // MongoDB: allow-list entries may be patterns, so the objects listed are the introspected collections they allow.
+    res.json((await s.connections.list(p.tenantId)).filter((c) => c.engine === 'postgres' || c.engine === 'mysql' || c.engine === 'mongodb').map((c) => {
+      const objs = (c.schema ?? []).filter((o) => (c.engine === 'mongodb' ? allowedObject(c, o.name) : c.allow_list.includes(o.name)));
+      return { id: c.id, name: c.name, engine: c.engine, label: c.label, objects: c.engine === 'mongodb' ? objs.map((o) => o.name) : c.allow_list, columns: Object.fromEntries(objs.map((o) => [o.name, o.columns.map((x) => x.name)])) };
+    }));
   });
 
   // ---------- knowledge bases ----------
@@ -193,6 +198,8 @@ export function knowledgeRoutes(s: Services): Router {
           maxPages: z.number().int().min(1).max(1000).optional(),
           pathPrefix: z.string().trim().max(300).regex(/^[^\0\s]*$/).optional(),
           sitemap: z.boolean().optional(),
+          /** MongoDB collections: the text fields to index (dotted paths allowed). */
+          fields: z.array(z.string().trim().regex(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/, 'a field name or dotted path')).min(1).max(50).optional(),
           roleMappings: z.array(z.object({ group: z.string().trim().min(1).max(200), role: z.string().trim().regex(ROLE_NAME, 'a PostgreSQL role name') }).strict()).min(1).max(50).optional()
         })
         .strict(),
@@ -200,7 +207,7 @@ export function knowledgeRoutes(s: Services): Router {
     );
     if (body.kind !== 'upload' && !body.location) throw badRequest('Give the source a location.');
     const src = await k.addSource(principalOf(req), String(req.params.id), body);
-    await audit(req, 'knowledge.source.added', { kb: src.kb_id, source: src.id }, { kind: src.kind, location: src.location, schedule: src.schedule, labelFloor: src.label_floor, ...(src.config.accessColumn ? { accessColumn: src.config.accessColumn, accessKind: src.config.accessKind } : {}), ...(src.config.replication ? { replication: true, publication: src.config.publication } : {}), ...(src.config.include?.length ? { include: src.config.include } : {}), ...(src.config.endpoint ? { endpoint: src.config.endpoint, ownKeys: true } : {}), ...(src.kind === 'web' ? { maxDepth: src.config.maxDepth, maxPages: src.config.maxPages, pathPrefix: src.config.pathPrefix, sitemap: src.config.sitemap } : {}), ...(src.config.roleMappings ? { roleMappings: src.config.roleMappings } : {}) }, src.label_floor);
+    await audit(req, 'knowledge.source.added', { kb: src.kb_id, source: src.id }, { kind: src.kind, location: src.location, schedule: src.schedule, labelFloor: src.label_floor, ...(src.config.accessColumn ? { accessColumn: src.config.accessColumn, accessKind: src.config.accessKind } : {}), ...(src.config.replication ? { replication: true, publication: src.config.publication } : {}), ...(src.config.include?.length ? { include: src.config.include } : {}), ...(src.config.endpoint ? { endpoint: src.config.endpoint, ownKeys: true } : {}), ...(src.kind === 'web' ? { maxDepth: src.config.maxDepth, maxPages: src.config.maxPages, pathPrefix: src.config.pathPrefix, sitemap: src.config.sitemap } : {}), ...(src.config.roleMappings ? { roleMappings: src.config.roleMappings } : {}), ...(src.config.fields ? { fields: src.config.fields } : {}) }, src.label_floor);
     res.status(201).json(sourceView(src));
   });
 

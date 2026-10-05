@@ -7,7 +7,7 @@ import { effectivePermissions, type Principal } from '../authz/policy.js';
 import type { AuditLog } from '../audit/chain.js';
 import { clamScan, classify } from '../chat/attachments.js';
 import type { ContextItem, ContextRequest } from '../chat/context.js';
-import type { ConnectionService } from '../connections/service.js';
+import { allowed as allowedObject, type ConnectionRow, type ConnectionService } from '../connections/service.js';
 import type { Gateway } from '../gateway/gateway.js';
 import type { Guardrails } from '../guardrails/types.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
@@ -87,7 +87,9 @@ export interface SourceRow {
     object?: string;
     idColumn?: string | null;
     watermarkColumn?: string | null;
-    engine?: 'postgres' | 'mysql';
+    engine?: 'postgres' | 'mysql' | 'mongodb';
+    /** MongoDB: the document fields whose text is indexed (dotted paths allowed). */
+    fields?: string[];
     accessColumn?: string | null;
     accessKind?: AccessKind;
     replication?: boolean;
@@ -150,6 +152,8 @@ export interface AddSourceInput {
   sitemap?: boolean;
   /** B-1503 */
   roleMappings?: RoleMapping[];
+  /** MongoDB collections: the text fields to index. */
+  fields?: string[];
 }
 
 export interface RoleMapping {
@@ -320,7 +324,9 @@ export const docView = (d: DocRow, source?: SourceRow) => ({
  * replication stream so both write the same document for the same row.
  */
 export function rowItem(cfg: SourceRow['config'], id: string, columns: string[], row: unknown[], access: unknown): SourceItem {
-  const body = `# ${cfg.object} ${id}\n\n` + columns.map((col, j) => `${col}: ${row[j] == null ? '' : row[j] instanceof Date ? (row[j] as Date).toISOString() : String(row[j])}`).join('\n');
+  // MongoDB sources name the fields to index; the id, watermark and access fields are read beside them, not indexed.
+  const keep = cfg.fields?.length ? new Set(cfg.fields) : null;
+  const body = `# ${cfg.object} ${id}\n\n` + columns.flatMap((col, j) => (keep && !keep.has(col) ? [] : [`${col}: ${row[j] == null ? '' : row[j] instanceof Date ? (row[j] as Date).toISOString() : String(row[j])}`])).join('\n');
   const data = Buffer.from(body, 'utf8');
   return { key: `${cfg.object}#${id}`, name: `${cfg.object} #${id}`, version: sha(data), size: data.length, read: async () => data, ...(cfg.accessColumn ? { acl: rowAcl(cfg.accessKind ?? 'group', access) } : {}) };
 }
@@ -607,7 +613,9 @@ export class KnowledgeService {
     } else {
       if (!input.connectionId) throw new HttpProblem(400, 'Invalid request', 'Pick the data connection the view is read through.');
       const conn = await this.d.connections.get(p.tenantId, input.connectionId);
-      if (conn.engine !== 'postgres' && conn.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views can be a knowledge source.');
+      if (conn.engine === 'mongodb') return this.addMongoSource(p, kb, conn, input, location, floor);
+      if (input.fields?.length) throw conflict('Fields are for MongoDB collections; a table or view is indexed whole.');
+      if (conn.engine !== 'postgres' && conn.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views, and MongoDB collections, can be a knowledge source.');
       const object = location.replace(/^(pg|mysql):\s*/i, '');
       // PostgreSQL names default to the public schema, MySQL names to the connection's database.
       const home = conn.engine === 'postgres' ? 'public' : (conn.database ?? '');
@@ -629,12 +637,43 @@ export class KnowledgeService {
       // Rows are read at the connection's label: the source floor is at least that.
       if (labelRank(conn.label) > labelRank(floor)) input = { ...input, labelFloor: conn.label };
     }
+    return this.insertSource(p, kb.id, input, location, config, secret, floor);
+  }
+
+  private async insertSource(p: Principal, kbId: string, input: AddSourceInput, location: string, config: SourceRow['config'], secret: string | null, floor: Label): Promise<SourceRow> {
     const t = Date.now();
     const id = ulid();
-    await this.db('knowledge_sources').insert({ id, tenant_id: p.tenantId, kb_id: kb.id, kind: input.kind, location, config: JSON.stringify(config), secret_sealed: secret ? await this.d.keys.seal(p.tenantId, secret, `knowledge-source:${id}`) : null, label_floor: highest(floor, input.labelFloor ?? floor), schedule: input.kind === 'upload' ? 'manual' : (input.schedule ?? '15m'), state: 'idle', created_by: p.userId, created_at: t, updated_at: t });
+    await this.db('knowledge_sources').insert({ id, tenant_id: p.tenantId, kb_id: kbId, kind: input.kind, location, config: JSON.stringify(config), secret_sealed: secret ? await this.d.keys.seal(p.tenantId, secret, `knowledge-source:${id}`) : null, label_floor: highest(floor, input.labelFloor ?? floor), schedule: input.kind === 'upload' ? 'manual' : (input.schedule ?? '15m'), state: 'idle', created_by: p.userId, created_at: t, updated_at: t });
     const s = await this.source(p.tenantId, id);
     if (s.kind !== 'upload') await this.sync(p.userId, s);
     return this.source(p.tenantId, id);
+  }
+
+  /**
+   * A MongoDB collection as a database source: the collection must be introspected and allow-listed; `fields` names
+   * the text to index, `idColumn` the field that identifies a document (`_id` by default), `watermarkColumn` an
+   * optional field that grows on every change (`updatedAt` or `updated_at` when the sampled schema has one), and
+   * `accessColumn` an optional field listing the groups or users who may retrieve each document (B-1002). Documents
+   * carry at least the connection's label. Replication and role mappings are PostgreSQL only.
+   */
+  private async addMongoSource(p: Principal, kb: { id: string }, conn: ConnectionRow, input: AddSourceInput, location: string, floor: Label): Promise<SourceRow> {
+    if (input.replication) throw conflict('Logical replication is for PostgreSQL sources; MongoDB sources sync by watermark.');
+    if (input.roleMappings?.length) throw conflict('Row security through database roles is for PostgreSQL sources.');
+    const object = location.replace(/^mongo(db)?:\s*/i, '');
+    const schema = (conn.schema ?? []).find((o) => o.name === object);
+    if (!schema) throw conflict(`${object} is not in ${conn.name}'s introspected schema. Refresh the schema on the Connections screen.`);
+    if (!allowedObject(conn, schema.name)) throw conflict(`${schema.name} is not on ${conn.name}'s allow-list.`);
+    const fields = [...new Set((input.fields ?? []).map((f) => f.trim()).filter(Boolean))];
+    if (!fields.length) throw new HttpProblem(400, 'Invalid request', 'Name the fields whose text is indexed, such as title and body.');
+    const cols = schema.columns.map((c) => c.name);
+    const wm = input.watermarkColumn ?? (cols.includes('updatedAt') ? 'updatedAt' : cols.includes('updated_at') ? 'updated_at' : null);
+    const idCol = input.idColumn ?? '_id';
+    const FIELD = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
+    for (const f of [...fields, idCol, wm, input.accessColumn]) if (f != null && !FIELD.test(f)) throw new HttpProblem(400, 'Invalid request', `${f} is not a field name: letters, digits, _, - and dots for nested fields.`);
+    const config: SourceRow['config'] = { connectionId: conn.id, object: schema.name, idColumn: idCol, watermarkColumn: wm, engine: 'mongodb', fields, accessColumn: input.accessColumn ?? null, ...(input.accessColumn ? { accessKind: input.accessKind ?? 'group' } : {}) };
+    // Documents are read at the connection's label: the source floor is at least that.
+    if (labelRank(conn.label) > labelRank(floor)) input = { ...input, labelFloor: conn.label };
+    return this.insertSource(p, kb.id, input, `mongo: ${schema.name}`, config, null, floor);
   }
 
   private get allow(): AllowList {
@@ -1143,7 +1182,9 @@ export class KnowledgeService {
     if (s.kind === 'database' && s.config.roleMappings?.length) return this.syncAsRoles(s, ctx);
     if (s.kind === 'database') {
       const cfg = s.config;
-      const r = await this.d.connections.readRows(s.tenant_id, cfg.connectionId!, cfg.object!, { watermarkColumn: cfg.watermarkColumn ?? null, after: cfg.watermarkColumn ? s.watermark : null, limit: 5000, rawColumn: cfg.accessColumn ?? null });
+      // MongoDB reads only the named fields, plus the id, watermark and access fields beside them.
+      const fields = cfg.fields?.length ? [...new Set([cfg.idColumn ?? '_id', ...cfg.fields, ...(cfg.watermarkColumn ? [cfg.watermarkColumn] : []), ...(cfg.accessColumn ? [cfg.accessColumn] : [])])] : null;
+      const r = await this.d.connections.readRows(s.tenant_id, cfg.connectionId!, cfg.object!, { watermarkColumn: cfg.watermarkColumn ?? null, after: cfg.watermarkColumn ? s.watermark : null, limit: 5000, rawColumn: cfg.accessColumn ?? null, ...(fields ? { fields } : {}) });
       const idAt = cfg.idColumn ? r.columns.indexOf(cfg.idColumn) : -1;
       const wmAt = cfg.watermarkColumn ? r.columns.indexOf(cfg.watermarkColumn) : -1;
       const accessAt = cfg.accessColumn ? r.columns.indexOf(cfg.accessColumn) : -1;

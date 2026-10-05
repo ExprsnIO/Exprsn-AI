@@ -275,7 +275,7 @@ export interface ServiceOverrides {
   imageSafety?: ImageSafety;
   vectors?: VectorStore;
   /** Data connection drivers by engine (tests use in-process fakes). */
-  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql', DriverFactory>>;
+  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql' | 'mongodb', DriverFactory>>;
   /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
   dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
