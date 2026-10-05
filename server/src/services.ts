@@ -99,6 +99,7 @@ import { clears } from './authz/labels.js';
 import { FileService } from './files/service.js';
 import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
 import { ModerationService } from './moderation/service.js';
+import { FirehoseService } from './atproto/firehose.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 
 export interface Services {
@@ -225,6 +226,8 @@ export interface Services {
   signup: SignupService;
   /** 1.4.0, Sprint 26a (B-1805): users, memberships and group mappings imported from CSV as a job. */
   userImports: UserImportService;
+  /** 1.4.0, Sprint 27 (B-1908): AT-Protocol firehose subscriptions and their single-instance consumers. */
+  firehose: FirehoseService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -464,9 +467,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     identityPolicy: new IdentityPolicies(() => s),
     signup: new SignupService(() => s),
     userImports: new UserImportService(() => s),
+    // 1.4.0, Sprint 27: the firehose.
+    firehose: new FirehoseService(() => s, { tickMs: cfg.FIREHOSE_TICK_MS, checkpointMs: cfg.FIREHOSE_CHECKPOINT_MS, queueMax: cfg.FIREHOSE_QUEUE_MAX, backoffMaxMs: cfg.FIREHOSE_BACKOFF_MAX_MS, idleMs: cfg.FIREHOSE_IDLE_MS, maxPerTenant: cfg.FIREHOSE_MAX_PER_TENANT }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
+      // B-1908: firehose consumers store their cursors and give their leases back while the database is still open.
+      await s.firehose.close().catch(() => undefined);
       s.webhooks.close();
       s.pluginRuntime.close();
       await denials.flushAll().catch(() => undefined);
@@ -607,4 +614,5 @@ export function startSchedules(s: Services): void {
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
+  s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
 }

@@ -2529,3 +2529,45 @@ then mappings, then memberships), auditing each change (`user.created`, `user.up
 - `exprsn-ai users import <file.csv> [--dry-run] [--send-invites] [--tenant <slug>] [--json]`: the same import, in the
   process, as the operator (no role ceiling, like `admin:create`); prints the report. Exit codes: 0 done, 1 refused or
   failed, 3 conflicts or errors in the file, 64 usage.
+
+## Sprint 27 (1.4.0): AT-Protocol firehose ingest (B-1908)
+
+A tenant subscribes to a Jetstream (JSON over WebSocket, cursor `time_us`) or a relay's
+`com.atproto.sync.subscribeRepos` (DAG-CBOR frames with records in CAR blocks, cursor `seq`). Each record operation that
+passes the filters (a collection on the allow-list, an author on the DID allow-list when there is one, and a
+deterministic sample by the record's `at://` URI) and has text (a post's text and image alt text; names and descriptions
+for other records) goes through the moderation check (B-1901) as an `atproto-post` object, checkpoint `user-input`,
+with the subscription's workspace and label: a verdict of flag or worse raises the post's one flag in that workspace's
+queue, and a verdict of warn or worse becomes signed labels on the post's URI from the tenant's labeler (B-1610; the
+platform's when the tenant has none). Deletes and records without text advance the cursor and are not checked.
+
+The consumer runs on one worker instance at a time: every `FIREHOSE_TICK_MS` each instance claims or renews a lease on
+the running subscriptions, and only the holder connects (a lease lasts three ticks; a stopping instance gives its leases
+back at once). Messages are handled in order from a bounded queue; when `FIREHOSE_QUEUE_MAX` wait, the socket is paused
+until half have been handled. The cursor (the last message handled) is stored every `FIREHOSE_CHECKPOINT_MS` and when
+the consumer stops; a restart connects with `?cursor=<stored>` and skips messages at or before it. A disconnect, an
+error frame (`{op: -1}`, shown as `lastError`) or `FIREHOSE_IDLE_MS` without a message reconnects from the cursor with
+backoff (500 ms doubling, up to `FIREHOSE_BACKOFF_MAX_MS`). The endpoint is a service URL (B-901): checked when saved and
+at every connection. Metrics: `exprsn_firehose_events_total{result}`, `exprsn_firehose_reconnects_total`,
+`exprsn_firehose_pauses_total`, and per subscription `exprsn_firehose_queue_depth`, `exprsn_firehose_connected`,
+`exprsn_firehose_paused`, `exprsn_firehose_lag_seconds`.
+
+### Subscriptions (`firehose:manage`)
+
+A subscription is `{id, name, protocol: jetstream | subscribe-repos, endpoint, collections, dids, sampleRate, workspaceId,
+label, state: running | stopped, status: idle | waiting | connecting | streaming | backoff | error, held, cursor,
+cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed}, reconnects, rev, live,
+createdAt, updatedAt}`. `held` says whether an instance holds its lease now (`waiting`: running but not yet taken);
+`live` is `{connected, paused, queue, pauses, cursor}` when the instance answering is the holder, else null. Counts are
+stored with the cursor. Subscriptions labelled above the caller's clearance are not shown (`404`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/firehose` | `{subscriptions: [subscription]}` |
+| `POST /api/atproto/firehose` `{name, protocol, endpoint, collections?, dids?, sampleRate?, workspaceId?, label?, start?}` | B-1908. `endpoint` is `wss://`, `ws://`, `https://` or `http://` (dialled as WebSocket); for Jetstream a bare host gets `/subscribe`, for subscribeRepos the path gets `/xrpc/com.atproto.sync.subscribeRepos`. `collections` are NSIDs or `prefix.*` (default `[app.bsky.feed.post]`, at most 100); `dids` up to 10,000 `did:plc` or `did:web` authors (null: everyone; Jetstream also receives both lists as `wantedCollections` and `wantedDids`); `sampleRate` in (0, 1] (default 1); `label` defaults to `public` (`403` above the caller's clearance). A refused endpoint is `400` with `step: endpoint`; a name in use or more than `FIREHOSE_MAX_PER_TENANT` subscriptions `409`. Stopped unless `start: true`. Audited `atproto.firehose.created`. `201` |
+| `GET /api/atproto/firehose/:id` | The subscription and its status |
+| `PATCH /api/atproto/firehose/:id` `{name?, protocol?, endpoint?, collections?, dids?, sampleRate?, workspaceId?, label?, cursor?: null}` | Changes move `rev`; a running consumer restarts with them from its cursor. `cursor: null` starts again from live, only once the subscription is stopped and no instance holds it (`409` otherwise); changing the protocol needs it (a cursor of one means nothing to the other). Audited `atproto.firehose.updated` |
+| `DELETE /api/atproto/firehose/:id` | The holder stops at its next tick. Audited `atproto.firehose.deleted`. `204` |
+| `POST /api/atproto/firehose/:id/start`, `POST /api/atproto/firehose/:id/stop` `{}` | Sets what the admin wants; the instances act on it at once over the bus (a stop stores the cursor and gives the lease back). Audited `atproto.firehose.started`, `atproto.firehose.stopped` |
+
+Audit actions are in the event catalogue's `atproto.*` group.

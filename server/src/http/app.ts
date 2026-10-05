@@ -47,6 +47,7 @@ import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
+import { firehoseRoutes } from '../routes/firehose.js';
 import { identityPolicyRoutes, signupPublicRoutes } from '../routes/signup.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
@@ -233,6 +234,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(moderationRoutes(s));
   // Sprint 26a (B-1801 to B-1803, B-1805): invitations, trusted devices, signup and MFA policies, CSV imports.
   api.use(identityPolicyRoutes(s));
+  // Sprint 27 (B-1908): AT-Protocol firehose subscriptions.
+  api.use(firehoseRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

@@ -2424,6 +2424,230 @@
           "dryRun",
           "rows"
         ]
+      },
+      "FirehoseSubscription": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "protocol",
+          "endpoint",
+          "collections",
+          "dids",
+          "sampleRate",
+          "workspaceId",
+          "label",
+          "state",
+          "status",
+          "held",
+          "cursor",
+          "counts",
+          "reconnects",
+          "rev",
+          "live",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "enum": [
+              "jetstream",
+              "subscribe-repos"
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sampleRate": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "state": {
+            "enum": [
+              "running",
+              "stopped"
+            ]
+          },
+          "status": {
+            "enum": [
+              "idle",
+              "waiting",
+              "connecting",
+              "streaming",
+              "backoff",
+              "error"
+            ]
+          },
+          "held": {
+            "type": "boolean",
+            "description": "Whether an instance holds the subscription's lease now"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cursorAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastEventAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "required": [
+              "received",
+              "checked",
+              "flagged",
+              "labelled",
+              "failed"
+            ],
+            "properties": {
+              "received": {
+                "type": "integer"
+              },
+              "checked": {
+                "type": "integer"
+              },
+              "flagged": {
+                "type": "integer"
+              },
+              "labelled": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              }
+            }
+          },
+          "reconnects": {
+            "type": "integer"
+          },
+          "rev": {
+            "type": "integer"
+          },
+          "live": {
+            "anyOf": [
+              {
+                "type": "object",
+                "description": "The consumer's live state, when the answering instance holds the lease",
+                "required": [
+                  "connected",
+                  "paused",
+                  "queue",
+                  "pauses",
+                  "cursor"
+                ],
+                "properties": {
+                  "connected": {
+                    "type": "boolean"
+                  },
+                  "paused": {
+                    "type": "boolean"
+                  },
+                  "queue": {
+                    "type": "integer"
+                  },
+                  "pauses": {
+                    "type": "integer"
+                  },
+                  "cursor": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
       }
     },
     "responses": {
@@ -9841,6 +10065,416 @@
                       ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/firehose": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. The tenant's firehose subscriptions (those within the caller's clearance) and their status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "subscriptions"
+                  ],
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FirehoseSubscription"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Subscribes to a Jetstream or a relay's subscribeRepos; posts that pass the collection and author allow-lists and the sample go through the moderation check and the tenant's labeler. The endpoint is checked as a service URL. Audited atproto.firehose.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "protocol",
+                  "endpoint"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "protocol": {
+                    "enum": [
+                      "jetstream",
+                      "subscribe-repos"
+                    ]
+                  },
+                  "endpoint": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 500,
+                    "description": "wss://, ws://, https:// or http://; checked as a service URL"
+                  },
+                  "collections": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z][a-zA-Z0-9-]{0,62}(\\.[a-zA-Z0-9-]{1,63})+(\\.\\*)?$"
+                    }
+                  },
+                  "dids": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 10000,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^did:(plc:[a-z2-7]{24}|web:[A-Za-z0-9.%:-]{3,250})$"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sampleRate": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "start": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirehoseSubscription"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/firehose/{id}": {
+      "get": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. A subscription, its stored cursor and counts, and the live consumer state when this instance holds it",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirehoseSubscription"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Changes the configuration (a running consumer restarts with it from its cursor); cursor: null starts again from live once stopped. Audited atproto.firehose.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "protocol": {
+                    "enum": [
+                      "jetstream",
+                      "subscribe-repos"
+                    ]
+                  },
+                  "endpoint": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 500,
+                    "description": "wss://, ws://, https:// or http://; checked as a service URL"
+                  },
+                  "collections": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z][a-zA-Z0-9-]{0,62}(\\.[a-zA-Z0-9-]{1,63})+(\\.\\*)?$"
+                    }
+                  },
+                  "dids": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 10000,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^did:(plc:[a-z2-7]{24}|web:[A-Za-z0-9.%:-]{3,250})$"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sampleRate": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  "workspaceId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "cursor": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirehoseSubscription"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Removes a subscription; its consumer stops. Audited atproto.firehose.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/firehose/{id}/start": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Starts consuming (the instance that takes the lease connects from the stored cursor). Audited atproto.firehose.started",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirehoseSubscription"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/atproto/firehose/{id}/stop": {
+      "post": {
+        "x-exprsn-since": "1.4.0",
+        "tags": [
+          "atproto"
+        ],
+        "summary": "firehose:manage. Stops consuming: the holder stores the cursor, disconnects and gives the lease back. Audited atproto.firehose.stopped",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirehoseSubscription"
                 }
               }
             }

@@ -548,7 +548,20 @@ const base = z.object({
      */
     MODERATION_SWEEP_SECONDS: z.coerce.number().int().min(0).max(24 * 3600).default(60),
     MODERATION_EXTERNAL_PROVIDERS: bool.default(false),
-    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000)
+    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000),
+    /**
+     * Sprint 27 (B-1908): AT-Protocol firehose ingest. Each worker instance's manager claims or renews the lease on
+     * running subscriptions every FIREHOSE_TICK_MS (a lease lasts three ticks); a consumer stores its cursor every
+     * FIREHOSE_CHECKPOINT_MS and when it stops, pauses its socket when FIREHOSE_QUEUE_MAX messages wait, reconnects
+     * with backoff up to FIREHOSE_BACKOFF_MAX_MS, and reconnects after FIREHOSE_IDLE_MS without a message. A tenant has
+     * at most FIREHOSE_MAX_PER_TENANT subscriptions.
+     */
+    FIREHOSE_TICK_MS: z.coerce.number().int().min(50).max(600_000).default(10_000),
+    FIREHOSE_CHECKPOINT_MS: z.coerce.number().int().min(50).max(600_000).default(5000),
+    FIREHOSE_QUEUE_MAX: z.coerce.number().int().min(1).max(100_000).default(1000),
+    FIREHOSE_BACKOFF_MAX_MS: z.coerce.number().int().min(100).max(3_600_000).default(60_000),
+    FIREHOSE_IDLE_MS: z.coerce.number().int().min(100).max(3_600_000).default(90_000),
+    FIREHOSE_MAX_PER_TENANT: z.coerce.number().int().min(0).max(1000).default(10)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
