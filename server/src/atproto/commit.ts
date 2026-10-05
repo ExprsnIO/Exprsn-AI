@@ -1,8 +1,11 @@
 import type { KeyObject } from 'node:crypto';
-import { cborDecode, cborEncode } from './cbor.js';
+import { cborDecode } from './cbor.js';
 import { decompressPublicKey, parseMultikey, verifySignature, type Curve } from './crypto.js';
 import type { DidResolver } from './did.js';
-import { base58Decode, Cid, CODEC_DAG_CBOR, sha256 } from './encoding.js';
+import { base58Decode, Cid, CODEC_DAG_CBOR } from './encoding.js';
+import { blockMatches } from './pds/car.js';
+import { mstLookup, type MstLookup } from './pds/mst.js';
+import { commitSigningBytes } from './pds/repo.js';
 
 /*
  * Relay commit verification (B-3604; https://atproto.com/specs/repository and /specs/sync).
@@ -24,9 +27,10 @@ import { base58Decode, Cid, CODEC_DAG_CBOR, sha256 } from './encoding.js';
  *
  * Anything that fails drops the whole commit; the firehose consumer audits it (as inbound labels are, B-1611).
  *
- * MST nodes are `{ l: CID | null, e: [{ p, k, v, t }] }`: `l` is the subtree left of the first entry, each entry's key
- * is the previous entry's key cut to `p` bytes followed by `k`, `v` is the record CID and `t` the subtree to its
- * right. A key's layer is the number of leading zero bits of SHA-256(key), halved (fanout 4).
+ * The repository format is the PDS's (`pds/`): the MST walk (`mstLookup`), its node format and key layers are in
+ * `pds/mst.ts`, the CAR reader and `blockMatches` in `pds/car.ts`, and the signed bytes of a commit
+ * (`commitSigningBytes`) in `pds/repo.ts`. This file holds what only a relay needs: the frame's proof shape, the
+ * `#atproto` key from a DID document, and the lenient commit check (version 2 accepted, unknown fields signed as sent).
  */
 
 export interface CommitOp {
@@ -54,30 +58,6 @@ export type CommitCheck = { ok: true; rev: string } | { ok: false; reason: Commi
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v) && !Buffer.isBuffer(v) && !(v instanceof Cid);
 
-/** The MST layer of a key: leading zero bits of SHA-256(key), counted two at a time. */
-export function keyHeight(key: string | Uint8Array): number {
-  const hash = sha256(typeof key === 'string' ? Buffer.from(key, 'utf8') : key);
-  let n = 0;
-  for (const b of hash) {
-    if (b < 64) n++;
-    if (b < 16) n++;
-    if (b < 4) n++;
-    if (b === 0) n++;
-    else break;
-  }
-  return n;
-}
-
-/** Whether bytes hash to a CID (SHA2-256; DAG-CBOR or raw). */
-export function blockMatches(cid: Cid | string, bytes: Uint8Array): boolean {
-  try {
-    const c = typeof cid === 'string' ? Cid.parse(cid) : cid;
-    return Cid.create(c.codec, sha256(bytes)).equals(c);
-  } catch {
-    return false;
-  }
-}
-
 class Unproven extends Error {}
 
 /** A block from the CAR whose bytes match its CID, decoded; `null` when the CAR does not carry it. */
@@ -90,38 +70,6 @@ function block(blocks: Map<string, Buffer>, cid: Cid): unknown {
   } catch (err) {
     throw new Unproven(`block ${cid.toString().slice(0, 20)}… is not DAG-CBOR: ${(err as Error).message}`);
   }
-}
-
-export type MstLookup = { found: Cid } | { absent: true } | { missing: string };
-
-/**
- * Walks the MST from `root` towards `key` using only the given blocks. `found`: the key maps to that CID; `absent`:
- * the tree has no such key; `missing`: a node on the way is not among the blocks. Throws `Error` for a node that is
- * malformed or does not hash to its CID.
- */
-export function mstLookup(blocks: Map<string, Buffer>, root: Cid, key: string): MstLookup {
-  const target = Buffer.from(key, 'utf8');
-  let node: Cid | null = root;
-  for (let depth = 0; node; depth++) {
-    if (depth > 128) throw new Unproven('the tree is too deep');
-    const v = block(blocks, node);
-    if (v === null) return { missing: node.toString() };
-    if (!isObj(v) || !Array.isArray(v.e) || !(v.l === null || v.l instanceof Cid)) throw new Unproven('an MST node is malformed');
-    let prev: Buffer = Buffer.alloc(0);
-    let next: Cid | null = v.l;
-    for (const raw of v.e) {
-      if (!isObj(raw) || typeof raw.p !== 'number' || !Buffer.isBuffer(raw.k) || !(raw.v instanceof Cid) || !(raw.t === null || raw.t instanceof Cid) || raw.p > prev.length) throw new Unproven('an MST entry is malformed');
-      const full = Buffer.concat([prev.subarray(0, raw.p), raw.k]);
-      if (prev.length && Buffer.compare(full, prev) <= 0) throw new Unproven('MST entries are out of order');
-      const cmp = Buffer.compare(target, full);
-      if (cmp === 0) return { found: raw.v };
-      if (cmp < 0) break; // the key sorts before this entry: it lives in the subtree on the entry's left (`next`)
-      next = raw.t;
-      prev = full;
-    }
-    node = next;
-  }
-  return { absent: true };
 }
 
 /** The repo signing key (`#atproto`) from a DID document: Multikey, or the older secp256k1/P-256 2019 suites. */
@@ -139,11 +87,6 @@ export function repoKeyFromDocument(doc: unknown, did: string): { curve: Curve; 
   }
   const k = parseMultikey(mb);
   return { curve: k.curve, key: k.key, multikey: mb };
-}
-
-/** The bytes a commit's signature covers: the commit object without `sig`, as DAG-CBOR. */
-export function commitSigningBytes(commit: Record<string, unknown>): Buffer {
-  return cborEncode({ ...commit, sig: undefined });
 }
 
 const REFRESH_MS = 60_000;

@@ -585,6 +585,37 @@ describe('Sprint 31: the AT-Protocol PDS', () => {
     expect((await x.get('com.atproto.repo.getRecord', { repo: bob.did, collection: 'app.bsky.feed.generator', rkey: 'whats-new' })).body.error).toBe('RecordNotFound');
   });
 
+  it('B-3004: a feed defined under /api/atproto/feeds is published by feedId; the record names the generator and the feed records it', async () => {
+    const bob = (await h.s.pds.accountByHandle(`bob.${DOMAIN}`))!;
+    // The tenant's own identity (made for the takedown label above) is the feed generator's service DID.
+    const generator = (await sys.get('/api/atproto/feeds').expect(200)).body.generator as { ready: boolean; did: string };
+    expect(generator.ready).toBe(true);
+    const feed = (await sys.post('/api/atproto/feeds', { rkey: 'team-news', displayName: 'Team news', description: 'From the workspace' }).expect(201)).body as { id: string; uri: string; published: unknown };
+    expect(feed).toMatchObject({ uri: `at://${generator.did}/app.bsky.feed.generator/team-news`, published: null });
+    // feedId and the metadata are exclusive; without feedId the metadata is required; an unknown feed is 404.
+    expect((await sys.post('/api/admin/pds/feed-generators', { target: { kind: 'hosted', accountId: bob.id }, feedId: feed.id, displayName: 'Other' })).status).toBe(400);
+    expect((await sys.post('/api/admin/pds/feed-generators', { target: { kind: 'hosted', accountId: bob.id }, rkey: 'x' })).status).toBe(400);
+    expect((await sys.post('/api/admin/pds/feed-generators', { target: { kind: 'hosted', accountId: bob.id }, feedId: '01ARZ3NDEKTSV4RRFFQ69G5FAV' })).status).toBe(404);
+
+    const r = await sys.post('/api/admin/pds/feed-generators', { target: { kind: 'hosted', accountId: bob.id }, feedId: feed.id });
+    expect(r.status).toBe(201);
+    const uri = `at://${bob.did}/app.bsky.feed.generator/team-news`;
+    expect(r.body).toMatchObject({ target: 'hosted', repo: bob.did, rkey: 'team-news', uri, serviceDid: generator.did, displayName: 'Team news', feedId: feed.id });
+    const rec = await x.get('com.atproto.repo.getRecord', { repo: bob.did, collection: 'app.bsky.feed.generator', rkey: 'team-news' });
+    expect(rec.body.value).toMatchObject({ $type: 'app.bsky.feed.generator', did: generator.did, displayName: 'Team news', description: 'From the workspace' });
+    const after = (await sys.get(`/api/atproto/feeds/${feed.id}`).expect(200)).body as { uri: string; published: { did: string; uri: string; cid: string; at: number } };
+    expect(after.published).toMatchObject({ did: bob.did, uri, cid: r.body.cid });
+    expect(after.published.at).toBeGreaterThan(0);
+    expect(after.uri).toBe(uri);
+    expect(await h.s.db('audit_events').where({ action: 'atproto.feed.published' }).first()).toBeTruthy();
+
+    // Withdrawing the record forgets the publication: the feed is named under the generator's DID again.
+    await sys.post(`/api/admin/pds/feed-generators/${r.body.id}/withdraw`).expect(204);
+    expect((await x.get('com.atproto.repo.getRecord', { repo: bob.did, collection: 'app.bsky.feed.generator', rkey: 'team-news' })).body.error).toBe('RecordNotFound');
+    const withdrawn = (await sys.get(`/api/atproto/feeds/${feed.id}`).expect(200)).body as { uri: string; published: unknown };
+    expect(withdrawn).toMatchObject({ uri: feed.uri, published: null });
+  });
+
   it('lists accounts for the tenant admin, and the audit names every change without content', async () => {
     const list = (await sys.get('/api/admin/pds/accounts')).body.accounts;
     expect(list.map((a: { handle: string }) => a.handle).sort()).toEqual([`alice.${DOMAIN}`, `bob.${DOMAIN}`, `carol.${DOMAIN}`]);

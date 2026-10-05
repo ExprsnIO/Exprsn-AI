@@ -18,6 +18,10 @@ import { XrpcError, type PdsActor, type PdsService } from './service.js';
  *
  * The record is read back and must name the service DID. Published records are kept in `pds_feed_records` so the
  * AT-Protocol screen can list and withdraw them. The record and its metadata are public by protocol.
+ *
+ * A feed defined under `/api/atproto/feeds` is published with `publishFeed`: the record is the generator's own
+ * (`feedGenerators.recordFor`), and the feed records the publication (`feedGenerators.markPublished`); withdrawing the
+ * record forgets it again.
  */
 
 export const GENERATOR = 'app.bsky.feed.generator';
@@ -134,6 +138,22 @@ export class PdsFeeds {
     return (await this.get(tenantId, id))!;
   }
 
+  /**
+   * Publishes the generator record of a feed defined under `/api/atproto/feeds` (B-3001 to B-3003): the record the
+   * feed generator builds for it (naming the generator's service DID, under the feed's record key), then records the
+   * publication on the feed, whose `at://` URI follows it from then on.
+   */
+  async publishFeed(by: PdsActor, tenantId: string, target: PublishTarget, feedId: string): Promise<FeedRecordRow> {
+    const fg = this.s().feedGenerators;
+    const row = await fg.get(tenantId, feedId);
+    if (!row) throw new XrpcError(404, 'NotFound', 'No such feed in this tenant.');
+    const g = await fg.generator(tenantId);
+    if (!g.did) throw new XrpcError(409, 'InvalidRequest', g.reason ?? 'The tenant has no feed generator.');
+    const out = await this.publishRecord(by, tenantId, target, row.rkey, fg.recordFor(row, g.did));
+    await fg.markPublished(by, row, { did: out.repo, uri: out.uri, cid: out.cid });
+    return out;
+  }
+
   /** Withdraws a published generator record (an external one needs its credentials again). */
   async withdraw(by: PdsActor, row: FeedRecordRow, creds?: { identifier: string; appPassword: string; pdsUrl?: string | undefined }): Promise<void> {
     if (row.target === 'hosted') {
@@ -145,6 +165,9 @@ export class PdsFeeds {
     }
     await this.db('pds_feed_records').where({ id: row.id }).delete();
     await this.pds.audit(by, 'pds.feed.withdrawn', { feedRecord: row.id, uri: row.uri }, { target: row.target });
+    // A feed published as this record forgets the publication (its URI falls back to the generator's DID).
+    const fg = this.s().feedGenerators;
+    for (const f of await fg.list(row.tenant_id)) if (f.record_uri === row.uri) await fg.markPublished(by, f, null);
   }
 
   /** Writes to an external account's PDS through the service URL checks; the app password is used once and dropped. */

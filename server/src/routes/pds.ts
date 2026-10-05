@@ -178,18 +178,26 @@ export function pdsRoutes(s: Services): Router {
       z
         .object({
           target,
-          serviceDid: z.string().trim().max(300),
-          rkey: z.string().trim().min(1).max(64),
-          displayName: z.string().trim().min(1).max(64),
+          feedId: id26.optional(),
+          serviceDid: z.string().trim().max(300).optional(),
+          rkey: z.string().trim().min(1).max(64).optional(),
+          displayName: z.string().trim().min(1).max(64).optional(),
           description: z.string().trim().max(3000).optional(),
           acceptsInteractions: z.boolean().optional(),
           contentMode: z.enum(['app.bsky.feed.defs#contentModeUnspecified', 'app.bsky.feed.defs#contentModeVideo']).optional()
         })
-        .strict(),
+        .strict()
+        .superRefine((v, ctx) => {
+          const meta = (['serviceDid', 'rkey', 'displayName', 'description', 'acceptsInteractions', 'contentMode'] as const).filter((k) => v[k] !== undefined);
+          if (v.feedId && meta.length) ctx.addIssue({ code: 'custom', path: [meta[0]!], message: 'With feedId the record is the feed’s own; leave out the metadata.' });
+          if (!v.feedId) for (const k of ['serviceDid', 'rkey', 'displayName'] as const) if (v[k] === undefined) ctx.addIssue({ code: 'custom', path: [k], message: 'Required without feedId.' });
+        }),
       req.body
     );
-    const row = await run(() => s.pds.feeds.publish(by(req), principalOf(req).tenantId, b.target as PublishTarget, b));
-    res.status(201).json(feedRecordView(row));
+    const tenantId = principalOf(req).tenantId;
+    const t = b.target as PublishTarget;
+    const row = await run(() => (b.feedId ? s.pds.feeds.publishFeed(by(req), tenantId, t, b.feedId) : s.pds.feeds.publish(by(req), tenantId, t, { ...b, serviceDid: b.serviceDid!, rkey: b.rkey!, displayName: b.displayName! })));
+    res.status(201).json({ ...feedRecordView(row), ...(b.feedId ? { feedId: b.feedId } : {}) });
   });
 
   r.post('/admin/pds/feed-generators/:id/withdraw', ...manage, async (req, res) => {

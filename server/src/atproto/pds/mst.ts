@@ -1,5 +1,6 @@
 import { cborDecode, cborEncode, type CborValue } from '../cbor.js';
-import { Cid, sha256 } from '../encoding.js';
+import { Cid, CODEC_DAG_CBOR, sha256 } from '../encoding.js';
+import { blockMatches } from './car.js';
 
 /*
  * The Merkle search tree of an AT-Protocol repository (B-2902, https://atproto.com/specs/repository#mst-structure).
@@ -20,7 +21,12 @@ import { Cid, sha256 } from '../encoding.js';
  * tree. `loadMst` reads a tree from blocks (a CAR file) and refuses one that is not canonical: rebuilding it from its
  * own keys must give the same root CID. The proofs follow the reference implementation's covering proofs, which a
  * commit sends on the firehose so a relay can check the operations against the previous tree (sync 1.1).
- * Known answers: `server/test/fixtures/atproto-interop/mst/` and `firehose/commit-proof-fixtures.json`.
+ * `mstLookup` is the other side: the relay commit check (B-3604, `../commit.ts`) walks a partial tree, only the
+ * blocks a `#commit` frame carries, to prove each operation's value or absence.
+ *
+ * This module is the one MST implementation: the PDS (B-2902), the relay commit verification (B-3604) and the test
+ * doubles of both build and read trees here. Known answers: `server/test/fixtures/atproto-interop/mst/`,
+ * `firehose/commit-proof-fixtures.json` and the same vectors in `server/test/fixtures/atproto/`.
  */
 
 export interface MstLeaf {
@@ -131,24 +137,42 @@ export function buildMst(leaves: readonly MstLeaf[], o: { checkKeys?: boolean } 
 
 const isMap = (v: unknown): v is Record<string, CborValue> => !!v && typeof v === 'object' && !Array.isArray(v) && !Buffer.isBuffer(v) && !(v instanceof Cid);
 
-/** Decodes one node block into its left link and entries (with full keys); refuses anything not shaped like a node. */
-export function decodeNode(bytes: Uint8Array): { left: Cid | null; entries: { key: string; value: Cid; right: Cid | null }[] } {
-  const v = cborDecode(bytes);
-  if (!isMap(v) || Object.keys(v).sort().join(',') !== 'e,l') throw new MstError('An MST node is a map of e and l');
+interface NodeParts {
+  left: Cid | null;
+  /** Full keys, as bytes. */
+  entries: { key: Buffer; value: Cid; right: Cid | null }[];
+}
+
+/**
+ * A decoded node's left link and entries, with each key rebuilt from its prefix length. `exact` (reading a whole
+ * repository) refuses any field but `l`, `e` and `p`, `k`, `v`, `t`; without it (the relay's proof walk) extra fields are
+ * ignored, as the reference implementation's schema check does.
+ */
+function nodeParts(v: unknown, exact: boolean): NodeParts {
+  if (!isMap(v) || (exact && Object.keys(v).sort().join(',') !== 'e,l')) throw new MstError('An MST node is a map of e and l');
   if (v.l !== null && !(v.l instanceof Cid)) throw new MstError('An MST node’s l is a link or null');
   if (!Array.isArray(v.e)) throw new MstError('An MST node’s e is an array');
   let prev = Buffer.alloc(0);
-  const entries = v.e.map((x, i) => {
-    if (!isMap(x) || Object.keys(x).sort().join(',') !== 'k,p,t,v') throw new MstError('An MST entry is a map of k, p, t and v');
-    if (typeof x.p !== 'number' || x.p < 0 || x.p > prev.length || (i === 0 && x.p !== 0)) throw new MstError('An MST entry’s prefix length is out of range');
+  const entries = v.e.map((x) => {
+    if (!isMap(x) || (exact && Object.keys(x).sort().join(',') !== 'k,p,t,v')) throw new MstError('An MST entry is a map of k, p, t and v');
+    if (typeof x.p !== 'number' || x.p < 0 || x.p > prev.length) throw new MstError('An MST entry’s prefix length is out of range');
     if (!Buffer.isBuffer(x.k) || !(x.v instanceof Cid) || (x.t !== null && !(x.t instanceof Cid))) throw new MstError('An MST entry’s k is bytes, v a link and t a link or null');
-    const k = Buffer.concat([prev.subarray(0, x.p), x.k]);
-    prev = k;
-    const key = k.toString('utf8');
-    if (!Buffer.from(key, 'utf8').equals(k)) throw new MstError('An MST key is not UTF-8');
+    const key = Buffer.concat([prev.subarray(0, x.p), x.k]);
+    prev = key;
     return { key, value: x.v, right: x.t };
   });
   return { left: v.l, entries };
+}
+
+/** Decodes one node block into its left link and entries (with full keys); refuses anything not shaped like a node. */
+export function decodeNode(bytes: Uint8Array): { left: Cid | null; entries: { key: string; value: Cid; right: Cid | null }[] } {
+  const n = nodeParts(cborDecode(bytes), true);
+  const entries = n.entries.map((e) => {
+    const key = e.key.toString('utf8');
+    if (!Buffer.from(key, 'utf8').equals(e.key)) throw new MstError('An MST key is not UTF-8');
+    return { key, value: e.value, right: e.right };
+  });
+  return { left: n.left, entries };
 }
 
 /**
@@ -223,6 +247,44 @@ export function mstPath(tree: MstTree, key: string): MstNode[] {
     node = next;
   }
   return out;
+}
+
+export type MstLookup = { found: Cid } | { absent: true } | { missing: string };
+
+/**
+ * Walks the tree from `root` towards `key` using only the given blocks (by CID string), as a relay proves a commit's
+ * operation (B-3604). `found`: the key maps to that CID; `absent`: the tree has no such key; `missing`: a node on the
+ * way is not among the blocks. Throws `MstError` for a node that does not hash to its CID, is not a node, or holds
+ * its keys out of order.
+ */
+export function mstLookup(blocks: ReadonlyMap<string, Uint8Array>, root: Cid, key: string): MstLookup {
+  const target = Buffer.from(key, 'utf8');
+  let node: Cid | null = root;
+  for (let depth = 0; node; depth++) {
+    if (depth > 128) throw new MstError('The MST is too deep');
+    const bytes = blocks.get(node.toString());
+    if (!bytes) return { missing: node.toString() };
+    if (node.codec !== CODEC_DAG_CBOR || !blockMatches(node, bytes)) throw new MstError(`The block ${node.toString().slice(0, 20)}… does not match its CID`);
+    let v: unknown;
+    try {
+      v = cborDecode(bytes);
+    } catch (err) {
+      throw new MstError(`The block ${node.toString().slice(0, 20)}… is not DAG-CBOR: ${(err as Error).message}`);
+    }
+    const n = nodeParts(v, false);
+    let next: Cid | null = n.left;
+    let prev: Buffer | null = null;
+    for (const e of n.entries) {
+      if (prev && Buffer.compare(e.key, prev) <= 0) throw new MstError('MST entries are out of order');
+      const c = Buffer.compare(target, e.key);
+      if (c === 0) return { found: e.value };
+      if (c < 0) break; // the key sorts before this entry: it lives in the subtree on the entry's left (`next`)
+      next = e.right;
+      prev = e.key;
+    }
+    node = next;
+  }
+  return { absent: true };
 }
 
 type Flat = { kind: 'tree'; node: MstNode } | { kind: 'leaf'; key: string };
