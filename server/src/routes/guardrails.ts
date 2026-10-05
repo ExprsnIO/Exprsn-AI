@@ -513,10 +513,16 @@ export function guardrailRoutes(s: Services): Router {
           await s.openai.holds.resolve(p, flag.source_id, decision);
           return;
         }
+        // Sprint 28a (B-2302): a held reply to a customer is delivered or withdrawn (the channel route can also edit it).
+        if (flag.source_kind === 'channel-message' && flag.source_id) {
+          await s.channels.resolveHeld({ p, ip: ip(req), traceId: req.traceId ?? null }, flag.source_id, decision);
+          return;
+        }
         if (flag.source_kind !== 'message' || !flag.source_id) throw conflict(`${flagRef(flag)} has no answer attached.`);
         conversationId = (await s.chat.resolveHold(p, flag.source_id, decision)).conversationId;
       });
       if (f.source_kind === 'api-request') await audit(req, `api.hold.${decision}`, { flag: flagRef(f), request: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
+      else if (f.source_kind === 'channel-message') await audit(req, `channel.hold.${decision}`, { flag: flagRef(f), message: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       else await audit(req, `chat.hold.${decision}`, { flag: flagRef(f), message: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       res.json(flags.view(f, p));
       return;

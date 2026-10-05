@@ -104,6 +104,9 @@ import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
+import { ChannelService } from './channels/service.js';
+import type { ChannelIo, ChannelMailer } from './channels/mail.js';
+import nodemailer from 'nodemailer';
 
 export interface Services {
   cfg: Config;
@@ -237,6 +240,8 @@ export interface Services {
   groups: GroupService;
   /** 1.4.0, Sprint 27c (B-2502 to B-2504): group events, RSVPs, check-in, reminders and signed iCalendar feeds. */
   calendar: CalendarService;
+  /** 1.4.0, Sprint 28a (B-2301 to B-2304): customer-service channels: sessions, held replies, email, retention. */
+  channels: ChannelService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -266,6 +271,8 @@ export interface ServiceOverrides {
   previewRenderer?: PreviewRenderer;
   /** Sprint 26 (B-1906): external moderation providers (tests use a fake). */
   moderationProviders?: ModerationProviderClient;
+  /** Sprint 28a (B-2303): the channels' IMAP fetcher and SMTP transports (tests use fakes; never a real mailbox). */
+  channelIo?: Partial<ChannelIo>;
 }
 
 export function createServices(cfg: Config, db: Db, log: Logger, metrics = new Metrics(), overrides: ServiceOverrides = {}): Services {
@@ -327,7 +334,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
   // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
-  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
+  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
@@ -482,6 +489,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
+    // 1.4.0, Sprint 28a: customer-service channels. Without SMTP settings of its own a channel sends through SMTP_URL.
+    channels: new ChannelService(() => s, {
+      platform: overrides.mail ? { sendMail: (m) => overrides.mail!.sendMail(m) } : cfg.SMTP_URL ? (nodemailer.createTransport(cfg.SMTP_URL) as unknown as ChannelMailer) : null,
+      ...overrides.channelIo
+    }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -591,6 +603,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 27c (B-2501 to B-2505): the group room authoriser, group content as moderation objects, reminder jobs.
   s.groups.init();
   s.calendar.registerJobs();
+  // Sprint 28a (B-2301 to B-2304): channel jobs (replies, IMAP polls, the outbox, retention, exports); sessions and
+  // their messages as moderation objects.
+  s.channels.init();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -650,4 +665,5 @@ export function startSchedules(s: Services): void {
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
 }

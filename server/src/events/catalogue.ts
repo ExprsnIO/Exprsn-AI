@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 3;
+export const CATALOGUE_VERSION = 4;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -62,6 +62,8 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'app.*', description: 'Low-code apps: apps, entities, record changes, imports and exports, forms and public submissions, triggers fired and skipped, AI fields, bundles and drafts (audit actions; never record values)' },
   { pattern: 'file.*', description: 'File store (Sprint 26d): uploaded, updated, deleted (to the trash), restored, shared; and audit actions for uploads received, versions ready or rejected, downloads, shares, trash, purges and quotas' },
   { pattern: 'group.*', description: 'Groups (Sprint 27c): created, updated, deleted; members added and removed; posts created and deleted; events created, updated and cancelled; and audit actions for requests, invitations, roles, RSVPs, check-ins and reminders' },
+  // 1.4.0, Sprint 28a (B-2301 to B-2304)
+  { pattern: 'channel.*', description: 'Customer-service channels: sessions started, escalated, closed and purged; customer messages received; replies held, sent and rejected; bounces; and audit actions for channels, secrets, held-reply decisions, exports and mail failures (never customer text)' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
   { pattern: 'post.*', description: 'Workspace feed posts: created, updated, deleted, held (reserved until B-27)' },
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
@@ -91,6 +93,7 @@ const approval = {
 const record = (extra: Record<string, JsonSchema> = {}) => obj({ app: id26, entity: str(120), record: id26, workspace: nullable(id26), actor: nullable(id26), ...extra });
 const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folder: nullable(id26), workspace: id26, version: { type: 'integer', minimum: 1 }, actor: nullable(id26), ...extra });
 const group = (extra: Record<string, JsonSchema> = {}) => obj({ group: id26, workspace: id26, actor: nullable(id26), ...extra });
+const channel = (extra: Record<string, JsonSchema> = {}) => obj({ channel: id26, session: id26, workspace: id26, ...extra });
 const message = (extra: Record<string, JsonSchema> = {}) => obj({ conversation: id26, message: id26, actor: nullable(id26), ...extra });
 const post = (extra: Record<string, JsonSchema> = {}) => obj({ post: id26, feed: { type: 'string', enum: ['workspace', 'group', 'user'] }, workspace: id26, group: nullable(id26), actor: nullable(id26), ...extra });
 
@@ -132,6 +135,15 @@ export const EVENT_TYPES: EventType[] = [
   { type: 'group.event.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An event was planned in a group', data: group({ event: id26, startsAt: isoTime }) },
   { type: 'group.event.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group event was changed', data: group({ event: id26, startsAt: isoTime }) },
   { type: 'group.event.cancelled', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group event was cancelled and its attendees told', data: group({ event: id26, attendees: { type: 'integer', minimum: 0 } }) },
+  { type: 'channel.session.started', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A customer session started (chat, or a new email thread)', data: channel({ customer: { type: 'string', enum: ['anonymous', 'identified', 'email'] } }) },
+  { type: 'channel.session.escalated', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A session went to the reviewers (the customer asked for a person, a guardrail asked for review, or the model failed)', data: channel({ reason: str(200) }) },
+  { type: 'channel.session.closed', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A session was closed by the customer or a reviewer', data: channel() },
+  { type: 'channel.session.purged', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: "Sessions past their channel's retention period were deleted", data: obj({ channel: id26, workspace: id26, sessions: { type: 'integer', minimum: 1 } }) },
+  { type: 'channel.message.received', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A customer message was taken into a session', data: channel({ message: id26, via: { type: 'string', enum: ['web', 'email'] } }) },
+  { type: 'channel.reply.held', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An answer waits for a reviewer before the customer sees it', data: channel({ message: id26, flag: { type: 'string', pattern: '^F-\\d+$' } }) },
+  { type: 'channel.reply.sent', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An answer reached the customer (as written, as edited by a reviewer, or from a person)', data: channel({ message: id26, edited: { type: 'boolean' } }) },
+  { type: 'channel.reply.rejected', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A reviewer withdrew a held answer', data: channel({ message: id26 }) },
+  { type: 'channel.bounce.recorded', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A reply bounced or drew a complaint', data: obj({ channel: id26, session: nullable(id26), workspace: id26, kind: { type: 'string', enum: ['hard', 'soft', 'complaint'] } }) },
   { type: 'message.sent', group: 'message.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A message was sent', data: message({ thread: nullable(id26) }) },
   { type: 'message.edited', group: 'message.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A message was edited', data: message() },
   { type: 'message.deleted', group: 'message.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A message was deleted', data: message() },

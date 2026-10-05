@@ -8,6 +8,7 @@ import { ed25519PublicKey } from '../crypto/httpsig.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requireRecentAuth, setSessionCookie, workspacesFor } from '../http/middleware.js';
 import { AccountService } from '../identity/account.js';
 import { LoginThrottle } from '../identity/lockout.js';
+import { admitSend, emailCodeTtlMs, maskAddress, requireEmail, sendCode } from '../identity/email-otp.js';
 import { securityAlert, type SecurityAlertInput } from '../identity/security-alerts.js';
 import { toClient as notificationView } from '../platform/notifications.js';
 import { badRequest, conflict, forbidden, HttpProblem, notFound, tooManyRequests, unauthorized } from '../http/problem.js';
@@ -407,7 +408,7 @@ export function meRoutes(s: Services): Router {
   const afterEnrol = async (req: Request, res: Response, kind: string) => {
     const p = principalOf(req);
     await audit(req, 'mfa.enrolled', { kind });
-    await alert(req, 'factor.added', `A ${kind === 'passkey' ? 'passkey' : 'authenticator app'} was added.`);
+    await alert(req, 'factor.added', `A ${kind === 'passkey' ? 'passkey' : kind === 'email code' ? 'email address for one-time codes' : 'authenticator app'} was added.`);
     const codes = (await s.mfa.remainingRecoveryCodes(p.userId)) === 0 ? await s.mfa.regenerateRecoveryCodes(p.userId) : null;
     let stage = req.authSession!.stage;
     if (stage === 'enroll') {
@@ -425,6 +426,34 @@ export function meRoutes(s: Services): Router {
     const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/) }), req.body);
     if (!(await s.mfa.confirmTotp(p.userId, String(req.params.id), code))) throw badRequest('That code did not match. Check the time on your device and try the next code.');
     await afterEnrol(req, res, 'TOTP');
+  });
+
+  // Sprint 28a (B-1806): one-time codes sent to the account's email address. The code proves the address works before
+  // it becomes a factor; wrong codes count against the account's lockout like a wrong password or TOTP code.
+  r.post('/mfa/email', enrolling, async (req, res) => {
+    const p = principalOf(req);
+    const { label } = parseBody(z.object({ label: z.string().trim().min(1).max(100).optional() }).strict(), req.body ?? {});
+    requireEmail(s);
+    const user = await s.users.get(p.tenantId, p.userId);
+    if (!user?.email) throw conflict('Your account has no email address. Ask an identity admin to add one first.');
+    if ((await s.mfa.factors(p.userId)).some((f) => f.kind === 'email')) throw conflict('An email factor is already set up. Remove it before adding another.');
+    await admitSend(s, p.userId);
+    const out = await s.mfa.beginEmail(p.userId, user.email, label ?? `Email ${maskAddress(user.email)}`, emailCodeTtlMs(s));
+    await sendCode(s, { address: user.email, name: user.display_name, username: user.username }, out.code, 'enrol');
+    await audit(req, 'mfa.email.code_sent', { factor: out.id }, { purpose: 'enrol' }, 'auth');
+    res.status(201).json({ id: out.id, sentTo: maskAddress(user.email), expiresAt: out.expiresAt });
+  });
+
+  r.post('/mfa/email/:id/confirm', enrolling, async (req, res) => {
+    const p = principalOf(req);
+    const { code } = parseBody(z.object({ code: z.string().trim().regex(/^\d{6}$/) }).strict(), req.body);
+    const attempt = await reserveAttempt(req);
+    if (!(await s.mfa.confirmEmail(p.userId, String(req.params.id), code))) {
+      const remaining = await attempt.failed('mfa.email.failed', { purpose: 'enrol' });
+      throw new HttpProblem(400, 'Not confirmed', 'That code did not match, or it expired. Ask for a new one if needed.', { extensions: { attempts_remaining: remaining } });
+    }
+    await attempt.ok();
+    await afterEnrol(req, res, 'email code');
   });
 
   r.post('/mfa/webauthn/options', enrolling, async (req, res) => {

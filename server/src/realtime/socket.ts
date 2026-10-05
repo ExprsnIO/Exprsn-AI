@@ -52,7 +52,7 @@ function forReaders(event: string, data: Record<string, unknown>): Record<string
 }
 
 /** Permissions whose holders receive live admin updates. */
-const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage', 'flags:review', 'tools:manage', 'zones:manage', 'training:manage'] as const;
+const LIVE_PERMS = ['pools:manage', 'models:manage', 'audit:read', 'tenant:manage', 'flags:review', 'tools:manage', 'zones:manage', 'training:manage', 'channels:review'] as const;
 
 /**
  * Socket.io on the same HTTP server (path /socket.io), authenticated by the session cookie at handshake.
