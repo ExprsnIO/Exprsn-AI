@@ -651,9 +651,9 @@ export class KnowledgeService {
 
   /**
    * A MongoDB collection as a database source: the collection must be introspected and allow-listed; `fields` names
-   * the text to index, `idColumn` the field that identifies a document (`_id` by default), `watermarkColumn` an
-   * optional field that grows on every change (`updatedAt` or `updated_at` when the sampled schema has one), and
-   * `accessColumn` an optional field listing the groups or users who may retrieve each document (B-1002). Documents
+   * the text to index (by default the text fields of the sampled schema), `idColumn` the field that identifies a
+   * document (`_id` by default), `watermarkColumn` an optional field that grows on every change (`updatedAt` or
+   * `updated_at` when the sampled schema has one; null for none), and `accessColumn` an optional field listing the groups or users who may retrieve each document (B-1002). Documents
    * carry at least the connection's label. Replication and role mappings are PostgreSQL only.
    */
   private async addMongoSource(p: Principal, kb: { id: string }, conn: ConnectionRow, input: AddSourceInput, location: string, floor: Label): Promise<SourceRow> {
@@ -663,11 +663,14 @@ export class KnowledgeService {
     const schema = (conn.schema ?? []).find((o) => o.name === object);
     if (!schema) throw conflict(`${object} is not in ${conn.name}'s introspected schema. Refresh the schema on the Connections screen.`);
     if (!allowedObject(conn, schema.name)) throw conflict(`${schema.name} is not on ${conn.name}'s allow-list.`);
-    const fields = [...new Set((input.fields ?? []).map((f) => f.trim()).filter(Boolean))];
-    if (!fields.length) throw new HttpProblem(400, 'Invalid request', 'Name the fields whose text is indexed, such as title and body.');
     const cols = schema.columns.map((c) => c.name);
-    const wm = input.watermarkColumn ?? (cols.includes('updatedAt') ? 'updatedAt' : cols.includes('updated_at') ? 'updated_at' : null);
-    const idCol = input.idColumn ?? '_id';
+    // An explicit null keeps the source without a watermark (every sync reads the collection again).
+    const wm = input.watermarkColumn === null ? null : input.watermarkColumn || (cols.includes('updatedAt') ? 'updatedAt' : cols.includes('updated_at') ? 'updated_at' : null);
+    const idCol = input.idColumn || '_id';
+    let fields = [...new Set((input.fields ?? []).map((f) => f.trim()).filter(Boolean))];
+    // Without `fields`, the text fields of the sampled schema (not the id, watermark or access field) are indexed.
+    if (!fields.length) fields = schema.columns.filter((c) => c.type === 'string' && ![idCol, wm, input.accessColumn].includes(c.name)).map((c) => c.name).slice(0, 50);
+    if (!fields.length) throw new HttpProblem(400, 'Invalid request', `The sampled documents of ${schema.name} have no text fields. Name the fields whose text is indexed, such as title and body.`);
     const FIELD = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
     for (const f of [...fields, idCol, wm, input.accessColumn]) if (f != null && !FIELD.test(f)) throw new HttpProblem(400, 'Invalid request', `${f} is not a field name: letters, digits, _, - and dots for nested fields.`);
     const config: SourceRow['config'] = { connectionId: conn.id, object: schema.name, idColumn: idCol, watermarkColumn: wm, engine: 'mongodb', fields, accessColumn: input.accessColumn ?? null, ...(input.accessColumn ? { accessKind: input.accessKind ?? 'group' } : {}) };

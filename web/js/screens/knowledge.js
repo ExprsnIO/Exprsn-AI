@@ -7,7 +7,7 @@
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
   const ago = (ms) => { if (!ms) return ''; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
   const size = (n) => (n == null ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table, view or collection', web: 'Internal web site', folder: 'File store folder' };
+  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table, view or collection', web: 'Internal web site' };
   const ENGINE = { postgres: 'PostgreSQL', mysql: 'MySQL', mongodb: 'MongoDB' };
   const csvList = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
   const REPL = { starting: 'starting', streaming: 'streaming changes', fallback: 'watermarks (replication unavailable)', stopped: 'stopped' };
@@ -114,7 +114,7 @@
       const kbList = bases.filter((k) => !st.filter || k.name.toLowerCase().indexOf(st.filter.toLowerCase()) >= 0);
       const subOf = (k) => k.documents + ' document' + (k.documents === 1 ? '' : 's') + (k.building ? ', index swap pending' : k.lastSyncAt ? ', synced ' + ago(k.lastSyncAt) : '') + (k.status === 'draft' ? ', draft' : '');
 
-      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository, database view or collection, internal web site or file store folder.' });
+      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository, database view or collection, or internal web site.' });
       const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [esc(d.name), UI.label(d.label, { sm: true }), esc(origin(d)), String(d.chunks), statePill(docState(d))], attrs: 'data-doc="' + esc(d.id) + '"', selected: st.failedOpen && d.state === 'failed' })), { minWidth: '0', emptyTitle: docs.length ? 'No documents match' : 'No documents yet', emptyText: docs.length ? 'Try another word.' : 'Add a source or upload a file. Documents appear as they are extracted.' });
       const failedDoc = docs.find((d) => d.state === 'failed');
       const failedPanel = st.failedOpen && failedDoc ? '<div class="problem"><div class="ptitle">Extraction failed for ' + esc(failedDoc.name) + '</div><div class="ptext">' + esc(failedDoc.error || 'The document could not be read.') + ' The document keeps its label and stays out of retrieval until a retry succeeds.</div><div class="trace"><span>Trace</span><span class="mono">' + esc(failedDoc.traceId || 'none') + '</span>' + (failedDoc.traceId ? UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + esc(failedDoc.traceId) + '"' }) : '') + '<span class="right"></span>' + (manage ? UI.btn('Retry extraction', { size: 'sm', icon: 'refresh', attrs: 'data-retry="' + esc(failedDoc.id) + '"' }) : '') + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissfail' }) + '</div></div>' : '';
@@ -278,7 +278,7 @@
       ctx.on('click', '[data-addsource]', () => openAdd());
       function openAdd() {
         const needConns = () => (st.conns ? Promise.resolve(st.conns) : App.get('/api/knowledge/connections').then((c) => { st.conns = c; return c; }).catch(() => { st.conns = []; return []; }));
-        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table, view or collection' }, { value: 'web', label: 'Internal web site' }, { value: 'folder', label: 'File store folder' }], 's3', 'data-type'))
+        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table, view or collection' }, { value: 'web', label: 'Internal web site' }], 's3', 'data-type'))
           + '<div data-loc-wrap>' + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/', attrs: 'data-loc' }), '<span data-loc-hint>The platform\'s S3 storage, or a bucket on its own endpoint below.</span>') + '</div>'
           + '<div data-s3-wrap>' + UI.field('Include', UI.input('', { placeholder: '**/*.md, policies/*.pdf', attrs: 'data-incl' }), 'Optional. Patterns relative to the prefix, comma separated: * within a folder, ** across folders.')
             + UI.field('Endpoint', UI.input('', { placeholder: 'https://minio.example.internal (empty: the platform\'s storage)', attrs: 'data-ep' }), 'An S3-compatible endpoint on the internal network, or one an operator allows.')
@@ -290,9 +290,8 @@
             + UI.check('Also read the pages the sitemap lists', true, 'data-sitemap')
             + '<div class="fg2">The crawl stays on the start page\'s site, follows robots.txt, and fetches only internal addresses (or hosts an operator allows). Unchanged pages are recognised by ETag or Last-Modified.</div></div>'
           + '<div data-git-wrap hidden>' + UI.field('Ref', UI.input('', { placeholder: 'main (default branch when empty)', attrs: 'data-ref' })) + UI.field('Path', UI.input('', { placeholder: 'docs/ (whole repository when empty)', attrs: 'data-path' })) + '</div>'
-          + '<div data-folder-wrap hidden>' + UI.field('Folder', '<select class="select" data-folder aria-label="Folder"><option value="">Loading…</option></select>', 'A top-level folder of your current workspace in the file store. Its subfolders are included; files are indexed up to the base\'s label.') + '</div>'
           + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn aria-label="Connection"><option value="">Loading…</option></select>', 'PostgreSQL, MySQL and MongoDB connections registered on the Connections screen.') + UI.field('View, table or collection', '<select class="select" data-obj aria-label="View, table or collection"></select>', 'Only objects on the connection\'s allow-list.')
-            + '<div data-mongo-wrap hidden>' + UI.field('Fields to index', UI.input('', { placeholder: 'title, body, customer.name', attrs: 'data-fields' }), 'Comma separated; dotted paths reach into sub-documents. Only these fields become document text.')
+            + '<div data-mongo-wrap hidden>' + UI.field('Fields to index', UI.input('', { placeholder: 'title, body, customer.name', attrs: 'data-fields' }), 'Comma separated; dotted paths reach into sub-documents. Only these fields become document text; empty indexes the text fields of the sampled schema.')
             + '<div class="knowledge-two">' + UI.field('Id field', UI.input('_id', { attrs: 'data-idf' })) + UI.field('Watermark field', UI.input('', { placeholder: 'updatedAt', attrs: 'data-wmf' }), 'Optional. A date or number that grows on every change; without one each sync reads the collection again.') + '</div></div>'
             + UI.field('Row access column', '<select class="select" data-acol aria-label="Row access column"></select>', 'Optional. Each row lists who may retrieve it; readers not on a row\'s list never get its text. An empty value lets nobody read the row.')
             + UI.field('The column names', UI.select([{ value: 'group', label: 'directory groups' }, { value: 'user', label: 'users (username or email)' }], 'group', 'data-akind aria-label="What the access column names"'))
@@ -314,14 +313,12 @@
               if (mongo) { const cols = c.columns[q('[data-obj]').value] || []; const wm = q('[data-wmf]'); if (!wm.value) wm.value = cols.indexOf('updatedAt') >= 0 ? 'updatedAt' : cols.indexOf('updated_at') >= 0 ? 'updated_at' : ''; }
               fillCols();
             };
-            const needFolders = () => (st.folders ? Promise.resolve(st.folders) : App.get('/api/files/browse').then((b) => { st.folders = b.folders || []; return st.folders; }).catch(() => { st.folders = []; return []; }));
             const sync = () => {
               const t = q('[data-type]').value;
-              q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database' || t === 'folder'; q('[data-folder-wrap]').hidden = t !== 'folder'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload'; q('[data-s3-wrap]').hidden = t !== 's3'; q('[data-web-wrap]').hidden = t !== 'web';
+              q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload'; q('[data-s3-wrap]').hidden = t !== 's3'; q('[data-web-wrap]').hidden = t !== 'web';
               q('[data-loc]').placeholder = t === 'git' ? 'https://git.example.internal/org/repo.git' : t === 'web' ? 'https://intranet.example.internal/' : 's3://bucket/prefix/';
               q('[data-loc-hint]').textContent = t === 'git' ? 'An https:// repository the server may read.' : t === 'web' ? 'The start page of an internal site.' : 'The platform\'s S3 storage, or a bucket on its own endpoint below.';
               if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(ENGINE[c.engine] || c.engine) + ', ' + esc(c.label) + ')</option>').join('') : '<option value="">No database connection registered</option>'; fillObjs(); });
-              if (t === 'folder') needFolders().then((fs) => { q('[data-folder]').innerHTML = fs.length ? fs.map((f) => '<option value="' + esc(f.id) + '">' + esc(f.name) + '</option>').join('') : '<option value="">No folder in this workspace</option>'; });
             };
             q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); q('[data-obj]').addEventListener('change', () => { const c = connOf(); if (c && c.engine === 'mongodb') { q('[data-wmf]').value = ''; fillObjs(); } else fillCols(); }); sync();
             q('[data-go]').addEventListener('click', async () => {
@@ -333,7 +330,7 @@
                 body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view or collection.'); return; }
                 const mc = connOf();
                 if (mc && mc.engine === 'mongodb') {
-                  body.fields = csvList(q('[data-fields]').value); if (!body.fields.length) { toast('Name the fields to index.'); return; }
+                  const fields = csvList(q('[data-fields]').value); if (fields.length) body.fields = fields;
                   const idf = q('[data-idf]').value.trim(); if (idf) body.idColumn = idf;
                   const wmf = q('[data-wmf]').value.trim(); body.watermarkColumn = wmf || null;
                 }
@@ -345,7 +342,6 @@
                   body.roleMappings = maps;
                 }
               }
-              else if (t === 'folder') { body.location = q('[data-folder]').value; if (!body.location) { toast('Pick a folder.'); return; } }
               else { body.location = q('[data-loc]').value.trim(); if (!body.location) { toast('Give the source a location.'); return; } }
               if (t === 'git') { const r = q('[data-ref]').value.trim(); const p = q('[data-path]').value.trim(); if (r) body.ref = r; if (p) body.path = p; }
               if (t === 's3') {

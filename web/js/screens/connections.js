@@ -334,7 +334,7 @@
           q('[data-dbwrap]').hidden = !sql && !mongo; q('[data-srcwrap]').hidden = !sql; if (!sql) src.value = 'static';
           const bao = src.value === 'openbao'; q('[data-staticwrap]').hidden = bao; q('[data-baowrap]').hidden = !bao;
           q('[data-endpoint]').placeholder = sel.value === 'opensearch' ? 'https://host:9200' : sel.value === 'mysql' ? 'host:3306' : mongo ? 'host:27017' : 'host:5432';
-          q('[data-userhelp]').textContent = mongo ? 'An account with the read role on the database. It signs in against admin; write authdb/user for another database. A vault: reference also works.' : '';
+          q('[data-userhelp]').textContent = mongo ? 'An account with the read role on the database. It signs in against that database; write authdb/user for another, such as admin/reader. The password may be a vault: reference.' : '';
         };
         sel.addEventListener('change', check); src.addEventListener('change', check); check();
         btn.addEventListener('click', async () => {

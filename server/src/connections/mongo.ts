@@ -233,10 +233,19 @@ export interface MongoDial {
 export type MongoOpener = (d: MongoDial) => Promise<MongoBackend>;
 
 /**
+ * The account and the database it authenticates against: `<authdb>/<user>` names the database (`admin/root`); a plain
+ * username authenticates against the connection's database, as `mongodb://user@host/<database>` would.
+ */
+export function mongoAccount(username: string | null, database: string): { user: string | null; authSource: string } {
+  const slash = username ? username.indexOf('/') : -1;
+  return slash > 0 ? { user: username!.slice(slash + 1), authSource: username!.slice(0, slash) } : { user: username, authSource: database };
+}
+
+/**
  * The official driver: one direct connection (no replica-set discovery, so no host the server names is dialled),
  * the checked address pinned through `lookup` so DNS cannot rebind (TLS still verifies the name), no retries, and
- * credentials passed as options, never in a URI. The account authenticates against `admin` unless the username is
- * written `<authdb>/<user>`.
+ * credentials passed as options, never in a URI. The account authenticates against the connection's database (as a
+ * URI naming that database would) unless the username is written `<authdb>/<user>`, such as `admin/root`.
  */
 export const openMongo: MongoOpener = async (d) => {
   const pinned = (_h: string, opts: { all?: boolean } | number | undefined, cb: (err: Error | null, address: string | { address: string; family: number }[], family?: number) => void) => {
@@ -244,9 +253,7 @@ export const openMongo: MongoOpener = async (d) => {
     if (typeof opts === 'object' && opts?.all) cb(null, [{ address: d.address, family }]);
     else cb(null, d.address, family);
   };
-  const slash = d.username ? d.username.indexOf('/') : -1;
-  const authSource = slash > 0 ? d.username!.slice(0, slash) : 'admin';
-  const user = slash > 0 ? d.username!.slice(slash + 1) : d.username;
+  const { user, authSource } = mongoAccount(d.username, d.database);
   const hostPart = isIP(d.host) === 6 ? `[${d.host}]` : d.host;
   const client = new MongoClient(`mongodb://${hostPart}:${d.port}/`, {
     directConnection: true,

@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Document } from 'mongodb';
 import { parseAllowList } from '../src/mcp/hosts.js';
-import { allowedCollection, classifyMongo, MongoDriver, type MongoBackend, type MongoDial } from '../src/connections/mongo.js';
+import { allowedCollection, classifyMongo, mongoAccount, MongoDriver, type MongoBackend, type MongoDial } from '../src/connections/mongo.js';
 import type { ConnectionSpec } from '../src/connections/drivers.js';
 import { FakeOllama } from './fake-ollama.js';
 import { loginAdmin, localUser, type Harness } from './helpers.js';
@@ -173,6 +173,13 @@ describe('MongoDB query model', () => {
 // ---------- the driver ----------
 
 describe('MongoDriver', () => {
+  it('authenticates against the connection database unless the username names another', () => {
+    expect(mongoAccount('reader', 'shop')).toEqual({ user: 'reader', authSource: 'shop' });
+    expect(mongoAccount('admin/root', 'shop')).toEqual({ user: 'root', authSource: 'admin' });
+    expect(mongoAccount(null, 'shop')).toEqual({ user: null, authSource: 'shop' });
+  });
+
+
   it('dials only checked internal addresses, pinned for the connection', async () => {
     const fake = new FakeMongo();
     await expect(new MongoDriver(spec({ endpoint: '169.254.169.254:27017' }), parseAllowList(''), fake.opener).test(1000)).rejects.toThrow(/link-local/);
@@ -314,7 +321,6 @@ describe('MongoDB connections and knowledge sources', () => {
     const kb = (await curator.post('/api/knowledge/bases', { name: 'Helpdesk', label: 'internal', embedModel: 'nomic-embed-text', sharing: 'members' }).expect(201)).body;
     await curator.patch(`/api/knowledge/bases/${kb.id}`, { status: 'published' }).expect(200);
     const add = (b: object) => curator.post(`/api/knowledge/bases/${kb.id}/sources`, { kind: 'database', connectionId: conn.id, ...b });
-    await add({ location: 'mongo: tickets' }).expect(400); // fields are required
     await add({ location: 'mongo: payroll', fields: ['amount'] }).expect(409); // not allow-listed
     await add({ location: 'mongo: tickets', fields: ['body'], replication: true }).expect(409);
     await add({ location: 'mongo: tickets', fields: ['body'], watermarkColumn: '$where' }).expect(400);
@@ -343,6 +349,17 @@ describe('MongoDB connections and knowledge sources', () => {
     const job = (await h.s.db('jobs').where({ type: 'knowledge.sync' }).orderBy('created_at', 'desc').first()) as { result: string };
     expect(JSON.parse(job.result)).toMatchObject({ added: 1, changed: 0 });
     expect(await h.s.db('knowledge_documents').where({ source_id: src.id })).toHaveLength(3);
+    // Without fields, the text fields of the sampled schema are indexed (not the id); a bare collection name is enough,
+    // and an explicit null watermark keeps none.
+    const kb2 = (await curator.post('/api/knowledge/bases', { name: 'Helpdesk 2', label: 'internal', embedModel: 'nomic-embed-text', sharing: 'members' }).expect(201)).body;
+    const plain = (await curator.post(`/api/knowledge/bases/${kb2.id}/sources`, { kind: 'database', connectionId: conn.id, location: 'tickets', idColumn: '_id', watermarkColumn: 'updatedAt' }).expect(201)).body;
+    expect(plain).toMatchObject({ location: 'mongo: tickets', config: { fields: ['subject', 'body', 'email'], idColumn: '_id', watermarkColumn: 'updatedAt' } });
+    const nowm = (await curator.post(`/api/knowledge/bases/${kb2.id}/sources`, { kind: 'database', connectionId: conn.id, location: 'mongo: tickets', fields: ['body'], watermarkColumn: null }).expect(201)).body;
+    expect(nowm.config).toMatchObject({ fields: ['body'], watermarkColumn: null });
+    await drain(h);
+    const plainDocs = (await h.s.db('knowledge_documents').where({ source_id: plain.id })) as { name: string }[];
+    expect(plainDocs).toHaveLength(3);
+
     // The connection cannot be removed while the source reads from it.
     await a.agent.delete(`/api/admin/connections/${conn.id}`).set('x-csrf-token', a.csrf).expect(409);
   });
