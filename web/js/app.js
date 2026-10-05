@@ -34,7 +34,9 @@
     calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
     // Sprint 30 (B-3402 to B-3404, B-3407, B-3408): the trust, apps and files screens
     certificates: 'M12 3l2.5 2 3-.5.5 3 2 2.5-2 2.5-.5 3-3-.5L12 17l-2.5-2-3 .5-.5-3L4 10l2-2.5.5-3 3 .5zM9 17l-1 5 4-2 4 2-1-5', vault: 'M4 4h16v16H4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 10v2M20 8h2M20 16h2',
-    plugins: 'M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3', files: 'M3 6h6l2 2h10v11H3z', apps: 'M4 4h16v16H4zM4 9h16M9 9v11'
+    plugins: 'M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3', files: 'M3 6h6l2 2h10v11H3z', apps: 'M4 4h16v16H4zM4 9h16M9 9v11',
+    // Sprint 31 (B-3406): the AT-Protocol screen
+    atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8'
   };
   const icon = (name, size, extra) => {
     const d = ICONS[name] || ICONS.info;
@@ -151,7 +153,8 @@
   };
 
   // ---------- Navigation model ----------
-  // `perm` is the permission the server checks for the screen's API; the item is hidden without it.
+  // `perm` is the permission the server checks for the screen's API; the item is hidden without it. A list means any
+  // one of them (a screen whose tabs each need their own permission, such as AT-Protocol).
   // `live` marks screens backed by the server; the rest still show prototype data (see docs/PLAN.md for their sprint).
   const NAV = [
     { group: null, items: [
@@ -172,6 +175,9 @@
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
       // Sprint 30 (B-3402 to B-3404): the trust screens
       { id: 'certificates', label: 'Certificates', icon: 'certificates', perm: 'pki:manage', live: true }, { id: 'vault', label: 'Vault', icon: 'vault', perm: 'secrets:admin', live: true }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins', perm: 'plugins:manage', live: true },
+      // Sprint 31 (B-3406): service DID and keys (pki:manage), labels and labelers (labels:manage), firehose and feeds
+      // (firehose:manage), DID bindings (identity:manage) and the PDS (pds:manage)
+      { id: 'atproto', label: 'AT-Protocol', icon: 'atproto', perm: ['pki:manage', 'labels:manage', 'firehose:manage', 'identity:manage', 'pds:manage'], live: true },
       { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];
@@ -233,7 +239,7 @@
     me: null, socket: null,
     api,
     get: (url) => api('GET', url), post: (url, body) => api('POST', url, body === undefined ? {} : body), patch: (url, body) => api('PATCH', url, body), del: (url) => api('DELETE', url),
-    can(perm) { return !!(App.me && App.me.permissions.indexOf(perm) >= 0); },
+    can(perm) { if (Array.isArray(perm)) return perm.some((p) => App.can(p)); return !!(App.me && App.me.permissions.indexOf(perm) >= 0); },
     canOpen(route) { if (OPEN_ROUTES[route]) return true; const it = NAV_BY_ID[route]; return !it || App.can(it.perm); },
     isLive(route) { const it = NAV_BY_ID[route]; return OPEN_ROUTES[route] || !!(it && it.live) || !!(screens[route] && screens[route].live); },
     /** Shows a problem's title, detail and trace id in a toast. */
@@ -679,7 +685,7 @@
 
   // not-found screen
   App.register({ id: 'not-found', title: 'Not found', crumb: ['Not found'], render(root, ctx) { root.innerHTML = '<div class="page">' + UI.problem('No such screen', 'The route in the address bar does not match a screen in the console.', false) + '<div>' + UI.btn('Open the screen map', { kind: 'primary', attrs: 'data-map' }) + '</div></div>'; ctx.on('click', '[data-map]', () => App.map()); } });
-  App.register({ id: 'forbidden', title: 'Not permitted', crumb: ['Not permitted'], render(root, ctx) { const it = NAV_BY_ID[state.route]; root.innerHTML = '<div class="page">' + UI.problem('You do not have access to ' + (it ? it.label : 'this screen'), 'It needs the ' + (it ? it.perm : '') + ' permission, which none of your roles grant. An identity admin can map your directory group to a role that does.', false) + '<div>' + UI.btn('Back to your workspace', { kind: 'primary', attrs: 'data-home' }) + '</div></div>'; ctx.on('click', '[data-home]', () => App.navigate(App.firstRoute())); } });
+  App.register({ id: 'forbidden', title: 'Not permitted', crumb: ['Not permitted'], render(root, ctx) { const it = NAV_BY_ID[state.route]; root.innerHTML = '<div class="page">' + UI.problem('You do not have access to ' + (it ? it.label : 'this screen'), 'It needs the ' + (it ? [].concat(it.perm).join(' or ') : '') + ' permission, which none of your roles grant. An identity admin can map your directory group to a role that does.', false) + '<div>' + UI.btn('Back to your workspace', { kind: 'primary', attrs: 'data-home' }) + '</div></div>'; ctx.on('click', '[data-home]', () => App.navigate(App.firstRoute())); } });
 
   // global events
   let tabTurn = 0;
