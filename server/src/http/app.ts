@@ -54,6 +54,7 @@ import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
 import { socialRoutes } from '../routes/social.js';
+import { messagingRoutes } from '../routes/messaging.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
@@ -248,6 +249,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(groupRoutes(s));
   // Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules.
   api.use(socialRoutes(s));
+  // Sprint 28b (B-2601 to B-2605): person-to-person messaging.
+  api.use(messagingRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

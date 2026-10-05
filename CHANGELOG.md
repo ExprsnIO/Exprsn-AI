@@ -61,6 +61,22 @@
   `SocialService.emitToRoom` leave out everyone in a block with the actor on every instance (the platform's BUG-080).
   New permissions `social:read` and `social:write` (members and tenant admins) and `social:manage` (tenant admins, an
   audited view of anyone's relations); audit actions `social.*`; catalogue version 4. Migration `030b_social`.
+- Person-to-person messaging (`/api/messaging`, `server/src/messaging/`), sealed at rest with the tenant key (no
+  end-to-end encryption, so search and summaries work). Direct conversations, one per pair even when both start one at
+  once, and group conversations in a workspace with owner, admin and member roles; workspace membership stays the
+  outer boundary. New permissions `messages:read` and `messages:write` (members and tenant admins).
+- Send, edit, delete, reply, threads, reactions, pins and forwarding; edits and deletes are audited without the text,
+  and a deleted message keeps only a tombstone. The `message.sent`, `message.edited` and `message.deleted` catalogue
+  events are now emitted; audit actions `messaging.*`. Messages are a moderation object type (`dm-message`).
+- Delivery and read receipts, typing and presence in the `conversation` realtime room, through the new `room.signal`
+  client message and room presence hooks; every event from a person leaves out the people in a block with them, on
+  the socket as well as in the API.
+- Attachments from the file store once they passed its quarantine; a mute and a notification rule (all, mentions,
+  none) per conversation: a muted conversation sends no notification.
+- Keyword search (keyed-hash terms) and semantic search (`MESSAGING_EMBED_MODEL`, by job) in a conversation; thread
+  summaries and catch-up digests from a profile, citing only messages the reader can see.
+- New settings `MESSAGING_MAX_MEMBERS`, `MESSAGING_EMBED_MODEL`, `MESSAGING_SUMMARY_PROFILE`,
+  `MESSAGING_SUMMARY_MAX_MESSAGES`, `ROOM_SIGNALS_PER_MINUTE`; the messaging tables are in migration `030b_social`.
 
 ## Unreleased
 

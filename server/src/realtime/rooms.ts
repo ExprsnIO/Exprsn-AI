@@ -30,6 +30,18 @@ export interface RoomGrant {
 /** Decides, from the principal, whether it may be in the room for this object; null refuses. */
 export type RoomAuthorizer = (p: Principal, id: string) => Promise<RoomGrant | null>;
 
+/**
+ * A signal a client sends into a room it is in (`room.signal {kind, id, signal, data}`): typing, delivery and read
+ * receipts. The domain decides what, if anything, to relay; it never trusts the client to name recipients.
+ */
+export type RoomSignalHandler = (p: Principal, id: string, signal: string, data: Record<string, unknown>) => Promise<void>;
+
+/** Called when a socket joins a room (after its authoriser admitted it) and when it leaves or disconnects. */
+export interface RoomPresenceHooks {
+  joined?(p: Principal, id: string): Promise<void>;
+  left?(p: Principal, id: string): Promise<void>;
+}
+
 export interface RoomAccessEvent {
   tenantId: string;
   kind: RoomKind;
@@ -65,6 +77,8 @@ export const roomName = (tenantId: string, kind: RoomKind, id: string) => `room:
 /** The authorisers domains register (on `s.rooms`) and the helpers they publish with. */
 export class RoomRegistry {
   private readonly authorizers = new Map<RoomKind, RoomAuthorizer>();
+  private readonly signals = new Map<RoomKind, RoomSignalHandler>();
+  private readonly presence = new Map<RoomKind, RoomPresenceHooks>();
 
   constructor(private readonly bus: Bus) {}
 
@@ -75,6 +89,39 @@ export class RoomRegistry {
     return () => {
       if (this.authorizers.get(kind) === authorize) this.authorizers.delete(kind);
     };
+  }
+
+  /** Handles the signals clients send into rooms of this kind (1.4.0, B-2603); kinds without one ignore signals. */
+  onSignal(kind: RoomKind, handler: RoomSignalHandler): () => void {
+    if (this.signals.has(kind)) throw new Error(`Rooms of kind ${kind} already have a signal handler`);
+    this.signals.set(kind, handler);
+    return () => {
+      if (this.signals.get(kind) === handler) this.signals.delete(kind);
+    };
+  }
+
+  /** Hooks for sockets joining and leaving rooms of this kind (presence, B-2603). */
+  onPresence(kind: RoomKind, hooks: RoomPresenceHooks): () => void {
+    if (this.presence.has(kind)) throw new Error(`Rooms of kind ${kind} already have presence hooks`);
+    this.presence.set(kind, hooks);
+    return () => {
+      if (this.presence.get(kind) === hooks) this.presence.delete(kind);
+    };
+  }
+
+  async signal(p: Principal, kind: RoomKind, id: string, signal: string, data: Record<string, unknown>): Promise<boolean> {
+    const fn = this.signals.get(kind);
+    if (!fn) return false;
+    await fn(p, id, signal, data);
+    return true;
+  }
+
+  async joined(p: Principal, kind: RoomKind, id: string): Promise<void> {
+    await this.presence.get(kind)?.joined?.(p, id);
+  }
+
+  async left(p: Principal, kind: RoomKind, id: string): Promise<void> {
+    await this.presence.get(kind)?.left?.(p, id);
   }
 
   async authorize(p: Principal, kind: RoomKind, id: string): Promise<RoomGrant | null> {
@@ -109,12 +156,17 @@ interface Io {
 }
 
 const joinMsg = z.object({ kind: z.enum(ROOM_KINDS), id: z.string().regex(ID) }).strict();
+const signalMsg = z.object({ kind: z.enum(ROOM_KINDS), id: z.string().regex(ID), signal: z.string().regex(/^[a-z][a-z-]{0,30}$/), data: z.record(z.string(), z.unknown()).optional() }).strict();
 
 /**
  * Wires the room protocol into Socket.io: `room.join` and `room.leave` from clients, room events and access changes
  * from the bus, and workspace membership changes. Returns the bus unsubscribers.
  */
-export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: (userId: string) => string, log: { warn(o: object, m: string): void }): { onConnection(socket: Socket): void; offs: (() => void)[] } {
+export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: (userId: string) => string, log: { warn(o: object, m: string): void }, opts: { signalsPerMinute?: number } = {}): { onConnection(socket: Socket): void; offs: (() => void)[] } {
+  const signalsPerMinute = opts.signalsPerMinute ?? 60;
+  const presence = (fn: 'joined' | 'left', p: Principal, kind: RoomKind, id: string) => {
+    void registry[fn](p, kind, id).catch((err: unknown) => log.warn({ err, kind }, `room ${fn} hook failed`));
+  };
   const recheck = (socket: Socket, d: RoomSocketData, room: string, kind: RoomKind, id: string) => {
     void registry
       .authorize(d.principal, kind, id)
@@ -207,9 +259,11 @@ export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: 
       try {
         const g = await registry.authorize(d.principal, kind, id);
         if (!g || !socket.connected) return reply({ ok: false, error: 'Not available to you.' });
+        const fresh = !d.rooms.has(room);
         d.rooms.set(room, { kind, id, grant: g });
         await socket.join(room);
         reply({ ok: true, label: g.label });
+        if (fresh) presence('joined', d.principal, kind, id);
       } catch (err) {
         log.warn({ err, kind }, 'room join failed');
         reply({ ok: false, error: 'Not available to you.' });
@@ -221,6 +275,28 @@ export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: 
       const room = roomName(d.principal.tenantId, parsed.data.kind, parsed.data.id);
       if (!d.rooms?.delete(room)) return;
       void socket.leave(room);
+      presence('left', d.principal, parsed.data.kind, parsed.data.id);
+    });
+    // B-2603: signals into a room the socket is in now (typing, receipts), at most `signalsPerMinute` a minute.
+    let budget = { start: Date.now(), n: 0 };
+    socket.on('room.signal', async (msg: unknown, ack?: (r: unknown) => void) => {
+      const reply = typeof ack === 'function' ? ack : () => undefined;
+      const parsed = signalMsg.safeParse(msg);
+      if (!parsed.success) return reply({ ok: false, error: 'Name a room kind, an id and a signal.' });
+      const { kind, id, signal, data } = parsed.data;
+      if (!d.rooms?.has(roomName(d.principal.tenantId, kind, id))) return reply({ ok: false, error: 'Join the room first.' });
+      const now = Date.now();
+      if (now - budget.start >= 60_000) budget = { start: now, n: 0 };
+      if (++budget.n > signalsPerMinute) return reply({ ok: false, error: 'Too many signals; slow down.' });
+      try {
+        reply({ ok: await registry.signal(d.principal, kind, id, signal, data ?? {}) });
+      } catch (err) {
+        log.warn({ err, kind, signal }, 'room signal failed');
+        reply({ ok: false, error: 'Signal refused.' });
+      }
+    });
+    socket.on('disconnect', () => {
+      for (const r of d.rooms?.values() ?? []) presence('left', d.principal, r.kind, r.id);
     });
   };
 

@@ -2861,3 +2861,111 @@ For other modules, `server/src/social/service.ts` (`s.social`) has the shared ch
 `requireContact`, and `emitToRoom`, which publishes a realtime room event with everyone in a block with the actor left
 out (`exceptUserIds` on the room event), so the filter applies on every instance. Every change is also published on
 the bus (`social.relation {tenantId, kind: block | mute | follow, userId, targetId, on}`).
+
+## Sprint 28b (1.4.0): messaging (B-2601 to B-2605)
+
+Person-to-person conversations inside the tenant, sealed at rest with the tenant key (no end-to-end encryption, so
+search, summaries and moderation work). `messages:read` reads one's conversations, `messages:write` starts them, sends,
+edits, reacts and pins (both held by members and tenant admins); what a member may do inside a conversation is their
+**role**: `owner` (title, roles, delete), `admin` (add and remove members, pin, delete others' messages, title) or
+`member` (send, react, receipts). Nobody reads a conversation they are not in: there is no administrator view
+(moderation reads reported messages). Every route answers `Cache-Control: no-store`.
+
+- A **direct** conversation is between two people, one per pair: starting one again, from either side, returns the
+  first (`200`), also when both start it at once (a unique key on the pair). It has no workspace: the two must share
+  one now (else `404`), and in it both may pin. A **group** conversation lives in one workspace; everyone in it must be
+  a member of that workspace now. Workspace membership is the outer boundary, as for groups: losing it hides the
+  conversation at once.
+- Starting a conversation or adding someone follows their **contact rule** and refuses a block (`403`, `step:
+  contact`, the same words either way; see social relations above). A direct conversation takes no messages while
+  either person blocks the other. In a group conversation, messages, reactions, receipts and socket events of people
+  in a block with the reader are left out of everything the reader gets.
+- The `label` (default `internal`, at most the workspace ceiling, or for a direct conversation the highest ceiling of
+  the shared workspaces) is set at creation; everyone in the conversation must be cleared for it (`422`).
+- A member added to a group conversation reads messages from the moment they were added.
+
+Refusals carry `step`: `contact`, `self`, `workspace`, `clearance`, `conversation-role` (with `right`), `author`,
+`guardrails`. Changes are audited under `messaging.*` without any message text (a deleted message leaves
+`messaging.message.deleted` with the author and edit count); the catalogue events `message.sent`, `message.edited` and
+`message.deleted` (ids only) are emitted to webhooks and plugins (catalogue version 4).
+
+### Conversations and members (B-2601)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/messaging/conversations?workspace=` | The caller's conversations still within their workspaces and clearance, latest activity first: `[{id, kind, workspaceId, title, label, role, members, unread, muted, mutedUntil, notify, lastReadId, lastMessageAt, with?, …}]` (`with` is the other person of a direct conversation) |
+| `POST /api/messaging/conversations` `{kind: direct, userId, label?}` | `201` with a new direct conversation, or `200` with the existing one for the pair |
+| `POST /api/messaging/conversations` `{kind: group, workspaceId?, title?, memberIds, label?}` | `201`; in a workspace the caller may act in (default the current one), with people from that workspace (`422`, `step: workspace`) who accept the caller (`403`). At most `MESSAGING_MAX_MEMBERS` people. The creator is the owner |
+| `GET /api/messaging/conversations/:id` | The conversation with `people: [{userId, username, displayName, role, joinedAt, lastSeenAt}]` |
+| `PATCH /api/messaging/conversations/:id` `{title}` | Owner or admin of a group conversation (`409` for a direct one) |
+| `DELETE /api/messaging/conversations/:id` | Owner. The conversation is deleted and its messages' bodies, terms and vectors removed |
+| `GET /api/messaging/conversations/:id/members` | The people |
+| `POST /api/messaging/conversations/:id/members` `{userId, role?: member}` | Owner or admin (owners for `admin` and `owner`). `201` |
+| `PATCH /api/messaging/conversations/:id/members/:userId` `{role}` | Owner. A conversation keeps at least one owner (`409`) |
+| `DELETE /api/messaging/conversations/:id/members/:userId` | Leave (one's own id) or remove (admins remove members, owners anyone). The last owner cannot leave (`409`). Their sockets leave the room at once |
+
+### Messages (B-2602)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/messaging/conversations/:id/messages?before=&thread=&limit=` | Newest first. Without `thread`, the main timeline (thread replies left out); with `thread=<first message id>`, the thread. `[{id, conversationId, authorId, authorName, body, state: sent \| hidden \| deleted, label, replyTo, threadId, replyCount, forwardedFrom, attachments: [{fileId, name, type, size, state}], reactions: [{emoji, count, mine}], pinned, pinnedAt, pinnedBy, edited, editedAt, createdAt}]`; deleted and hidden messages are tombstones (`body: null`) |
+| `POST /api/messaging/conversations/:id/messages` `{body, replyTo?, threadId?, attachments?}` | Up to 10,000 characters, screened at the `user-input` guardrail checkpoint (`422`, `step: guardrails`; a redaction is stored redacted), sealed. `threadId` puts it in the thread of that message (threads are one level deep); `replyTo` quotes a message. `201` |
+| `GET /api/messaging/conversations/:id/pins` | Pinned messages |
+| `PATCH /api/messaging/messages/:id` `{body}` | Its author; screened again. Audited with the edit number and length |
+| `DELETE /api/messaging/messages/:id` | Its author, or an owner or admin. The body, attachments, keyword terms, vector and reactions are deleted; the row stays as a tombstone |
+| `POST /api/messaging/messages/:id/reactions` `{emoji}` | An emoji or a `:name:` (no spaces, up to 32 characters). `201` |
+| `DELETE /api/messaging/messages/:id/reactions/:emoji` | Takes the caller's reaction back |
+| `POST /api/messaging/messages/:id/pin`, `DELETE …/pin` | Owner or admin (anyone in a direct conversation) |
+| `POST /api/messaging/messages/:id/forward` `{conversationId}` | Copies a message (and its attachments, checked again) into another conversation the caller writes in; a message above that conversation's label is `422`. `201` with the new message (`forwardedFrom`) |
+
+### Receipts, typing and presence (B-2603)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/messaging/conversations/:id/read` `{messageId}` | Moves the caller's read mark forward (never back); reading also counts as delivered |
+| `POST /api/messaging/conversations/:id/delivered` `{messageId}` | Moves the delivered mark forward |
+| `GET /api/messaging/conversations/:id/receipts` | `[{userId, lastReadId, lastReadAt, deliveredId, deliveredAt, lastSeenAt}]` without people in a block with the caller |
+
+The `conversation` room kind: a socket joins with `room.join {kind: conversation, id}` when its user is a member,
+inside the boundary and cleared. Events (ids, never text): `conversation.message.created {messageId, authorId,
+threadId}`, `conversation.message.edited`, `conversation.message.deleted`, `conversation.reaction`,
+`conversation.pin`, `conversation.member.added`, `conversation.member.removed`, `conversation.member.role`,
+`conversation.updated`, `conversation.read {userId, messageId}`, `conversation.delivered`, `conversation.typing
+{userId, typing}` and `conversation.presence {userId, state: online | offline, at}` (sent when a socket joins or
+leaves the room). A socket in the room sends `room.signal {kind: conversation, id, signal: typing | read | delivered,
+data: {typing?, messageId?}}` (at most `ROOM_SIGNALS_PER_MINUTE` a minute; the acknowledgement is `{ok}`). Every event
+from a person leaves out the sockets of everyone in a block with them, on every instance (the platform's BUG-080):
+a blocked user receives no typing, presence, receipt or message event from the person they blocked or who blocked
+them.
+
+### Attachments and notifications (B-2604)
+
+Attachments are files from the file store (`PUT /api/files/uploads`): only a file the sender can read whose current
+version passed its quarantine scan (`409` while it is pending), labelled at most the conversation's label, and in the
+conversation's workspace (or, in a direct conversation, a workspace both people share; `422`, `step: workspace`), so
+everyone reads it through the file store. At most 10 a message.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/messaging/conversations/:id/settings` `{muted?, mutedMinutes?, notify?: all \| mentions \| none}` | The caller's own: `muted: true` until unmuted, `mutedMinutes` for a while, `muted: false` to unmute. `{conversationId, muted, mutedUntil, notify}` |
+
+A new message notifies (in the console, `kind: message`, naming the sender, never the text or the title) every other
+member except those who muted the conversation, whose rule is `none`, whose rule is `mentions` and who were not named
+(`@username`), who muted the sender, or who are in a block with the sender.
+
+### Search, summaries and digests (B-2605)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/messaging/conversations/:id/search?q=&mode=keyword \| semantic \| hybrid&limit=` | Over the messages the caller can see (since they joined, not deleted or hidden, none from people in a block with them). Keyword ranks by keyed-hash terms; semantic by the embeddings of `MESSAGING_EMBED_MODEL` (an approved embedding model; without it `semantic` and `hybrid` are `409` and the default is `keyword`); hybrid fuses both by reciprocal rank. The messages with `score {fused, keyword, semantic}` |
+| `POST /api/messaging/conversations/:id/summary` `{threadId?, profile?, limit?}` | Also needs `inference:invoke`. A summary of a thread, or of the latest messages (up to `MESSAGING_SUMMARY_MAX_MESSAGES`), from the profile (default `MESSAGING_SUMMARY_PROFILE`). `{conversationId, kind: thread \| recent, profile, messages, from, to, summary, citations: [{n, messageId}]}` |
+| `POST /api/messaging/conversations/:id/digest` `{profile?}` | Also needs `inference:invoke`. A catch-up digest of the messages from others after the caller's read mark; `summary: null` when there are none |
+
+Only the messages the caller can see are numbered and sent to the model; citations `[n]` in its answer are kept only
+when they name one of them (others are removed from the text), so a summary never cites a message its reader cannot
+see. The answer passes the `model-output` guardrail checkpoint; a model that is down or refused is `503`. Audited
+`messaging.summary.created` (counts only).
+
+Messages are moderated through the moderation API with the registered type `dm-message`: anyone who can see a message
+may report it (`POST /api/moderation/reports {type: dm-message, id}`); a hidden message shows to its conversation as a
+tombstone and leaves search.

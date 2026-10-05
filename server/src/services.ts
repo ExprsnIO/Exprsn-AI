@@ -105,6 +105,8 @@ import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
 import { SocialService } from './social/service.js';
+import { MessagingService } from './messaging/service.js';
+import { MessagingInsights } from './messaging/insights.js';
 
 export interface Services {
   cfg: Config;
@@ -240,6 +242,10 @@ export interface Services {
   calendar: CalendarService;
   /** 1.4.0, Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules, shared by messaging and the feed. */
   social: SocialService;
+  /** 1.4.0, Sprint 28b (B-2601 to B-2604): direct and group conversations, sealed messages, receipts, presence, mutes. */
+  messaging: MessagingService;
+  /** 1.4.0, Sprint 28b (B-2605): keyword and semantic search, thread summaries and catch-up digests. */
+  messagingInsights: MessagingInsights;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -487,6 +493,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
     // 1.4.0, Sprint 28b: social relations.
     social: new SocialService(() => s),
+    messaging: new MessagingService(() => s, { maxMembers: cfg.MESSAGING_MAX_MEMBERS, embedModel: cfg.MESSAGING_EMBED_MODEL || null }),
+    messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -596,6 +604,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 27c (B-2501 to B-2505): the group room authoriser, group content as moderation objects, reminder jobs.
   s.groups.init();
   s.calendar.registerJobs();
+  // Sprint 28b (B-2601 to B-2605): the conversation room (authoriser, signals, presence), embeddings, messages as
+  // moderation objects.
+  s.messaging.init();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));

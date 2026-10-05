@@ -584,7 +584,19 @@ const base = z.object({
     GROUP_INVITE_DAYS: z.coerce.number().int().min(1).max(365).default(7),
     GROUP_REQUEST_DAYS: z.coerce.number().int().min(1).max(365).default(14),
     CALENDAR_FEED_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
-    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
+    CALENDAR_FEED_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal'),
+    /**
+     * Sprint 28b (B-2601 to B-2605): messaging. A group conversation holds at most MESSAGING_MAX_MEMBERS people.
+     * MESSAGING_EMBED_MODEL (an approved embedding model) turns on semantic search; without it search is by keyword
+     * only. Summaries and catch-up digests use the profile MESSAGING_SUMMARY_PROFILE unless the request names one, over
+     * at most MESSAGING_SUMMARY_MAX_MESSAGES messages. ROOM_SIGNALS_PER_MINUTE caps the signals (typing, delivery and
+     * read receipts) one socket may send into realtime rooms.
+     */
+    MESSAGING_MAX_MEMBERS: z.coerce.number().int().min(3).max(10_000).default(256),
+    MESSAGING_EMBED_MODEL: z.string().max(200).optional(),
+    MESSAGING_SUMMARY_PROFILE: z.string().min(1).max(63).default('general'),
+    MESSAGING_SUMMARY_MAX_MESSAGES: z.coerce.number().int().min(10).max(2000).default(200),
+    ROOM_SIGNALS_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
