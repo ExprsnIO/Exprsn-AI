@@ -8,9 +8,10 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 40 items, 227 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 50, P2 60. At about
-78 points a sprint (roughly five engineers) that is Sprints 29 to 31. With fewer, P2 (the PDS and feed generator)
-moves to 1.6 first, then WebDAV (B-32).
+**Size.** 47 items, 277 points (1 point ≈ half a day for one engineer, tests included): P0 117, P1 100, P2 60. At about
+78 points a sprint (roughly five engineers) that is Sprints 29 to 31 with Sprints 30 and 31 over the guide; with fewer,
+P2 (the PDS and feed generator) moves to 1.6 first, then WebDAV (B-32), then the import wizard's dataset half
+(B-3804 to B-3807).
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -23,14 +24,15 @@ the same policy pipeline.
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
 | 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | Planned |
-| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703 | 86 | `032_dav` | Planned |
-| 31 | AT-Protocol PDS and feed generator, release | B-2901–B-2906, B-3001–B-3004, B-3406, B-3501 | 65 | `033_pds_feeds` | Planned |
+| 30 | Domain screens; CalDAV, CardDAV and WebDAV; model-based memory management; import repositories and model import | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203, B-3701–B-3703, B-3801–B-3803 | 107 | `032_dav`, `032b_imports` | Planned |
+| 31 | AT-Protocol PDS and feed generator, release; dataset import, knowledge sets and the Import screen | B-2901–B-2906, B-3001–B-3004, B-3406, B-3804–B-3807, B-3501 | 94 | `033_pds_feeds` | Planned |
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
 the file-store mount (B-3102, B-3103, B-32); the PDS repository (B-2902) before the outbound firehose (B-2904) and
 before a feed generator publishes its record into a tenant repo (B-3004); the AT-Protocol screen (B-3406) last, so it
-covers the PDS and feeds.
+covers the PDS and feeds; the repository registry (B-3801) before any import, and model and dataset import (B-3803,
+B-3804) before the Import screen (B-3807) goes live.
 
 ---
 
@@ -113,6 +115,30 @@ proposals a person accepts, with the rules kept as the fallback.
 | B-3702 | A consolidation job: near-duplicates found by embedding similarity and confirmed by the profile become one merge proposal; stale or contradicted memories get an expiry proposal; nothing changes until accepted | Two near-duplicate memories produce one merge proposal and both stay unchanged until it is accepted | 5 |
 | B-3703 | The memory embedding model as a tenant setting (instead of the first approved embedding model by name), with a reindex job and recall by recency while it runs | Switching the model reindexes every memory and recall keeps answering during the reindex | 3 |
 
+### B-38 Model and dataset import wizard (50 points)
+
+Approved from the mockup `design/mockups/import-wizard.html` and the prototype board `design/prototype/js/screens/import.js`
+(route `#/import`) on 2026-10-05. One guided path from a public repository (Hugging Face Hub, the Ollama library,
+ModelScope, data.gov, data.europa.eu, Eurostat and the ECB, data.gov.sg, data.go.jp and e-Stat, data.gov.in,
+data.go.kr, OpenML, Zenodo, Kaggle, the signed import share) to a draft model in the catalogue, a versioned training
+dataset, a classifier evaluation set or a knowledge set. It extends the Models, Training, Classifiers and Knowledge
+screens rather than replacing them: the result lands where those screens already govern it, and the licence, label,
+digest, attribution and requester are recorded on the manifest. Weights still enter only through the signed import
+path (GGUF and safetensors; pickle refused before anything is written); air-gapped instances queue the request for
+the weekly bundle. New permissions: `imports:run` (model, ML and knowledge admins by destination) and
+`imports:repositories` (model admin, dual control). New tables: `import_repositories`, `import_catalog`,
+`import_jobs`; `knowledge_sources.kind` gains `dataset`, `training_datasets.source_kind` gains `import`.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3801 | Repository registry: types (Hugging Face compatible hub, Ollama compatible registry, CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle, bundle share), credentials in the vault, the staging-proxy allow-list, dual-controlled add, harvest schedules and the catalogue snapshot | A CKAN portal added from the screen is harvested and browsable after confirmation | 8 |
+| B-3802 | Catalogue browse: search, classification and licence facets from the source's own taxonomy, live search through the proxy when reachable, snapshot fallback with backoff when rate limited | A facet count equals the rows the filter returns | 5 |
+| B-3803 | Model import: tags, variants and files, gate acceptance with the recorded token, format and pickle checks, licence policy and exceptions, GGUF conversion on the training pool, draft registration with digest pinning; bundle mode for air-gapped instances | A pickle-only repository is refused with nothing written; a safetensors import registers a draft whose digest matches | 8 |
+| B-3804 | Dataset import: configurations, splits, resources and API paging (CKAN datastore, Socrata, SDMX, e-Stat, OGD), schema preview with PII flags, sampling above the quota, scrub and versioning into `training_datasets` | An imported version has a manifest, hash and scrub report identical in shape to an inline one | 8 |
+| B-3805 | Knowledge sets: `knowledge_sources.kind = dataset` with column mapping (title, text, metadata), grouping by a column, refresh schedules that follow the publisher, citations back to the row | A monthly SDMX table refreshes on schedule and the index swaps without downtime | 8 |
+| B-3806 | Classifier eval sets and imported classifier engines: rows into an eval set with minimum-sample warnings; a text-classification model served by the classifier worker | An imported eval set shows precision and recall per label on the Classifiers screen | 5 |
+| B-3807 | Import screen: the wizard, the Imports queue with cancel, retry and logs, the Repositories tab; entry points on Models, Training, Classifiers and Knowledge; Playwright and axe coverage for every state on the board | Every state on the board is reachable in the e2e suite in light and dark | 8 |
+
 ## P2
 
 ### B-29 AT-Protocol personal data server (42 points)
@@ -158,11 +184,21 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 ## Open decisions
 
-- [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
-  tenant's own domain).
-- [ ] Custom roles: can a workspace define roles, or only the tenant?
-- [ ] Access reviews: who reviews by default (the workspace admin, the member's manager from the directory, or both)?
-- [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
+All six resolved by the owner on 2026-10-05.
+
+- [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant
+  subdomain (`<handle>.<tenant>.<pds domain>`). A tenant's own handle domain is deferred to 1.6 (B-2901).
+- [x] Custom roles: tenant only. Workspaces assign roles but do not define them; the matrix stays one table per
+  tenant (B-3302, B-3412).
+- [x] Access reviews: both the workspace admin (tenant admin for tenant-level roles) and the member's directory
+  manager are assigned; the first decision stands. When the manager attribute is empty only the admin is assigned
+  (B-3305).
+- [x] DAV app passwords: allowed for roles that require MFA, but creating one needs a fresh MFA step-up and the
+  password carries a DAV-only scope (CalDAV, CardDAV, WebDAV; never the API or console) (B-3101).
+- [x] Import quota (B-38): 500 GB per tenant for datasets, metered and shown beside the existing tenant quotas; any
+  workspace's import draws from it (B-3804).
+- [x] Licence exceptions (B-3803, B-3804): granted or refused by a reviewer holding a new `legal-review` role; tenant
+  admins request but cannot grant. The import waits in the queue until the decision.
 
 ## Risks
 
@@ -171,5 +207,6 @@ and a handle domain per tenant. New permission: `pds:manage`.
 | AT-Protocol repo format | A subtle MST or CAR encoding error makes relays and AppViews reject the repo | Conformance against the reference implementation's test vectors and the dev environment in CI (B-2906) |
 | Hosting public repositories | Abuse, takedown and legal duties for content Exprsn-AI now serves to the network | P2 and off by default per tenant; takedowns through B-19; the open decision above |
 | DAV client quirks | Clients differ on ETags, sync tokens and locking | Recorded conformance runs (B-3104) and `litmus` (B-3203) in CI |
+| Public repositories | A harvested card misstates its licence, or a gated download changes under the same revision | Licence recorded from the fetched files, not the snapshot; digests pinned at request time; pickle scan at staging as well as in the wizard (B-3803) |
 | Custom roles widening access | A role grants more than its creator holds, or more than a zone allows | Creation capped at the creator's own permissions, dual control for admin permissions, the zone ceiling still applies in `policy.ts` |
-| Screen volume | Thirteen new screens strain the e2e suite's run time | Share fixtures; the reflow spec covers dialogs by registry rather than per test |
+| Screen volume | Fourteen new screens strain the e2e suite's run time | Share fixtures; the reflow spec covers dialogs by registry rather than per test |
