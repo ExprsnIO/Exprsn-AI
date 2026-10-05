@@ -1,5 +1,5 @@
 /**
- * Permission catalogue and the thirteen built-in roles from the Tenants board.
+ * Permission catalogue and the fourteen built-in roles from the Tenants board.
  * A permission is `resource:action`. Roles are sets of permissions; `system-admin` holds everything.
  * API keys and service accounts carry scopes, which can only narrow what the role grants ("scopes never widen a role").
  *
@@ -64,7 +64,12 @@ export const PERMISSIONS = [
   // comments in the workspaces one may act in, and set and run each workspace's digest.
   'feed:read', 'feed:write', 'feed:manage',
   // 1.5.0 (Sprint 29, B-33): tenant-defined roles, the role and effective-access matrices, and access reviews.
-  'roles:manage'
+  'roles:manage',
+  // 1.5.0 (Sprint 30, B-38): the import wizard. run: browse repositories and request imports (a destination also needs
+  // its own permission: models:manage for a draft model); repositories: propose, confirm and change the repositories
+  // (dual control); review: grant or refuse licence exceptions and set the tenant's licence allow-list (the
+  // legal-review role; tenant admins request exceptions but cannot decide them).
+  'imports:run', 'imports:repositories', 'imports:review'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -112,17 +117,20 @@ const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage', 'imports:run'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
-  { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
+  { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage', 'imports:run', 'imports:repositories'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage', 'channels:review'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'tool-admin', name: 'Tool admin', description: 'Registry review, MCP servers and tool approvals.', permissions: ['tools:manage', 'agents:manage', 'mcp:manage'], requiresMfa: true, grantableBy: ADMINS },
-  { id: 'knowledge-curator', name: 'Knowledge curator', description: 'Knowledge bases, sources, relabelling and workspace memory.', permissions: ['knowledge:read', 'knowledge:manage', 'prompts:manage'], requiresMfa: false, grantableBy: ADMINS },
-  { id: 'ml-admin', name: 'ML admin', description: 'Training jobs, datasets and approvals for confidential data.', permissions: ['training:submit', 'training:manage', 'models:read'], requiresMfa: true, grantableBy: ADMINS },
+  { id: 'knowledge-curator', name: 'Knowledge curator', description: 'Knowledge bases, sources, relabelling and workspace memory.', permissions: ['knowledge:read', 'knowledge:manage', 'prompts:manage', 'imports:run'], requiresMfa: false, grantableBy: ADMINS },
+  { id: 'ml-admin', name: 'ML admin', description: 'Training jobs, datasets and approvals for confidential data.', permissions: ['training:submit', 'training:manage', 'models:read', 'imports:run'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'workflow-admin', name: 'Workflow admin', description: 'Publishes workflows and scripts as tools, and designs low-code apps.', permissions: ['workflows:manage', 'scripts:run', 'apps:design', 'records:read', 'records:write'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'connection-admin', name: 'Connection admin', description: 'Data connections, credentials and schema allow-lists.', permissions: ['connections:manage', 'secrets:read', 'secrets:write'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'flag-reviewer', name: 'Flag reviewer', description: 'Works the review queue within their clearance.', permissions: ['flags:review', 'moderation:review', 'channels:review'], requiresMfa: false, grantableBy: ADMINS },
   { id: 'member', name: 'Member', description: 'Chat, knowledge and tools within their clearance.', permissions: MEMBER, requiresMfa: false, grantableBy: [...ADMINS, 'identity-admin'] },
+  // 1.5.0 (Sprint 30, B-3803): licence exceptions for imports. Only a system admin grants it, so a tenant admin who
+  // requests an exception cannot also decide it.
+  { id: 'legal-review', name: 'Legal review', description: 'Grants or refuses licence exceptions for imports and keeps the licence allow-list.', permissions: ['imports:review', 'models:read'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'auditor', name: 'Auditor', description: 'Reads the audit chain and usage. Nothing else.', permissions: ['audit:read', 'usage:read'], requiresMfa: true, grantableBy: ADMINS }
 ];
 

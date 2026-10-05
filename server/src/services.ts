@@ -114,6 +114,7 @@ import { FeedService } from './feed/service.js';
 import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
+import { ImportService } from './imports/service.js';
 
 export interface Services {
   cfg: Config;
@@ -263,6 +264,8 @@ export interface Services {
   access: AccessService;
   /** 1.5.0, Sprint 29 (B-3305): access review campaigns. */
   accessReviews: AccessReviewService;
+  /** 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, the catalogue and model import. */
+  imports: ImportService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -525,6 +528,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
     accessReviews: new AccessReviewService(() => s),
+    // 1.5.0, Sprint 30: the import wizard's server side.
+    imports: new ImportService(() => s, cfg),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -646,6 +651,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
   s.customRoles.init();
   s.accessReviews.registerJobs();
+  s.imports.registerJobs(); // 1.5.0, Sprint 30 (B-3801 to B-3803): harvests, model imports, bundle matching
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -708,4 +714,5 @@ export function startSchedules(s: Services): void {
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation
+  s.imports.schedule(s.scheduler, activeTenants); // 1.5.0, Sprint 30 (B-3801, B-3803): due harvests, promoted bundles
 }

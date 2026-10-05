@@ -74,7 +74,9 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
   { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
   // 1.4.0, Sprint 25c (B-1704 to B-1706)
-  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' }
+  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' },
+  // 1.5.0, Sprint 30 (B-3801 to B-3803)
+  { pattern: 'import.*', description: 'Imports: repositories proposed, confirmed, rejected, updated, enabled, disabled, deleted and harvested; gates accepted; imports requested, refused, completed, failed, cancelled and retried; licence exceptions requested, granted and refused; the licence allow-list and the import quota (audit actions; never credentials)' }
 ];
 
 const id26 = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };

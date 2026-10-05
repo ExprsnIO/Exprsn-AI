@@ -144,8 +144,26 @@ export class TrainingWorkerGate {
 
   /** Stores an artefact the worker uploads, encrypted under a key sealed with the tenant key. */
   async putArtifact(id: string, name: string, kind: string, body: ByteSource, caller: WorkerCaller): Promise<{ ref: string; name: string; sha256: string; bytes: number }> {
-    const s = this.s();
     const g = await this.check(id, 'artifacts', caller);
+    const out = await this.storeArtifact(g.tenant_id, g.job_id, name, kind, body);
+    await this.audit(g, 'training.worker.artifact.stored', { grant: id, name, kind: out.kind, bytes: out.bytes, sha256: out.sha256 }, caller);
+    return { ref: out.ref, name, sha256: out.sha256, bytes: out.bytes };
+  }
+
+  /**
+   * 1.5.0 (B-3803): an artefact grant for work that is not a training run (an import's GGUF conversion): the worker
+   * reads the staged files and uploads the GGUF with it, exactly as for a run.
+   */
+  async artifactGrant(tenantId: string, jobId: string, ttlMs: number): Promise<{ url: string; token: string; expiresAt: number }> {
+    await this.s().db('training_worker_grants').where({ job_id: jobId, kind: 'artifacts' }).delete();
+    const g = await this.grant(tenantId, jobId, 'artifacts', ttlMs, async () => null);
+    return { url: `${this.base()}/trainer/v1/artifacts/${g.id}`, token: g.token, expiresAt: g.expiresAt };
+  }
+
+  /** Seals bytes into an artefact of a job (the worker's upload, or an import's staged file); replaces one of the same name. */
+  async storeArtifact(tenantId: string, jobId: string, name: string, kind: string, body: ByteSource): Promise<{ ref: string; kind: ArtifactRow['kind']; sha256: string; bytes: number }> {
+    const s = this.s();
+    const g = { tenant_id: tenantId, job_id: jobId };
     if (!NAME.test(name)) throw new HttpProblem(400, 'Invalid request', 'An artefact name is letters, digits, dots, dashes and underscores.');
     const k: ArtifactRow['kind'] = kind === 'checkpoint' || kind === 'gguf' ? kind : 'other';
     const blobKey = `training/${g.tenant_id}/jobs/${g.job_id}/artifacts/${name}`;
@@ -167,8 +185,7 @@ export class TrainingWorkerGate {
     dek.fill(0);
     await s.db('training_artifacts').where({ job_id: g.job_id, name }).delete();
     await s.db('training_artifacts').insert(row);
-    await this.audit(g, 'training.worker.artifact.stored', { grant: id, name, kind: k, bytes: size, sha256: row.sha256 }, caller);
-    return { ref: `${ARTIFACT_REF}${name}`, name, sha256: row.sha256, bytes: size };
+    return { ref: `${ARTIFACT_REF}${name}`, kind: k, sha256: row.sha256, bytes: size };
   }
 
   /** Streams an artefact back to the worker (to resume from a checkpoint, or to convert). */

@@ -119,6 +119,23 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Import repositories and model import (1.5.0, Sprint 30, B-3801 to B-3803): the allow-list is enforced by the
+  platform's own egress (each hop of a redirect checked, credentials never forwarded along one); with
+  `IMPORT_PROXY_URL` the connection is the proxy's, and the proxy must enforce the exported allow-list itself
+  (`GET /api/imports/proxy-allowlist`): the platform cannot check the addresses the proxy dials. Hugging Face gates that
+  the publisher approves by hand stay pending; the platform only sends the access request with the recorded token and
+  records the acceptance once a file is readable. The licence is read from the model card at the pinned commit or the
+  Ollama license layer and recognised from a fixed list; a card that misstates its licence is recorded as stated (legal
+  review sees the source in the manifest). Staged weights are kept unsealed and content-addressed under
+  `imports/blobs/` (public repository content; the copies handed to the training worker are sealed per tenant), and
+  nothing expires them yet. Ollama registry imports pin the manifest digest and stage the layers, but the pools still
+  pull the tag from the registry their Ollama is configured for (the registry itself, or an internal mirror): the
+  platform does not serve the staged layers to Ollama, and on an air-gapped instance the pools need the bundle's
+  models in that mirror. Classifier engines, speech and other non-Ollama models are refused until B-3806. Repository
+  credentials resolve as the user who saved them (B-1705), so that user needs `secrets:read` and the vault path; a
+  model admin without vault access records repositories without credentials. DCAT-AP, SDMX and OpenML have no search
+  API, so they browse their snapshot only; OpenML licences are read for the first `detailLimit` datasets of a harvest.
+  Dataset import (B-3804) is not built: its quota check (`admitDataset`) exists but nothing calls it yet.
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another

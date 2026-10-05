@@ -3305,3 +3305,151 @@ all required; `{anyOf}` when one of several suffices), `authenticated` (any sign
 entry for a route that is gone, or a route whose `requireAuth`, `requirePermission` or `requireAnyPermission`
 middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
 their middleware implies, for review.
+
+## Sprint 30 (1.5.0): import repositories and model import (B-3801 to B-3803)
+
+The server side of the import wizard (the Import screen is B-3807). New permissions: `imports:run` (browse
+repositories and request imports; model, ML and knowledge admins and tenant admins; a destination also needs its own
+permission, `models:manage` for a draft model), `imports:repositories` (model admins: propose, confirm and change
+repositories) and `imports:review` (the new `legal-review` role, granted only by a system admin: licence exceptions and
+the licence allow-list). Migration `032b_imports`. Audit actions `import.*` (also an event group). Configuration:
+`IMPORT_CONNECTIVITY`, `IMPORT_PROXY_URL`, `IMPORT_ALLOWED_HOSTS`, `IMPORT_TIMEOUT_MS`, `IMPORT_PART_BYTES`,
+`IMPORT_MAX_BYTES`, `IMPORT_HARVEST_MAX_ITEMS`, `IMPORT_HARVEST_TICK_MINUTES`, `IMPORT_BUNDLE_POLL_MINUTES`,
+`IMPORT_BACKOFF_MAX_MINUTES`, `IMPORT_DATASET_QUOTA_GB` (`server/.env.example`).
+
+### Repositories (B-3801)
+
+Types (`GET /api/imports/types`): `hf` (Hugging Face compatible hub), `ollama` (Ollama compatible OCI registry), `ckan`,
+`dcat` (DCAT-AP as JSON-LD), `sdmx` (SDMX 2.1 REST), `openml`, `invenio` (InvenioRDM, Zenodo), `kaggle` and `bundle`
+(model files in promoted signed platform bundles). Model import is implemented for `hf`, `ollama` and `bundle`; the
+others are browsable dataset catalogues until dataset import (B-3804).
+
+A repository is **proposed** by one holder of `imports:repositories` (`state: pending`) and **confirmed** by another
+(`403` `step: dual-control` for the proposer). Until then it is not browsable (`409`), not harvested and its hosts are
+not on the allow-list. Confirming queues the first harvest. The base host and `extraHosts` (redirect and CDN hosts,
+defaulted per type: `*.hf.co`, `cdn-lfs*.huggingface.co` for a hub, `*.r2.cloudflarestorage.com` for the Ollama
+registry) are the repository's part of the staging-proxy allow-list; they cannot be changed afterwards (propose again).
+`https://` only; plain `http://` only for hosts `IMPORT_ALLOWED_HOSTS` names.
+
+The credential is a vault reference (`credentialRef: vault:<path>#<key>`, checked with the saver's vault policy) or a
+value (`credential`) written into the vault at `imports/repositories/<id>` as the caller (they need vault write on that
+path). It is resolved, at use, as the user who saved it (B-1705: they need `secrets:read` and the path policy), sent
+only on the first request to the repository's own host, never along a redirect, and never shown again (the view has
+`credential: {recorded, ref, required, kind}`). Hub and InvenioRDM tokens go as `Bearer`, Kaggle and registry
+credentials (`username:key`) as Basic, CKAN keys as `Authorization`, OpenML keys as `X-API-Key`.
+
+Harvests (`imports.harvest` job) replace the repository's catalogue snapshot in one transaction; `harvestMinutes`
+(at least 15) schedules them (`imports.harvest-due`, every `IMPORT_HARVEST_TICK_MINUTES`). A source answering 429 (or
+503 with `Retry-After`) puts the repository into backoff (the longer of `Retry-After` and one minute doubling per
+failure, capped at `IMPORT_BACKOFF_MAX_MINUTES`): `status: rate limited`, `backoffUntil`; harvests, live search and
+downloads wait for it.
+
+Repository view: `{id, name, type, typeName, protocol, baseUrl, host, extraHosts, region, kinds, options, credential,
+licencePolicy, harvestMinutes, nextHarvestAt, state: pending | active | disabled | rejected, status: unknown |
+reachable | rate limited | unreachable | needs token | disabled, statusDetail, backoffUntil, liveSearch, modelImport,
+snapshotAt, snapshotItems, harvestJob, requestedBy, decidedBy, decidedAt, decisionNote, createdAt, updatedAt}`.
+
+Type options: `hf` `search`, `author`; `ollama` `models` (names to track; a registry answering `/v2/_catalog` needs
+none), `maxTags`; `ckan` `query`, `fq`, `region`; `dcat`, `sdmx` `region`, `licence` (the provider's terms); `openml`
+`detailLimit` (how many descriptions to read for licences); `invenio` `query` (for example `resource_type.type:dataset`);
+`kaggle` `query`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/types` | The types with kinds, protocol, example URL, default hosts, credential, live search and facet keys |
+| `GET /api/imports/repositories` | Repository views |
+| `POST /api/imports/repositories` `{name, type, baseUrl?, region?, kinds?, extraHosts?, options?, credentialRef? \| credential?, licencePolicy?, harvestMinutes?}` | `201` a pending repository; the other repository admins are notified |
+| `GET /api/imports/repositories/:id` | One repository |
+| `PATCH /api/imports/repositories/:id` `{name?, region?, options?, credentialRef?, credential?, licencePolicy?, harvestMinutes?}` | Changes it (not its hosts) |
+| `POST /api/imports/repositories/:id/confirm` `{note?}` | The second admin's confirmation: the view and `harvestJobId` |
+| `POST /api/imports/repositories/:id/reject` `{note?}` | Rejects a proposal |
+| `POST /api/imports/repositories/:id/enable`, `/disable` | Enables or disables it |
+| `POST /api/imports/repositories/:id/harvest` | `202 {jobId}` |
+| `POST /api/imports/repositories/:id/check` | Probes the source (and the credential) and updates `status` |
+| `DELETE /api/imports/repositories/:id` | `204`; `409` while any of its imports is in the queue |
+| `GET /api/imports/proxy-allowlist?format=json\|squid` | `platform:manage`: the hosts of every confirmed repository (system admins: every tenant) plus `IMPORT_ALLOWED_HOSTS`, as `{proxy, hosts: [{host, repositories}]}` or squid `dstdomain` lines |
+
+### Catalogue browse (B-3802)
+
+`GET /api/imports/repositories/:id/catalog?kind&q&facet.<key>=<value>&live=auto|on|off&limit&offset` answers
+`{repository, kind, query, selected, source: live | snapshot, liveReason, snapshotAt, total, limit, offset, items,
+facets: [{key, label, values: [{value, count, selected}]}]}`. Items: `{itemId, name, publisher, description,
+classification, licence, licenceAllowed, formats, gated, sizeBytes, updated, facets, data}`.
+
+Facets come from the source's own taxonomy: models `classification` (the hub's pipeline tag, the registry's model
+family), `format`, `licence`, `parameters`, `access` (open or gated), `library`, `family`, `quantization`; datasets
+`classification` (CKAN groups, DCAT-AP themes, SDMX categorisations, OpenML task types, InvenioRDM resource types,
+Kaggle and hub tags), `domain`, `format`, `licence`, `publisher`, `rows`, `region`, `updates`. Counts are disjunctive:
+a value's count is the number of items matching the search and every other selected facet, which is exactly how many
+rows selecting it returns. A search runs live through the proxy when the type can be searched (`hf`, `ckan`,
+`invenio`, `kaggle`), the repository is reachable and not backing off, and the instance is not air-gapped; otherwise
+(and with no search terms) the snapshot answers, and `liveReason` says why.
+
+### Model import (B-3803)
+
+The select and review steps:
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/repositories/:id/item?id&revision` | The model as the source states it now: `{itemId, name, revision (the commit, or the manifest digest), files: [{name, size, pin: sha256:… \| gitsha1:…, format: gguf \| safetensors \| pickle \| onnx \| metadata \| manifest \| other, mediaType}], variants, gated, access: open \| granted \| gated, gate, licence, licenceSource, classification, family, parameters, capabilities, contextLength, source: live \| snapshot \| bundle}`. Air-gapped: from the snapshot. Rate limited: `503` |
+| `POST /api/imports/repositories/:id/gate` `{item}` | Accepts a gate with the recorded token: `{item, access: granted, account, acceptedBy, acceptedAt}`; `409` `Gate pending` while the publisher has not approved |
+| `POST /api/imports/plan` (the request body below) | `{repository, item, name, revision, mode, source, files (with selected), variants, selected (names), variant, sizeBytes, gated, access, gate, licence: {id, source, allowed, recorded, needsException}, label, tag, conversion: {needed, quantization}, manifestDigest, checks: [{name, result: passed \| refused \| warning \| info \| waiting, detail}], blocked, waiting}`; nothing is written |
+
+Request body (plan and request): `{repositoryId, item, revision?, variants? (one GGUF file, or an Ollama tag),
+files?, target: models, label (default internal), licence? (recorded when the source states none), attribution?, tag?,
+quantization? Q4_K_M | Q5_K_M | Q8_0 | F16, poolId?, notes?, exception?: {reason}}`.
+
+Checks, in the board's order: **Format** (only GGUF and safetensors; a pickle-only repository, a selected pickle,
+ONNX or other weights, two GGUF variants, or GGUF and safetensors together are refused), **Licence** (from the card at
+the pinned commit or the manifest's license layer; on the allow-list, or waiting for an exception), **Access** (the
+gate), **Serving path** (classifier and speech models are refused until B-3806), **Conversion** (safetensors and
+published GGUF go through the GPU training worker; refused without one), **Destination** (a valid, unused tag; the
+caller's clearance; the pool's ceiling), **Size** (`IMPORT_MAX_BYTES`), **Connectivity**.
+
+`POST /api/imports` (`imports:run` and, for a draft model, `models:manage`) answers `201` with the import, or:
+`422 Import refused` (`import` holds the refused queue entry; nothing is downloaded, staged or registered), `409`
+`reason: gate`, `409 reason: licence-unknown` (record `licence`), `409 reason: licence-exception-required` (send
+`exception`). States: `queued`, `waiting on licence` (an exception `EXC-n` is pending; the legal reviewers are
+notified), `queued for bundle` (air-gapped), `running` (`stage`: Pinning, Downloading, Converting, Registering),
+`complete`, `refused`, `failed`, `cancelled`.
+
+The `imports.model` job re-reads the source at the pinned revision (a file whose digest changed under it refuses the
+import), downloads each file in parts of `IMPORT_PART_BYTES` (a retry resumes with `Range` from the stored parts),
+refuses pickle by the first bytes (`\x80` protocol or a zip archive) whatever the name, and checks every file against
+its pin (sha256, or the git blob id for small files). Verified files are kept content-addressed
+(`imports/blobs/sha256/<hex>`). Registration: an Ollama manifest registers as `<name>:<tag>` (another registry's host
+prefixed), `expected_digest` the manifest's digest, which is what the pools report; hub files are sealed as artefacts
+of the import and converted (or packaged, `as-is`, for a published GGUF) by the training worker's `POST /v1/convert`
+(`docs/training-worker.md`), and the digest it returns is pinned on the draft. The draft is an ordinary `draft` model
+(pull, evaluate and dual-control approval on the Models screen); with `poolId` it is placed and pulled. The import's
+`manifest` (`exprsn-import-manifest/1`: source, revision, files with pins and sha256, licence and its status, label,
+attribution, requester, gate, model and expected digest, conversion) is signed with the KMS key `import-manifests`.
+
+Import view: `{id, ref (IMP-2026-41), kind, repository, item, itemName, revision, target, mode, state, stage,
+progress, note, files: [{name, size, pin, format, done, sha256, state}], options, checks, log: [{at, title, meta,
+tone}], manifest, licence, licenceStatus: allowed | exception pending | exception granted | exception refused,
+exception: {id, ref, state, decidedBy, decisionNote}, label, attribution, sizeBytes, storedBytes, jobId, model: {id,
+name, state, expectedDigest}, error, requestedBy, requestedByName, createdAt, startedAt, finishedAt, updatedAt}`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports?state&kind&q&limit&offset` | `{counts: {total, running, waiting, queued}, imports}` within the caller's clearance |
+| `POST /api/imports` | Requests an import (above) |
+| `GET /api/imports/:id` | One import |
+| `POST /api/imports/:id/cancel` | Cancels a queued, waiting or running one (a pending exception is withdrawn, stored parts discarded) |
+| `POST /api/imports/:id/retry` | Retries a failed or cancelled one, resuming the downloads; a refused one is `409` |
+| `GET /api/imports/exceptions?state` | `imports:run` or `imports:review`: `[{id, ref, licence, reason, state, import: {id, ref, item, itemName, state, label}, requestedBy, requestedByName, requestedAt, decidedBy, decidedByName, decidedAt, decisionNote}]` |
+| `POST /api/imports/exceptions/:id/decision` `{decision: grant \| refuse, note?}` | `imports:review`. Whoever requested the import or the exception gets `403 step: dual-control`; an already decided one `409`. Granting queues the import; refusing refuses it |
+| `GET /api/imports/settings` | `{allowedLicences, defaultLicences, updatedBy, updatedAt, connectivity: direct \| bundle, viaProxy, quota}` |
+| `PUT /api/imports/settings/licences` `{allowedLicences}` | `imports:review`: the tenant's licence allow-list (ids are normalised; `unknown` and `other` are never allowed) |
+| `GET /api/imports/quota` | `imports:run` or `usage:read`: `{maxBytes, custom, usedBytes: {datasets, models, total}, appliesTo: datasets, updatedAt}`. The quota (500 GB unless set) applies to dataset imports (B-3804); model imports are metered beside it |
+| `PUT /api/admin/tenants/:tid/import-quota` `{maxBytes}` | `tenant:manage` and the system-admin role; `null` restores the default |
+| `GET /api/imports/bundle-requests` | `platform:manage`: `{format: exprsn-import-requests/1, generatedAt, requests: [{id, ref, tenant, repository: {type, baseUrl, name}, item, revision, variant, manifestDigest, files, licence, path, requestedAt}]}`, what staging fetches for the next bundle |
+
+**Bundle mode.** With `IMPORT_CONNECTIVITY=bundle` requests are planned from the snapshot and wait as
+`queued for bundle`. Staging reads `GET /api/imports/bundle-requests`, fetches and scans, and ships the files in a
+signed platform bundle under `imports/<import id>/` (the `models` mirror; Ollama layers as `<kind>-<12 hex>` beside
+`manifest.json`; an optional `import.json` `{licence, source, item, revision}`). Once the bundle is verified and
+promoted, `imports.bundle-match` (every `IMPORT_BUNDLE_POLL_MINUTES`) continues each request from the bundle's files with
+the same checks; a pin recorded at request time must still match. A `bundle` repository browses and imports promoted
+bundle files directly.

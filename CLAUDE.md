@@ -128,7 +128,7 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys;
   `account.ts` (password change, reset tokens, forced change, step-up freshness, preferences), `breached.ts` (HIBP range
   API and offline file), `security-alerts.ts` (security notices).
-- **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
+- **`authz/`**: `permissions.ts` (catalogue and the 14 built-in roles), `labels.ts`, `policy.ts` (the single decision
   pipeline: role → scopes → tenant → clearance → zone ceiling, plus `explain` for the step-by-step view).
 - **`audit/`**: `chain.ts` (append-only per-tenant SHA-256 hash chain, `onAppend` listeners), `checkpoints.ts`
   (KMS-signed checkpoints, verification), `exports.ts` (clearance-gated CSV by job), `siem.ts`.
@@ -190,6 +190,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `migrate --check`); `platform/shamir.ts` and `platform/escrow.ts` (`kms:escrow`, `kms:recover`); `zones/kube.ts` and
   `zones/cluster.ts` (`ZONES_APPLY=kubernetes`); `knowledge/crawl.ts` (the internal web crawler). Prometheus rules and
   Grafana dashboards are in `deploy/observability/`.
+- 1.5.0 modules: **`imports/`** (Sprint 30: `repositories.ts` the dual-controlled repository registry and harvests,
+  `catalog.ts` the snapshot with facets and live search, `fetcher.ts` the allow-listed import egress, `formats.ts`
+  format, pickle and licence checks, `service.ts` model import jobs, licence exceptions and bundle mode, `adapters/`
+  one per repository type); its fakes are `server/test/sprint30-imports-fakes.ts`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

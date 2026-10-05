@@ -7005,6 +7005,1016 @@
           "grant",
           "decision"
         ]
+      },
+      "ImportRepository": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "hf",
+              "ollama",
+              "ckan",
+              "dcat",
+              "sdmx",
+              "openml",
+              "invenio",
+              "kaggle",
+              "bundle"
+            ]
+          },
+          "typeName": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "extraHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "region": {
+            "type": "string"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "model",
+                "dataset"
+              ]
+            }
+          },
+          "options": {
+            "type": "object"
+          },
+          "credential": {
+            "type": "object",
+            "properties": {
+              "recorded": {
+                "type": "boolean"
+              },
+              "ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": true
+          },
+          "licencePolicy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harvestMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nextHarvestAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "disabled",
+              "rejected"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "reachable",
+              "rate limited",
+              "unreachable",
+              "needs token",
+              "disabled"
+            ]
+          },
+          "statusDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backoffUntil": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "liveSearch": {
+            "type": "boolean"
+          },
+          "modelImport": {
+            "type": "boolean"
+          },
+          "snapshotAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "snapshotItems": {
+            "type": "integer"
+          },
+          "harvestJob": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "decidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decisionNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportCatalogItem": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "classification": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "licence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "licenceAllowed": {
+            "type": "boolean"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gated": {
+            "type": "boolean"
+          },
+          "sizeBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updated": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "facets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "data": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportCatalogPage": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/ImportRepository"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "selected": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "snapshot"
+            ]
+          },
+          "liveReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshotAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportCatalogItem"
+            }
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      },
+                      "selected": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportCheck": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "refused",
+              "warning",
+              "info",
+              "waiting"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportModelDetail": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "pin": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "gguf",
+                    "safetensors",
+                    "pickle",
+                    "onnx",
+                    "metadata",
+                    "manifest",
+                    "other"
+                  ]
+                },
+                "mediaType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "quantization": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "size": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "digest": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "gated": {
+            "type": "boolean"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "open",
+              "granted",
+              "gated"
+            ]
+          },
+          "gate": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "licence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "licenceSource": {
+            "type": "string"
+          },
+          "classification": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parameters": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "snapshot",
+              "bundle"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportPlan": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "item": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "bundle"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "pin": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "gguf",
+                    "safetensors",
+                    "pickle",
+                    "onnx",
+                    "metadata",
+                    "manifest",
+                    "other"
+                  ]
+                },
+                "mediaType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "variant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "gated": {
+            "type": "boolean"
+          },
+          "access": {
+            "type": "string"
+          },
+          "licence": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "allowed": {
+                "type": "boolean"
+              },
+              "recorded": {
+                "type": "boolean"
+              },
+              "needsException": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": true
+          },
+          "label": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "conversion": {
+            "type": "object",
+            "properties": {
+              "needed": {
+                "type": "boolean"
+              },
+              "quantization": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": true
+          },
+          "manifestDigest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportCheck"
+            }
+          },
+          "blocked": {
+            "type": "boolean"
+          },
+          "waiting": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      },
+      "Import": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "object"
+          },
+          "item": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "waiting on licence",
+              "queued for bundle",
+              "running",
+              "complete",
+              "refused",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress": {
+            "type": "integer"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "options": {
+            "type": "object"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportCheck"
+            }
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "meta": {
+                  "type": "string"
+                },
+                "tone": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "manifest": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "licence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "licenceStatus": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "exception pending",
+              "exception granted",
+              "exception refused"
+            ]
+          },
+          "exception": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "storedBytes": {
+            "type": "integer"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "requestedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportLicenceException": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "licence": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "granted",
+              "refused",
+              "withdrawn"
+            ]
+          },
+          "import": {
+            "type": "object"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "requestedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedAt": {
+            "type": "integer"
+          },
+          "decidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decisionNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportQuota": {
+        "type": "object",
+        "properties": {
+          "maxBytes": {
+            "type": "integer"
+          },
+          "custom": {
+            "type": "boolean"
+          },
+          "usedBytes": {
+            "type": "object",
+            "properties": {
+              "datasets": {
+                "type": "integer"
+              },
+              "models": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": true
+          },
+          "appliesTo": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ImportSettings": {
+        "type": "object",
+        "properties": {
+          "allowedLicences": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultLicences": {
+            "type": "boolean"
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "connectivity": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "bundle"
+            ]
+          },
+          "viaProxy": {
+            "type": "boolean"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/ImportQuota"
+          }
+        },
+        "additionalProperties": true
       }
     },
     "responses": {
@@ -38270,6 +39280,1618 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AccessReview"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/types": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Repository types with their kinds, protocol, credential, live search and facet keys",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/settings": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "The tenant's licence allow-list, connectivity (direct or bundle), whether a staging proxy is used, and the quota",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/settings/licences": {
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Sets the tenant's licence allow-list (legal-review)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "allowedLicences"
+                ],
+                "properties": {
+                  "allowedLicences": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/quota": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "The import quota (dataset bytes, 500 GB by default) and the bytes used by datasets and models",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportQuota"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/tenants/{tid}/import-quota": {
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Sets a tenant's dataset import quota (system admins; null restores the default)",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "description": "The tenant id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "maxBytes"
+                ],
+                "properties": {
+                  "maxBytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportQuota"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "The tenant's repositories",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImportRepository"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Proposes a repository; a second holder of imports:repositories confirms it before it is harvested or allow-listed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "type"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "baseUrl": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "kinds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "extraHosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "options": {
+                    "type": "object"
+                  },
+                  "credentialRef": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "credential": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "licencePolicy": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "harvestMinutes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "One repository",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Changes name, region, options, credential, licence note or harvest schedule (not its hosts)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "object"
+                  },
+                  "credentialRef": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "credential": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "licencePolicy": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "harvestMinutes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Deletes a repository with its snapshot (none of its imports may be in the queue)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/confirm": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Confirms a proposed repository (not its proposer): its hosts join the allow-list and the first harvest is queued",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ImportRepository"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "harvestJobId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Rejects a proposed repository",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/enable": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Enables a disabled repository",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/disable": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Disables a repository (no browsing, harvests or imports)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/harvest": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Queues a harvest of the catalogue snapshot now",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/check": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Checks the source answers (and the credential works) and updates its status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRepository"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/catalog": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Browses the catalogue: live search when the source can be searched and is reachable, else the snapshot; facet counts equal the rows their filter returns",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "description": "model or dataset",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Search terms",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "facet.<key>",
+            "in": "query",
+            "required": false,
+            "description": "A facet value to filter on (classification, licence, format, …); one per key",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "live",
+            "in": "query",
+            "required": false,
+            "description": "auto (default), on or off",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "1 to 200",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Skip",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportCatalogPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/item": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "One model as the source states it now at a revision: files with their pins, variants, gate, licence",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "description": "The item id (org/name, a model name)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": false,
+            "description": "A commit, tag or digest; default main or latest",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportModelDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/gate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Accepts a gated repository's licence with the repository's recorded token and records who did it",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The repository id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "item"
+                ],
+                "properties": {
+                  "item": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "item": {
+                      "type": "string"
+                    },
+                    "access": {
+                      "type": "string"
+                    },
+                    "account": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "acceptedBy": {
+                      "type": "string"
+                    },
+                    "acceptedAt": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/plan": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "The review step: every check, the pinned files, the licence and the tag; nothing is written",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repositoryId",
+                  "item"
+                ],
+                "properties": {
+                  "repositoryId": {
+                    "type": "string"
+                  },
+                  "item": {
+                    "type": "string"
+                  },
+                  "revision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "variants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "target": {
+                    "const": "models"
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "licence": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attribution": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tag": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "quantization": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "Q4_K_M",
+                      "Q5_K_M",
+                      "Q8_0",
+                      "F16",
+                      null
+                    ]
+                  },
+                  "poolId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "exception": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPlan"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "The Imports queue, newest first, within the caller's clearance",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "An import state",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "description": "model or dataset",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Filter by item or ref",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "1 to 200",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Skip",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "counts": {
+                      "type": "object"
+                    },
+                    "imports": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Import"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Requests an import (also needs models:manage for a draft model). Refused checks answer 422 with the refused import; a licence outside policy needs `exception`",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repositoryId",
+                  "item"
+                ],
+                "properties": {
+                  "repositoryId": {
+                    "type": "string"
+                  },
+                  "item": {
+                    "type": "string"
+                  },
+                  "revision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "variants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "target": {
+                    "const": "models"
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "licence": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attribution": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tag": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "quantization": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "Q4_K_M",
+                      "Q5_K_M",
+                      "Q8_0",
+                      "F16",
+                      null
+                    ]
+                  },
+                  "poolId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "exception": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Import"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/{id}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "One import with its files, checks, log and signed manifest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The import id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Import"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/{id}/cancel": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Cancels a queued, waiting or running import (its stored parts are discarded)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The import id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Import"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/{id}/retry": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Retries a failed or cancelled import; downloads resume from the stored parts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The import id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Import"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/exceptions": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Licence exceptions, newest first",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "pending, granted, refused or withdrawn",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImportLicenceException"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/exceptions/{id}/decision": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Grants or refuses a licence exception (legal-review; never the requester)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The exception id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "decision"
+                ],
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "grant",
+                      "refuse"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportLicenceException"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/bundle-requests": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "Requests waiting for the weekly bundle, for staging (format exprsn-import-requests/1)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "const": "exprsn-import-requests/1"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "requests": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/proxy-allowlist": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "imports"
+        ],
+        "summary": "The staging proxy's allow-list: confirmed repositories' hosts and IMPORT_ALLOWED_HOSTS (JSON, or squid dstdomain lines with format=squid)",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "json (default) or squid",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "proxy": {
+                      "type": "boolean"
+                    },
+                    "hosts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "host": {
+                            "type": "string"
+                          },
+                          "repositories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

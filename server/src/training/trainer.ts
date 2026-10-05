@@ -100,8 +100,14 @@ export interface ConvertRequest {
   name: string;
   checkpoint: Checkpoint;
   baseModel: string;
-  /** Q4_K_M, Q5_K_M, Q8_0, or `adapter` (a LoRA adapter on the pinned base). */
+  /** Q4_K_M, Q5_K_M, Q8_0, or `adapter` (a LoRA adapter on the pinned base); `as-is` packages a published GGUF unchanged. */
   quantization: string;
+  /**
+   * 1.5.0 (B-3803): an import rather than a training run. The files are staged as artefacts the worker reads with
+   * `artifacts` (GET <url>/<name>, the same bearer), checks against `sha256`, converts (or packages, for `as-is`) and
+   * pushes where Ollama pulls from, like a run's checkpoint.
+   */
+  source?: { kind: 'import'; repository: string; item: string; revision: string; files: { name: string; artifact: string; sha256: string; bytes: number; format: string }[]; artifacts: { url: string; token: string; expiresAt: number } };
 }
 
 export interface ConvertResult {

@@ -71,6 +71,7 @@ import { publicAppRoutes } from '../routes/apps-public.js';
 import { channelRoutes } from '../routes/channels.js';
 import { publicChannelRoutes } from '../routes/channels-public.js';
 import { authzRoutes } from '../routes/authz.js';
+import { importRoutes } from '../routes/imports.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -261,6 +262,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(feedRoutes(s));
   // 1.5.0, Sprint 29 (B-3301 to B-3305): role and effective-access matrices, custom roles and access reviews.
   api.use(authzRoutes(s));
+  // 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, catalogue browse and model import
+  api.use(importRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });
