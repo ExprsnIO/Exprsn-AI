@@ -5,8 +5,11 @@
   const rank = (l) => LABELS.indexOf(l);
   const enc = encodeURIComponent;
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
-  const ENGINE = { postgres: 'PostgreSQL', mysql: 'MySQL', opensearch: 'OpenSearch' };
-  const isSql = (c) => c.engine !== 'opensearch';
+  const ENGINE = { postgres: 'PostgreSQL', mysql: 'MySQL', opensearch: 'OpenSearch', mongodb: 'MongoDB' };
+  const ENGINE_OPTS = [{ value: 'postgres', label: 'PostgreSQL' }, { value: 'mysql', label: 'MySQL' }, { value: 'opensearch', label: 'OpenSearch' }, { value: 'mongodb', label: 'MongoDB' }];
+  const isSql = (c) => c.engine === 'postgres' || c.engine === 'mysql';
+  const isMongo = (c) => c.engine === 'mongodb';
+  const mongoFind = (coll, limit) => '{\n  "find": ' + JSON.stringify(coll) + ',\n  "filter": {},\n  "limit": ' + limit + '\n}';
   const ZONES = ['data', 'app', 'sandbox', 'inference', 'directory', 'training', 'edge'];
   const HEALTH = { healthy: 'ok', degraded: 'warn', unreachable: 'danger', unknown: '' };
   const cell = (v) => (v == null ? '<span class="muted">null</span>' : esc(typeof v === 'object' ? JSON.stringify(v) : String(v)));
@@ -23,6 +26,14 @@
         obj ? { id: 'update', label: 'UPDATE (write)', q: 'UPDATE ' + obj + '\nSET ' + col + ' = ' + col + ';' } : null,
         obj ? { id: 'ddl', label: 'DROP TABLE (DDL)', q: 'DROP TABLE ' + obj + ';' } : null,
         outside[0] ? { id: 'denied', label: 'Table outside the allow-list', q: 'SELECT * FROM ' + outside[0].name + ' LIMIT 10;' } : null
+      ].filter(Boolean);
+    }
+    if (isMongo(c)) {
+      return [
+        obj ? { id: 'read', label: 'First documents of ' + obj, q: mongoFind(obj, c.rowLimit) } : null,
+        obj ? { id: 'update', label: 'updateMany (write)', q: 'db.' + obj + '.updateMany({}, { "$set": { "reviewed": true } })' } : null,
+        obj ? { id: 'ddl', label: 'drop (DDL)', q: '{ "drop": ' + JSON.stringify(obj) + ' }' } : null,
+        outside[0] ? { id: 'denied', label: 'Collection outside the allow-list', q: mongoFind(outside[0].name, 10) } : null
       ].filter(Boolean);
     }
     const pat = obj || 'logs-*';
@@ -48,7 +59,7 @@
       { title: 'Parser could not read it', tone: 'warn', text: 'The query uses vendor syntax the parser does not know. The user sees the query and confirms before it runs on the read-only account.', apply(ctx) { ctx.state.demo = 'unparsed'; ctx.rerender(); } },
       { title: 'Write refused', tone: 'danger', text: 'An UPDATE was proposed on a read-only connection. The database would refuse it, so it is not sent.', apply(ctx) { ctx.state.demo = 'write'; ctx.rerender(); } },
       { title: 'Row cap reached', tone: 'neutral', text: 'The row limit of rows returned out of a larger estimate, with a prompt to aggregate instead.', apply(ctx) { ctx.state.demo = 'capped'; ctx.rerender(); } },
-      { title: 'Three engines', tone: 'info', text: 'Register offers PostgreSQL, MySQL and OpenSearch, with a sealed account or OpenBao dynamic credentials.', apply(ctx) { ctx.state.register = true; ctx.rerender(); } }
+      { title: 'Four engines', tone: 'info', text: 'Register offers PostgreSQL, MySQL, OpenSearch and MongoDB, with a sealed account, or OpenBao dynamic credentials for PostgreSQL and MySQL.', apply(ctx) { ctx.state.register = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -131,15 +142,15 @@
       const browser = () => (above
         ? '<div class="cols"><div style="width:270px;flex-shrink:0">' + schemaTree() + '</div><div class="vstack grow">' + resultHtml + '</div></div>'
         : '<div class="cols"><div style="width:270px;flex-shrink:0">' + schemaTree() + '</div>'
-        + '<div class="vstack grow" style="gap:10px"><div class="hstack wrap"><div class="eyebrow">Query</div><span class="muted" style="font-size:12px">' + (isSql(conn) ? (conn.engine === 'mysql' ? 'MySQL SQL, one statement' : 'SQL, one statement') : 'POST /index/_search or _count, then a JSON body') + '</span><span class="right hstack gap6 wrap">' + exs.map((x) => UI.chip(esc(x.label), x.q === sql, 'data-example="' + x.id + '"')).join('') + '</span></div>'
-        + (st.editing ? '<textarea class="textarea mono" data-sqledit style="min-height:126px;white-space:pre">' + esc(sql) + '</textarea>' : '<div data-code style="cursor:text" title="Click to edit">' + UI.code(sql || (isSql(conn) ? '-- write a query' : '# write a request'), isSql(conn) ? 'sql' : 'json') + '</div>')
+        + '<div class="vstack grow" style="gap:10px"><div class="hstack wrap"><div class="eyebrow">Query</div><span class="muted" style="font-size:12px">' + (isSql(conn) ? (conn.engine === 'mysql' ? 'MySQL SQL, one statement' : 'SQL, one statement') : isMongo(conn) ? 'JSON: find with filter, projection, sort and limit, or aggregate with a pipeline' : 'POST /index/_search or _count, then a JSON body') + '</span><span class="right hstack gap6 wrap">' + exs.map((x) => UI.chip(esc(x.label), x.q === sql, 'data-example="' + x.id + '"')).join('') + '</span></div>'
+        + (st.editing ? '<textarea class="textarea mono" data-sqledit style="min-height:126px;white-space:pre">' + esc(sql) + '</textarea>' : '<div data-code style="cursor:text" title="Click to edit">' + UI.code(sql || (isSql(conn) ? '-- write a query' : isMongo(conn) ? '{ "find": "collection" }' : '# write a request'), isSql(conn) ? 'sql' : 'json') + '</div>')
         + '<div class="hstack wrap">' + UI.btn('Run query', { kind: 'primary', icon: 'play', attrs: 'data-run', disabled: !!st.running }) + UI.btn('Export', { icon: 'download', attrs: 'data-export' + (r && r.ok ? '' : ' disabled') }) + (st.editing ? UI.btn('Done editing', { kind: 'ghost', attrs: 'data-doneedit' }) : UI.btn('Edit', { kind: 'ghost', attrs: 'data-editsql' })) + '<span class="muted" style="font-size:12px">Row limit ' + conn.rowLimit + ', timeout ' + conn.timeoutS + ' s, results labelled ' + esc(conn.label) + '</span></div>'
         + resultHtml + '</div></div>');
 
       const settings = () => '<div class="panel"><div class="formgrid" style="--cols:3">'
-        + UI.field('Type', UI.select([{ value: 'postgres', label: 'PostgreSQL' }, { value: 'mysql', label: 'MySQL' }, { value: 'opensearch', label: 'OpenSearch' }], conn.engine, 'disabled'), 'Fixed after registration')
+        + UI.field('Type', UI.select(ENGINE_OPTS, conn.engine, 'disabled'), 'Fixed after registration')
         + UI.field('Endpoint', UI.input(conn.endpoint, { attrs: 'data-setting="endpoint"' }))
-        + (isSql(conn) ? UI.field('Database', UI.input(conn.database || '', { attrs: 'data-setting="database"' })) : '')
+        + (isSql(conn) || isMongo(conn) ? UI.field('Database', UI.input(conn.database || '', { attrs: 'data-setting="database"' })) : '')
         + UI.field('Network zone', UI.select(['data', 'core', 'gpu', 'edge'].concat(['data', 'core', 'gpu', 'edge'].indexOf(conn.zone) < 0 ? [conn.zone] : []), conn.zone, 'data-setting="zone"'))
         + (conn.credentialSource === 'openbao'
           ? UI.field('Credential', UI.input('OpenBao role ' + (conn.baoRole || '') + (conn.lease ? ', account ' + conn.lease.username + ' until ' + when(conn.lease.expiresAt) : ''), { readonly: true, attrs: 'class="input mono"' }), 'Short-lived accounts from the OpenBao database engine, renewed while in use and revoked when dropped. Switch to a sealed account with Rotate credential.')
@@ -155,10 +166,11 @@
       const allow = () => {
         const on = (name, def) => (st.allow[conn.id + '|' + name] != null ? st.allow[conn.id + '|' + name] : def);
         const extra = conn.allowList.filter((a) => !conn.schema.some((o) => o.name === a));
-        const rows = conn.schema.map((t) => ({ name: t.name, shape: t.columns.length + ' columns' + (t.kind ? ', ' + t.kind : ''), pii: t.columns.some((c) => c.pii), def: t.allowed })).concat(extra.map((a) => ({ name: a, shape: isSql(conn) ? 'not introspected' : 'index pattern', pii: false, def: true, pattern: true })));
+        const rows = conn.schema.map((t) => ({ name: t.name, shape: t.columns.length + ' columns' + (t.kind ? ', ' + t.kind : ''), pii: t.columns.some((c) => c.pii), def: t.allowed })).concat(extra.map((a) => ({ name: a, shape: isSql(conn) ? 'not introspected' : isMongo(conn) ? 'collection pattern' : 'index pattern', pii: false, def: true, pattern: true })));
         return '<div class="vstack" style="gap:10px">' + UI.notice('Only allow-listed objects appear in the introspected schema the model sees. Everything else is refused before the query is sent.', 'info')
           + UI.table(['', 'Object', 'Shape', 'Classification', 'Queries'], rows.map((t) => { const v = on(t.name, t.def); return { cells: [UI.check('', v, 'data-allowobj="' + esc(t.name) + '"'), '<span class="mono">' + esc(t.name) + '</span>', esc(t.shape), t.pii ? UI.pill('PII masked', 'warn') : t.pattern ? UI.pill('pattern') : UI.pill('clean', 'ok'), v ? UI.pill('allowed', 'ok') : UI.pill('refused', 'danger')] }; }), { clickable: false, minWidth: '0', emptyTitle: 'No schema yet', emptyText: 'Refresh schema to introspect the objects the account can read.' })
           + (conn.engine === 'opensearch' ? UI.field('Add an index pattern', UI.input('', { placeholder: 'logs-*', attrs: 'data-newpattern' })) : '')
+          + (isMongo(conn) ? UI.field('Add a collection pattern', UI.input('', { placeholder: 'orders_*', attrs: 'data-newpattern' }), 'Collection names are case-sensitive; * matches any characters.') : '')
           + UI.field('Extra PII columns', UI.input(conn.piiColumns.join(', '), { placeholder: 'schema.table.column, …', attrs: 'data-pii' }), 'Columns named like emails, IBANs, phones or national identifiers are masked already; list any others here.')
           + '<div class="hstack">' + UI.btn('Save allow-list', { kind: 'primary', attrs: 'data-saveallow' }) + '<span class="muted" style="font-size:12px">' + (conn.schemaAt ? 'Schema introspected ' + esc(when(conn.schemaAt)) + '. Refresh schema after a migration.' : 'Schema not introspected yet.') + '</span></div></div>';
       };
@@ -176,13 +188,13 @@
         + '</style>'
         + '<div class="leftpane conn-left"><div class="hstack"><div class="eyebrow grow">Connections</div>' + UI.btn('Register', { size: 'sm', attrs: 'data-register' }) + '</div>'
         + '<div class="conn-list">' + conns.map((c) => UI.listItem(esc(c.name), esc(ENGINE[c.engine] || c.engine) + (c.zone ? ', zone ' + esc(c.zone) : ''), { active: conn && c.id === conn.id, attrs: 'data-conn="' + esc(c.id) + '"', right: UI.label(c.label, { sm: true }) })).join('') + (conns.length ? '' : '<div class="muted" style="font-size:12px">No connections yet.</div>') + '</div>'
-        + '<div class="divider"></div><div class="muted" style="font-size:12px">PostgreSQL stays the system of record. MySQL and MongoDB connections arrive with a later import bundle.</div></div>'
+        + '<div class="divider"></div><div class="muted" style="font-size:12px">PostgreSQL stays the system of record. Connections to PostgreSQL, MySQL, OpenSearch and MongoDB only read.</div></div>'
         + '<div class="page">'
         + (st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissnote' })) : '')
-        + (!conn ? UI.pagehead('Connections', 'Database and search connections for the data browser and knowledge sources', '') + UI.empty('No connections yet', 'Register a PostgreSQL database or an OpenSearch cluster with a read-only account, then introspect its schema and allow the objects the model may read.', UI.btn('Register a connection', { kind: 'primary', attrs: 'data-register' }))
+        + (!conn ? UI.pagehead('Connections', 'Database and search connections for the data browser and knowledge sources', '') + UI.empty('No connections yet', 'Register a PostgreSQL, MySQL or MongoDB database or an OpenSearch cluster with a read-only account, then introspect its schema and allow the objects the model may read.', UI.btn('Register a connection', { kind: 'primary', attrs: 'data-register' }))
           : UI.pagehead(esc(conn.name), esc(conn.endpoint) + (conn.database ? '/' + esc(conn.database) : '') + (conn.credentialSource === 'openbao' ? ', OpenBao role ' + esc(conn.baoRole || '') : ', account ' + esc(conn.account || 'not set')) + ' ' + UI.pill(conn.health, HEALTH[conn.health]), UI.btn('Test connection', { attrs: 'data-test' }) + UI.btn('Refresh schema', { icon: 'refresh', attrs: 'data-refresh' }) + (canKb && conn.engine === 'postgres' ? UI.btn('Use as knowledge source', { kind: 'primary', attrs: 'data-usekb' }) : ''))
           + (conn.health === 'degraded' || conn.health === 'unreachable' ? UI.notice(esc(conn.healthDetail || (conn.health === 'unreachable' ? 'The last test could not reach the server.' : 'The last test reported a problem.')) + (conn.checkedAt ? ' <span class="muted">Checked ' + esc(when(conn.checkedAt)) + '.</span>' : ''), conn.health === 'unreachable' ? 'danger' : 'warn', App.canOpen('zones') ? '<a href="#" data-gozones>Zones</a>' : '') : '')
-          + UI.notice('Read-only is enforced by the database account and a read-only transaction. The query parser is advisory.', 'ok')
+          + UI.notice(isMongo(conn) ? 'Only find and aggregate with allow-listed stages are sent, with no server-side JavaScript. Use an account with the read role: Test connection reports any write privilege.' : 'Read-only is enforced by the database account and a read-only transaction. The query parser is advisory.', 'ok')
           + UI.tabs([{ id: 'settings', label: 'Settings' }, { id: 'allow', label: 'Schema allow-list' }, { id: 'sync', label: 'Sync', count: conn.syncs.length }, { id: 'browser', label: 'Browser' }], st.tab)
           + (st.tab === 'settings' ? settings() : st.tab === 'allow' ? allow() : st.tab === 'sync' ? sync() : browser()))
         + '</div>';
@@ -193,7 +205,7 @@
       ctx.on('click', '[data-dismissnote]', () => { st.demoNote = null; ctx.rerender(); });
       if (!conn) return;
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', '[data-obj]', (e, t) => { st.treeOpen = t.dataset.obj; st.sqlBy[conn.id] = isSql(conn) ? 'SELECT *\nFROM ' + t.dataset.obj + '\nLIMIT ' + conn.rowLimit + ';' : 'POST /' + t.dataset.obj + '/_search\n{\n  "size": ' + conn.rowLimit + ',\n  "query": { "match_all": {} }\n}'; delete st.results[conn.id]; st.editing = false; st.tab = 'browser'; ctx.rerender(); });
+      ctx.on('click', '[data-obj]', (e, t) => { st.treeOpen = t.dataset.obj; st.sqlBy[conn.id] = isSql(conn) ? 'SELECT *\nFROM ' + t.dataset.obj + '\nLIMIT ' + conn.rowLimit + ';' : isMongo(conn) ? mongoFind(t.dataset.obj, conn.rowLimit) : 'POST /' + t.dataset.obj + '/_search\n{\n  "size": ' + conn.rowLimit + ',\n  "query": { "match_all": {} }\n}'; delete st.results[conn.id]; st.editing = false; st.tab = 'browser'; ctx.rerender(); });
       ctx.on('click', '[data-example]', (e, t) => { const x = exs.find((y) => y.id === t.dataset.example); st.sqlBy[conn.id] = x.q; delete st.results[conn.id]; st.editing = false; ctx.rerender(); });
       ctx.on('click', '[data-editsql], [data-code]', () => { st.editing = true; ctx.rerender(); const ta = ctx.$('[data-sqledit]'); if (ta) ta.focus(); });
       ctx.on('input', '[data-sqledit]', (e, t) => { st.sqlBy[conn.id] = t.value; });
@@ -304,26 +316,33 @@
   function openRegister() {
     App.modal({
       title: 'Register a connection',
-      body: UI.notice('PostgreSQL, MySQL and OpenSearch are available. MongoDB is not in this release. The zone must be one defined under Zones, with a ceiling at or above the label.', 'info')
-        + '<div class="formgrid">' + UI.field('Engine', UI.select([{ value: 'postgres', label: 'PostgreSQL' }, { value: 'mysql', label: 'MySQL' }, { value: 'opensearch', label: 'OpenSearch' }, { value: 'mongodb', label: 'MongoDB (not available)' }], 'postgres', 'data-engine'))
+      body: UI.notice('PostgreSQL, MySQL, OpenSearch and MongoDB are available. The zone must be one defined under Zones, with a ceiling at or above the label.', 'info')
+        + '<div class="formgrid">' + UI.field('Engine', UI.select(ENGINE_OPTS, 'postgres', 'data-engine'))
         + UI.field('Name', UI.input('', { placeholder: 'for example sales-ro', attrs: 'data-name' })) + UI.field('Endpoint', UI.input('', { placeholder: 'host:port', attrs: 'data-endpoint' })) + '<div data-dbwrap>' + UI.field('Database', UI.input('', { placeholder: 'ledger', attrs: 'data-db' })) + '</div>' + UI.field('Network zone', UI.select(ZONES, 'data', 'data-zone'))
         + UI.field('Label ceiling', UI.select(LABELS, 'internal', 'data-label')) + '<div data-srcwrap>' + UI.field('Credentials', UI.select([{ value: 'static', label: 'Sealed account' }, { value: 'openbao', label: 'OpenBao dynamic credentials' }], 'static', 'data-src')) + '</div>'
-        + '<div data-staticwrap>' + UI.field('Read-only account', UI.input('', { attrs: 'data-user autocomplete="off"' })) + UI.field('Password', '<input type="password" class="input" data-pass autocomplete="new-password">', 'Sealed with the tenant key; never shown again.') + '</div>'
+        + '<div data-staticwrap>' + UI.field('Read-only account', UI.input('', { attrs: 'data-user autocomplete="off"' }), '<span data-userhelp></span>') + UI.field('Password', '<input type="password" class="input" data-pass autocomplete="new-password">', 'Sealed with the tenant key; never shown again.') + '</div>'
         + '<div data-baowrap>' + UI.field('OpenBao role', UI.input('', { attrs: 'data-role autocomplete="off" placeholder="ledger-readonly"' }), 'GET database/creds/&lt;role&gt; issues a short-lived read-only account.') + '</div>'
         + UI.field('Row limit', UI.input('500', { type: 'number', attrs: 'data-rows' })) + UI.field('Statement timeout, s', UI.input('10', { type: 'number', attrs: 'data-timeout' })) + '</div>'
-        + UI.check('Use TLS and verify the server certificate', false, 'data-tls') + '<div data-enginewarn></div><div data-err></div>',
+        + UI.check('Use TLS and verify the server certificate', false, 'data-tls') + '<div data-err></div>',
       actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Register', { kind: 'primary', attrs: 'data-doreg' }),
       onMount(m) {
         const q = (s) => m.querySelector(s);
-        const sel = q('[data-engine]'); const warn = q('[data-enginewarn]'); const btn = q('[data-doreg]');
+        const sel = q('[data-engine]'); const btn = q('[data-doreg]');
         const src = q('[data-src]');
-        const check = () => { const off = sel.value === 'mongodb'; const sql = sel.value === 'postgres' || sel.value === 'mysql'; warn.innerHTML = off ? UI.notice('That engine is not installed on this platform. Register offers PostgreSQL, MySQL and OpenSearch.', 'warn') : ''; btn.disabled = off; q('[data-dbwrap]').hidden = !sql; q('[data-srcwrap]').hidden = !sql; if (!sql) src.value = 'static'; const bao = src.value === 'openbao'; q('[data-staticwrap]').hidden = bao; q('[data-baowrap]').hidden = !bao; q('[data-endpoint]').placeholder = sel.value === 'opensearch' ? 'https://host:9200' : sel.value === 'mysql' ? 'host:3306' : 'host:5432'; };
+        const check = () => {
+          const sql = sel.value === 'postgres' || sel.value === 'mysql'; const mongo = sel.value === 'mongodb';
+          q('[data-dbwrap]').hidden = !sql && !mongo; q('[data-srcwrap]').hidden = !sql; if (!sql) src.value = 'static';
+          const bao = src.value === 'openbao'; q('[data-staticwrap]').hidden = bao; q('[data-baowrap]').hidden = !bao;
+          q('[data-endpoint]').placeholder = sel.value === 'opensearch' ? 'https://host:9200' : sel.value === 'mysql' ? 'host:3306' : mongo ? 'host:27017' : 'host:5432';
+          q('[data-userhelp]').textContent = mongo ? 'An account with the read role on the database. It signs in against admin; write authdb/user for another database. A vault: reference also works.' : '';
+        };
         sel.addEventListener('change', check); src.addEventListener('change', check); check();
         btn.addEventListener('click', async () => {
           const tlsBox = q('[data-tls]'); const tlsIn = tlsBox && (tlsBox.matches('input') ? tlsBox : tlsBox.querySelector('input'));
           const body = { name: q('[data-name]').value.trim(), engine: sel.value, endpoint: q('[data-endpoint]').value.trim(), database: sel.value !== 'opensearch' ? (q('[data-db]').value.trim() || null) : null, zone: q('[data-zone]').value, label: q('[data-label]').value, rowLimit: Math.round(+q('[data-rows]').value || 500), timeoutS: Math.round(+q('[data-timeout]').value || 10), tls: !!(tlsIn && tlsIn.checked), username: src.value === 'openbao' ? null : (q('[data-user]').value.trim() || null), password: src.value === 'openbao' ? null : (q('[data-pass]').value || null), baoRole: src.value === 'openbao' ? (q('[data-role]').value.trim() || null) : null };
           if (src.value === 'openbao' && !body.baoRole) { App.toast('Give the OpenBao role.'); return; }
           if (!body.name || !body.endpoint) { App.toast('Give the connection a name and an endpoint.'); return; }
+          if (body.engine === 'mongodb' && !body.database) { App.toast('Name the MongoDB database the connection reads.'); return; }
           try {
             const c = await App.post('/api/admin/connections', body);
             App.closeOverlay();
