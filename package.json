@@ -12,6 +12,7 @@
     "start": "npm start -w server",
     "lint": "npm run lint -w server",
     "typecheck": "npm run typecheck -w server",
+    "docs:permissions": "npm run docs:permissions -w server",
     "test": "npm test -w server",
     "loadtest": "npm run loadtest -w server --",
     "loadtest:platform": "npm run loadtest:platform -w server --",

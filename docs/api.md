@@ -2627,8 +2627,8 @@ unique value `409` with `field`; a stale `version` `409`.
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /api/apps/:app/entities/:entity/records?filter=<json>&sort=field:dir,…&q=&limit=&offset=` | `records:read`. The records the caller is cleared for (hidden ones left out). `{total, limit, offset, records}` |
-| `POST /api/apps/:app/entities/:entity/records/query` `{filter?, sort?, q?, limit?, offset?}` | `records:read`. The same as a body. `q` searches the indexed text fields (lower-cased, `%` and `_` literal). `limit` ≤ 200, `offset` ≤ 100,000 |
+| `GET /api/apps/:app/entities/:entity/records?filter=<json>&sort=field:dir,…&q=&limit=&offset=&cursor=` | `records:read`. The records the caller is cleared for (hidden ones left out). `{total, limit, offset, nextCursor, records}` |
+| `POST /api/apps/:app/entities/:entity/records/query` `{filter?, sort?, q?, limit?, offset?, cursor?}` | `records:read`. The same as a body. `q` searches the indexed text fields (lower-cased, `%` and `_` literal). `limit` ≤ 200, `offset` ≤ 100,000. B-3601 (1.5.0): `nextCursor` is an opaque cursor for the page after this one (`null` on the last); send it back as `cursor`, with the same `filter`, `sort` and `q`, for the next page (keyset paging: each page costs the same however deep, and records written meanwhile do not shift it). A cursor made for another sort, or a cursor with an `offset`, is `400`; `offset` keeps working as before. `total` counts every match on every page |
 | `POST /api/apps/:app/entities/:entity/records/aggregate` `{filter?, q?, groupBy?, metrics: [{op: count} \| {op: sum \| avg \| min \| max, field}]}` | `records:read`. Groups by an indexed field or `state`; metrics over indexed number, date and boolean fields. `{groupBy, metrics, groups: [{key, values}]}`, ordered by key with empty last, at most 1000 groups |
 | `POST /api/apps/:app/entities/:entity/records` `{values, label?}` | `records:write`. Values are validated (unknown and computed fields refused), formulas computed, references, lookups and files checked against what the writer may see, then sealed; unique values are claimed in the same transaction. The label is between the entity's and the app's and within the caller's clearance. Audited `app.record.created`; `record.created`. `201` record |
 | `POST /api/apps/:app/entities/:entity/records/bulk` `{create?: [{values, label?}], update?: [{id, values, version?}], delete?: [id]}` | `records:write`. Up to `APPS_BULK_MAX` operations, all validated and sealed first and written in one transaction: any problem (a duplicate, a stale version) writes nothing and names the operation (`op`, `index`). Audited once, `app.records.bulk`; one event per record. `{created, updated, deleted}` |
@@ -3198,3 +3198,110 @@ The `feed` room kind (B-2101), joined with `room.join {kind: feed, id}` by `feed
 - `id` = the caller's own user id: their home room. A new post reaches the home rooms of the author's followers who
   may read it and did not mute the author (`feed: home` in the data), up to `FEED_HOME_FANOUT_MAX` followers; the
   others see it on their next load. A person's feed (`/api/feed/users/:id`) updates from the workspace rooms.
+
+## Sprint 29 (1.5.0): permission matrices, custom roles and access reviews (B-3301 to B-3305)
+
+New permission `roles:manage` (tenant admins; system admins hold every permission). Every route below needs it,
+except that the reviewers assigned to an access review's items list, read and decide them. Nothing here is a
+second policy engine: role resolution, cells and `explain` steps all come from `server/src/authz/policy.ts`. Errors
+are problem+json; a refusal names the failing `step`. Migration `031_access`.
+
+### Role × permission matrix (B-3301)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/authz/matrix` | The catalogue's matrix with the tenant's custom roles in force: `{permissions: [{id, admin, routes, anyOfRoutes}], roles: [{id, name, description, builtIn, requiresMfa, grantableBy, version, permissions}], authenticatedRoutes, publicRoutes}`. `admin` is any permission outside the member baseline; `routes` are the routes requiring the permission (from the route registry), `anyOfRoutes` those accepting it as one of several. `version` is null for built-in roles. `?format=csv` (or `Accept: text/csv`) answers `text/csv`: `permission,admin,routes,<role ids…>` with `x` where a role grants it |
+
+`docs/permissions.md` is the same matrix for the built-in roles, with every route per permission. It is generated
+(`npm run docs:permissions`) and the test suite fails when it differs from the catalogue.
+
+### Custom roles (B-3302)
+
+A custom role belongs to the tenant (workspaces do not define roles), has the id `custom-<lower-case ULID>` and is
+built only from catalogue permissions. It never holds a permission its creator (and, for a pending version, its
+approver) does not hold: a tenant admin cannot create a role holding `platform:manage` (`403`, `step: role`,
+`permissions: [...]`). `grantableBy` names roles of the tenant (built-in or custom) whose holders may grant it; a
+granter must also hold every permission the role carries. `requiresMfa` defaults to true and can be false only when
+a built-in role without the requirement grants each of its permissions (`400` otherwise). A role holding an admin
+permission is under dual control: its first version, and every later version, waits for a second holder of
+`roles:manage` (`pending`) and the version in force stays as it was until then. Custom roles resolve wherever
+built-in roles do: assignment (`PATCH /api/admin/users/:id`, group mappings, invitations, CSV imports, all checked
+against the tenant's roles), `GET /api/admin/roles`, `GET /api/me`, the policy, effective permissions and `explain`
+(whose role step names the granting roles). Other instances reload the roles in force from the bus.
+
+Role view: `{id, builtIn: false, name, description, permissions, requiresMfa, grantableBy, state: pending | active |
+retired, version (in force, null while the first is pending), createdBy, createdAt, updatedAt, pendingVersion}`.
+Version view: `{version, name, description, permissions, requiresMfa, grantableBy, dualControl, state: pending |
+applied | rejected | withdrawn | superseded, proposedBy, proposedAt, decidedBy, decidedAt, note}`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/authz/roles` | `{builtIn: [matrix role], custom: [role view]}`; `?retired=true` includes retired roles |
+| `POST /api/authz/roles` `{name, description?, permissions, requiresMfa?, grantableBy?}` | `201 {role, version, pending}`. `grantableBy` defaults to `["system-admin", "tenant-admin"]`. A name taken by a built-in or live custom role is `409`. Audited `authz.role.created`, or `authz.role.proposed` under dual control (the other holders of `roles:manage` are notified) |
+| `GET /api/authz/roles/:id` | The role view and `versions` (newest first) |
+| `PATCH /api/authz/roles/:id` `{name?, description?, permissions?, requiresMfa?, grantableBy?}` | A new version: `{role, version, pending}`. `409` while another version is pending. Audited `authz.role.updated` (with the diff) or `authz.role.proposed` |
+| `DELETE /api/authz/roles/:id` | Retires it: the role view. `409` while a user holds it, a group mapping or a pending invitation grants it. Audited `authz.role.retired` |
+| `GET /api/authz/roles/:id/versions/:version` | One version view |
+| `GET /api/authz/roles/:id/diff?from&to` | `{from, to, permissions: {added, removed}, grantableBy: {added, removed}, fields: {name?, description?, requiresMfa?: {from, to}}}`; `to` defaults to the newest version, `from` to the one before |
+| `POST /api/authz/roles/:id/versions/:version/approve` `{note?}` | Dual control: another admin, holding every permission of the version, puts it in force: the role view. Your own change is `403` `step: dual-control`. Audited `authz.role.approved` |
+| `POST /api/authz/roles/:id/versions/:version/reject` `{note?}` | Rejects a pending version (its proposer withdraws it): the version view. A role whose first version is rejected is retired. Audited `authz.role.rejected` or `authz.role.withdrawn` |
+
+### Effective access (B-3303)
+
+Each cell is `policy.explain` for the principal a request from that user (or with that API key) would carry and a
+resource standing for the workspace: the tenant, the workspace's label ceiling (or `label`), and the ceiling of
+`zone` when given. `member` says whether the subject may act in the workspace at all. Workspaces above the caller's
+clearance are left out (at most 100 per answer).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/authz/access?workspaceId&permissions&userId&q&label&zone&keys&limit&offset` | `{permissions, workspaces: [{id, name, labelCeiling}], resource: {label, zone: {name, ceiling} \| null}, total, limit, offset, rows: [{subject, cells: {<workspaceId>: {member, allow: [permission], deny: {<permission>: step}}}}]}`. `subject`: `{kind: user \| api_key, userId, username, displayName, apiKeyId, apiKeyName, active, roles, clearance, scopes}`; an inactive subject (disabled, sanctioned, revoked or expired key) is denied everything at `role`. `permissions` is a comma list (default all), `keys=true` adds a row per live API key, `limit` 1 to 100 (default 25) users per page. An unknown zone is `400` |
+| `GET /api/authz/access/explain?userId&apiKeyId&workspaceId&permission&label&zone` | One cell in full: `{subject, workspace: {id, name, labelCeiling, member}, resource: {label, zoneCeiling}, decision: {allow, step, reason, action, policy}, steps: [{step, ok, detail}]}` |
+| `GET /api/authz/who-can?permission&workspaceId&label&zone&limit&offset` | Users holding a role that grants the permission: `{permission, workspace, resource, roles (the granting role ids), total, limit, offset, users: [subject + {grantedBy, member, decision: {allow, step, reason}}]}`, allowed ones first within the page |
+
+### Access reviews (B-3305)
+
+A campaign certifies the direct grants in its scope (`kinds`: roles, workspace memberships or both; optionally only
+some roles, or only the members of one workspace). Roles in scope are those named, else every role the creator may
+grant; naming one the creator cannot grant is `403`. Grants from group mappings or the directory are reviewed at the
+mapping. When the campaign opens, each grant becomes an item with its own reviewers:
+
+- the admins of the grant: for a workspace membership, the tenant admins (holders of `tenant:manage`) and the members
+  of that workspace holding `roles:manage`; for a role, the tenant admins;
+- the member's directory manager, when their user store names one and that manager is an active user linked to the
+  same store (LDAP: the `managerAttribute` of the store, default `manager`, a DN; SQL user tables: the
+  `columns.manager` column, holding the manager's id column value). Sign-in and directory sync keep it; an empty
+  attribute means only the admins are assigned;
+- the campaign's extra reviewers (`reviewerIds`, optional).
+
+Nobody is assigned their own grant (and deciding it is `403` `step: self`); when that leaves nobody, the tenant admins
+are assigned, then the campaign's creator. Any assigned reviewer may decide; the first decision stands, and a later
+one is `409` naming who decided (`decision`, `decidedBy`, `decidedAt` in the problem). A revoke removes the grant at
+once: it is gone on the member's next request, and their sockets leave the permission rooms it gave. Deciding every
+item closes the campaign. Each assigned reviewer is notified when it opens. The `authz.reviews` job (every five
+minutes) opens scheduled campaigns and escalates an open one past its due date, once, to the tenant admins
+(notification `authz.review.overdue`). Closing a campaign with `everyDays` schedules the next one `everyDays` after
+this one opened. Audited `authz.review.created`, `opened`, `confirmed`, `revoked`, `escalated`, `closed` and
+`cancelled`.
+
+Review view (`reviewers` are the extra reviewers): `{id, name, state: scheduled | open | closed | cancelled, scope: {kinds, roles, workspaceId}, reviewers,
+opensAt, dueDays, dueAt, everyDays, overdue, escalatedAt, counts: {total, decided}, nextId, createdBy, createdAt,
+openedAt, closedAt}`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/authz/reviews?state&limit&offset` | Signed in. Review views: all of the tenant's for holders of `roles:manage`, else those with at least one item assigned to the caller |
+| `POST /api/authz/reviews` `{name, kinds?, roles?, workspaceId?, reviewerIds?, opensAt?, dueDays?, everyDays?}` | `201` review view; opens at once unless `opensAt` (ISO time) is in the future. `dueDays` 1 to 90 (default 14), `everyDays` 7 to 366. At most 5000 grants (`409`: narrow it) |
+| `GET /api/authz/reviews/:id?decision&limit&offset` | Signed in, for holders of `roles:manage` (every item) and assigned reviewers (their items only); else `404`. The review view and `items: [{id, user: {id, username, displayName}, kind: role \| workspace, grant: {id, name}, decision: pending \| confirmed \| revoked \| expired, reviewers, manager, decidedBy, decidedByName, decidedAt, note, removed}]` |
+| `POST /api/authz/reviews/:id/items/:itemId/decision` `{decision: confirm \| revoke, note?}` | An assigned reviewer's decision: `{id, decision, decidedBy, decidedAt, note, removed}` (`removed` false when the grant was already gone). Not assigned: `403` `step: reviewer`. Already decided: `409` naming who decided first; campaign not open: `409` |
+| `POST /api/authz/reviews/:id/open` | Opens a scheduled campaign now: the review view |
+| `POST /api/authz/reviews/:id/close` | Closes it (undecided items expire and their grants stay) or cancels a scheduled one: the review view |
+
+### Route permission registry (B-3304)
+
+`server/src/authz/routes.ts` declares, for every route the server registers, the permission it requires (or several,
+all required; `{anyOf}` when one of several suffices), `authenticated` (any signed-in caller; the handler decides) or
+`public`. `server/test/route-registry.test.ts` walks the Express app and fails for a route missing from the table, an
+entry for a route that is gone, or a route whose `requireAuth`, `requirePermission` or `requireAnyPermission`
+middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
+their middleware implies, for review.

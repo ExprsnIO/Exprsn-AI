@@ -4,7 +4,7 @@ import { actorFrom } from '../audit/chain.js';
 import { authorize } from '../authz/policy.js';
 import { LABELS } from '../authz/labels.js';
 import type { Permission } from '../authz/permissions.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
 import { notFound } from '../http/problem.js';
 import { MAX_BUDGETS } from '../registry/service.js';
 import type { Services } from '../services.js';
@@ -21,10 +21,7 @@ export function agentRoutes(s: Services): Router {
   const run = requirePermission(s, 'agents:run');
   const invoke = requirePermission(s, 'tools:invoke');
   /** The first of `perms` the caller holds, checked (and denials audited) like requirePermission. */
-  const anyOf = (...perms: Permission[]): RequestHandler => async (req, res, next) => {
-    const p = principalOf(req);
-    await requirePermission(s, perms.find((x) => authorize(p, x).allow) ?? perms[0]!)(req, res, next);
-  };
+  const anyOf = (...perms: Permission[]): RequestHandler => requireAnyPermission(s, perms);
   const audit = (req: Request, action: string, target: Record<string, unknown>, detail?: Record<string, unknown>) => {
     const p = principalOf(req);
     return s.audit.append({ tenantId: p.tenantId, action, kind: 'admin', actor: actorFrom(p, ip(req)), target, ...(detail ? { detail } : {}), traceId: req.traceId });

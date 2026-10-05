@@ -47,6 +47,15 @@ the maintainers rather than in issues.
 - Grant rules prevent privilege escalation: only a system admin can grant system admin, roles can be granted only by
   the roles listed for them, clearance cannot be granted above the granter's own, and admins cannot change their own
   access.
+- Custom roles (1.5.0, B-3302) are built only from catalogue permissions and never hold a permission their creator, or
+  for a pending version its approver, does not hold; a custom role is granted only by holders of its `grantableBy`
+  roles who also hold every permission it carries, and it resolves only inside its own tenant. A role holding an admin
+  permission (outside the member baseline) changes only when a second holder of `roles:manage` approves the version,
+  and `requiresMfa` cannot be lower than the built-in roles granting the same permissions require. The zone ceiling and
+  clearance steps still apply to everything a custom role grants.
+- Every route declares what it requires in one table (`server/src/authz/routes.ts`, B-3304); the test suite fails
+  for a route that is not declared or whose middleware disagrees with its entry. Access reviews (B-3305) remove a
+  revoked grant at once, and the member's sockets leave the permission rooms it gave.
 
 ## Audit
 
@@ -109,6 +118,25 @@ the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, emp
 filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
+
+- Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
+  its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
+  instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another
+  instance's change only after a restart (as for every bus-driven cache); a single instance applies it at once. The
+  route registry checks the `requireAuth`, `requirePermission` and `requireAnyPermission` middleware only: a route
+  declared `authenticated` or with a permission its handler checks itself is taken at its word, and conditions a
+  handler adds (ownership, membership, clearance) are not in the table. Workflow approval steps and low-code state
+  machines still name built-in roles only. Access reviews cover direct grants; roles and memberships from group
+  mappings or the directory are reviewed at the mapping, since a removed row would come back at the next sign-in or
+  sync. Reviewers are assigned per item (the grant's admins and the member's directory manager); the manager comes
+  only from LDAP stores (`managerAttribute`) and SQL user tables (`columns.manager`), and only when the manager is a
+  user linked to the same store (matched on the external id, ignoring case but not spacing within a DN); upstream
+  OIDC and SAML claims, SCIM and the local store carry none, so their members are reviewed by admins only. Workspaces
+  have no admin role of their own: a workspace's admins are the tenant admins and its members holding `roles:manage`.
+  A grant whose only possible reviewer is its member (a sole tenant admin reviewing their own membership) stays
+  unassigned to anyone else but the campaign's creator, and is escalated when overdue. A review does not snapshot API keys: a key's scopes only narrow its owner's roles, so revoking the role is
+  enough. The effective-access matrix shows at most 100 workspaces and 100 users per answer, and its cells are the
+  policy decision only: `member` says separately whether the user may act in the workspace.
 
 - First-factor enrolment: `admin:create --enrol-link` (1.2.0) gives the first admin a single-use link that sets the
   password and opens a session that can only enrol a second factor, so that account is never usable with a password
@@ -668,8 +696,12 @@ filter, private `/tmp`, only the state directory writable.
   it by someone with database access. Indexed text is compared lower-cased after Unicode NFC, byte-wise (no accent
   folding, no locale collation: `é` sorts after `z`), and is at most 255 characters, so an indexed text field has a
   `maxLength` of at most 255; uniqueness is case-insensitive. Filters cover a tested subset (`eq`, `ne`, `gt`, `gte`,
-  `lt`, `lte`, `in`, `contains`, `startsWith`, `exists`, with `and`, `or`, `not`); there is no PostgreSQL-only fast
-  path. Offset pagination stops at 100,000. An existing field cannot become unique while the entity has records, and
+  `lt`, `lte`, `in`, `contains`, `startsWith`, `exists`, with `and`, `or`, `not`), with the same results on every
+  dialect; PostgreSQL's plans differ only in its collated, partial value indexes (031b). Offset pagination stops at
+  100,000; a cursor (keyset paging, B-3601, 1.5.0) goes further at the cost of the first page, but each page still
+  counts every match for `total`, so an entity with very many matching records costs that count on every page (an
+  estimated total is not offered yet). A cursor is opaque but not sealed: it carries the last record's sort values
+  and id, which the caller has just read, and is checked against the sort it is sent with. An existing field cannot become unique while the entity has records, and
   a field's type cannot change then. Formulas are parsed and walked (no `eval`), read only the entity's own non-computed
   fields, and give null on any error; they are computed on write (and by the reindex job), so `today()` and `now()`
   are the time of the last write. AI fields are filled by a job after the write, fail soft (an error leaves the field

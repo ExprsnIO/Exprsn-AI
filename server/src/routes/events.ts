@@ -1,7 +1,5 @@
 import { Router } from 'express';
-import type { RequestHandler } from 'express';
-import { authorize } from '../authz/policy.js';
-import { principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { requireAnyPermission, requireAuth } from '../http/middleware.js';
 import { catalogue } from '../events/catalogue.js';
 import type { Services } from '../services.js';
 
@@ -14,9 +12,7 @@ export function eventRoutes(s: Services): Router {
   const body = catalogue();
   const etag = `"catalogue-${body.version}"`;
   // Plugin managers may read it too; anyone else is refused (and audited) as for webhooks:manage.
-  const webhooks = requirePermission(s, 'webhooks:manage');
-  const plugins = requirePermission(s, 'plugins:manage');
-  const either: RequestHandler = (req, res, next) => (authorize(principalOf(req), 'plugins:manage', {}).allow ? plugins(req, res, next) : webhooks(req, res, next));
+  const either = requireAnyPermission(s, ['webhooks:manage', 'plugins:manage']);
   r.get('/events/catalogue', requireAuth(), either, (req, res) => {
     res.setHeader('ETag', etag);
     if (req.headers['if-none-match'] === etag) return void res.status(304).end();

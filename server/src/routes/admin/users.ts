@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
 import { clears, LABELS } from '../../authz/labels.js';
-import { canGrant, canManage, isRole, ROLES, rolesRequireMfa } from '../../authz/permissions.js';
+import { canGrant, canManage, customRolesOf, isRole, ROLES, rolesRequireMfa } from '../../authz/permissions.js';
 import { hashPassword } from '../../identity/passwords.js';
 import { randomToken } from '../../crypto/index.js';
 import { securityAlert } from '../../identity/security-alerts.js';
@@ -22,8 +22,9 @@ export function userAdminRoutes(s: Services): Router {
     return s.audit.append({ tenantId: p.tenantId, action, kind: 'admin', actor: actorFrom(p, ip(req)), target, ...(detail ? { detail } : {}), traceId: req.traceId });
   };
 
-  r.get('/roles', requirePermission(s, 'users:manage'), (_req, res) => {
-    res.json(ROLES.map((x) => ({ id: x.id, name: x.name, description: x.description, requiresMfa: x.requiresMfa, permissions: x.permissions, grantableBy: x.grantableBy })));
+  // 1.5.0 (B-3302): the tenant's custom roles in force follow the built-in ones.
+  r.get('/roles', requirePermission(s, 'users:manage'), (req, res) => {
+    res.json([...ROLES, ...customRolesOf(principalOf(req).tenantId)].map((x) => ({ id: x.id, name: x.name, description: x.description, requiresMfa: x.requiresMfa, permissions: x.permissions, grantableBy: x.grantableBy, builtIn: ROLES.includes(x) })));
   });
 
   r.get('/users', manage, async (req, res) => {
@@ -72,7 +73,7 @@ export function userAdminRoutes(s: Services): Router {
         invite: z.boolean().default(false),
         /** An admin-set initial password must be changed at first sign-in (B-103). */
         mustChange: z.boolean().default(true),
-        roles: z.array(z.string().refine(isRole, 'Unknown role')).min(1),
+        roles: z.array(z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role')).min(1),
         clearance: z.enum(LABELS).default('internal')
       })
         .refine((b) => (b.invite ? !b.password : !!b.password), 'Give a password, or set invite with no password.'),
@@ -81,7 +82,7 @@ export function userAdminRoutes(s: Services): Router {
     if (body.invite && !body.email) throw conflict('An invitation needs an email address.');
     if (body.invite && !s.notifications.emailEnabled) throw conflict('Email is not configured (SMTP_URL), so an invitation cannot be sent. Set an initial password instead.');
     if (body.password) await s.account.checkNewPassword({ tenantId: p.tenantId, username: body.username, password: body.password, actor: p, ip: ip(req), traceId: req.traceId });
-    const denied = body.roles.filter((role) => !canGrant(p.roles, role));
+    const denied = body.roles.filter((role) => !canGrant(p.roles, role, p.tenantId));
     if (denied.length) throw forbidden(`Your roles cannot grant ${denied.join(', ')}.`, { step: 'role' });
     if (!clears(p.clearance, body.clearance)) throw forbidden('You cannot grant a clearance above your own.', { step: 'clearance' });
     const local = (await s.providers.list(p.tenantId)).find((x) => x.kind === 'local');
@@ -92,7 +93,7 @@ export function userAdminRoutes(s: Services): Router {
       // One transaction: a failure part-way never leaves a user without a credential, identity or roles.
       const user = await s.db.transaction(async (trx) => {
         const users = s.users.within(trx);
-        const u = await users.create(p.tenantId, { username: body.username, displayName: body.displayName, email: body.email, clearance: body.clearance, mfaRequired: rolesRequireMfa(body.roles) });
+        const u = await users.create(p.tenantId, { username: body.username, displayName: body.displayName, email: body.email, clearance: body.clearance, mfaRequired: rolesRequireMfa(body.roles, p.tenantId) });
         await users.update(p.tenantId, u.id, { clearance_direct: body.clearance });
         // Sprint 26a (B-1802): an address an admin gives is vouched for (an invitation link also proves it).
         if (body.email) await trx('users').where({ id: u.id }).update({ email_verified_at: Date.now() });
@@ -125,7 +126,7 @@ export function userAdminRoutes(s: Services): Router {
         state: z.enum(['active', 'disabled']).optional(),
         disabledReason: z.string().trim().max(200).optional(),
         clearanceDirect: z.enum(LABELS).nullable().optional(),
-        roles: z.array(z.string().refine(isRole, 'Unknown role')).optional(),
+        roles: z.array(z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role')).optional(),
         mfaRequired: z.boolean().optional()
       }),
       req.body
@@ -134,12 +135,12 @@ export function userAdminRoutes(s: Services): Router {
       throw forbidden('You cannot change your own state, roles or clearance. Ask another admin.', { step: 'self' });
     }
     const before = { state: u.state, clearanceDirect: u.clearance_direct, roles: await s.users.roles(u.id), mfaRequired: u.mfa_required };
-    if (!canManage(p.roles, before.roles.map((x) => x.role))) throw forbidden('This user holds roles you cannot grant, so you cannot change them.', { step: 'role' });
+    if (!canManage(p.roles, before.roles.map((x) => x.role), p.tenantId)) throw forbidden('This user holds roles you cannot grant, so you cannot change them.', { step: 'role' });
 
     if (body.roles) {
       const current = before.roles.filter((x) => x.source === 'direct').map((x) => x.role);
       const changed = [...body.roles.filter((x) => !current.includes(x)), ...current.filter((x) => !body.roles!.includes(x))];
-      const denied = changed.filter((role) => !canGrant(p.roles, role));
+      const denied = changed.filter((role) => !canGrant(p.roles, role, p.tenantId));
       if (denied.length) throw forbidden(`Your roles cannot grant or remove ${denied.join(', ')}.`, { step: 'role' });
       await s.users.setRoles(u.id, 'direct', body.roles);
     }
@@ -159,7 +160,7 @@ export function userAdminRoutes(s: Services): Router {
       if (body.clearanceDirect) patch.clearance = body.clearanceDirect;
     }
     const roleIds = await s.users.roleIds(u.id);
-    if (body.mfaRequired !== undefined || rolesRequireMfa(roleIds)) patch.mfa_required = (body.mfaRequired ?? u.mfa_required) || rolesRequireMfa(roleIds);
+    if (body.mfaRequired !== undefined || rolesRequireMfa(roleIds, p.tenantId)) patch.mfa_required = (body.mfaRequired ?? u.mfa_required) || rolesRequireMfa(roleIds, p.tenantId);
     await s.users.update(p.tenantId, u.id, patch);
 
     let revoked = 0;
@@ -177,7 +178,7 @@ export function userAdminRoutes(s: Services): Router {
     const u = await s.users.get(p.tenantId, String(req.params.id));
     if (!u) throw notFound('User');
     if (u.id === p.userId) throw forbidden('Reset your own factors from Settings.', { step: 'self' });
-    if (!canManage(p.roles, await s.users.roleIds(u.id))) throw forbidden('This user holds roles you cannot grant, so you cannot reset their factors.', { step: 'role' });
+    if (!canManage(p.roles, await s.users.roleIds(u.id), p.tenantId)) throw forbidden('This user holds roles you cannot grant, so you cannot reset their factors.', { step: 'role' });
     const factors = await s.mfa.factors(u.id, false);
     for (const f of factors) await s.mfa.removeFactor(u.id, f.id);
     await s.db('mfa_recovery_codes').where({ user_id: u.id }).delete();
@@ -196,7 +197,7 @@ export function userAdminRoutes(s: Services): Router {
     const u = await s.users.get(p.tenantId, String(req.params.id));
     if (!u) throw notFound('User');
     if (u.id === p.userId) throw forbidden('Change your own password from Settings.', { step: 'self' });
-    if (!canManage(p.roles, await s.users.roleIds(u.id))) throw forbidden('This user holds roles you cannot grant, so you cannot reset their password.', { step: 'role' });
+    if (!canManage(p.roles, await s.users.roleIds(u.id), p.tenantId)) throw forbidden('This user holds roles you cannot grant, so you cannot reset their password.', { step: 'role' });
     // B-804: the account's API keys end too unless the admin unticks it (they are separate credentials).
     const revokeKeys = z.boolean().default(true);
     const body = parseBody(z.discriminatedUnion('mode', [z.object({ mode: z.literal('temporary'), password: z.string().min(1).max(256), revokeApiKeys: revokeKeys }), z.object({ mode: z.literal('link'), revokeApiKeys: revokeKeys })]), req.body);
@@ -237,7 +238,7 @@ export function userAdminRoutes(s: Services): Router {
     const target = await s.sessions.get(p.tenantId, String(req.params.id));
     if (!target) throw notFound('Session');
     // As for role changes and factor resets: only someone who could grant all of the owner's roles may end their session.
-    if (target.user_id !== p.userId && !canManage(p.roles, await s.users.roleIds(target.user_id))) throw forbidden('This session belongs to someone holding roles you cannot grant, so you cannot end it.', { step: 'role' });
+    if (target.user_id !== p.userId && !canManage(p.roles, await s.users.roleIds(target.user_id), p.tenantId)) throw forbidden('This session belongs to someone holding roles you cannot grant, so you cannot end it.', { step: 'role' });
     await s.sessions.revoke(p.tenantId, target.id);
     await s.identityPolicy.forgetSession(target.id); // Sprint 26a (B-1803): and the device trusted from it
     await audit(req, 'session.revoked', { session: target.id, user: target.user_id }, { note: 'Refresh tokens and sockets for this session end with it.' });

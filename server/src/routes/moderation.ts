@@ -1,10 +1,9 @@
 import { Router, type Request, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { LABELS } from '../authz/labels.js';
-import { effectivePermissions } from '../authz/policy.js';
 import type { Permission } from '../authz/permissions.js';
 import { CHECKPOINTS } from '../guardrails/types.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, requireRecentAuth } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission, requireRecentAuth } from '../http/middleware.js';
 import { OBJECT_TYPE } from '../moderation/registry.js';
 import { ModerationService, providerView, queueView, type ModCtx } from '../moderation/service.js';
 import type { Principal } from '../authz/policy.js';
@@ -73,12 +72,7 @@ export function moderationRoutes(s: Services): Router {
   const manage = perm('moderation:manage');
   // Sanctions change who may sign in: a browser session that recently proved its owner (step-up), never a key.
   const stepUp: RequestHandler[] = [requireAuth({ sessionOnly: true }), requireRecentAuth(s)];
-  const anyOf =
-    (...perms: Permission[]): RequestHandler =>
-    (req, res, next) => {
-      const held = effectivePermissions(principalOf(req));
-      return requirePermission(s, perms.find((x) => held.has(x)) ?? perms[0]!)(req, res, next);
-    };
+  const anyOf = (...perms: Permission[]): RequestHandler => requireAnyPermission(s, perms);
   const ctx = (req: Request): ModCtx & { principal: Principal } => ModerationService.ctxFor(principalOf(req), ip(req), req.traceId) as ModCtx & { principal: Principal };
 
   // ---------- B-1901: checks ----------

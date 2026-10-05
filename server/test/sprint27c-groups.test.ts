@@ -421,12 +421,13 @@ describe('groups and events (Sprint 27c)', () => {
   it('B-2504: events above CALENDAR_FEED_MAX_LABEL appear only as busy time', async () => {
     const boss = await memberOf(h, 'boss', [wsA], ['member'], 'confidential');
     const g = await group(boss, { name: 'Board', visibility: 'private', joinMode: 'open', label: 'confidential' });
-    await boss.post(`/api/groups/${g.id}/events`, { title: 'Acquisition talks', location: 'HQ', start: wall(Date.now() + 86_400_000), timeZone: 'UTC' }).expect(201);
+    await boss.post(`/api/groups/${g.id}/events`, { title: 'Acquisition talks', location: 'Head office', start: wall(Date.now() + 86_400_000), timeZone: 'UTC' }).expect(201);
     const feed = (await boss.post('/api/calendar/feeds', { kind: 'group', targetId: g.id }).expect(201)).body;
     const ics = (await boss.agent.get(new URL(feed.url).pathname).expect(200)).text;
     expect(ics).toContain('SUMMARY:Busy (confidential)');
     expect(ics).toContain('CLASS:CONFIDENTIAL');
-    expect(ics).not.toMatch(/Acquisition|HQ/);
+    // Words in lower case and with a space: they cannot occur by chance in the feed's ULIDs ("HQ" did, in an event id).
+    expect(ics).not.toMatch(/Acquisition|Head office/);
   });
 
   it('deleting a group stops its reminders and closes it; changes are audited and emitted as catalogue events', async () => {

@@ -1,5 +1,5 @@
 import { clears, labelRank, type Label } from './labels.js';
-import { permissionsFor, type Permission } from './permissions.js';
+import { getRole, permissionsFor, type Permission } from './permissions.js';
 
 export const POLICY_VERSION = 'baseline-v1';
 
@@ -44,8 +44,8 @@ export interface Decision {
 }
 
 /** Permissions the principal actually holds: role permissions, narrowed by credential scopes. */
-export function effectivePermissions(p: Pick<Principal, 'roles' | 'scopes'>): Set<Permission> {
-  const fromRoles = permissionsFor(p.roles);
+export function effectivePermissions(p: Pick<Principal, 'roles' | 'scopes'> & { tenantId?: string }): Set<Permission> {
+  const fromRoles = permissionsFor(p.roles, p.tenantId);
   if (!p.scopes) return fromRoles;
   return new Set(p.scopes.filter((s) => fromRoles.has(s)));
 }
@@ -57,7 +57,7 @@ export function effectivePermissions(p: Pick<Principal, 'roles' | 'scopes'>): Se
 export function authorize(p: Principal, action: Permission, resource: Resource = {}): Decision {
   const deny = (step: DecisionStep, reason: string): Decision => ({ allow: false, step, reason, action, policy: POLICY_VERSION });
 
-  if (!permissionsFor(p.roles).has(action)) return deny('role', `No role held grants ${action}`);
+  if (!permissionsFor(p.roles, p.tenantId).has(action)) return deny('role', `No role held grants ${action}`);
   if (p.scopes && !p.scopes.includes(action)) return deny('scope', `Credential scopes do not include ${action}`);
   if (action === 'inference:invoke' && p.profiles && resource.profiles && !resource.profiles.some((x) => p.profiles!.includes(x))) {
     return deny('scope', `Credential scopes allow only the profiles ${p.profiles.join(', ')}`);
@@ -93,9 +93,11 @@ export interface ExplainedStep {
  * "effective permission" panel. The decision itself is authorize()'s: the first failing step.
  */
 export function explain(p: Principal, action: Permission, resource: Resource = {}): { decision: Decision; steps: ExplainedStep[] } {
-  const perms = permissionsFor(p.roles);
+  const perms = permissionsFor(p.roles, p.tenantId);
+  // 1.5.0 (B-3303): the step names the roles that grant the action, built-in or custom.
+  const granting = perms.has(action) ? p.roles.filter((id) => permissionsFor([id], p.tenantId).has(action)).map((id) => getRole(id, p.tenantId)?.name ?? id) : [];
   const steps: ExplainedStep[] = [
-    { step: 'role', ok: perms.has(action), detail: perms.has(action) ? `A role held grants ${action}` : `No role held grants ${action}` },
+    { step: 'role', ok: perms.has(action), detail: perms.has(action) ? `A role held grants ${action} (${granting.join(', ')})` : `No role held grants ${action}` },
     { step: 'scope', ok: !p.scopes || p.scopes.includes(action), detail: !p.scopes ? 'Session credential: no scope narrowing' : p.scopes.includes(action) ? `Credential scopes include ${action}` : `Credential scopes do not include ${action}` },
     {
       step: 'tenant',

@@ -41,6 +41,8 @@ import * as m029c from './029c_groups.js';
 import * as m030 from './030_channels.js';
 import * as m030b from './030b_social.js';
 import * as m030c from './030c_feed.js';
+import * as m031 from './031_access.js';
+import * as m031b from './031b_record_queries.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -90,7 +92,9 @@ const MIGRATIONS: Record<string, Migration> = {
   '029c_groups': m029c,
   '030_channels': m030,
   '030b_social': m030b,
-  '030c_feed': m030c
+  '030c_feed': m030c,
+  '031_access': m031,
+  '031b_record_queries': m031b
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

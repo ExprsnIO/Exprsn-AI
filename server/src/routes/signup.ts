@@ -142,7 +142,7 @@ export function identityPolicyRoutes(s: Services): Router {
       z.object({
         email: z.email().max(320),
         workspaceId: z.string().length(26).nullable().default(null),
-        roles: z.array(z.string().refine(isRole, 'Unknown role')).min(1).max(13),
+        roles: z.array(z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role')).min(1).max(13),
         clearance: z.enum(LABELS).default('internal')
       }),
       req.body

@@ -4,7 +4,7 @@ import { json } from '../db/knex.js';
 import { actorFrom, isUniqueViolation, type AuditActor } from '../audit/chain.js';
 import { clears, isLabel, type Label } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
-import { getRole } from '../authz/permissions.js';
+import { rolesRequireMfa } from '../authz/permissions.js';
 import { flagFromRow, flagRef, type EscalationLevel, type FlagRow, type Severity } from '../guardrails/flags.js';
 import { actionRank } from '../guardrails/rules.js';
 import type { Checkpoint, GuardDecision, GuardFinding } from '../guardrails/types.js';
@@ -684,7 +684,7 @@ export class ModerationService {
     const targetRoles = await s.users.roleIds(user.id);
     // Admins are sanctioned only by a tenant admin, a system admin only by a system admin.
     if (targetRoles.includes('system-admin') && !p.roles.includes('system-admin')) throw forbidden('Only a system admin sanctions a system admin.', { step: 'role' });
-    if (targetRoles.some((r) => getRole(r)?.requiresMfa) && !effectivePermissions(p).has('tenant:manage')) throw forbidden('Sanctioning an administrator needs a tenant admin.', { step: 'role' });
+    if (rolesRequireMfa(targetRoles, p.tenantId) && !effectivePermissions(p).has('tenant:manage')) throw forbidden('Sanctioning an administrator needs a tenant admin.', { step: 'role' });
     if (input.kind === 'suspend' && !input.durationMinutes) throw new HttpProblem(400, 'Invalid request', 'A suspension needs a duration (durationMinutes).');
     const flag = input.flag ? await s.guard.flags.get(p.tenantId, input.flag) : null;
     const t = Date.now();
