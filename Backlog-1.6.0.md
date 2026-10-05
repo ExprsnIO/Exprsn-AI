@@ -7,16 +7,17 @@ remaining exprsn-platform gaps that Exprsn-AI wants (groups depth, tenant templa
 extras, capability tokens, quote posts), closes two 1.4.0 known gaps and the industry gaps found by the 2026-10-05
 research (prompt-injection defence, red-teaming, MCP server and authorization, SCIM, an AI inventory and seven P2
 epics) and the low-code gaps from the same day (row and field permissions, app environments and promotion, data
-model generation, AI field upgrades, outside database sync). Rules as before: everything follows
+model generation, AI field upgrades, outside database sync, entity APIs and app embedding). Rules as before: everything follows
 `docs/PLAN.md` and `CLAUDE.md`; screens follow `design/prototype/CONTRACT.md` (prototype board first, then live when
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 54 items, 283 points (1 point ≈ half a day for one engineer, tests included): P1 165, P2 118. The industry
+**Size.** 59 items, 306 points (1 point ≈ half a day for one engineer, tests included): P1 180, P2 126. The industry
 gaps (B-69 to B-80, 23 items, 121 points) were added on 2026-10-05 and need a fourth sprint, 38, which now carries
 the release. The low-code gaps
-(B-81 to B-85, 11 items, 59 points) followed the same day. Sprints 35 to 38 are at 69, 69, 71 and 74 points, under
-the 78-point pace.
+(B-81 to B-85, 11 items, 59 points) followed the same day, then the second pass (B-86, B-87 and two points on B-7101,
+5 items, 23 points), which needs a fifth sprint, 39, now carrying the release. Sprints 35 to 39 are at 69, 71, 71, 74
+and 21 points, under the 78-point pace.
 
 **Builds on.** The B-4201 boards (Overview, Jobs and queues, Storage, Configuration, Social and messaging) and the
 sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `JobQueue`, `Scheduler` and tenant cache
@@ -27,9 +28,10 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; prompt-injection defence; SCIM | B-4202–B-4207, B-4501, B-6901–B-6903, B-7201–B-7202 | 69 | Planned |
-| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; MCP server and authorization; AI inventory | B-4401–B-4405, B-4601, B-4701, B-4803, B-7101–B-7103, B-7301–B-7302 | 69 | Planned |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; MCP server and authorization; AI inventory | B-4401–B-4405, B-4601, B-4701, B-4803, B-7101–B-7103, B-7301–B-7302 | 71 | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions | B-4901, B-5001, B-4801, B-4802, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103 | 71 | Planned |
-| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; release | B-7601–B-7603, B-7801, B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-5201 | 74 | Planned |
+| 38 | DLP, legal hold and eDiscovery; agent handoffs; image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync | B-7601–B-7603, B-7801, B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501 | 74 | Planned |
+| 39 | Entity APIs; app embedding; release | B-8601–B-8603, B-8701–B-8702, B-5201 | 21 | Planned |
 
 The order follows the dependencies: the Storage screen (B-4204) before blob deduplication shows its savings (B-4601);
 the Social and messaging screen (B-4206) before group categories are managed from it (B-4405); vault anomaly detection
@@ -37,7 +39,8 @@ the Social and messaging screen (B-4206) before group categories are managed fro
 B-6903) before the red-team suites reuse the corpus (B-7001); MCP server authorization (B-7102) in the same sprint
 as the server (B-7101); capability tokens (B-5001) before agent identities use them (B-7701); chaining (B-41,
 1.5.0) before agent handoffs (B-7801); record queries (B-3601, 1.5.0) before policies add row conditions to them
-(B-8101); policies (B-81) before packages carry them (B-8201).
+(B-8101); policies (B-81) before packages carry them (B-8201) and before entity APIs enforce them (B-8601); capability
+tokens (B-5001) before scoped entity API tokens and embed sessions (B-8601, B-8702).
 
 ---
 
@@ -145,7 +148,7 @@ extraction).
 | B-7001 | Red-team suites as an eval kind: attack sets (B-6903's corpus, jailbreaks, data exfiltration through tools, system-prompt extraction) run against profiles, agents and workflows, and the publish gate can require a passing red-team run | A profile that leaks its system prompt in the suite cannot be published while the gate is on | 8 |
 | B-7002 | Red-team results on the Evaluations screen with each failed attack linked to a flag, and tenant-added attack cases | A failed attack opens as a flag that can be turned into an eval case | 3 |
 
-### B-71 MCP server and MCP authorization (21 points)
+### B-71 MCP server and MCP authorization (23 points)
 
 Exprsn-AI is an MCP client only, and that client has no OAuth, so it cannot reach most authenticated remote MCP
 servers for each user. Peers: Dify publishes apps and workflows as MCP servers (authenticated only by a secret in
@@ -155,7 +158,7 @@ metadata, RFC 8707 audience). Building on the existing OIDC provider, DPoP and P
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
-| B-7101 | MCP server: publish workflows, agents, knowledge bases and registry tools as an MCP server over Streamable HTTP, one endpoint per workspace, tools filtered by the caller's permissions and labels, every call through the guardrails and audited | Claude Desktop lists a published workflow as a tool and running it writes an audit event | 8 |
+| B-7101 | MCP server: publish workflows, agents, knowledge bases, registry tools and app records (list, query, count, aggregate, create, update, delete, as NocoDB's free edition does) as an MCP server over Streamable HTTP, one endpoint per workspace, tools in groups a client selects (as Supabase does), tools filtered by the caller's permissions and labels, every call through the guardrails and audited | Claude Desktop lists a published workflow as a tool and running it writes an audit event || 10 |
 | B-7102 | MCP server authorization: the endpoint is an OAuth 2.1 resource server of the tenant's own issuer, with RFC 9728 protected resource metadata, `WWW-Authenticate` `resource_metadata`, RFC 8707 audience checks and DPoP where the client offers it | A token issued for another resource is refused with 401 and the metadata URL in the header | 5 |
 | B-7103 | MCP client OAuth: Authorization Code with PKCE per user, dynamic client registration, metadata discovery with a manual fallback, refresh, tokens sealed with the tenant key, a per-user connect and disconnect in Settings | Two users of one MCP server act under their own accounts, and disconnecting revokes the stored token | 8 |
 
@@ -316,11 +319,45 @@ database. The database management mockup (B-68) would cover this only if it incl
 | --- | --- | --- | --- |
 | B-8501 | Attach a table in an outside PostgreSQL or MySQL database as an app entity, with credentials from the vault (dynamic leases where available), writes through to the source and a scheduled pull | A row changed in the outside table appears in the app after the next pull, and an app edit reaches the outside table at once | 8 |
 
+### Second pass (APIs, embedding, components)
+
+A second low-code research pass on 2026-10-05 covered NocoDB, Supabase, ToolJet, Budibase and Airtable. Exprsn-AI
+meets or beats NocoDB's free edition (no SSO, audit, 2FA or SCIM, one workspace), and ToolJet and Budibase charge
+for authenticated embedding, so shipping these in the base product is a differentiator. No peer publishes record
+query latency to compare with the 732 ms p95. Custom code components (ToolJet's React component, Budibase plugins)
+belong with the app builder (workbench mockup B-63) and are noted on its open decision; for many tenants on one
+instance they need an iframe or CSP sandbox and per-tenant plugin approval, which the peers leave undocumented.
+
+### P1
+
+### B-86 Entity APIs (13 points)
+
+Supabase generates a REST API from the schema (PostgREST, under row security); NocoDB has record (Data) and schema
+(Meta) APIs with API tokens. Exprsn-AI apps have no API per entity.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8601 | A REST API per app entity (`/api/apps/:app/:entity`): list with filter, sort and pagination, read with related records, create, update, delete; every call under the B-81 policies and field permissions and the labels, with scoped tokens (capability tokens, B-50) | A token scoped to one entity read-only lists its rows, with masked fields masked, and is refused on any write | 8 |
+| B-8602 | A schema API for entities, fields, forms and state machines under `apps:manage`, each change audited and versioned into the app package (B-8201) | Adding a field through the schema API shows in the app and in the next package export | 3 |
+| B-8603 | An OpenAPI document per app, regenerated when its schema changes, and a TypeScript client generated from it | The generated client creates a record against a fresh app with no hand-written code | 2 |
+
+### P2
+
+### B-87 App embedding (8 points)
+
+ToolJet has public embeds and private embeds with per-user, per-app tokens; Budibase embeds through an iframe with a
+host-signed JWT (ES256, RS256 or HS256). Both charge for the authenticated kind.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8701 | Public embeds of an app's public pages and forms, with an allowlist of host sites per app (`frame-ancestors`) | An app page embeds on an allowed site and is refused by the browser on any other | 3 |
+| B-8702 | Signed embeds: the host site signs a short-lived JWT with a key registered for the app (or a tenant CA certificate), mapped to an existing user by a configurable claim; the embedded session is scoped to that app, expires on its own and is kept apart from console sessions; audited | An embed with an expired or wrongly signed token is refused, and a valid one sees only what the mapped user may | 5 |
+
 ## Release
 
 | ID | Item | Pts |
 | --- | --- | --- |
-| B-5201 | Version `1.6.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 38; renumbered from B-5101, which 1.5.0 uses for profiles) | — |
+| B-5201 | Version `1.6.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 39; renumbered from B-5101, which 1.5.0 uses for profiles) | — |
 
 ---
 
@@ -350,7 +387,9 @@ database. The database management mockup (B-68) would cover this only if it incl
 - [ ] App promotion (B-82): an in-product pipeline with fixed packages and approvals, like Power Platform (assumed),
   or git-backed releases across instances, like Retool?
 - [ ] Workbench mockups (provisional B-63 to B-68): schedule them in 1.6.0 or 1.7? Whole-app generation and the
-  visual builder wait for B-63.
+  visual builder wait for B-63, and so do custom code components (sandboxed in an iframe or under CSP, approved per
+  tenant), which the second research pass found at ToolJet and Budibase.
+- [ ] A fifth sprint (39) for the second-pass items and the release, or move P2 epics (B-74 to B-80, B-87) to 1.7?
 
 ## Risks
 
