@@ -112,6 +112,8 @@ class Pause extends Error {
 export type AgentMemories = (p: Principal, agent: string, label: Label) => Promise<{ id: string; type: string; text: string }[]>;
 /** Files a memory proposal for an agent (the memory service's proposal flow and `memory` checkpoint). */
 export type ProposeMemory = (p: Principal, input: { agent: string; runId: string; text: string; type: string; label: Label }) => Promise<{ id: string }>;
+/** A run that succeeded under a memory policy allowing proposals, for the memory service's extraction (B-3701). */
+export type RunFinishedForMemory = (e: { tenantId: string; workspaceId: string | null; userId: string; runId: string; agent: string; label: Label; types: string[]; remaining: number }) => void;
 
 /** The built-in tool through which a run proposes a memory, offered only when the agent's memory policy allows it. */
 export const REMEMBER_TOOL = {
@@ -128,6 +130,8 @@ export class AgentService {
   memories: AgentMemories | null = null;
   /** Proposes memories from runs whose agent's memory policy allows it; unset, runs cannot write memory. */
   proposeMemory: ProposeMemory | null = null;
+  /** Extracts memory proposals from a succeeded run whose policy allows them (B-3701); unset, nothing is extracted. */
+  memoryExtract: RunFinishedForMemory | null = null;
 
   constructor(
     private readonly db: Db,
@@ -478,6 +482,13 @@ export class AgentService {
     if (state === 'failed' || state === 'succeeded') await this.audit.append({ tenantId: r.tenant_id, action: `agent.run.${state}`, kind: 'system', actor: { service: 'agents', user: r.user_id }, target: { run: r.id, agent: r.agent_name, version: r.agent_version }, label: r.label, detail: { error: upd.error ?? null, usage: extra.usage ?? null } });
   }
 
+  /** A run's task and final answer, opened, for memory extraction (B-3701). */
+  async runTexts(tenantId: string, runId: string): Promise<{ agent: string; label: Label; input: string; output: string | null; userId: string; workspaceId: string | null } | null> {
+    const r = (await this.db('agent_runs').where({ tenant_id: tenantId, id: runId }).first()) as RunRow | undefined;
+    if (!r) return null;
+    return { agent: r.agent_name, label: r.label, input: await this.open<string>(r.tenant_id, `agent-run-input:${r.id}`, r.input, ''), output: await this.open<string | null>(r.tenant_id, `agent-run-output:${r.id}`, r.output, null), userId: r.user_id, workspaceId: r.workspace_id };
+  }
+
   private async resolveProfile(p: Principal, profile: string, label: Label): Promise<ResolvedProfile> {
     const r = await this.gateway.resolve(p.tenantId, profile);
     if (r.model.state !== 'approved' && r.model.state !== 'deprecated') throw new HttpProblem(409, 'Profile unavailable', `Profile ${r.profile.name} routes to ${r.model.name}, which is ${r.model.state}.`);
@@ -679,6 +690,7 @@ export class AgentService {
         await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
         if (!pending.length) {
           await this.finish(run, 'succeeded', { output: content, usage, error: null });
+          if (policy && this.memoryExtract) this.memoryExtract({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, runId: run.id, agent: run.agent_name, label: run.label, types: policy.types, remaining: policy.maxPerRun - proposals });
           return { state: 'succeeded', steps: usage.steps };
         }
       }

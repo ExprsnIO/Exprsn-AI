@@ -10,10 +10,11 @@ import type { Guardrails } from '../guardrails/types.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import type { BlobStore } from '../platform/blob.js';
 import type { DataKeys } from '../platform/datakeys.js';
-import type { JobQueue } from '../platform/jobs.js';
-import type { VectorStore } from '../platform/vectors.js';
+import type { JobContext, JobQueue } from '../platform/jobs.js';
+import { cosine, type VectorStore } from '../platform/vectors.js';
 import type { Gateway } from '../gateway/gateway.js';
 import type { TermKeys } from '../knowledge/terms.js';
+import { askProfile, consolidationMessages, consolidationSchema, extractionMessages, extractionSchema } from './model.js';
 
 export type MemoryScope = 'user' | 'workspace' | 'agent';
 export type MemoryState = 'proposed' | 'active' | 'superseded';
@@ -22,6 +23,81 @@ export const WORKSPACE_TYPES = ['convention', 'glossary', 'contact'] as const;
 /** What an agent may propose about its own work (Sprint 12): progress on a task, a quirk of a tool or source. */
 export const AGENT_TYPES = ['progress', 'quirk'] as const;
 const COLLECTION = 'memory';
+export const EXTRACT_JOB = 'memory.extract';
+export const CONSOLIDATE_JOB = 'memory.consolidate';
+export const REINDEX_JOB = 'memory.reindex';
+/** Types whose memories go stale: what happened once, and progress on a task. */
+const STALE_TYPES = ['episodic', 'progress'];
+/** Profile calls one consolidation run may make (pairs judged), and memories per owner it compares. */
+const MAX_JUDGED = 50;
+const MAX_PER_OWNER = 300;
+/** How long after an accepted expiry proposal the memory is purged. */
+const EXPIRY_GRACE_MS = 24 * 3_600_000;
+
+/** One memory a merge proposal replaces: its id and the version it was proposed against, and where it came from. */
+export interface MergeSource {
+  memoryId: string;
+  version: number;
+  origin: string;
+  source: unknown;
+}
+
+export interface ExpiryProposal {
+  expiresAt: number;
+  reason: 'stale' | 'contradicted';
+  /** The memory that contradicts this one. */
+  by: string | null;
+  similarity: number | null;
+  proposedAt: number;
+}
+
+/** The per-tenant memory settings (B-3701 to B-3703). */
+export interface MemorySettings {
+  profile: string | null;
+  embedModel: string | null;
+  /** The model memories are embedded with now: the setting, or the first approved embedding model by name. */
+  effectiveEmbedModel: string | null;
+  similarity: number;
+  staleDays: number | null;
+  reindex: { state: 'idle' | 'running' | 'done' | 'failed'; model: string | null; jobId: string | null; done: number; total: number; error: string | null; startedAt: number | null; finishedAt: number | null };
+  updatedBy: string | null;
+  updatedAt: number | null;
+}
+
+interface SettingsRow {
+  profile: string | null;
+  embed_model: string | null;
+  similarity_pct: number;
+  stale_days: number | null;
+  reindex_state: MemorySettings['reindex']['state'];
+  reindex_model: string | null;
+  reindex_job_id: string | null;
+  reindex_done: number;
+  reindex_total: number;
+  reindex_error: string | null;
+  reindex_started_at: number | null;
+  reindex_finished_at: number | null;
+  updated_by: string | null;
+  updated_at: number | null;
+}
+
+const DEFAULT_SETTINGS: SettingsRow = { profile: null, embed_model: null, similarity_pct: 85, stale_days: null, reindex_state: 'idle', reindex_model: null, reindex_job_id: null, reindex_done: 0, reindex_total: 0, reindex_error: null, reindex_started_at: null, reindex_finished_at: null, updated_by: null, updated_at: null };
+
+/** What an agent run gives memory extraction (the agent service opens the run's sealed input and output). */
+export type RunTexts = (tenantId: string, runId: string) => Promise<{ agent: string; label: Label; input: string; output: string | null; userId: string; workspaceId: string | null } | null>;
+
+/** A run that finished under a memory policy allowing proposals (from the agent service). */
+export interface RunMemoryEvent {
+  tenantId: string;
+  workspaceId: string | null;
+  userId: string;
+  runId: string;
+  agent: string;
+  label: Label;
+  types: string[];
+  /** Proposals the policy still allows for this run (after the ones made through the `remember` tool). */
+  remaining: number;
+}
 
 export interface MemoryRow {
   id: string;
@@ -33,22 +109,34 @@ export interface MemoryRow {
   label: Label;
   source_label: Label;
   state: MemoryState;
-  /** A chat turn, or (for an agent's proposal) the run that proposed it. */
-  source: { conversationId: string; messageId: string } | { runId: string } | null;
-  origin: 'manual' | 'chat' | 'extraction' | 'agent';
+  /** A chat turn, (for an agent's proposal) the run that proposed it, or (for a merge) the memories it replaces. */
+  source: { conversationId: string; messageId: string } | { runId: string } | { merge: MergeSource[]; similarity: number; model: string } | null;
+  origin: 'manual' | 'chat' | 'extraction' | 'agent' | 'consolidation';
   author_id: string | null;
   accepted_by: string | null;
   embed_model: string | null;
   expires_at: number | null;
+  /** The merged memory that replaced this one (state `superseded`). */
+  superseded_by: string | null;
+  expiry_proposal: ExpiryProposal | null;
   version: number;
   created_at: number;
   updated_at: number;
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
-const fromRow = (r: Record<string, unknown>): MemoryRow => ({ ...(r as unknown as MemoryRow), source: json(r.source, null), expires_at: num(r.expires_at), version: Number(r.version), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+const fromRow = (r: Record<string, unknown>): MemoryRow => ({ ...(r as unknown as MemoryRow), source: json(r.source, null), expires_at: num(r.expires_at), superseded_by: (r.superseded_by as string | null | undefined) ?? null, expiry_proposal: json<ExpiryProposal | null>(r.expiry_proposal, null), version: Number(r.version), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 const labelsUpTo = (l: Label): Label[] => LABELS.filter((x) => labelRank(x) <= labelRank(l));
 const partition = (m: Pick<MemoryRow, 'scope' | 'owner_id'>) => `${m.scope}:${m.owner_id}`;
+const mergeSources = (m: Pick<MemoryRow, 'source'>): MergeSource[] | null => (m.source && 'merge' in m.source && Array.isArray(m.source.merge) ? m.source.merge : null);
+/** The key under which a judged pair is remembered when its proposal is rejected (never asked again). */
+const pairKey = (a: string, b: string) => `pair:${[a, b].sort().join(':')}`;
+
+/** A proposal's text as stored: one line, no trailing full stop, a capital first letter. */
+export function normaliseProposal(text: string): string {
+  const v = text.replace(/\s+/g, ' ').trim().replace(/[.!]+$/, '').trim();
+  return v ? v[0]!.toUpperCase() + v.slice(1) : v;
+}
 
 /** Things a memory must never hold: credentials and key material. */
 const CREDENTIAL = /\b(passwords?|passwd|pwd|passphrase|secret|api[ _-]?keys?|access[ _-]?keys?|tokens?|private[ _-]?key|bearer)\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9]{16,}|\bAKIA[0-9A-Z]{16}\b|\bexai_k1_/i;
@@ -94,15 +182,24 @@ export interface MemoryDeps {
  * again. Every write and every read into a prompt passes the `memory` checkpoint; credentials are never stored and
  * restricted memories are refused by tenant policy. Text is sealed; embeddings live in the `VectorStore`; forgetting
  * deletes the record, its versions, its vector and every export file that could hold it, and is audited.
+ *
+ * Since 1.5.0 (Sprint 30) a tenant may name a `memory` profile: it extracts proposals from chat turns and agent runs
+ * (the rules still run when there is none or it fails), and it confirms consolidation candidates (near-duplicates by
+ * embedding similarity become merge proposals; stale or contradicted memories get expiry proposals). The embedding
+ * model is a tenant setting too; changing it reindexes every memory while recall falls back to recency.
  */
 export class MemoryService {
   private readonly db: Db;
+  /** Opens an agent run's input and output for extraction (the agent service, installed after it is built). */
+  runTexts: RunTexts | null = null;
 
   constructor(private readonly d: MemoryDeps) {
     this.db = d.db;
-    d.jobs.register('memory.extract', (p) => this.extractJob(p));
+    d.jobs.register(EXTRACT_JOB, (p, ctx) => (p.runId ? this.extractRunJob(p, ctx.job.tenant_id) : this.extractJob(p)));
     d.jobs.register('memory.export', (p) => this.exportJob(String(p.exportId)));
     d.jobs.register('memory.purge', (p, ctx) => this.purgeExpired(String(p.tenantId ?? ctx.job.tenant_id)));
+    d.jobs.register(CONSOLIDATE_JOB, (p, ctx) => this.consolidate(String(p.tenantId ?? ctx.job.tenant_id), ctx), { timeoutMs: 60 * 60_000 });
+    d.jobs.register(REINDEX_JOB, (p, ctx) => this.reindexJob(String(p.tenantId ?? ctx.job.tenant_id), String(p.model), ctx), { timeoutMs: 6 * 60 * 60_000 });
   }
 
   get backend(): string {
@@ -121,10 +218,80 @@ export class MemoryService {
     return effectivePermissions(p).has('knowledge:manage');
   }
 
-  /** The first approved embedding model in the catalogue, or none (memories are then recalled by recency). */
-  private async embedModel(label: Label): Promise<string | null> {
-    const models = (await this.d.gateway.repo.models()).filter((m) => m.capabilities.includes('embedding') && (m.state === 'approved' || m.state === 'deprecated') && labelRank(m.label) >= labelRank(label));
-    return models.sort((a, b) => (a.name < b.name ? -1 : 1))[0]?.name ?? null;
+  /**
+   * The model memories at this label are embedded with: the tenant's setting (B-3703) when it names an approved
+   * embedding model cleared for the label, else none; without a setting, the first approved embedding model in the
+   * catalogue by name. None means memories are recalled by recency.
+   */
+  private async embedModel(tenantId: string, label: Label, st?: SettingsRow): Promise<string | null> {
+    const settings = st ?? (await this.settingsRow(tenantId));
+    const usable = (await this.d.gateway.repo.models()).filter((m) => m.capabilities.includes('embedding') && (m.state === 'approved' || m.state === 'deprecated') && labelRank(m.label) >= labelRank(label));
+    if (settings.embed_model) return usable.some((m) => m.name === settings.embed_model) ? settings.embed_model : null;
+    return usable.sort((a, b) => (a.name < b.name ? -1 : 1))[0]?.name ?? null;
+  }
+
+  // ---------- settings (B-3701 to B-3703) ----------
+
+  private async settingsRow(tenantId: string): Promise<SettingsRow> {
+    const r = (await this.db('memory_settings').where({ tenant_id: tenantId }).first()) as Record<string, unknown> | undefined;
+    if (!r) return DEFAULT_SETTINGS;
+    return { ...(r as unknown as SettingsRow), similarity_pct: Number(r.similarity_pct), stale_days: num(r.stale_days), reindex_done: Number(r.reindex_done), reindex_total: Number(r.reindex_total), reindex_started_at: num(r.reindex_started_at), reindex_finished_at: num(r.reindex_finished_at), updated_at: num(r.updated_at) };
+  }
+
+  /** Writes settings columns; `updated_at` moves only when the patch carries it (a person's change, not a job's). */
+  private async saveSettings(tenantId: string, patch: Partial<SettingsRow>): Promise<void> {
+    const n = await this.db('memory_settings').where({ tenant_id: tenantId }).update(patch);
+    if (!n) await this.db('memory_settings').insert({ ...DEFAULT_SETTINGS, ...patch, tenant_id: tenantId, updated_at: patch.updated_at ?? Date.now() });
+  }
+
+  async settings(tenantId: string): Promise<MemorySettings> {
+    const r = await this.settingsRow(tenantId);
+    return {
+      profile: r.profile,
+      embedModel: r.embed_model,
+      effectiveEmbedModel: await this.embedModel(tenantId, 'public', r),
+      similarity: r.similarity_pct / 100,
+      staleDays: r.stale_days,
+      reindex: { state: r.reindex_state, model: r.reindex_model, jobId: r.reindex_job_id, done: r.reindex_done, total: r.reindex_total, error: r.reindex_error, startedAt: r.reindex_started_at, finishedAt: r.reindex_finished_at },
+      updatedBy: r.updated_by,
+      updatedAt: r.updated_at
+    };
+  }
+
+  /** Embedding models the setting may name: approved (or deprecated) models with the embedding capability. */
+  async embeddingModels(): Promise<{ name: string; label: Label; state: string }[]> {
+    return (await this.d.gateway.repo.models()).filter((m) => m.capabilities.includes('embedding') && (m.state === 'approved' || m.state === 'deprecated')).map((m) => ({ name: m.name, label: m.label, state: m.state }));
+  }
+
+  /**
+   * Changes the tenant's memory settings. A profile must resolve; an embedding model must be an approved embedding
+   * model. When the effective embedding model changes, every memory is reindexed by a job (recall is by recency
+   * while it runs). Audited with the before and after.
+   */
+  async setSettings(p: Principal, ip: string | null, traceId: string, input: { profile?: string | null | undefined; embedModel?: string | null | undefined; similarity?: number | undefined; staleDays?: number | null | undefined }): Promise<MemorySettings> {
+    const before = await this.settings(p.tenantId);
+    if (input.profile) {
+      try {
+        await this.d.gateway.resolve(p.tenantId, input.profile);
+      } catch (err) {
+        if (err instanceof HttpProblem) throw new HttpProblem(422, 'Unknown profile', `Profile ${input.profile} cannot be the memory profile: ${err.detail ?? err.message}`);
+        throw err;
+      }
+    }
+    if (input.embedModel && !(await this.embeddingModels()).some((m) => m.name === input.embedModel)) throw new HttpProblem(422, 'Not an embedding model', `${input.embedModel} is not an approved embedding model.`);
+    const patch: Partial<SettingsRow> = { updated_by: p.userId, updated_at: Date.now() };
+    if (input.profile !== undefined) patch.profile = input.profile;
+    if (input.embedModel !== undefined) patch.embed_model = input.embedModel;
+    if (input.similarity !== undefined) patch.similarity_pct = Math.round(input.similarity * 100);
+    if (input.staleDays !== undefined) patch.stale_days = input.staleDays;
+    await this.saveSettings(p.tenantId, patch);
+    let after = await this.settings(p.tenantId);
+    await this.d.audit.append({ tenantId: p.tenantId, action: 'memory.settings.updated', kind: 'admin', actor: actorFrom(p, ip), target: { tenant: p.tenantId }, label: 'internal', traceId, detail: { before: { profile: before.profile, embedModel: before.embedModel, similarity: before.similarity, staleDays: before.staleDays }, after: { profile: after.profile, embedModel: after.embedModel, similarity: after.similarity, staleDays: after.staleDays } } });
+    if (after.effectiveEmbedModel && after.effectiveEmbedModel !== before.effectiveEmbedModel) {
+      await this.startReindex(p, ip, traceId);
+      after = await this.settings(p.tenantId);
+    }
+    return after;
   }
 
   async get(tenantId: string, id: string): Promise<MemoryRow> {
@@ -200,7 +367,11 @@ export class MemoryService {
       acceptedBy: m.accepted_by ? (names.get(m.accepted_by) ?? null) : null,
       backend: this.backend,
       embedded: !!m.embed_model,
+      embedModel: m.embed_model,
       expiresAt: m.expires_at,
+      merge: mergeSources(m) ? { memories: mergeSources(m)!.map((x) => x.memoryId), similarity: (m.source as { similarity: number }).similarity } : null,
+      supersededBy: m.superseded_by,
+      expiryProposal: m.expiry_proposal,
       version: m.version,
       history: versions.map((v) => ({ version: Number(v.version), note: v.note, actor: v.actor ? (names.get(v.actor) ?? null) : null, at: Number(v.created_at) })),
       createdAt: m.created_at,
@@ -236,7 +407,7 @@ export class MemoryService {
   /** Writes the memory's vector (when an embedding model exists); failures leave it recalled by recency. */
   private async embed(m: MemoryRow, text: string): Promise<void> {
     try {
-      const model = await this.embedModel(m.label);
+      const model = await this.embedModel(m.tenant_id, m.label);
       await this.d.vectors.delete(COLLECTION, [m.id]);
       if (!model) {
         await this.db('memories').where({ id: m.id }).update({ embed_model: null });
@@ -278,26 +449,80 @@ export class MemoryService {
     });
   }
 
-  async accept(p: Principal, id: string): Promise<MemoryRow> {
+  /**
+   * Accepts a proposal. A merge proposal (B-3702) becomes the new memory and retires the memories it replaces: each
+   * is `superseded`, links to the new one and keeps its history; they must be unchanged since the proposal.
+   */
+  async accept(p: Principal, id: string): Promise<{ memory: MemoryRow; replaced: string[] }> {
     const m = await this.visible(p, id, 'write');
     if (m.state !== 'proposed') throw conflict(`This memory is ${m.state}.`);
+    const replaced: MemoryRow[] = [];
+    for (const src of mergeSources(m) ?? []) {
+      const o = (await this.db('memories').where({ tenant_id: m.tenant_id, id: src.memoryId }).first()) as Record<string, unknown> | undefined;
+      if (!o) throw conflict('A memory this merge replaces was forgotten; reject the proposal.');
+      const old = fromRow(o);
+      if (old.state !== 'active' || old.version !== src.version || partition(old) !== partition(m)) throw conflict('A memory this merge replaces changed after the proposal; reject it and consolidate again.');
+      replaced.push(old);
+    }
     const text = await this.open(m, m.content);
-    await this.checkWrite(p, m.tenant_id, p.workspaceId ?? null, text, m.label, { scope: m.scope, accept: true });
-    await this.db('memories').where({ id: m.id }).update({ state: 'active', accepted_by: p.userId, version: m.version + 1, updated_at: Date.now() });
-    await this.db('memory_versions').insert({ id: ulid(), memory_id: m.id, tenant_id: m.tenant_id, version: m.version + 1, content: null, note: 'accepted', actor: p.userId, created_at: Date.now() });
+    await this.checkWrite(p, m.tenant_id, p.workspaceId ?? null, text, m.label, { scope: m.scope, accept: true, ...(replaced.length ? { merge: replaced.map((r) => r.id) } : {}) });
+    const t = Date.now();
+    await this.db.transaction(async (trx) => {
+      await trx('memories').where({ id: m.id }).update({ state: 'active', accepted_by: p.userId, version: m.version + 1, updated_at: t });
+      await trx('memory_versions').insert({ id: ulid(), memory_id: m.id, tenant_id: m.tenant_id, version: m.version + 1, content: null, note: replaced.length ? `accepted; merges ${replaced.map((r) => r.id).join(' and ')}` : 'accepted', actor: p.userId, created_at: t });
+      for (const old of replaced) {
+        await trx('memories').where({ id: old.id }).update({ state: 'superseded', superseded_by: m.id, expiry_proposal: null, version: old.version + 1, updated_at: t });
+        await trx('memory_versions').insert({ id: ulid(), memory_id: old.id, tenant_id: old.tenant_id, version: old.version + 1, content: null, note: `merged into ${m.id}`, actor: p.userId, created_at: t });
+      }
+    });
+    if (replaced.length) await this.d.vectors.delete(COLLECTION, replaced.map((r) => r.id));
     await this.embed({ ...m, state: 'active' }, text);
-    return this.get(p.tenantId, id);
+    return { memory: await this.get(p.tenantId, id), replaced: replaced.map((r) => r.id) };
   }
 
-  /** Discards a proposal and remembers not to propose the same text again. */
+  private rejectionHash(tenantId: string, key: string): Promise<string> {
+    return this.d.terms.text(tenantId, 'memory-reject', key.toLowerCase());
+  }
+
+  private async rejected(tenantId: string, ownerKey: string, key: string): Promise<boolean> {
+    return !!(await this.db('memory_rejections').where({ tenant_id: tenantId, owner_key: ownerKey, hash: await this.rejectionHash(tenantId, key) }).first());
+  }
+
+  private async remember(tenantId: string, ownerKey: string, key: string): Promise<void> {
+    await this.db('memory_rejections').insert({ tenant_id: tenantId, owner_key: ownerKey, hash: await this.rejectionHash(tenantId, key), created_at: Date.now() }).catch(() => undefined);
+  }
+
+  /** Discards a proposal and remembers not to propose the same text (or, for a merge, the same pair) again. */
   async reject(p: Principal, id: string): Promise<MemoryRow> {
     const m = await this.visible(p, id, 'write');
     if (m.state !== 'proposed') throw conflict(`This memory is ${m.state}; forget it instead.`);
     const text = await this.open(m, m.content);
-    const hash = await this.d.terms.text(m.tenant_id, 'memory-reject', text.toLowerCase());
-    await this.db('memory_rejections').insert({ tenant_id: m.tenant_id, owner_key: partition(m), hash, created_at: Date.now() }).catch(() => undefined);
+    await this.remember(m.tenant_id, partition(m), text);
+    const merge = mergeSources(m);
+    if (merge && merge.length === 2) await this.remember(m.tenant_id, partition(m), pairKey(merge[0]!.memoryId, merge[1]!.memoryId));
     await this.db('memories').where({ id: m.id }).delete();
     return m;
+  }
+
+  /**
+   * Decides an expiry proposal (B-3702): accepting sets the memory to expire (it is purged after a day's grace),
+   * rejecting clears the proposal and remembers not to propose it again for the same reason.
+   */
+  async decideExpiry(p: Principal, id: string, decision: 'accept' | 'reject'): Promise<{ memory: MemoryRow; proposal: ExpiryProposal }> {
+    const m = await this.visible(p, id, 'write');
+    const proposal = m.expiry_proposal;
+    if (!proposal) throw conflict('This memory has no expiry proposal.');
+    const t = Date.now();
+    if (decision === 'accept') {
+      const expiresAt = Math.max(proposal.expiresAt, t);
+      await this.db('memories').where({ id: m.id }).update({ expires_at: expiresAt, expiry_proposal: null, version: m.version + 1, updated_at: t });
+      await this.db('memory_versions').insert({ id: ulid(), memory_id: m.id, tenant_id: m.tenant_id, version: m.version + 1, content: null, note: `expiry set to ${new Date(expiresAt).toISOString().slice(0, 10)} (${proposal.reason === 'stale' ? 'stale' : `contradicted by ${proposal.by}`})`, actor: p.userId, created_at: t });
+    } else {
+      await this.db('memories').where({ id: m.id }).update({ expiry_proposal: null });
+      await this.remember(m.tenant_id, partition(m), `expire:${m.id}:${proposal.reason}`);
+      if (proposal.by) await this.remember(m.tenant_id, partition(m), pairKey(m.id, proposal.by));
+    }
+    return { memory: await this.get(p.tenantId, id), proposal };
   }
 
   async edit(p: Principal, id: string, patch: { text?: string; label?: Label; expiresAt?: number | null }): Promise<{ memory: MemoryRow; changed: string[] }> {
@@ -358,8 +583,35 @@ export class MemoryService {
   onAnswer(e: AnswerEvent): void {
     if (e.state !== 'complete' || !e.userMessageId) return;
     void this.d.jobs
-      .enqueue({ tenantId: e.tenantId, type: 'memory.extract', payload: { messageId: e.userMessageId, conversationId: e.conversationId, userId: e.principal.userId, workspaceId: e.workspaceId }, createdBy: e.principal.userId, maxAttempts: 1 })
+      .enqueue({ tenantId: e.tenantId, type: EXTRACT_JOB, payload: { messageId: e.userMessageId, conversationId: e.conversationId, userId: e.principal.userId, workspaceId: e.workspaceId }, createdBy: e.principal.userId, maxAttempts: 1 })
       .catch((err: Error) => this.d.log.warn({ err: err.message }, 'memory extraction could not be queued'));
+  }
+
+  /** Queues extraction of agent memory proposals from a run that finished under a policy allowing them (B-3701). */
+  onRun(e: RunMemoryEvent): void {
+    if (e.remaining <= 0 || !e.types.length) return;
+    void this.d.jobs
+      .enqueue({ tenantId: e.tenantId, type: EXTRACT_JOB, payload: { runId: e.runId, types: e.types, remaining: e.remaining }, createdBy: e.userId, maxAttempts: 1 })
+      .catch((err: Error) => this.d.log.warn({ err: err.message }, 'memory extraction could not be queued'));
+  }
+
+  /**
+   * Candidate memories from a text: the tenant's memory profile when one is set and it answers well-formed JSON,
+   * else (no profile, a model error, a malformed answer) the rules. A fallback is audited with its reason.
+   */
+  private async candidates(tenantId: string, kind: 'chat' | 'run', data: Record<string, string>, rulesText: string, label: Label, types: readonly [string, ...string[]], target: Record<string, unknown>): Promise<{ via: 'model' | 'rules'; items: { text: string; type: string }[] }> {
+    const st = await this.settingsRow(tenantId);
+    if (st.profile) {
+      try {
+        const r = await askProfile(this.d.gateway, tenantId, st.profile, label, extractionMessages(kind, data, types), extractionSchema(types));
+        return { via: 'model', items: r.value.memories.map((m) => ({ text: m.text, type: m.type ?? types[0] })) };
+      } catch (err) {
+        const reason = (err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message).slice(0, 300);
+        this.d.log.warn({ err: reason, profile: st.profile }, 'memory profile failed; the rules extract instead');
+        await this.d.audit.append({ tenantId, action: 'memory.extraction.fallback', kind: 'system', actor: { service: EXTRACT_JOB }, target, label, detail: { profile: st.profile, reason } });
+      }
+    }
+    return { via: 'rules', items: extractProposals(rulesText).map((text) => ({ text, type: types[0] })) };
   }
 
   private async extractJob(p: Record<string, unknown>): Promise<unknown> {
@@ -367,25 +619,56 @@ export class MemoryService {
     if (!msg || msg.role !== 'user' || !msg.content) return { proposals: 0 };
     const text = await this.d.keys.open(msg.tenant_id, msg.content, `content:${msg.id}`);
     const userId = String(p.userId);
+    const found = await this.candidates(msg.tenant_id, 'chat', { message: text }, text, msg.label, USER_TYPES, { message: msg.id });
     let proposals = 0;
     const refused: string[] = [];
-    for (const candidate of extractProposals(text)) {
-      const hash = await this.d.terms.text(msg.tenant_id, 'memory-reject', candidate.toLowerCase());
-      if (await this.db('memory_rejections').where({ tenant_id: msg.tenant_id, owner_key: `user:${userId}`, hash }).first()) continue;
-      const existing = ((await this.db('memories').where({ tenant_id: msg.tenant_id, scope: 'user', owner_id: userId })) as Record<string, unknown>[]).map(fromRow);
-      let dup = false;
-      for (const e of existing) if ((await this.open(e, e.content)).toLowerCase() === candidate.toLowerCase()) dup = true;
-      if (dup) continue;
+    const existing = ((await this.db('memories').where({ tenant_id: msg.tenant_id, scope: 'user', owner_id: userId })) as Record<string, unknown>[]).map(fromRow);
+    const held = new Set<string>();
+    for (const e of existing) held.add((await this.open(e, e.content)).toLowerCase());
+    for (const c of found.items) {
+      const candidate = normaliseProposal(c.text);
+      if (candidate.length < 4 || held.has(candidate.toLowerCase())) continue;
+      // The rejection list: a text the user rejected before is never proposed again, whoever wrote it.
+      if (await this.rejected(msg.tenant_id, `user:${userId}`, candidate)) continue;
       try {
-        const clean = await this.checkWrite(null, msg.tenant_id, (p.workspaceId as string | null) ?? null, candidate, msg.label, { scope: 'user', proposal: true });
-        await this.insert({ tenantId: msg.tenant_id, scope: 'user', ownerId: userId, type: 'user', text: clean, label: msg.label, sourceLabel: msg.label, state: 'proposed', origin: 'extraction', source: { conversationId: String(p.conversationId), messageId: msg.id }, authorId: null, acceptedBy: null, expiresAt: null, note: 'proposed after a chat turn; passed the memory checkpoint' });
+        const clean = await this.checkWrite(null, msg.tenant_id, (p.workspaceId as string | null) ?? null, candidate, msg.label, { scope: 'user', proposal: true, via: found.via });
+        await this.insert({ tenantId: msg.tenant_id, scope: 'user', ownerId: userId, type: c.type, text: clean, label: msg.label, sourceLabel: msg.label, state: 'proposed', origin: 'extraction', source: { conversationId: String(p.conversationId), messageId: msg.id }, authorId: null, acceptedBy: null, expiresAt: null, note: `proposed after a chat turn (${found.via === 'model' ? 'memory profile' : 'rules'}); passed the memory checkpoint` });
+        held.add(candidate.toLowerCase());
         proposals++;
       } catch (err) {
         refused.push(err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message);
-        await this.d.audit.append({ tenantId: msg.tenant_id, action: 'memory.proposal.refused', kind: 'system', actor: { service: 'memory.extract', user: userId }, target: { message: msg.id }, label: msg.label, detail: { reason: refused[refused.length - 1] } });
+        await this.d.audit.append({ tenantId: msg.tenant_id, action: 'memory.proposal.refused', kind: 'system', actor: { service: EXTRACT_JOB, user: userId }, target: { message: msg.id }, label: msg.label, detail: { reason: refused[refused.length - 1] } });
       }
     }
-    return { proposals, refused: refused.length };
+    return { via: found.via, proposals, refused: refused.length };
+  }
+
+  /** Agent memory proposals from a finished run's task and answer (B-3701), within what the policy still allows. */
+  private async extractRunJob(p: Record<string, unknown>, tenantId: string): Promise<unknown> {
+    const runId = String(p.runId);
+    const run = this.runTexts ? await this.runTexts(tenantId, runId) : null;
+    if (!run?.output) return { proposals: 0 };
+    const types = (Array.isArray(p.types) ? p.types.map(String) : []).filter((t) => (AGENT_TYPES as readonly string[]).includes(t));
+    let remaining = Number(p.remaining ?? 0);
+    if (!types.length || remaining <= 0) return { proposals: 0 };
+    const found = await this.candidates(tenantId, 'run', { task: run.input, answer: run.output }, run.output, run.label, types as [string, ...string[]], { run: runId, agent: run.agent });
+    let proposals = 0;
+    let refused = 0;
+    for (const c of found.items) {
+      if (remaining <= 0) break;
+      const type = types.includes(c.type) ? c.type : types[0]!;
+      try {
+        await this.proposeAgent({ tenantId, workspaceId: run.workspaceId, principal: null, userId: run.userId, service: EXTRACT_JOB }, { agent: run.agent, runId, text: c.text, type, label: run.label, via: found.via });
+        proposals++;
+        remaining--;
+      } catch (err) {
+        // Already held, or rejected before: skipped quietly. Refused by the checkpoint: audited.
+        if (err instanceof HttpProblem && err.status === 409) continue;
+        refused++;
+        await this.d.audit.append({ tenantId, action: 'memory.proposal.refused', kind: 'system', actor: { service: EXTRACT_JOB, user: run.userId }, target: { run: runId, agent: run.agent }, label: run.label, detail: { reason: err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message } });
+      }
+    }
+    return { via: found.via, proposals, refused };
   }
 
   /**
@@ -395,16 +678,20 @@ export class MemoryService {
    * for a knowledge curator to accept it.
    */
   async proposeForAgent(p: Principal, input: { agent: string; runId: string; text: string; type: string; label: Label }): Promise<MemoryRow> {
-    const text = input.text.replace(/\s+/g, ' ').trim();
+    return this.proposeAgent({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, principal: p, userId: p.userId, service: 'agents' }, input);
+  }
+
+  private async proposeAgent(ctx: { tenantId: string; workspaceId: string | null; principal: Principal | null; userId: string; service: string }, input: { agent: string; runId: string; text: string; type: string; label: Label; via?: 'model' | 'rules' }): Promise<MemoryRow> {
+    const text = input.via ? normaliseProposal(input.text) : input.text.replace(/\s+/g, ' ').trim();
     if (text.length < 4 || text.length > 1000) throw new HttpProblem(422, 'Invalid memory', 'A memory is 4 to 1000 characters.');
-    const hash = await this.d.terms.text(p.tenantId, 'memory-reject', text.toLowerCase());
-    if (await this.db('memory_rejections').where({ tenant_id: p.tenantId, owner_key: `agent:${input.agent}`, hash }).first()) throw conflict('A curator rejected this memory before, so it is not proposed again.');
-    for (const e of ((await this.db('memories').where({ tenant_id: p.tenantId, scope: 'agent', owner_id: input.agent }).whereNot({ state: 'superseded' })) as Record<string, unknown>[]).map(fromRow)) {
+    if (await this.rejected(ctx.tenantId, `agent:${input.agent}`, text)) throw conflict('A curator rejected this memory before, so it is not proposed again.');
+    for (const e of ((await this.db('memories').where({ tenant_id: ctx.tenantId, scope: 'agent', owner_id: input.agent }).whereNot({ state: 'superseded' })) as Record<string, unknown>[]).map(fromRow)) {
       if ((await this.open(e, e.content)).toLowerCase() === text.toLowerCase()) throw conflict('The agent already has this memory or a proposal for it.');
     }
-    const clean = await this.checkWrite(p, p.tenantId, p.workspaceId ?? null, text, input.label, { scope: 'agent', agent: input.agent, proposal: true, run: input.runId });
-    const m = await this.insert({ tenantId: p.tenantId, scope: 'agent', ownerId: input.agent, type: input.type, text: clean, label: input.label, sourceLabel: input.label, state: 'proposed', origin: 'agent', source: { runId: input.runId }, authorId: null, acceptedBy: null, expiresAt: null, note: `proposed by run ${input.runId}; passed the memory checkpoint` });
-    await this.d.audit.append({ tenantId: p.tenantId, action: 'memory.proposed', kind: 'system', actor: { service: 'agents', user: p.userId }, target: { memory: m.id, agent: input.agent, run: input.runId }, label: m.label, detail: { type: m.type, scope: 'agent' } });
+    const clean = await this.checkWrite(ctx.principal, ctx.tenantId, ctx.workspaceId, text, input.label, { scope: 'agent', agent: input.agent, proposal: true, run: input.runId, ...(input.via ? { via: input.via } : {}) });
+    const how = input.via ? ` (extracted by the ${input.via === 'model' ? 'memory profile' : 'rules'})` : '';
+    const m = await this.insert({ tenantId: ctx.tenantId, scope: 'agent', ownerId: input.agent, type: input.type, text: clean, label: input.label, sourceLabel: input.label, state: 'proposed', origin: 'agent', source: { runId: input.runId }, authorId: null, acceptedBy: null, expiresAt: null, note: `proposed by run ${input.runId}${how}; passed the memory checkpoint` });
+    await this.d.audit.append({ tenantId: ctx.tenantId, action: 'memory.proposed', kind: 'system', actor: { service: ctx.service, user: ctx.userId }, target: { memory: m.id, agent: input.agent, run: input.runId }, label: m.label, detail: { type: m.type, scope: 'agent', ...(input.via ? { via: input.via } : {}) } });
     return m;
   }
 
@@ -418,12 +705,15 @@ export class MemoryService {
         .andWhere((w) => w.where({ scope: 'user', owner_id: req.principal.userId }).orWhere((x) => x.where({ scope: 'workspace', owner_id: req.workspaceId ?? '' })))
         .andWhere((w) => w.whereNull('expires_at').orWhere('expires_at', '>', Date.now()));
     let rows = ((await base().orderBy('updated_at', 'desc').limit(10)) as Record<string, unknown>[]).map(fromRow);
-    const model = await this.embedModel('public');
+    // While a reindex runs (B-3703) the vectors are of two models: recall is by recency until it is done.
+    const st = await this.settingsRow(req.tenantId);
+    const model = st.reindex_state === 'running' ? null : await this.embedModel(req.tenantId, 'public', st);
     if (model && req.query.trim()) {
       try {
         const [vec] = await this.d.embed(req.tenantId, model, [req.query], req.label, req.principal.userId);
         const hits = await this.d.vectors.search(COLLECTION, { tenantId: req.tenantId, vector: vec!, k: 8, maxLabelRank: labelRank(req.ceiling), partitions: parts });
-        const byVector = hits.length ? ((await base().whereIn('id', hits.map((h) => h.id))) as Record<string, unknown>[]).map(fromRow) : [];
+        // Only vectors of the model the query was embedded with are comparable.
+        const byVector = hits.length ? ((await base().whereIn('id', hits.map((h) => h.id)).andWhere({ embed_model: model })) as Record<string, unknown>[]).map(fromRow) : [];
         const order = new Map(hits.map((h, i) => [h.id, i]));
         rows = [...byVector.sort((a, b) => order.get(a.id)! - order.get(b.id)!), ...rows.filter((r) => !order.has(r.id))].slice(0, 10);
       } catch (err) {
@@ -459,6 +749,204 @@ export class MemoryService {
       out.push({ id: m.id, type: m.type, label: m.label, text: g.action === 'redact' ? g.text : text });
     }
     return out;
+  }
+
+  // ---------- consolidation (B-3702) ----------
+
+  /** Queues a consolidation run now (it also runs daily for every tenant). */
+  async requestConsolidation(p: Principal, ip: string | null, traceId: string): Promise<{ jobId: string }> {
+    const job = await this.d.jobs.enqueue({ tenantId: p.tenantId, type: CONSOLIDATE_JOB, payload: { tenantId: p.tenantId }, createdBy: p.userId, dedupeKey: `${CONSOLIDATE_JOB}:${p.tenantId}:manual:${Math.floor(Date.now() / 60_000)}`, maxAttempts: 1 });
+    await this.d.audit.append({ tenantId: p.tenantId, action: 'memory.consolidation.requested', kind: 'admin', actor: actorFrom(p, ip), target: { job: job.id }, label: 'internal', traceId });
+    return { jobId: job.id };
+  }
+
+  /**
+   * Finds what to tidy and proposes it; nothing changes until a person accepts. Stale memories (episodic or progress,
+   * untouched for the tenant's `staleDays`) get an expiry proposal. With a memory profile and an embedding model,
+   * active memories of the same owner whose vectors are at least `similarity` alike are judged by the profile: the
+   * same fact becomes one merge proposal (a new proposed memory naming both), a contradiction an expiry proposal for
+   * the outdated one. A pair already proposed, or whose proposal was rejected, is not judged again.
+   */
+  async consolidate(tenantId: string, ctx?: JobContext): Promise<{ merges: number; expiries: number; stale: number; judged: number; failures: number }> {
+    const st = await this.settingsRow(tenantId);
+    const now = Date.now();
+    const out = { merges: 0, expiries: 0, stale: 0, judged: 0, failures: 0 };
+    if (st.stale_days) {
+      const old = ((await this.db('memories').where({ tenant_id: tenantId, state: 'active' }).whereIn('type', STALE_TYPES).whereNull('expires_at').whereNull('expiry_proposal').andWhere('updated_at', '<', now - st.stale_days * 86_400_000).limit(1000)) as Record<string, unknown>[]).map(fromRow);
+      for (const m of old) {
+        if (await this.rejected(tenantId, partition(m), `expire:${m.id}:stale`)) continue;
+        await this.proposeExpiry(m, { expiresAt: now + EXPIRY_GRACE_MS, reason: 'stale', by: null, similarity: null, proposedAt: now });
+        out.stale++;
+      }
+    }
+    if (st.profile && st.reindex_state !== 'running') {
+      const owners = (await this.db('memories').where({ tenant_id: tenantId, state: 'active' }).distinct('scope', 'owner_id')) as { scope: MemoryScope; owner_id: string }[];
+      for (const [i, owner] of owners.entries()) {
+        if (ctx?.signal.aborted || out.judged >= MAX_JUDGED) break;
+        const r = await this.consolidateOwner(tenantId, st, owner, MAX_JUDGED - out.judged);
+        out.merges += r.merges;
+        out.expiries += r.expiries;
+        out.judged += r.judged;
+        out.failures += r.failures;
+        await ctx?.progress(Math.round(((i + 1) / owners.length) * 100), `${owner.scope} memories`);
+      }
+    }
+    await this.d.audit.append({ tenantId, action: 'memory.consolidated', kind: 'system', actor: { service: CONSOLIDATE_JOB }, target: { tenant: tenantId }, label: 'internal', detail: { ...out, profile: st.profile } });
+    return out;
+  }
+
+  private async consolidateOwner(tenantId: string, st: SettingsRow, owner: { scope: MemoryScope; owner_id: string }, budget: number): Promise<{ merges: number; expiries: number; judged: number; failures: number }> {
+    const out = { merges: 0, expiries: 0, judged: 0, failures: 0 };
+    const now = Date.now();
+    const all = ((await this.db('memories').where({ tenant_id: tenantId, scope: owner.scope, owner_id: owner.owner_id }).whereNot({ state: 'superseded' })) as Record<string, unknown>[]).map(fromRow);
+    // Memories already in a pending merge or expiry proposal wait for that decision first.
+    const busy = new Set<string>();
+    for (const m of all) {
+      if (m.state === 'proposed') for (const src of mergeSources(m) ?? []) busy.add(src.memoryId);
+      if (m.expiry_proposal) busy.add(m.id);
+    }
+    const rows = all
+      .filter((m) => m.state === 'active' && (m.expires_at == null || m.expires_at > now) && !busy.has(m.id))
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .slice(0, MAX_PER_OWNER);
+    if (rows.length < 2) return out;
+    const top = highest(...rows.map((m) => m.label));
+    const model = await this.embedModel(tenantId, top, st);
+    if (!model) return out;
+    const texts = await Promise.all(rows.map((m) => this.open(m, m.content)));
+    let vecs: number[][];
+    try {
+      vecs = await this.d.embed(tenantId, model, texts, top, null);
+    } catch (err) {
+      this.d.log.warn({ err: (err as Error).message }, 'memory consolidation could not embed; skipped');
+      out.failures++;
+      return out;
+    }
+    const threshold = st.similarity_pct / 100;
+    const pairs: { i: number; j: number; score: number }[] = [];
+    for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) {
+      const score = cosine(vecs[i]!, vecs[j]!);
+      if (score >= threshold) pairs.push({ i, j, score });
+    }
+    pairs.sort((a, b) => b.score - a.score);
+    const used = new Set<string>();
+    for (const pair of pairs) {
+      if (out.judged >= budget) break;
+      const a = rows[pair.i]!;
+      const b = rows[pair.j]!;
+      if (used.has(a.id) || used.has(b.id)) continue;
+      if (await this.rejected(tenantId, partition(a), pairKey(a.id, b.id))) continue;
+      out.judged++;
+      let verdict;
+      try {
+        verdict = (await askProfile(this.d.gateway, tenantId, st.profile!, highest(a.label, b.label), consolidationMessages({ text: texts[pair.i]!, updatedAt: a.updated_at }, { text: texts[pair.j]!, updatedAt: b.updated_at }), consolidationSchema)).value;
+      } catch (err) {
+        out.failures++;
+        this.d.log.warn({ err: (err as Error).message, profile: st.profile }, 'memory profile could not judge a pair; nothing proposed');
+        continue;
+      }
+      const score = Math.round(pair.score * 1000) / 1000;
+      if (verdict.relation === 'same' && verdict.merged) {
+        if (await this.proposeMerge(a, b, verdict.merged, score, model)) {
+          used.add(a.id);
+          used.add(b.id);
+          out.merges++;
+        }
+      } else if (verdict.relation === 'contradicts' && verdict.outdated) {
+        const [outdated, by] = verdict.outdated === 'a' ? [a, b] : [b, a];
+        if (await this.rejected(tenantId, partition(outdated), `expire:${outdated.id}:contradicted`)) continue;
+        await this.proposeExpiry(outdated, { expiresAt: now + EXPIRY_GRACE_MS, reason: 'contradicted', by: by.id, similarity: score, proposedAt: now });
+        used.add(outdated.id);
+        out.expiries++;
+      }
+    }
+    return out;
+  }
+
+  /** Files a merge proposal: a new proposed memory naming both sources, labelled as high as they are. */
+  private async proposeMerge(a: MemoryRow, b: MemoryRow, merged: string, similarity: number, model: string): Promise<MemoryRow | null> {
+    const text = normaliseProposal(merged);
+    const label = highest(a.label, b.label);
+    if (text.length < 4 || (await this.rejected(a.tenant_id, partition(a), text))) return null;
+    let clean: string;
+    try {
+      clean = await this.checkWrite(null, a.tenant_id, a.scope === 'workspace' ? a.owner_id : null, text, label, { scope: a.scope, proposal: true, merge: [a.id, b.id] });
+    } catch (err) {
+      await this.d.audit.append({ tenantId: a.tenant_id, action: 'memory.proposal.refused', kind: 'system', actor: { service: CONSOLIDATE_JOB }, target: { merges: [a.id, b.id] }, label, detail: { reason: err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message } });
+      return null;
+    }
+    const newer = a.updated_at >= b.updated_at ? a : b;
+    const expiresAt = a.expires_at != null && b.expires_at != null ? Math.max(a.expires_at, b.expires_at) : null;
+    const source = { merge: [a, b].map((m) => ({ memoryId: m.id, version: m.version, origin: m.origin, source: m.source })), similarity, model };
+    const m = await this.insert({ tenantId: a.tenant_id, scope: a.scope, ownerId: a.owner_id, type: a.type === b.type ? a.type : newer.type, text: clean, label, sourceLabel: highest(a.source_label, b.source_label), state: 'proposed', origin: 'consolidation', source, authorId: null, acceptedBy: null, expiresAt, note: `proposed by consolidation: merges ${a.id} and ${b.id} (similarity ${similarity}); passed the memory checkpoint` });
+    await this.d.audit.append({ tenantId: a.tenant_id, action: 'memory.merge.proposed', kind: 'system', actor: { service: CONSOLIDATE_JOB }, target: { memory: m.id, merges: [a.id, b.id], scope: a.scope }, label, detail: { similarity, model } });
+    return m;
+  }
+
+  private async proposeExpiry(m: MemoryRow, proposal: ExpiryProposal): Promise<void> {
+    await this.db('memories').where({ id: m.id }).update({ expiry_proposal: JSON.stringify(proposal) });
+    await this.d.audit.append({ tenantId: m.tenant_id, action: 'memory.expiry.proposed', kind: 'system', actor: { service: CONSOLIDATE_JOB }, target: { memory: m.id, scope: m.scope, ...(proposal.by ? { by: proposal.by } : {}) }, label: m.label, detail: { reason: proposal.reason, expiresAt: proposal.expiresAt, similarity: proposal.similarity } });
+  }
+
+  // ---------- reindex (B-3703) ----------
+
+  /** Queues a reindex of every active memory with the tenant's embedding model; recall is by recency until it ends. */
+  async startReindex(p: Principal, ip: string | null, traceId: string): Promise<MemorySettings> {
+    const model = await this.embedModel(p.tenantId, 'public');
+    if (!model) throw conflict('There is no embedding model to reindex with.');
+    const total = Number(((await this.db('memories').where({ tenant_id: p.tenantId, state: 'active' }).count({ n: '*' })) as { n: number }[])[0]?.n ?? 0);
+    await this.saveSettings(p.tenantId, { reindex_state: 'running', reindex_model: model, reindex_done: 0, reindex_total: total, reindex_error: null, reindex_started_at: Date.now(), reindex_finished_at: null, reindex_job_id: null });
+    const job = await this.d.jobs.enqueue({ tenantId: p.tenantId, type: REINDEX_JOB, payload: { tenantId: p.tenantId, model }, createdBy: p.userId, maxAttempts: 3 });
+    await this.saveSettings(p.tenantId, { reindex_job_id: job.id });
+    await this.d.audit.append({ tenantId: p.tenantId, action: 'memory.reindex.started', kind: 'admin', actor: actorFrom(p, ip), target: { job: job.id }, label: 'internal', traceId, detail: { model, memories: total } });
+    return this.settings(p.tenantId);
+  }
+
+  /**
+   * Embeds every active memory with the model (those already embedded with it are skipped, so a retry resumes),
+   * in batches per label. A memory the model is not cleared for is left unembedded (recalled by recency). A newer
+   * model change supersedes the run.
+   */
+  private async reindexJob(tenantId: string, model: string, ctx: JobContext): Promise<unknown> {
+    const current = async () => (await this.settingsRow(tenantId)).reindex_model === model;
+    if (!(await current())) return { superseded: true };
+    try {
+      await this.saveSettings(tenantId, { reindex_state: 'running', reindex_error: null });
+      const rows = ((await this.db('memories').where({ tenant_id: tenantId, state: 'active' }).orderBy('id')) as Record<string, unknown>[]).map(fromRow);
+      const todo = rows.filter((m) => m.embed_model !== model);
+      let done = rows.length - todo.length;
+      await this.saveSettings(tenantId, { reindex_total: rows.length, reindex_done: done });
+      let skipped = 0;
+      for (const label of LABELS) {
+        const group = todo.filter((m) => m.label === label);
+        if (!group.length) continue;
+        const cleared = (await this.embedModel(tenantId, label)) === model;
+        for (let i = 0; i < group.length; i += 32) {
+          if (ctx.signal.aborted) throw new Error('The reindex was cancelled.');
+          if (!(await current())) return { superseded: true, done };
+          const batch = group.slice(i, i + 32);
+          if (cleared) {
+            const vecs = await this.d.embed(tenantId, model, await Promise.all(batch.map((m) => this.open(m, m.content))), label, null);
+            await this.d.vectors.upsert(COLLECTION, batch.map((m, k) => ({ id: m.id, tenantId, partition: partition(m), labelRank: labelRank(m.label), vector: vecs[k]! })));
+            await this.db('memories').whereIn('id', batch.map((m) => m.id)).update({ embed_model: model });
+          } else {
+            await this.d.vectors.delete(COLLECTION, batch.map((m) => m.id));
+            await this.db('memories').whereIn('id', batch.map((m) => m.id)).update({ embed_model: null });
+            skipped += batch.length;
+          }
+          done += batch.length;
+          await this.saveSettings(tenantId, { reindex_done: done });
+          await ctx.progress(rows.length ? Math.round((done / rows.length) * 100) : 100, `${done} of ${rows.length} memories`);
+        }
+      }
+      await this.saveSettings(tenantId, { reindex_state: 'done', reindex_finished_at: Date.now() });
+      await this.d.audit.append({ tenantId, action: 'memory.reindexed', kind: 'system', actor: { service: REINDEX_JOB }, target: { tenant: tenantId }, label: 'internal', detail: { model, memories: rows.length, embedded: todo.length - skipped, unembedded: skipped } });
+      return { model, memories: rows.length, embedded: todo.length - skipped, unembedded: skipped };
+    } catch (err) {
+      if (await current()) await this.saveSettings(tenantId, { reindex_state: 'failed', reindex_error: (err as Error).message.slice(0, 500), reindex_finished_at: Date.now() });
+      await this.d.audit.append({ tenantId, action: 'memory.reindex.failed', kind: 'system', actor: { service: REINDEX_JOB }, target: { tenant: tenantId }, label: 'internal', detail: { model, error: (err as Error).message.slice(0, 300) } });
+      throw err;
+    }
   }
 
   // ---------- export ----------

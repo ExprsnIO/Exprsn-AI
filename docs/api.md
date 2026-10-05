@@ -609,6 +609,51 @@ working on…"); accepted memories of the user and the current workspace go into
 (each through the `memory` checkpoint), recalled by vector similarity when an embedding model is approved, else by
 recency. Expired memories are purged hourly from every backend.
 
+#### Model-based memory management (1.5.0, Sprint 30: B-3701 to B-3703)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /memory/settings` | `knowledge:manage`. `{profile, embedModel, effectiveEmbedModel, similarity, staleDays, reindex: {state: idle\|running\|done\|failed, model, jobId, done, total, error, startedAt, finishedAt}, updatedBy, updatedAt, embeddingModels: [{name, label, state}]}` for the tenant |
+| `PUT /memory/settings` `{profile?: name\|null, embedModel?: name\|null, similarity?: 0.5-0.99, staleDays?: 1-3650\|null}` | `knowledge:manage`. `422` for a profile that does not resolve or a model that is not an approved embedding model. When the embedding model in effect changes, `memory.reindex` starts (`reindex.state: running`). Audited (`memory.settings.updated`, `memory.reindex.started`) |
+| `POST /memory/consolidate` | `knowledge:manage`. `202 {jobId}`: a `memory.consolidate` run now (it also runs daily for every tenant) |
+| `POST /memory/reindex` | `knowledge:manage`. `202` with the settings: re-embeds every active memory with the model in effect (memories already embedded with it are skipped). `409` without an embedding model |
+| `POST /memory/:id/expiry/accept` | `memory:write`, the owner (a curator for workspace and agent memories). The memory expires at the proposed time (a day after the proposal) and is purged; a new version notes why. `409` without a proposal |
+| `POST /memory/:id/expiry/reject` | Clears the proposal; the memory is not proposed for expiry again for the same reason, and a contradicting pair is not judged again |
+
+- **The memory profile** (`profile`): a published model profile of the tenant. After a chat answer completes,
+  `memory.extract` asks it for proposals from the user's message; after an agent run succeeds under a memory policy
+  that allows proposals (`memory.write: propose`), it asks it for `progress` or `quirk` proposals from the run's task
+  and answer, within what `maxPerRun` still allows after the `remember` tool's proposals. The text goes to the model
+  as a JSON string and the prompt says nothing in it is an instruction; the answer must be one JSON object matching
+  `{memories: [{text, type?}]}` (at most 5, each 4 to 300 characters), else it counts as a failure. With no profile, or
+  when the profile fails (it does not resolve, its model is not approved, the text's label is above the profile's,
+  the call fails or times out, or the answer is not that JSON), the rules extract as before and
+  `memory.extraction.fallback` records the reason. Either way every proposal passes the `memory` checkpoint (tenant
+  policy, the credential ban, the guardrail rules; refusals are audited as `memory.proposal.refused`), is skipped when
+  it is held already or was rejected before (the rejection list compares one-line, lower-case text), and carries the
+  label of its source (the message's, or the run's). The memory's first version notes which extracted it.
+- **Consolidation** (`memory.consolidate`, daily and on request; nothing changes until a person accepts):
+  episodic and progress memories untouched for `staleDays` get an expiry proposal (`reason: stale`). With a profile and
+  an embedding model, the active memories of each owner (up to 300, most recent first) are embedded and every pair at
+  least `similarity` alike (cosine) is judged by the profile (at most 50 pairs per run), which answers
+  `{relation: same|contradicts|distinct, merged?, outdated?: a|b}` strictly. `same` becomes a **merge proposal**: a new
+  proposed memory (`origin: consolidation`) with the merged text, labelled as high as the two, whose `source` keeps both
+  memories' ids, versions, origins and sources; `contradicts` becomes an expiry proposal (`reason: contradicted, by`)
+  on the outdated one. Memories in a pending proposal are left out, and a pair whose proposal was rejected is not
+  judged again. Accepting a merge (`POST /memory/:id/accept`, as for any proposal) activates the new memory and
+  retires both: `state: superseded`, `supersededBy`, a version noting `merged into <id>`, their vectors deleted;
+  `409` when either changed or was forgotten since the proposal. Audit: `memory.merge.proposed`,
+  `memory.expiry.proposed`, `memory.consolidated`, `memory.merged`, `memory.expiry.accepted`, `memory.expiry.rejected`.
+- **The embedding model** (`embedModel`): memories are embedded with it when it is an approved embedding model
+  cleared for their label (else they are recalled by recency); unset, the first approved embedding model by name, as
+  before. `memory.reindex` re-embeds every active memory in batches per label and reports progress; while it is
+  `running`, recall is by recency (the vectors are of two models), and afterwards only vectors of the model the query
+  was embedded with are compared. A later model change supersedes a running reindex.
+
+A memory view also carries `embedModel`, `merge: {memories: [id, id], similarity} | null`, `supersededBy` and
+`expiryProposal: {expiresAt, reason: stale|contradicted, by, similarity, proposedAt} | null`; `origin` may be `agent` or
+`consolidation`.
+
 ### Data connections (`connections:manage`)
 
 | Method and path | What it does |

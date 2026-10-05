@@ -119,6 +119,18 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Model-based memory management (1.5.0, Sprint 30): the tenant's memory profile reads the user's chat messages and
+  agent runs' tasks and answers (through the gateway, within the profile's label and the pool's ceiling). The text is
+  sent as JSON data with an instruction to treat it as such, and only a strictly valid JSON answer is used, but a
+  message can still steer the model into proposing a memory its author chose; the defence is that every proposal
+  passes the `memory` checkpoint and the credential ban and waits for a person. The profile's answers do not pass the
+  `model-output` checkpoint (each proposal passes the `memory` one instead), and its calls (extraction and
+  consolidation judgements) are neither admitted against nor metered in the tenant's quotas; embeddings are metered as
+  before. The rejection list compares one-line, lower-case text, so a paraphrase of a rejected memory can be proposed
+  again (a rejected merge pair is not judged again). Consolidation compares up to 300 memories per owner and judges at
+  most 50 pairs per run, in the job's process memory; larger sets are consolidated over several runs. While a reindex
+  runs, the whole tenant's recall is by recency; if it fails it stays `failed` (retried up to three times) and recall
+  uses only the vectors already made with the model in effect, until `POST /memory/reindex` succeeds.
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another

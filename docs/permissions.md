@@ -37,7 +37,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `tools:invoke` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |
 | `agents:run` | no | 22 | x |  |  |  |  |  |  |  |  |  |  | x |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |
-| `memory:write` | no | 10 | x |  |  |  |  |  |  |  |  |  |  | x |  |
+| `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x |  |
 | `models:manage` | yes | 5 | x |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -50,7 +50,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |
 | `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |
-| `knowledge:manage` | yes | 0 | x |  |  |  |  |  | x |  |  |  |  |  |  |
+| `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |
 | `training:submit` | yes | 19 | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |
@@ -256,6 +256,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/memory`
 - `POST /api/memory/{id}/accept`
 - `POST /api/memory/{id}/reject`
+- `POST /api/memory/{id}/expiry/accept`
+- `POST /api/memory/{id}/expiry/reject`
 - `POST /api/memory/exports`
 
 ### `knowledge:read`
@@ -454,7 +456,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `knowledge:manage`
 
-No route requires it directly; handlers and services check it.
+- `GET /api/memory/settings`
+- `POST /api/memory/consolidate`
+- `POST /api/memory/reindex`
+- `PUT /api/memory/settings`
 
 ### `connections:manage`
 

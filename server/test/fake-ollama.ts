@@ -63,6 +63,8 @@ export class FakeOllama {
   embedDims: (model: string) => number = (model) => (model.includes('bge') ? 48 : 64);
   /** When set, requests hang until released (to test queueing and stop). */
   hold: Promise<void> | null = null;
+  /** When set, embedding requests hang until released (to test what keeps answering during a reindex). */
+  embedHold: Promise<void> | null = null;
   down = false;
   server: Server;
   url = '';
@@ -150,6 +152,7 @@ export class FakeOllama {
       case 'POST /api/embed': {
         const m = this.available.get(name);
         if (!m) return json(404, { error: `model '${name}' not found` });
+        if (this.embedHold) await this.embedHold;
         const input = (Array.isArray(body.input) ? body.input : [body.input]).map(String);
         this.loaded.set(name, { size: m.size, expires: Date.now() + 30 * 60_000 });
         return json(200, { model: name, embeddings: input.map((t) => embedding(t, this.embedDims(name))), total_duration: 2_000_000 * input.length, load_duration: 0, prompt_eval_count: input.reduce((a, t) => a + Math.ceil(t.length / 4), 0) });

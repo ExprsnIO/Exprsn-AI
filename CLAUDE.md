@@ -154,8 +154,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `linear.ts`, `flags.ts` (the review queue, including held answers), `stream.ts` (sentence-by-sentence screening of
   streamed output).
 - **`knowledge/`** (sources, extraction, chunking, keyword terms, hybrid search with RRF, blue/green reindex),
-  **`memory/`** (scopes, proposals, forget, export), **`connections/`** (PostgreSQL, MySQL and OpenSearch drivers,
-  query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
+  **`memory/`** (scopes, proposals, forget, export; since 1.5.0 the tenant's memory settings, consolidation and
+  reindex jobs, and `model.ts`: the memory profile's prompts and strict JSON parsing), **`connections/`** (PostgreSQL,
+  MySQL and OpenSearch drivers, query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
   **`platform/vectors.ts`** (`VectorStore`: table scan or pgvector).
 - **`registry/`** (entries, checks, schemas, `dispatch.ts`: the one tool dispatcher for chat, agents, workflows and
   the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs

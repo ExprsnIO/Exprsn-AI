@@ -42,6 +42,42 @@ export function memoryRoutes(s: Services): Router {
     });
   });
 
+  // ---------- settings, consolidation and reindex (Sprint 30, B-3701 to B-3703; knowledge curators) ----------
+
+  const curate = requirePermission(s, 'knowledge:manage');
+  const settingsView = async (tenantId: string) => ({ ...(await m.settings(tenantId)), embeddingModels: await m.embeddingModels() });
+
+  r.get('/memory/settings', curate, async (req, res) => {
+    res.json(await settingsView(principalOf(req).tenantId));
+  });
+
+  r.put('/memory/settings', curate, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(
+      z
+        .object({
+          profile: z.string().trim().min(1).max(200).nullable().optional(),
+          embedModel: z.string().trim().min(1).max(200).nullable().optional(),
+          similarity: z.number().min(0.5).max(0.99).optional(),
+          staleDays: z.number().int().min(1).max(3650).nullable().optional()
+        })
+        .strict(),
+      req.body
+    );
+    await m.setSettings(p, ip(req), req.traceId, body);
+    res.json(await settingsView(p.tenantId));
+  });
+
+  r.post('/memory/consolidate', curate, async (req, res) => {
+    res.status(202).json(await m.requestConsolidation(principalOf(req), ip(req), req.traceId));
+  });
+
+  r.post('/memory/reindex', curate, async (req, res) => {
+    const p = principalOf(req);
+    await m.startReindex(p, ip(req), req.traceId);
+    res.status(202).json(await settingsView(p.tenantId));
+  });
+
   r.get('/memory/:id', mem, async (req, res) => {
     const p = principalOf(req);
     res.json(await m.view(p, await m.visible(p, String(req.params.id))));
@@ -69,8 +105,9 @@ export function memoryRoutes(s: Services): Router {
 
   r.post('/memory/:id/accept', mem, async (req, res) => {
     const p = principalOf(req);
-    const row = await m.accept(p, String(req.params.id));
+    const { memory: row, replaced } = await m.accept(p, String(req.params.id));
     await audit(req, 'memory.accepted', { memory: row.id, scope: row.scope }, row.label);
+    if (replaced.length) await audit(req, 'memory.merged', { memory: row.id, replaced, scope: row.scope }, row.label);
     res.json(await m.view(p, row));
   });
 
@@ -79,6 +116,15 @@ export function memoryRoutes(s: Services): Router {
     await audit(req, 'memory.rejected', { memory: row.id, scope: row.scope }, row.label);
     res.json({ id: row.id, state: 'rejected' });
   });
+
+  for (const decision of ['accept', 'reject'] as const) {
+    r.post(`/memory/:id/expiry/${decision}`, mem, async (req, res) => {
+      const p = principalOf(req);
+      const out = await m.decideExpiry(p, String(req.params.id), decision);
+      await audit(req, decision === 'accept' ? 'memory.expiry.accepted' : 'memory.expiry.rejected', { memory: out.memory.id, scope: out.memory.scope }, out.memory.label, { reason: out.proposal.reason, by: out.proposal.by });
+      res.json(await m.view(p, out.memory));
+    });
+  }
 
   r.delete('/memory/:id', mem, async (req, res) => {
     const p = principalOf(req);
