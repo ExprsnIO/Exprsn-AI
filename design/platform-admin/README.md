@@ -290,19 +290,19 @@ every workspace at once. Five tabs.
 - Accessibility: tabs are buttons in a `nav`, rows are focusable, dialogs and drawers reflow at 320 and 640 px; the
   live screens join `y-reflow` and the axe run in both modes (B-3414).
 
-## Proposed backlog items (epic B-39, Platform administration screens)
+## Proposed backlog items (epic B-42, Platform administration screens)
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
-| B-3901 | Prototype boards for Overview, Jobs and queues, Storage, Configuration, Social and messaging (this design); `node build.mjs` and the smoke run clean | Every board passes the smoke run in light and dark | 5 |
-| B-3902 | Overview live: `GET /api/admin/overview` (alerts, counters, instances from the instance registry with their `/readyz` checks, next schedules, recent audit, capacity); acknowledge alerts; drain an instance | Draining an instance from the screen stops it claiming jobs | 5 |
-| B-3903 | Jobs and queues live: `GET /api/admin/jobs` with filters, `/queues`, `/schedules` (run now, pause), `/dead-letters` (redrive, discard), `/cache` (namespaces, invalidate); pause by type in `JobQueue` | A paused type stops claiming within one poll and resumes from the screen | 8 |
-| B-3904 | Storage live: stores and health, usage by workspace and user, quarantine listing with rescan, the integrity job `ops.blobs.verify` with findings, purge schedule summary | An orphan found by the job can be deleted from the screen after a dry run | 8 |
-| B-3905 | Configuration live: a settings descriptor generated from `config/index.ts` (name, section, type, default, secret, hot or restart), `GET /api/admin/platform/settings` with per-instance values; overrides only if question 2 says so | Two instances with different values show as differing on the screen | 5 |
-| B-3906 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules | A revoked calendar feed answers 404 on its next fetch | 5 |
-| B-3907 | Accessibility and reflow for the five screens; `docs/accessibility.md` updated | No axe or reflow finding on any of the five | 3 |
+| B-4201 | Prototype boards for Overview, Jobs and queues, Storage, Configuration, Social and messaging (this design); `node build.mjs` and the smoke run clean | Every board passes the smoke run in light and dark | 5 |
+| B-4202 | Overview live: `GET /api/admin/overview` (alerts, counters, instances from the instance registry with their `/readyz` checks, next schedules, recent audit, capacity); acknowledge alerts; drain an instance | Draining an instance from the screen stops it claiming jobs | 5 |
+| B-4203 | Jobs and queues live: `GET /api/admin/jobs` with filters, `/queues`, `/schedules` (run now, pause), `/dead-letters` (redrive, discard), `/cache` (namespaces, invalidate); pause by type in `JobQueue` | A paused type stops claiming within one poll and resumes from the screen | 8 |
+| B-4204 | Storage live: stores and health, usage by workspace and user, quarantine listing with rescan, the integrity job `ops.blobs.verify` with findings, purge schedule summary | An orphan found by the job can be deleted from the screen after a dry run | 8 |
+| B-4205 | Configuration live: a settings descriptor generated from `config/index.ts` (name, section, type, default, secret, hot or restart), `GET /api/admin/platform/settings` with per-instance values; overrides only if question 2 says so | Two instances with different values show as differing on the screen | 5 |
+| B-4206 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules | A revoked calendar feed answers 404 on its next fetch | 5 |
+| B-4207 | Accessibility and reflow for the five screens; `docs/accessibility.md` updated | No axe or reflow finding on any of the five | 3 |
 
-39 points. B-3901 is this design. The rest fit Sprint 31 beside the release, or open 1.6; see question 12.
+39 points. B-4201 is this design. The rest fit Sprint 31 beside the release, or open 1.6; see question 12.
 
 ## Open questions
 
@@ -325,7 +325,7 @@ file and prints the lines to carry into `Backlog-1.5.0.md` "Open decisions". The
 10. Deleting orphan blobs: dry run then one admin with a reason (default), or dual control?
 11. Tenant provisioning templates (the platform's enterprise, team and personal organisation types): add Create from
     template to Tenants (default), or leave provisioning to the CLI?
-12. Sprint placement for B-3902 to B-3907: Sprint 31 (default), Sprint 30 displacing WebDAV, or 1.6?
+12. Sprint placement for B-4202 to B-4207: Sprint 31 (default), Sprint 30 displacing WebDAV, or 1.6?
 13. Icons: the sprint-29 session adds `overview`, `jobs`, `storage`, `configuration` and `social` to `app.js` when the
     screens go live (default), or this branch edits `app.js` now?
 14. Draining an instance: from the console with a confirm and a recent sign-in (default), or the CLI only?

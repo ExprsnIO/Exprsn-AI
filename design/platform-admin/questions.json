@@ -114,7 +114,7 @@
     },
     {
       "id": "Q12", "kind": "question", "screen": "Planning",
-      "title": "Which sprint takes B-3902 to B-3907?",
+      "title": "Which sprint takes B-4202 to B-4207?",
       "context": "The live screens are 34 points after this design's boards. Sprint 31 holds the PDS, the feed generator and the release at 65 points; Sprint 30 holds the domain screens and DAV at 73.",
       "options": [
         { "key": "s31", "label": "Sprint 31, beside the release", "default": true },
@@ -184,10 +184,10 @@
     {
       "id": "C3", "kind": "concern", "screen": "Backlog",
       "title": "Backlog-1.5.0.md gains an epic on this branch",
-      "context": "B-39 (seven items, 39 points) is appended under P1 and the sprint table is left as it is until Q12 is answered. The design/import-wizard branch appends B-38 to the same file, so whichever merges second resolves a small conflict at the end of the P1 section.",
+      "context": "B-42 (seven items, 39 points) is appended under P1 and the sprint table is left as it is until Q12 is answered. The design/import-wizard branch appends B-38 to the same file, so whichever merges second resolves a small conflict at the end of the P1 section.",
       "options": [
         { "key": "ack", "label": "Acknowledged", "default": true },
-        { "key": "readme", "label": "Keep B-39 in the README only; do not touch the backlog file" }
+        { "key": "readme", "label": "Keep B-42 in the README only; do not touch the backlog file" }
       ]
     },
     {
