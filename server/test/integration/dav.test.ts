@@ -84,15 +84,17 @@ for (const d of [
         await dav('PROPPATCH', `${cal}/`).send('<?xml version="1.0"?><d:propertyupdate xmlns:d="DAV:"><d:set><d:prop><z:order xmlns:z="urn:x">7</z:order></d:prop></d:set></d:propertyupdate>').expect(207);
         expect(String((await db('dav_properties').first()).value)).not.toContain('7<');
 
-        // The directory within clearance.
+        // The directory: people who share a workspace with the caller, within clearance (Cy shares it but is cleared
+        // higher, so only clearance hides Cy).
+        const ws = await s.tenants.createWorkspace(tenant.id, 'Studio', 'internal');
+        await s.tenants.addMember(ws.id, ann.u.id);
+        await s.tenants.addMember(ws.id, ben.u.id);
+        await s.tenants.addMember(ws.id, cy.u.id);
         const dir = (await dav('PROPFIND', `/dav/addressbooks/${ann.u.id}/directory/`).set('Depth', '1').expect(207)).text;
         expect(dir).toContain(`${ben.u.id}.vcf`);
         expect(dir).not.toContain(`${cy.u.id}.vcf`);
 
         // A group event answered over CalDAV is the attendee's RSVP.
-        const ws = await s.tenants.createWorkspace(tenant.id, 'Studio', 'internal');
-        await s.tenants.addMember(ws.id, ann.u.id);
-        await s.tenants.addMember(ws.id, ben.u.id);
         const benCtx = { p: (await loadPrincipal(s, tenant.id, ben.u.id, {}))!, ip: null };
         benCtx.p.workspaceId = ws.id;
         const g = await s.groups.create(benCtx, { workspaceId: ws.id, name: 'Crit', visibility: 'public', joinMode: 'open' });
