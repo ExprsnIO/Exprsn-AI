@@ -1,12 +1,19 @@
 (function () {
   const { UI, esc } = App;
 
-  const KIND_LABEL = { ldap: 'OpenLDAP / LDAP', sql: 'SQL user table', local: 'Local accounts', oidc: 'Upstream OIDC', saml: 'Upstream SAML' };
+  const KIND_LABEL = { ldap: 'OpenLDAP / LDAP', sql: 'SQL user table', local: 'Local accounts', oidc: 'Upstream OIDC', saml: 'Upstream SAML', github: 'GitHub', atproto: 'AT-Protocol accounts' };
   const TEMPLATES = {
     ldap: { url: 'ldaps://ldap.example.internal:636', bindDN: 'cn=exprsn-svc,ou=services,dc=example,dc=internal', bindPassword: 'env:LDAP_BIND_PASSWORD', userBase: 'ou=people,dc=example,dc=internal', groupBase: 'ou=groups,dc=example,dc=internal', caFile: '/etc/exprsn-ai/ldap-ca.pem' },
     'sql:pg': { dialect: 'pg', connection: 'env:HR_PG_URL', table: 'users', columns: { id: 'id', username: 'username', passwordHash: 'password_hash', displayName: 'full_name', email: 'email', disabled: 'disabled', groups: 'groups' }, defaultRoles: [], defaultClearance: 'internal' },
     'sql:mysql': { dialect: 'mysql', connection: 'env:HR_MYSQL_URL', table: 'users', columns: { id: 'id', username: 'username', passwordHash: 'password_hash', displayName: 'full_name', email: 'email', disabled: 'disabled' }, groupTable: { table: 'user_groups', userColumn: 'user_id', groupColumn: 'group_name' }, defaultRoles: [], defaultClearance: 'internal' },
-    'sql:sqlite': { dialect: 'sqlite', connection: 'file:/etc/exprsn-ai/secrets/hr-sqlite-path', table: 'users', columns: { username: 'username', passwordHash: 'password_hash', displayName: 'display_name' }, defaultRoles: ['member'], defaultClearance: 'internal' }
+    'sql:sqlite': { dialect: 'sqlite', connection: 'file:/etc/exprsn-ai/secrets/hr-sqlite-path', table: 'users', columns: { username: 'username', passwordHash: 'password_hash', displayName: 'display_name' }, defaultRoles: ['member'], defaultClearance: 'internal' },
+    // 1.4.0: GitHub sign-in (B-1804) and AT-Protocol accounts (B-1808).
+    github: { clientId: 'Iv1.0123456789abcdef', clientSecret: 'file:/run/secrets/github-client-secret', webUrl: 'https://github.com', apiUrl: 'https://api.github.com', allowedOrgs: [], scopes: 'read:user user:email read:org', defaultRoles: [], defaultClearance: 'internal' },
+    atproto: { boundOnly: true, authServers: [], defaultRoles: ['member'], defaultClearance: 'internal' }
+  };
+  const KIND_HINT = {
+    github: 'GitHub or GitHub Enterprise Server as an OAuth app. Register its callback as <span class="mono">&lt;issuer&gt;/federation/github/callback</span>. Only a verified primary address is kept; organisations become groups <span class="mono">org</span> and teams <span class="mono">org/team-slug</span>; <span class="mono">allowedOrgs</span> refuses everyone else. Both addresses pass the service URL checks when saved and at every connection.',
+    atproto: 'No passwords and no directory. A DID bound to a user (in their Settings) signs in as that user; others are provisioned just in time with the handle as username and the DID as their only group. <span class="mono">boundOnly</span> refuses unbound DIDs; <span class="mono">authServers</span> (origins) limits the authorization servers accepted.'
   };
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');
   const kindOf = (p) => (p.kind === 'sql' ? 'SQL (' + ({ pg: 'PostgreSQL', mysql: 'MySQL', sqlite: 'SQLite' }[p.config.dialect] || p.config.dialect) + ')' : KIND_LABEL[p.kind]);
@@ -15,11 +22,12 @@
 
   App.register({
     id: 'directories', title: 'User stores', section: 'admin', live: true,
-    summary: 'OpenLDAP and SQL user stores, sign-in order, group mappings, users and sessions',
+    summary: 'OpenLDAP, SQL, GitHub and AT-Protocol user stores, sign-in order, group mappings, users and sessions',
     crumb: ['Admin', 'User stores'],
     render(root, ctx) {
       const st = ctx.state;
       st.tab = ctx.params.tab || st.tab || 'stores';
+      if (ctx.params.store) { st.sel = ctx.params.store; delete ctx.params.store; }
       const load = () => {
         if (st.loading) return;
         st.loading = true;
@@ -100,16 +108,19 @@
       });
       ctx.on('click', '[data-remove]', async () => { const ok = await ctx.confirm({ title: 'Remove ' + sel.name + '?', tag: 'cannot be undone', tone: 'danger', body: '<div class="fg2">Its group mappings and identity links go with it. Users keep their accounts but cannot sign in through this store.</div>', ok: 'Remove store' }); if (ok) act(() => App.del('/api/admin/identity-providers/' + encodeURIComponent(sel.id)), 'Store removed. Audit entry written.').then(() => { st.sel = null; }); });
       const storeModal = (existing) => {
-        const kinds = [{ value: 'ldap', label: 'OpenLDAP / LDAP directory' }, { value: 'sql:pg', label: 'PostgreSQL user table' }, { value: 'sql:mysql', label: 'MySQL user table' }, { value: 'sql:sqlite', label: 'SQLite user table' }, { value: 'local', label: 'Local accounts' }];
-        const startKind = existing ? (existing.kind === 'sql' ? 'sql:' + existing.config.dialect : existing.kind) : 'ldap';
+        const kinds = [{ value: 'ldap', label: 'OpenLDAP / LDAP directory' }, { value: 'sql:pg', label: 'PostgreSQL user table' }, { value: 'sql:mysql', label: 'MySQL user table' }, { value: 'sql:sqlite', label: 'SQLite user table' }, { value: 'local', label: 'Local accounts' }, { value: 'github', label: 'GitHub sign-in' }, { value: 'atproto', label: 'AT-Protocol accounts' }];
+        // `existing` is a store to edit, or the kind (a TEMPLATES key) a new store starts as.
+        const preset = typeof existing === 'string' ? existing : null;
+        if (preset) existing = null;
+        const startKind = existing ? (existing.kind === 'sql' ? 'sql:' + existing.config.dialect : existing.kind) : (preset || 'ldap');
         ctx.modal({ cls: 'wide', title: existing ? 'Edit ' + esc(existing.name) : 'Add user store',
           body: '<div class="formgrid" style="--cols:3">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-sname maxlength="100"', placeholder: 'for example Corporate OpenLDAP' })) + UI.field('Kind', UI.select(kinds, startKind, 'data-skind' + (existing ? ' disabled' : ''))) + UI.field('Order', UI.input(String(existing ? existing.position : 10 * (providers.length + 1)), { type: 'number', attrs: 'data-spos min="0" max="10000"' }), 'Lower is asked first') + '</div>'
             + UI.field('Configuration (JSON)', UI.textarea(JSON.stringify(existing ? existing.config : TEMPLATES[startKind] || {}, null, 2), { attrs: 'data-scfg spellcheck="false" style="font-family:var(--mono);font-size:12px"', rows: 14 }), 'Secrets as <span class="mono">env:NAME</span> (a variable your operator has allowed) or <span class="mono">file:/path</span> (inside the secrets directories); the server\'s own settings are never readable. Directory and database hosts must be internal. LDAP needs ldaps:// or StartTLS. SQL stores accept argon2 and bcrypt hashes only; grant the account SELECT on the user table.')
-            + '<div data-serr></div>',
+            + '<div data-skindhint>' + (KIND_HINT[startKind] ? UI.notice(KIND_HINT[startKind], 'info') : '') + '</div><div data-serr></div>',
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(existing ? 'Save' : 'Add store', { kind: 'primary', attrs: 'data-ssave' }),
           onMount(m) {
             const kindEl = m.querySelector('[data-skind]'); const cfgEl = m.querySelector('[data-scfg]');
-            kindEl.addEventListener('change', () => { cfgEl.value = JSON.stringify(TEMPLATES[kindEl.value] || {}, null, 2); });
+            kindEl.addEventListener('change', () => { cfgEl.value = JSON.stringify(TEMPLATES[kindEl.value] || {}, null, 2); m.querySelector('[data-skindhint]').innerHTML = KIND_HINT[kindEl.value] ? UI.notice(KIND_HINT[kindEl.value], 'info') : ''; });
             m.querySelector('[data-ssave]').addEventListener('click', async () => {
               const errBox = m.querySelector('[data-serr]'); errBox.innerHTML = '';
               let config; try { config = JSON.parse(cfgEl.value || '{}'); } catch (e) { errBox.innerHTML = UI.notice('The configuration is not valid JSON: ' + esc(e.message), 'danger'); return; }
@@ -126,6 +137,13 @@
           } });
       };
       ctx.on('click', '[data-add]', () => storeModal(null));
+      // From Identity's "Add GitHub or AT-Protocol store": opens the dialog with that kind once the stores are loaded.
+      if (st.loaded && ctx.params.add && TEMPLATES[ctx.params.add]) {
+        const k = ctx.params.add; delete ctx.params.add;
+        // Take it out of the address too, so a later render (after saving) does not open the dialog again.
+        try { history.replaceState(null, '', location.pathname + location.search + '#/directories?tab=' + encodeURIComponent(st.tab)); } catch (e) { /* history unavailable */ }
+        setTimeout(() => { if (App.state.route === 'directories') storeModal(k); }, 50);
+      }
       ctx.on('click', '[data-edit]', () => storeModal(sel));
 
       // ---- mappings ----

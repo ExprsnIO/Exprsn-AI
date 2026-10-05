@@ -6,6 +6,7 @@ import { provision } from '../identity/provisioning.js';
 import { signsInByRedirect } from '../identity/providers/types.js';
 import type { SessionRow } from '../identity/sessions.js';
 import { effectivePermissions } from '../authz/policy.js';
+import { rolesRequireMfa } from '../authz/permissions.js';
 import { estimateStrength, passwordRules } from '../identity/passwords.js';
 import { clearSessionCookie, ip, loadPrincipal, noStore, parseBody, requireAuth, setSessionCookie } from '../http/middleware.js';
 import { conflict, forbidden, HttpProblem, tooManyRequests, unauthorized } from '../http/problem.js';
@@ -38,11 +39,16 @@ export function authRoutes(s: Services): Router {
   const sessionBody = async (session: SessionRow) => {
     const user = await s.users.get(session.tenant_id, session.user_id);
     const methods = session.stage === 'mfa' ? await s.mfa.methods(session.user_id) : [];
+    // Sprint 30d (B-3413): how long "trust this browser" lasts for this account, so the sign-in page offers it only
+    // when the tenant allows trusted devices and the account may have one (never admins or accounts marked as needing
+    // a factor).
+    const trustedDeviceDays =
+      session.stage !== 'mfa' || !user || user.mfa_required || rolesRequireMfa(await s.users.roleIds(user.id), session.tenant_id) ? 0 : (await s.identityPolicy.get(session.tenant_id)).mfa.trustedDeviceDays;
     return {
       authenticated: session.stage === 'active',
       stage: session.stage,
       csrf: s.sessions.csrfFor(session.id),
-      mfa: { methods },
+      mfa: { methods, ...(session.stage === 'mfa' ? { trustedDeviceDays } : {}) },
       user: user ? { id: user.id, username: user.username, displayName: user.display_name } : null,
       expiresAt: session.expires_at
     };

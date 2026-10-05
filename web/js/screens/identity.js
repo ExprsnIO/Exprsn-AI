@@ -20,12 +20,31 @@
   const grantsText = (c) => c.grants.filter((g) => g !== 'refresh_token').map((g) => GRANT_TEXT[g] || g).join(', ') + (c.grants.indexOf('refresh_token') >= 0 ? ', refresh' : '');
   const certText = (cert) => (!cert ? 'none' : (cert.expired ? 'expired ' : 'expires ') + date(cert.validTo));
   const stepsHtml = (steps) => UI.timeline(steps.map((s) => ({ title: esc(s.title), text: s.detail ? esc(s.detail) : '', meta: s.ms != null ? s.ms + ' ms' : '', tone: s.ok ? 'ok' : 'danger' })));
+  // 1.4.0 identity additions (B-3413): the tenant's sign-up and MFA policy, sign-ups, invitations, CSV imports, DIDs.
+  const LABELS = ['public', 'internal', 'confidential', 'restricted'];
+  const SIGNUP_ROLES = ['member', 'flag-reviewer', 'knowledge-curator'];
+  const MFA_ROLES = ['member', 'knowledge-curator', 'flag-reviewer', 'connection-admin'];
+  const CSV_HEADER = 'kind,username,display_name,email,roles,clearance,workspace,provider,group';
+  const SAMPLE_CSV = CSV_HEADER + '\nuser,dokonkwo,Dami Okonkwo,d.okonkwo@example.internal,member;flag-reviewer,confidential,,,\nmembership,dokonkwo,,,,,finance-ops,,\nmapping,,,,knowledge-curator,internal,,OpenLDAP,cn=kb-curators\nuser,tweber,Tomasz Weber,t.weber@example.internal,member,internal,,,';
+  const stamp = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const problemText = (err) => { const p = (err && err.problem) || {}; return '<b>' + esc(p.title || 'Not done') + '.</b> ' + esc(p.detail || (err && err.message) || '') + (p.errors ? ' ' + esc(p.errors.map((x) => x.path + ': ' + x.message).join('; ')) : ''); };
+  /** CSV imports go up as text/csv (App.api always sends JSON), with the session's CSRF token. */
+  const postCsv = async (csv, dryRun, sendInvites) => {
+    let res;
+    try { res = await fetch('/api/admin/user-imports?dryRun=' + (dryRun ? 'true' : 'false') + '&sendInvites=' + (sendInvites ? 'true' : 'false'), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'text/csv', Accept: 'application/json', 'X-CSRF-Token': App.state.csrf || '' }, body: csv }); }
+    catch (e) { throw new App.ApiError({ status: 0, title: 'Network error', detail: 'The server could not be reached.' }); }
+    const data = /json/.test(res.headers.get('content-type') || '') ? await res.json() : null;
+    if (!res.ok) throw new App.ApiError(data || { status: res.status, title: res.statusText });
+    return data;
+  };
   const copy = (text, what, ctx) => { if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => ctx.toast(esc(what) + ' copied.', 'ok'), () => ctx.toast('Copy failed; select the text instead.', 'warn')); else ctx.toast('Copy is not available here; select the text instead.', 'warn'); };
 
   App.register({
-    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, upstream federation',
+    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, user stores (GitHub, AT-Protocol), sign-up and MFA policy, invitations, CSV imports, DID bindings',
     crumb: ['Admin', 'Identity'],
     commands: [
+      { label: 'Invite someone', sub: 'Identity', run(app) { const s = app.stateFor('identity'); s.tab = 'policy'; s.policyView = 'invitations'; s.openInvite = true; app.render(); } },
       { label: 'Create an OIDC client', sub: 'Identity', run(app) { app.stateFor('identity').openCreate = true; app.render(); } },
       { label: 'Rotate the signing key', sub: 'Identity', run(app) { app.stateFor('identity').tab = 'keys'; app.stateFor('identity').openRotate = true; app.render(); } }
     ],
@@ -33,18 +52,30 @@
       { title: 'After the reveal', tone: 'neutral', text: 'The secret field shows only its creation date and a rotate action.', apply(ctx) { const st = ctx.state; st.tab = 'clients'; const c = (st.clients || []).find((x) => x.confidential); if (c) { st.client = c.id; delete st.fresh[c.id]; } ctx.rerender(); } },
       { title: 'Key nearing expiry', tone: 'warn', text: '14 days before rotation a banner appears. The new key is published to JWKS before it signs.', apply(ctx) { ctx.state.tab = 'keys'; ctx.state.keyExpiring = true; ctx.rerender(); } },
       { title: 'Upstream federation', tone: 'info', text: 'Only on-prem identity providers can be added. Cloud providers are unreachable from this network.', apply(ctx) { ctx.state.tab = 'upstream'; ctx.state.openUpstream = true; ctx.rerender(); } },
+      { title: 'Sign-up pending approval', tone: 'warn', text: 'With the approval mode, a new account is created disabled and identity admins get a notice. Approve activates it; reject keeps it disabled and tells the user by email.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'signups'; ctx.state.signupFilter = 'pending'; ctx.rerender(); } },
+      { title: 'MFA grace restarted', tone: 'info', text: 'Widening the MFA requirement restarts the grace period: covered accounts sign in without a factor for graceDays, then enrol first. Audited with graceRestarted.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'policy'; ctx.state.graceRestarted = true; ctx.rerender(); } },
+      { title: 'Import dry run with conflicts', tone: 'warn', text: 'A dry run plans and reports every row; conflicts (an account linked to another store, a reused address) and errors (a role the importer may not grant) change nothing.', apply(ctx) { const st = ctx.state; st.tab = 'imports'; const x = (st.imports || []).find((i) => i.dryRun && i.summary && (i.summary.conflict || i.summary.error)) || (st.imports || []).find((i) => i.dryRun); if (x) st.importSel = x.id; ctx.rerender(); } },
       { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
       st.tab = st.tab || 'clients'; st.fresh = st.fresh || {}; st.q = st.q || '';
+      st.policyView = st.policyView || 'policy'; st.signupFilter = st.signupFilter || 'pending'; st.csvs = st.csvs || {}; st.importDetail = st.importDetail || {};
       if (ctx.params.tab) st.tab = ctx.params.tab;
 
       const load = () => {
         if (st.loading) return;
         st.loading = true;
-        Promise.all([App.get('/api/admin/federation'), App.get('/api/admin/federation/oidc/clients'), App.get('/api/admin/federation/saml/sps'), App.get('/api/admin/federation/upstream'), App.get('/api/admin/federation/sessions'), App.get('/api/admin/federation/scopes'), App.get('/api/admin/federation/keys'), App.get('/api/admin/federation/proposals?state=pending'), App.get('/api/admin/federation/metadata')])
-          .then(([overview, clients, sps, upstream, sessions, scopes, keys, proposals, sources]) => { Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, proposals, sources, loaded: true, loadError: null }); })
+        // B-3413: the identity additions load with the rest; each needs its own permission, and one that fails or is
+        // not held leaves its tab saying so instead of failing the screen.
+        const extraErr = {};
+        const opt = (perm, key, url) => (App.can(perm) ? App.get(url).catch((err) => { extraErr[key] = err; return null; }) : Promise.resolve(null));
+        Promise.all([App.get('/api/admin/federation'), App.get('/api/admin/federation/oidc/clients'), App.get('/api/admin/federation/saml/sps'), App.get('/api/admin/federation/upstream'), App.get('/api/admin/federation/sessions'), App.get('/api/admin/federation/scopes'), App.get('/api/admin/federation/keys'), App.get('/api/admin/federation/proposals?state=pending'), App.get('/api/admin/federation/metadata'),
+          opt('identity:manage', 'policy', '/api/admin/identity-policy'), opt('users:manage', 'signups', '/api/admin/signups'), opt('members:invite', 'invites', '/api/invitations'), opt('users:manage', 'imports', '/api/admin/user-imports'), opt('identity:manage', 'dids', '/api/admin/atproto/accounts'), opt('identity:manage', 'stores', '/api/admin/identity-providers'), opt('users:manage', 'roles', '/api/admin/roles'), opt('users:manage', 'people', '/api/admin/users?limit=500')])
+          .then(([overview, clients, sps, upstream, sessions, scopes, keys, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people]) => {
+            Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, extraErr, loaded: true, loadError: null });
+            st.draft = policy ? clone(policy) : null;
+          })
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (App.state.route === 'identity' && !document.querySelector('.modal')) ctx.rerender(); });
       };
@@ -64,7 +95,7 @@
       const rotatesAt = ov.rotation.rotatesAt;
       const nearing = st.keyExpiring || (!nextKey && rotatesAt && rotatesAt - Date.now() < 14 * DAY);
 
-      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'Upstream federation' }, { id: 'sessions', label: 'Sessions' }], st.tab);
+      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'User stores and federation' }, { id: 'policy', label: 'Sign-up and MFA policy', count: st.signups ? st.signups.filter((x) => x.state === 'pending').length : undefined }, { id: 'imports', label: 'CSV imports' }, { id: 'dids', label: 'AT-Protocol accounts' }, { id: 'sessions', label: 'Sessions' }], st.tab);
       const banner = nearing && signing ? UI.notice('<b>Signing key ' + esc(signing.kid) + ' rotates ' + esc(rotatesAt ? inDays(rotatesAt) : 'soon') + '.</b> Rotate now to generate the next key and publish it to JWKS, so relying parties cache it before it signs anything.', 'warn', UI.btn('Rotate now', { size: 'sm', attrs: 'data-rotatekey' })) : '';
 
       function keysTable(compact) {
@@ -81,6 +112,11 @@
       const sources = st.sources || [];
       const sourceOf = (id) => sources.find((x) => x.id === id) || null;
       const sourceCell = (id) => { const m = sourceOf(id); return m ? '<span class="mono" style="overflow-wrap:anywhere;font-size:11px">' + esc(m.url) + '</span><div class="muted" style="font-size:11px">' + (m.error ? 'last fetch failed: ' + esc(m.error) : 'fetched ' + esc(when(m.fetchedAt))) + '</div>' + UI.btn('Fetch now', { size: 'xs', kind: 'ghost', attrs: 'data-metarefresh="' + esc(id) + '"' }) : '<span class="muted">pasted</span>'; };
+
+      const myWorkspaces = (App.me && App.me.workspaces) || [];
+      const myClearance = (App.me && App.me.user.clearance) || 'internal';
+      const wsName = (id) => (!id ? 'none' : (myWorkspaces.find((w) => w.id === id) || { name: id }).name);
+      const who = (id) => { if (!id) return 'system'; if (App.me && id === App.me.user.id) return 'you'; const u = (st.people || []).find((x) => x.id === id); return u ? u.displayName : id; };
 
       let body = '';
       if (st.tab === 'clients') {
@@ -109,10 +145,89 @@
           + UI.panel('Where keys live', UI.kv([['Store', ov.signingInKms ? 'Held in ' + esc(ov.keyStore) + '; tokens and assertions are signed there, so private keys never enter this server' : 'Sealed with the platform data key (' + esc(ov.keyStore) + '); never leave the server'], ['Algorithm', 'ES256 (P-256) for OIDC; RSA-2048 for the SAML certificate'], ['Rotation', 'every ' + ov.rotation.days + ' days with a ' + ov.rotation.overlapDays + ' day overlap window'], ['Discovery', '<span class="mono">' + esc(ov.discoveryUrl) + '</span>'], ['Data keys', 'per-tenant envelope keys in the same KMS']], 1) + '<div>' + UI.btn('Open secrets health', { size: 'sm', attrs: 'data-goplatform' }) + '</div>') + '</div>';
       } else if (st.tab === 'upstream') {
         const k = ov.kerberos;
-        body = '<div class="hstack"><span class="fg2">Optional federation: this issuer acts as OIDC relying party or SAML service provider to an on-prem identity provider.</span><span class="right">' + UI.btn('Add upstream provider', { size: 'sm', icon: 'plus', attrs: 'data-upstream' }) + '</span></div>'
-          + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by', 'Metadata'], st.upstream.map((u) => ['<b>' + esc(u.name) + '</b>', esc(u.protocolLabel), esc(u.reach), UI.pill(u.status, u.status === 'connected' ? 'ok' : u.status === 'disabled' ? '' : 'danger'), esc(u.usedBy), u.protocol === 'saml' ? sourceCell(u.id) : '<span class="muted">discovery</span>']), { clickable: false, minWidth: '640px', emptyTitle: 'No upstream providers', emptyText: 'Users sign in with the user stores. Add an on-prem OIDC or SAML provider to federate.' })
+        // 1.4.0: GitHub (B-1804) and AT-Protocol (B-1808) user stores sit in the same chain; their settings live in User stores.
+        const atStores = (st.stores || []).filter((p) => p.kind === 'atproto').map((p) => ({ id: p.id, name: p.name, protocol: 'atproto', protocolLabel: 'atproto', reach: 'any PDS the service URL checks allow', status: p.enabled ? 'connected' : 'disabled', usedBy: (st.dids || []).filter((d) => d.verified).length + ' bound users', store: true }));
+        const upRows = st.upstream.concat(atStores);
+        body = '<div class="hstack wrap"><span class="fg2">Optional federation: this issuer acts as OIDC relying party or SAML service provider to an on-prem identity provider.</span><span class="right hstack gap6">' + UI.btn('Add GitHub or AT-Protocol store', { size: 'sm', kind: 'ghost', attrs: 'data-addstore' }) + UI.btn('Add upstream provider', { size: 'sm', icon: 'plus', attrs: 'data-upstream' }) + '</span></div>'
+          + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by', 'Metadata', ''], upRows.map((u) => ['<b>' + esc(u.name) + '</b>', /^(github|atproto)$/.test(u.protocol) ? UI.pill(u.protocol, 'outline') : esc(u.protocolLabel), esc(u.reach), UI.pill(u.status, u.status === 'connected' ? 'ok' : u.status === 'disabled' ? '' : 'danger'), esc(u.usedBy), u.protocol === 'saml' ? sourceCell(u.id) : u.protocol === 'oidc' ? '<span class="muted">discovery</span>' : '<span class="muted">none</span>', /^(github|atproto)$/.test(u.protocol) && (st.stores || []).some((p) => p.id === u.id) ? UI.btn('Settings', { size: 'xs', kind: 'ghost', attrs: 'data-storedetail="' + esc(u.id) + '" aria-label="Settings of ' + esc(u.name) + '"' }) : '']), { clickable: false, minWidth: '720px', emptyTitle: 'No upstream providers', emptyText: 'Users sign in with the user stores. Add an on-prem OIDC or SAML provider, a GitHub or an AT-Protocol store to federate.' })
+          + UI.notice('Since 1.4.0 the chain also takes a <b>GitHub</b> store (OAuth app, allowed organisations, verified primary address only) and an <b>AT-Protocol</b> store (a bound DID signs in as its user; others are provisioned just in time with the handle as username and the DID as their only group). Both pass the service URL checks when saved and at every connection.', 'info')
           + '<div class="grid2">' + UI.panel('Primary authentication', UI.kv([['Kerberos SPNEGO', k.available && k.enabled ? esc(k.detail) + (k.realms.length ? ', realms ' + esc(k.realms.join(', ')) : ', any realm') : k.enabled ? 'not available: ' + esc(k.detail) : 'turned off for this tenant'], ['LDAP bind', 'LDAPS or StartTLS to the directory; never a clear bind'], ['Second factor', 'WebAuthn passkeys and TOTP, required for admin roles, also after Kerberos and upstream sign-in'], ['Device flow', 'RFC 8628 at <span class="mono">' + esc(ov.device.verificationUri) + '</span>, codes live ' + ov.device.minutes + ' min'], ['Fallback order', 'Kerberos, then upstream or password, then MFA']], 1) + '<div>' + UI.btn('Test a login', { size: 'sm', attrs: 'data-testlogin' }) + '</div>')
           + UI.panel('Air gap', UI.notice('Cloud identity providers are unreachable from this network. Only on-prem providers on internal addresses' + (ov.upstream.allowList ? ', or hosts on the allow-list (' + esc(ov.upstream.allowList) + '),' : '') + ' can be upstream.', 'info') + UI.kv([['OIDC redirect URI', '<span class="mono">' + esc(ov.upstream.redirectUri) + '</span>'], ['SAML ACS URL', '<span class="mono">' + esc(ov.upstream.acsUrl) + '</span>'], ['SAML single logout', '<span class="mono">' + esc(ov.upstream.sloUrl) + '</span>']], 1) + '<div>' + UI.btn('Open zones', { size: 'sm', kind: 'ghost', attrs: 'data-gozones' }) + '</div>') + '</div>';
+      } else if (st.tab === 'policy') {
+        const pendingN = st.signups ? st.signups.filter((x) => x.state === 'pending').length : 0;
+        body = UI.seg([{ id: 'policy', label: 'Policy' }, { id: 'signups', label: 'Sign-ups (' + pendingN + ' pending)' }, { id: 'invitations', label: 'Invitations' }], st.policyView, 'data-policyseg aria-label="Sign-up and MFA policy"');
+        if (st.policyView === 'policy') {
+          const pol = st.draft;
+          if (!pol) body += st.extraErr.policy ? UI.problem('The identity policy could not be loaded', st.extraErr.policy.message, st.extraErr.policy.problem && st.extraErr.policy.problem.trace_id) : UI.notice('Changing the sign-up and MFA policy needs the identity:manage permission.', 'info');
+          else {
+            const wsOpts = [{ value: '', label: 'none' }].concat(myWorkspaces.map((w) => ({ value: w.id, label: w.name })));
+            if (pol.signup.workspaceId && !myWorkspaces.some((w) => w.id === pol.signup.workspaceId)) wsOpts.push({ value: pol.signup.workspaceId, label: pol.signup.workspaceId });
+            const mfaRoles = MFA_ROLES.concat(pol.mfa.roles.filter((r) => MFA_ROLES.indexOf(r) < 0));
+            const roleLabel = (id) => ((st.roles || []).find((r) => r.id === id) || { name: id }).name;
+            const effective = st.policy.mfa.effectiveAt;
+            body += (st.graceRestarted ? UI.notice('<b>MFA requirement widened; the grace period restarted.</b> Accounts it now covers may sign in without a factor' + (st.policy.mfa.graceDays && effective ? ' until ' + esc(date(effective + st.policy.mfa.graceDays * DAY)) : ' for the grace period') + ', then enrol first. Audited identity.mfa_policy.updated with graceRestarted.', 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-gracedone' })) : '')
+              + (st.policyDirty ? UI.notice('Unsaved changes. Save the policy to apply them.', 'warn') : '')
+              + '<div class="grid2">' + UI.panel('Self-registration (B-1801, B-1802)', '<div class="formgrid">' + UI.field('Mode', UI.select([{ value: 'closed', label: 'closed (default)' }, { value: 'open', label: 'open' }, { value: 'approval', label: 'open with approval' }], pol.signup.mode, 'data-pol="signup.mode"'))
+                + UI.field('Default workspace', UI.select(wsOpts, pol.signup.workspaceId || '', 'data-pol="signup.workspaceId"'))
+                + UI.field('Allowed email domains', UI.textarea(pol.signup.domains.join('\n'), { rows: 2, attrs: 'data-pol="signup.domains"', placeholder: 'example.com' }), 'One per line; *.example.com covers subdomains; empty allows any. Up to 200.')
+                + UI.field('Default roles', '<div class="hstack wrap gap12" style="row-gap:12px">' + SIGNUP_ROLES.map((r) => UI.check(roleLabel(r), pol.signup.roles.indexOf(r) >= 0, 'data-polrole="' + r + '"')).join('') + '</div>', 'Only these three roles may be granted at sign-up.')
+                + UI.field('Default clearance', UI.select(LABELS.filter((l) => LABELS.indexOf(l) <= LABELS.indexOf(myClearance)), pol.signup.clearance, 'data-pol="signup.clearance"'), 'At most yours (' + esc(myClearance) + ').') + '</div>'
+                + UI.toggle('Require a verified email address for local accounts', pol.signup.requireEmailVerification, 'data-manual data-polverify')
+                + '<div class="muted" style="font-size:12px">Also covers other local accounts with an unproven address; accounts created by an admin, imported or from an invitation count as proven. Public: <span class="mono">POST /api/auth/register</span>, throttled per address and per email.</div>')
+              + UI.panel('Second factor policy and trusted devices (B-1803)', '<div class="formgrid">' + UI.field('Require a second factor', UI.select([{ value: 'off', label: 'off (only roles that always need one)' }, { value: 'all', label: 'everyone' }, { value: 'roles', label: 'listed roles' }], pol.mfa.require, 'data-pol="mfa.require"'))
+                + UI.field('Grace period, days', UI.input(pol.mfa.graceDays, { type: 'number', attrs: 'data-pol="mfa.graceDays" min="0" max="90"' }), 'After the requirement last widened, or the account\'s creation if later.')
+                + UI.field('Roles', '<div class="hstack wrap gap12" style="row-gap:12px">' + mfaRoles.map((r) => UI.check(roleLabel(r), pol.mfa.roles.indexOf(r) >= 0, 'data-polmfarole="' + esc(r) + '"' + (pol.mfa.require !== 'roles' ? ' disabled' : ''))).join('') + '</div>', 'Admin roles always need one; these are added to them.')
+                + UI.field('Trusted device period, days', UI.input(pol.mfa.trustedDeviceDays, { type: 'number', attrs: 'data-pol="mfa.trustedDeviceDays" min="0" max="90"' }), '0 to 90. 0 allows no trusted devices; shortening it ends older trust at once.') + '</div>'
+                + UI.kv([['Effective', effective ? esc(stamp(effective)) : 'no requirement beyond admin roles'], ['Last change', st.policy.updatedAt ? esc(who(st.policy.updatedBy)) + ', ' + esc(stamp(st.policy.updatedAt)) : 'never changed, defaults'], ['Email codes', 'allowed as the second factor for admin roles (Sprint 28 decision; docs/security.md known gap)']], 1)) + '</div>'
+              + '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Saving audits identity.signup_policy.updated and identity.mfa_policy.updated. Upstream (OIDC, SAML, GitHub, AT-Protocol) and Kerberos sign-ins follow the same MFA policy.</span>' + (st.policyDirty ? UI.btn('Discard changes', { kind: 'ghost', size: 'sm', attrs: 'data-discardpolicy' }) : '') + UI.btn('Save policy', { kind: 'primary', size: 'sm', attrs: 'data-savepolicy' }) + '</div>';
+          }
+        } else if (st.policyView === 'signups') {
+          if (!st.signups) body += st.extraErr.signups ? UI.problem('Sign-ups could not be loaded', st.extraErr.signups.message, st.extraErr.signups.problem && st.extraErr.signups.problem.trace_id) : UI.notice('Deciding sign-ups needs the users:manage permission.', 'info');
+          else {
+            const list = st.signups.filter((x) => st.signupFilter === 'all' || x.state === st.signupFilter);
+            body += '<div class="toolbar">' + UI.seg([{ id: 'pending', label: 'Pending' }, { id: 'approved', label: 'Approved' }, { id: 'rejected', label: 'Rejected' }, { id: 'all', label: 'All' }], st.signupFilter, 'data-signupseg aria-label="Sign-up state"') + '<span class="muted right" style="font-size:12px">' + list.length + ' sign-up' + (list.length === 1 ? '' : 's') + '</span></div>'
+              + UI.table(['Username', 'Name', 'Email', 'Domain', 'State', 'Signed up', 'Decided', { label: '', right: true }], list.map((x) => ['<span class="mono">' + esc(x.username) + '</span>', esc(x.displayName), '<span class="mono">' + esc(x.email || '') + '</span> ' + (x.emailVerified ? UI.pill('verified', 'ok') : UI.pill('unverified', 'warn')), esc(x.domain), UI.pill(x.state, x.state === 'pending' ? 'warn' : x.state === 'rejected' ? 'danger' : 'ok'), esc(stamp(x.createdAt)), x.decidedBy ? esc(who(x.decidedBy)) + ', ' + esc(stamp(x.decidedAt)) + (x.reason ? '<div class="muted" style="font-size:12px">' + esc(x.reason) + '</div>' : '') : '', x.state === 'pending' ? '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-approve="' + esc(x.userId) + '" aria-label="Approve ' + esc(x.username) + '"' }) + UI.btn('Reject', { size: 'xs', attrs: 'data-reject="' + esc(x.userId) + '" aria-label="Reject ' + esc(x.username) + '"' }) + '</span>' : '']), { clickable: false, minWidth: '900px', emptyTitle: 'No sign-ups here', emptyText: 'Sign-ups appear when the mode is open or open with approval.' })
+              + '<div class="muted" style="font-size:12px">Approval activates the account; rejection keeps it disabled (409 once decided). The user is told by email. Audited user.signup.approved or user.signup.rejected.</div>';
+          }
+        } else {
+          const invites = st.invites || [];
+          body += '<div class="hstack wrap"><span class="fg2">Workspace admins with <span class="mono">members:invite</span> invite people with roles they may grant and a clearance at most theirs. Tenant admins see every invitation; other inviters their own.</span><span class="right">' + UI.btn('Invite someone', { size: 'sm', icon: 'plus', kind: 'primary', attrs: 'data-invite' + (App.can('members:invite') ? '' : ' disabled') }) + '</span></div>'
+            + (!st.invites && st.extraErr.invites ? UI.problem('Invitations could not be loaded', st.extraErr.invites.message, st.extraErr.invites.problem && st.extraErr.invites.problem.trace_id) : !st.invites ? UI.notice('Inviting people needs the members:invite permission.', 'info')
+              : UI.table(['Email', 'Workspace', 'Roles', 'Clearance', 'Invited by', 'State', 'Expires', { label: '', right: true }], invites.map((x) => ['<span class="mono">' + esc(x.email) + '</span>', esc(wsName(x.workspaceId)), '<span class="mono">' + esc(x.roles.join(' ')) + '</span>', UI.label(x.clearance, { sm: true }), esc(who(x.invitedBy)), UI.pill(x.state, x.state === 'pending' ? 'info' : x.state === 'accepted' ? 'ok' : x.state === 'revoked' ? 'danger' : 'warn') + (x.acceptedBy ? '<div class="muted" style="font-size:12px">as ' + esc(who(x.acceptedBy)) + ', ' + esc(stamp(x.acceptedAt)) + '</div>' : ''), esc(date(x.expiresAt)), x.state === 'pending' ? UI.btn('Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-withdraw="' + esc(x.id) + '" aria-label="Withdraw the invitation for ' + esc(x.email) + '"' }) : '']), { clickable: false, minWidth: '900px', emptyTitle: 'No invitations', emptyText: 'Invite someone to create their account with roles and a workspace.' }))
+            + '<div class="muted" style="font-size:12px">Links are <span class="mono">#/signin?invitation=&lt;token&gt;</span>, valid for 7 days, stored as SHA-256. A new invitation replaces a pending one for the same address and workspace. Needs SMTP (409 without).</div>';
+        }
+      } else if (st.tab === 'imports') {
+        const imports = st.imports || [];
+        const sel = imports.find((x) => x.id === st.importSel) || null;
+        const detail = sel ? st.importDetail[sel.id] : null;
+        // The report of a finished import is fetched once it is selected (a row click, a design state, a new import).
+        if (sel && sel.state === 'done' && !detail && !st.detailBusy) {
+          st.detailBusy = true;
+          App.get('/api/admin/user-imports/' + encodeURIComponent(sel.id)).then((d) => { st.importDetail[sel.id] = d; }, (err) => { st.importDetail[sel.id] = { error: err }; }).finally(() => { st.detailBusy = false; if (App.state.route === 'identity' && !document.querySelector('.modal')) ctx.rerender(); });
+        }
+        const sum = (x) => x.summary || { create: 0, update: 0, unchanged: 0, conflict: 0, error: 0, applied: 0 };
+        let selPanel = '';
+        if (sel && (sel.state === 'queued' || sel.state === 'running')) selPanel = UI.notice('Import <span class="mono">' + esc(sel.id) + '</span> is ' + esc(sel.state) + '. The report appears here when the job has run.', 'info');
+        else if (sel && sel.state === 'failed') selPanel = UI.notice('<b>Import ' + esc(sel.id) + ' failed.</b> ' + esc(sel.error || ''), 'danger');
+        else if (sel && !detail) selPanel = UI.notice('Loading…', 'info');
+        else if (sel && detail && detail.error) selPanel = UI.problem('The report could not be loaded', detail.error.message, detail.error.problem && detail.error.problem.trace_id);
+        else if (sel && detail) {
+          const s0 = sum(detail);
+          const issues = detail.report.filter((r) => r.action !== 'unchanged');
+          selPanel = (!detail.dryRun && !s0.conflict && !s0.error) ? UI.notice('Import ' + esc(sel.id) + ' applied ' + s0.applied + ' row' + (s0.applied === 1 ? '' : 's') + ' with no conflicts. Each change was audited with via: import.', 'ok')
+            : UI.panel('Report for ' + esc(sel.id) + (detail.dryRun ? ' (dry run, nothing changed)' : ''), UI.table(['Row', 'Kind', 'Key', 'Action', 'Detail'], issues.map((r) => [String(r.row), esc(r.kind), '<span class="mono">' + esc(r.key) + '</span>', UI.pill(r.action, r.action === 'conflict' ? 'warn' : r.action === 'error' ? 'danger' : r.action === 'create' ? 'ok' : 'info'), esc(r.detail || '')]), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'Every row unchanged', emptyText: 'The file matches what is here.' })
+              + (detail.dryRun ? '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Fix the conflicting rows and run again, or apply: accepted rows are written (accounts, then mappings, then memberships) and the conflicts skipped.' + (st.csvs[sel.id] ? '' : ' The file is not kept after a dry run, so applying asks for it again.') + '</span>' + UI.btn('Apply accepted rows', { size: 'sm', kind: 'primary', attrs: 'data-applyimport' }) + '</div>' : ''));
+        }
+        body = '<div class="hstack wrap"><span class="fg2">CSV imports of users, memberships and group mappings (B-1805). The file is sealed with the tenant key and run as a job under your roles and clearance; a dry run plans and reports, changing nothing.</span><span class="right">' + UI.btn('Import CSV', { size: 'sm', icon: 'upload', kind: 'primary', attrs: 'data-import' + (App.can('users:manage') ? '' : ' disabled') }) + '</span></div>'
+          + (!st.imports ? (st.extraErr.imports ? UI.problem('Imports could not be loaded', st.extraErr.imports.message, st.extraErr.imports.problem && st.extraErr.imports.problem.trace_id) : UI.notice('Importing users needs the users:manage permission.', 'info'))
+            : UI.table(['Import', 'State', 'Mode', 'Rows', 'Create', 'Update', 'Unchanged', 'Conflicts', 'Errors', 'Applied', 'By'], imports.map((x) => { const m = sum(x); return { cells: ['<span class="mono">' + esc(x.id.slice(-8)) + '</span>', UI.pill(x.state, x.state === 'done' ? 'ok' : x.state === 'failed' ? 'danger' : 'info'), x.dryRun ? UI.pill('dry run', 'outline') : 'applied', String(x.rows), String(m.create), String(m.update), String(m.unchanged), m.conflict ? '<span style="color:var(--warn-fg)">' + m.conflict + '</span>' : '0', m.error ? '<span style="color:var(--danger-fg)">' + m.error + '</span>' : '0', String(m.applied), esc(who(x.createdBy)) + '<div class="muted" style="font-size:12px">' + esc(stamp(x.createdAt)) + '</div>'], attrs: 'data-import-row="' + esc(x.id) + '"', selected: sel && sel.id === x.id }; }), { minWidth: '900px', emptyTitle: 'No imports yet', emptyText: 'Import a CSV of users, memberships and group mappings; start with a dry run.' }))
+          + selPanel
+          + UI.panel('File format', UI.code(SAMPLE_CSV, 'csv') + '<div class="muted" style="font-size:12px">Header row; columns in any order; unknown columns refused. <span class="mono">kind=user</span> creates a local account (roles separated by ;) or updates one; <span class="mono">membership</span> adds a direct membership (workspace by slug or id); <span class="mono">mapping</span> adds or changes a group mapping (one role; provider empty for any). At most 5 MB and 10,000 rows.</div>');
+      } else if (st.tab === 'dids') {
+        body = '<div class="hstack wrap"><span class="fg2">Users bind their own AT-Protocol DID in Settings (a profile challenge or the OAuth flow). Bound DIDs sign in as their user through the <span class="mono">atproto</span> store.</span><span class="right hstack gap6">' + UI.btn('Check an account', { size: 'sm', attrs: 'data-checkaccount' }) + '</span></div>'
+          + (!st.dids ? (st.extraErr.dids ? UI.problem('Bindings could not be loaded', st.extraErr.dids.message, st.extraErr.dids.problem && st.extraErr.dids.problem.trace_id) : UI.notice('Seeing bindings needs the identity:manage permission.', 'info'))
+            : UI.table(['User', 'DID', 'Handle', 'State', 'Proof', { label: '', right: true }], st.dids.map((d) => ['<span class="mono">' + esc(d.username) + '</span>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.did) + '</span>', d.handle ? '<span class="mono">' + esc(d.handle) + '</span>' : '<span class="muted">none</span>', d.verified ? UI.pill('verified', 'ok') : d.challengePending ? UI.pill('challenge pending', 'warn') + '<div class="muted" style="font-size:12px">expires ' + esc(stamp(d.challengeExpiresAt)) + '</div>' : UI.pill('unverified', 'warn'), d.proof ? UI.pill(d.proof, 'outline') : '', UI.btn('Remove binding', { size: 'xs', kind: 'ghost', attrs: 'data-rmdid="' + esc(d.id) + '" aria-label="Remove the binding for ' + esc(d.username) + '"' })]), { clickable: false, minWidth: '760px', emptyTitle: 'No bindings', emptyText: 'Users bind a DID from Settings.' }))
+          + '<div class="muted" style="font-size:12px">Removing a binding is audited atproto.did.removed (204). Handles are checked both ways: the DNS or well-known record must give the DID, and the DID document must name the handle back.</div>';
       } else {
         body = '<div class="eyebrow">Active sessions and grants in this tenant</div>' + UI.table(['User', 'Signed in', 'Method', 'Client', ''], st.sessions.map((s, i) => ['<b>' + esc(s.user) + '</b>', esc(s.kind === 'service' ? 'token, ' + when(s.signedInAt) : when(s.signedInAt)), esc(s.method), esc(s.client), UI.btn('Revoke', { size: 'xs', attrs: 'data-revoke="' + i + '"' })]), { clickable: false, minWidth: '560px', emptyTitle: 'No active sessions', emptyText: 'Sessions appear when someone signs in or a service account requests a token.' })
           + '<div class="muted" style="font-size:12px">Revocation also invalidates refresh tokens. Users disabled by directory sync lose their sessions within one sync interval.</div><div>' + UI.btn('Open tenant sessions', { size: 'sm', kind: 'ghost', attrs: 'data-gotenants' }) + '</div>';
@@ -265,6 +380,175 @@
       if (st.openRotate) { st.openRotate = false; setTimeout(rotateKey, 50); }
       if (st.openSaml) { st.openSaml = false; setTimeout(samlImport, 50); }
       if (st.openUpstream) { st.openUpstream = false; setTimeout(upstreamModal, 50); }
+
+      // ----- B-3413: sign-up and MFA policy, sign-ups, invitations, CSV imports, DID bindings, GitHub and AT-Protocol stores -----
+      function inviteModal() {
+        const roleOpts = (st.roles || []).length ? st.roles.filter((r) => !r.requiresMfa || App.can('users:manage')) : SIGNUP_ROLES.map((id) => ({ id, name: id }));
+        const wsOpts = myWorkspaces.map((w) => ({ value: w.id, label: w.name })).concat(App.can('tenant:manage') ? [{ value: '', label: 'No workspace' }] : []);
+        ctx.modal({ title: 'Invite someone',
+          body: '<div class="formgrid">' + UI.field('Email', UI.input('', { type: 'email', placeholder: 'name@example.internal', attrs: 'data-iemail autocomplete="off"' })) + UI.field('Workspace', UI.select(wsOpts, wsOpts.length ? wsOpts[0].value : '', 'data-iws'), 'Without tenant:manage, one you belong to.') + UI.field('Clearance', UI.select(LABELS.filter((l) => LABELS.indexOf(l) <= LABELS.indexOf(myClearance)), 'internal', 'data-iclr'), 'At most yours (' + esc(myClearance) + ').')
+            + UI.field('Roles you may grant', '<div class="hstack wrap gap12" style="row-gap:12px">' + roleOpts.map((r) => UI.check(r.name, r.id === 'member', 'data-irole="' + esc(r.id) + '"')).join('') + '</div>', 'A role you may not grant is refused (403 step role).') + '</div>'
+            + UI.notice('The link goes by email, is valid for 7 days and creates a local account with these roles in the workspace; the address counts as verified. Audited user.invitation.created.', 'info') + '<div data-ierr role="alert"></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send invitation', { kind: 'primary', attrs: 'data-isend' }),
+          onMount(m) {
+            m.querySelector('[data-isend]').addEventListener('click', async () => {
+              const email = m.querySelector('[data-iemail]').value.trim(); const err = m.querySelector('[data-ierr]');
+              if (!/^[^@\s]+@[^@\s]+$/.test(email)) { err.innerHTML = UI.notice('Enter an email address.', 'warn'); return; }
+              const roles = Array.prototype.slice.call(m.querySelectorAll('[data-irole]:checked')).map((c) => c.dataset.irole);
+              if (!roles.length) { err.innerHTML = UI.notice('Pick at least one role.', 'warn'); return; }
+              try {
+                const r = await App.post('/api/invitations', { email, workspaceId: m.querySelector('[data-iws]').value || null, roles, clearance: m.querySelector('[data-iclr]').value });
+                App.closeOverlay(); st.tab = 'policy'; st.policyView = 'invitations';
+                ctx.toast(r.sent ? 'Invitation sent to ' + esc(email) + '. A pending one for the same address and workspace was replaced.' : 'Invitation for ' + esc(email) + ' created, but the email could not be sent.', r.sent ? 'ok' : 'warn', 5000);
+                reload();
+              } catch (e) { err.innerHTML = UI.notice(problemText(e), 'danger'); }
+            });
+          } });
+      }
+      function importModal(prefill) {
+        ctx.modal({ title: 'Import users, memberships and mappings', cls: 'wide',
+          body: (prefill ? UI.notice(prefill.note, 'info') : '') + UI.field('CSV file', '<input type="file" class="input" accept=".csv,text/csv,text/plain" data-csvfile>', 'Or paste the contents below.') + UI.field('CSV', UI.textarea(prefill ? prefill.csv : '', { rows: 7, placeholder: CSV_HEADER, attrs: 'data-csv spellcheck="false" style="font-family:var(--mono);font-size:12px"' }), 'text/csv, at most 5 MB and 10,000 rows. Stored sealed; dropped once the job has run.')
+            + '<div class="hstack wrap gap12">' + UI.check('Dry run: plan and report, change nothing', prefill ? !!prefill.dry : true, 'data-dry') + UI.check('Send invitation links to new accounts instead of passwords nobody knows', prefill ? !!prefill.sendInvites : false, 'data-sendinv') + '</div>'
+            + UI.notice('Every row is checked like the API: roles you may grant, clearance at or below yours, accounts whose roles you may manage. The job runs under your current roles.', 'info') + '<div data-imperr role="alert"></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Queue import', { kind: 'primary', attrs: 'data-igo' }),
+          onMount(m) {
+            const ta = m.querySelector('[data-csv]');
+            m.querySelector('[data-csvfile]').addEventListener('change', (ev) => { const f = ev.target.files && ev.target.files[0]; if (!f) return; f.text().then((t) => { ta.value = t; }, () => { m.querySelector('[data-imperr]').innerHTML = UI.notice('The file could not be read.', 'danger'); }); });
+            m.querySelector('[data-igo]').addEventListener('click', async () => {
+              const csv = ta.value; const dry = m.querySelector('[data-dry]').checked; const inv = m.querySelector('[data-sendinv]').checked;
+              if (!csv.trim()) { m.querySelector('[data-imperr]').innerHTML = UI.notice('Choose a file or paste the CSV.', 'warn'); return; }
+              try {
+                const r = await postCsv(csv, dry, inv);
+                st.csvs[r.id] = { csv, sendInvites: inv };
+                App.closeOverlay(); st.tab = 'imports'; st.importSel = r.id;
+                ctx.toast('Import queued. Audited ' + (dry ? 'user.import.dry_run' : 'user.import.requested') + '.', 'ok');
+                reload(); watchImport(r.id);
+              } catch (e) { m.querySelector('[data-imperr]').innerHTML = UI.notice(problemText(e), 'danger'); }
+            });
+          } });
+      }
+      /** Follows a queued import until its job has run, then shows the report. */
+      function watchImport(id) {
+        let n = 0;
+        const tick = () => {
+          if (App.state.route !== 'identity' || n++ > 60) return;
+          App.get('/api/admin/user-imports/' + encodeURIComponent(id)).then((d) => {
+            if (d.state === 'queued' || d.state === 'running') { setTimeout(tick, 1000); return; }
+            st.importDetail[id] = d;
+            if (!document.querySelector('.modal')) reload(); else st.loaded = false;
+          }, () => undefined);
+        };
+        setTimeout(tick, 600);
+      }
+      function checkAccountModal() {
+        ctx.modal({ title: 'Check an AT-Protocol account',
+          body: UI.field('Handle or DID', UI.input('', { attrs: 'data-chk autocomplete="off" spellcheck="false"', placeholder: 'alice.bsky.social' })) + '<div id="chk-out">' + UI.timeline([{ title: 'Ready', text: 'Resolves the account step by step: handle, DID, document, PDS, its authorization server and that server\'s metadata. Nothing is signed in. Audited atproto.account.checked.' }]) + '</div>',
+          actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Check', { kind: 'primary', attrs: 'data-chkrun' }),
+          onMount(m) {
+            m.querySelector('[data-chkrun]').addEventListener('click', async () => {
+              const v = m.querySelector('[data-chk]').value.trim(); const out = m.querySelector('#chk-out');
+              if (v.length < 3) { out.innerHTML = UI.notice('Enter a handle or a DID.', 'warn'); return; }
+              out.innerHTML = UI.timeline([{ title: 'Checking', tone: 'accent', meta: 'running' }]);
+              try { const r = await App.post('/api/admin/atproto/accounts/check', { account: v }); out.innerHTML = (r.ok ? UI.notice('Resolved' + (r.did ? ' to <span class="mono">' + esc(r.did) + '</span>' : '') + '.', 'ok') : UI.notice('<b>Not usable.</b> A step below failed.', 'danger')) + stepsHtml(r.steps || []); }
+              catch (e) { out.innerHTML = UI.notice(problemText(e), 'danger'); }
+            });
+          } });
+      }
+      if (st.openInvite) { st.openInvite = false; setTimeout(inviteModal, 50); }
+
+      const draft = st.draft;
+      const dirty = () => { if (!st.policyDirty) { st.policyDirty = true; ctx.rerender(); } };
+      ctx.on('click', '[data-policyseg] [data-seg]', (e, t) => { st.policyView = t.dataset.seg; ctx.rerender(); });
+      ctx.on('click', '[data-signupseg] [data-seg]', (e, t) => { st.signupFilter = t.dataset.seg; ctx.rerender(); });
+      ctx.on('click', '[data-gracedone]', () => { st.graceRestarted = false; ctx.rerender(); });
+      ctx.on('click', '[data-discardpolicy]', () => { st.draft = clone(st.policy); st.policyDirty = false; ctx.rerender(); });
+      ctx.on('change', '[data-pol]', (e, t) => {
+        if (!draft) return;
+        const path = t.dataset.pol.split('.');
+        const v = t.tagName === 'TEXTAREA' ? t.value.split('\n').map((x) => x.trim()).filter(Boolean) : t.type === 'number' ? Math.max(0, Math.min(90, parseInt(t.value, 10) || 0)) : path[1] === 'workspaceId' ? (t.value || null) : t.value;
+        draft[path[0]][path[1]] = v;
+        if (path[1] === 'require') { st.policyDirty = true; ctx.rerender(); } else dirty();
+      });
+      ctx.on('change', '[data-polrole]', (e, t) => { if (!draft) return; const r = t.dataset.polrole; draft.signup.roles = draft.signup.roles.filter((x) => x !== r).concat(t.checked ? [r] : []); dirty(); });
+      ctx.on('change', '[data-polmfarole]', (e, t) => { if (!draft) return; const r = t.dataset.polmfarole; draft.mfa.roles = draft.mfa.roles.filter((x) => x !== r).concat(t.checked ? [r] : []); dirty(); });
+      ctx.on('click', '[data-polverify]', () => { if (!draft) return; draft.signup.requireEmailVerification = !draft.signup.requireEmailVerification; st.policyDirty = true; ctx.rerender(); });
+      ctx.on('click', '[data-savepolicy]', async () => {
+        if (!draft) return;
+        const pol = draft; const was = st.policy.mfa;
+        if (pol.mfa.require === 'roles' && !pol.mfa.roles.length) { ctx.toast('Name at least one role, or require a second factor for everyone.', 'warn'); return; }
+        if (!pol.signup.roles.length) { ctx.toast('Give new accounts at least one role.', 'warn'); return; }
+        const widened = pol.mfa.require !== 'off' && (was.require === 'off' || (was.require === 'roles' && (pol.mfa.require === 'all' || pol.mfa.roles.some((r) => was.roles.indexOf(r) < 0))));
+        const ok = await ctx.confirm({ title: 'Save the identity policy', tag: widened ? 'restarts the grace period' : 'tenant-wide', tone: 'info', body: '<p class="fg2" style="margin:0">Applies to every sign-in from now on' + (widened ? '. The MFA requirement widened, so covered accounts get ' + pol.mfa.graceDays + ' days to enrol a factor.' : '.') + '</p>', kv: [['Sign-up', esc(pol.signup.mode) + ', ' + (pol.signup.domains.length ? esc(pol.signup.domains.join(', ')) : 'any domain')], ['Verified email', pol.signup.requireEmailVerification ? 'required' : 'not required'], ['Second factor', esc(pol.mfa.require) + (pol.mfa.require === 'roles' ? ': ' + esc(pol.mfa.roles.join(', ')) : '')], ['Trusted devices', pol.mfa.trustedDeviceDays + ' days']], ok: 'Save' });
+        if (!ok) return;
+        try {
+          await App.api('PUT', '/api/admin/identity-policy/signup', pol.signup);
+          const m = await App.api('PUT', '/api/admin/identity-policy/mfa', { require: pol.mfa.require, roles: pol.mfa.roles, graceDays: pol.mfa.graceDays, trustedDeviceDays: pol.mfa.trustedDeviceDays });
+          st.graceRestarted = m.require !== 'off' && m.effectiveAt !== st.policy.mfa.effectiveAt;
+          st.policyDirty = false;
+          ctx.toast('Policy saved. Audited identity.signup_policy.updated and identity.mfa_policy.updated' + (st.graceRestarted ? ' (graceRestarted).' : '.'), 'ok', 5000);
+          reload();
+        } catch (e) {
+          // Keep the edits on screen; what did save shows after the next load.
+          App.fail(e, 'Policy not saved');
+        }
+      });
+      ctx.on('click', '[data-approve]', async (e, t) => {
+        const x = (st.signups || []).find((s) => s.userId === t.dataset.approve); if (!x) return;
+        const sp = st.policy ? st.policy.signup : null;
+        const ok = await ctx.confirm({ title: 'Approve ' + x.displayName, tone: 'info', body: '<p class="fg2" style="margin:0">Activates the account with the roles, clearance and workspace it was created with. The user is told by email.</p>', kv: [['Username', esc(x.username)], ['Email', esc(x.email || '') + (x.emailVerified ? ', verified' : ', not verified yet')]].concat(sp ? [['Policy roles', esc(sp.roles.join(', '))], ['Workspace', esc(wsName(sp.workspaceId))]] : []), ok: 'Approve' });
+        if (ok) act(() => App.post('/api/admin/signups/' + encodeURIComponent(x.userId) + '/approve', {}), esc(x.username) + ' approved and active. Audited user.signup.approved.');
+      });
+      ctx.on('click', '[data-reject]', (e, t) => {
+        const x = (st.signups || []).find((s) => s.userId === t.dataset.reject); if (!x) return;
+        ctx.modal({ title: 'Reject ' + esc(x.displayName), body: UI.field('Reason', UI.select(['Not a known colleague', 'Duplicate of an existing account', 'Wrong tenant', 'Other'], 'Not a known colleague', 'data-rreason'), 'Sent to the user by email and kept with the sign-up.') + UI.notice('The account stays disabled. A later approval is refused (409 once decided).', 'warn'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reject', { kind: 'danger', attrs: 'data-rgo' }),
+          onMount(m) { m.querySelector('[data-rgo]').addEventListener('click', () => { const reason = m.querySelector('[data-rreason]').value; App.closeOverlay(); act(() => App.post('/api/admin/signups/' + encodeURIComponent(x.userId) + '/reject', { reason }), esc(x.username) + ' rejected. Audited user.signup.rejected.', 'warn'); }); } });
+      });
+      ctx.on('click', '[data-invite]', inviteModal);
+      ctx.on('click', '[data-withdraw]', async (e, t) => {
+        const x = (st.invites || []).find((i) => i.id === t.dataset.withdraw); if (!x) return;
+        const ok = await ctx.confirm({ title: 'Withdraw the invitation?', tone: 'danger', body: '<p class="fg2" style="margin:0">The link stops working at once. Audited user.invitation.revoked.</p>', kv: [['Email', esc(x.email)], ['Workspace', esc(wsName(x.workspaceId))]], ok: 'Withdraw' });
+        if (ok) act(() => App.del('/api/invitations/' + encodeURIComponent(x.id)), 'Invitation withdrawn.');
+      });
+      ctx.on('click', '[data-import]', () => importModal(null));
+      ctx.on('click', 'tr[data-import-row]', (e, t) => {
+        if (e.target.closest('button')) return;
+        const id = t.dataset.importRow; st.importSel = id; ctx.rerender();
+        const x = (st.imports || []).find((i) => i.id === id);
+        if (x && (x.state === 'queued' || x.state === 'running')) watchImport(id);
+      });
+      ctx.on('click', '[data-applyimport]', async () => {
+        const id = st.importSel; const d = st.importDetail[id]; const kept = st.csvs[id];
+        if (!d) return;
+        if (!kept) { importModal({ csv: '', dry: false, note: 'The file of a dry run is not kept. Choose it again to apply the accepted rows.' }); return; }
+        const s0 = d.summary || {};
+        const ok = await ctx.confirm({ title: 'Apply the accepted rows', tone: 'info', body: '<p class="fg2" style="margin:0">The same file runs again for real: accounts first, then mappings, then memberships; each change audited with via: import. Conflicts and errors are skipped.</p>', kv: [['Create', String(s0.create || 0)], ['Update', String(s0.update || 0)], ['Skipped', String((s0.conflict || 0) + (s0.error || 0))]], ok: 'Apply' });
+        if (!ok) return;
+        try { const r = await postCsv(kept.csv, false, kept.sendInvites); st.csvs[r.id] = kept; st.importSel = r.id; ctx.toast('Import queued. Audited user.import.requested.', 'ok'); reload(); watchImport(r.id); }
+        catch (e) { App.fail(e, 'Import not queued'); }
+      });
+      ctx.on('click', '[data-checkaccount]', checkAccountModal);
+      ctx.on('click', '[data-rmdid]', async (e, t) => {
+        const d = (st.dids || []).find((x) => x.id === t.dataset.rmdid); if (!d) return;
+        const ok = await ctx.confirm({ title: 'Remove the binding for ' + d.username + '?', tone: 'danger', body: '<p class="fg2" style="margin:0">The DID no longer signs in as this user. With boundOnly on the store, it is refused entirely.</p>', kv: [['DID', '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.did) + '</span>'], ['Handle', esc(d.handle || 'none')]], ok: 'Remove binding' });
+        if (ok) act(() => App.del('/api/admin/atproto/accounts/' + encodeURIComponent(d.id)), 'Binding removed. Audited atproto.did.removed.');
+      });
+      ctx.on('click', '[data-addstore]', () => ctx.navigate('directories', { tab: 'stores', add: 'github' }));
+      ctx.on('click', '[data-storedetail]', (e, t) => {
+        const p = (st.stores || []).find((x) => x.id === t.dataset.storedetail); if (!p) return;
+        const up = st.upstream.find((u) => u.id === p.id);
+        ctx.drawer({ title: esc(p.name) + ' ' + UI.pill(p.kind, 'outline'),
+          body: UI.kv([['Protocol', esc(p.kind)], ['State', UI.pill(p.enabled ? 'enabled' : 'disabled', p.enabled ? 'ok' : '')], ['Reachability', esc(up ? up.reach : 'checked per account')], ['Used by', esc(up ? up.usedBy : (st.dids || []).filter((d) => d.verified).length + ' bound users')]], 1)
+            + '<div class="eyebrow">Configuration</div>' + UI.code(JSON.stringify(p.config, null, 2), 'json')
+            + (p.kind === 'github' ? UI.notice('Register the OAuth app\'s callback as <span class="mono">' + esc(ov.issuer.replace(/\/$/, '')) + '/federation/github/callback</span>. The client secret is a secret reference; the access token is never stored. Organisations become groups org and teams org/team-slug.', 'info') : UI.notice('Sign-in is an OAuth flow with PAR, PKCE and DPoP against the account\'s authorization server; the PDS confirms the session for the same DID. Tokens are revoked afterwards, never stored.', 'info'))
+            + '<div data-storeout></div><div class="hstack wrap gap6">' + UI.btn('Test connection', { size: 'sm', icon: 'play', attrs: 'data-storetest' }) + UI.btn(p.enabled ? 'Disable store' : 'Enable store', { size: 'sm', kind: p.enabled ? 'danger' : '', attrs: 'data-storetoggle' }) + UI.btn('Edit in User stores', { size: 'sm', kind: 'ghost', attrs: 'data-storeedit' }) + '</div>',
+          actions: UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+          onMount(d) {
+            d.querySelector('[data-storetest]').addEventListener('click', async () => { const out = d.querySelector('[data-storeout]'); out.innerHTML = UI.notice('Testing…', 'info'); try { const r = await App.post('/api/admin/identity-providers/' + encodeURIComponent(p.id) + '/test'); out.innerHTML = UI.notice(r.ok ? 'Connection test passed.' : 'Connection test failed.', r.ok ? 'ok' : 'danger') + stepsHtml(r.steps || []); } catch (err) { out.innerHTML = UI.notice(problemText(err), 'danger'); } });
+            d.querySelector('[data-storetoggle]').addEventListener('click', () => { App.closeOverlay(); act(() => App.patch('/api/admin/identity-providers/' + encodeURIComponent(p.id), { enabled: !p.enabled }), esc(p.name) + (p.enabled ? ' disabled. It leaves the sign-in options at once.' : ' enabled.'), p.enabled ? 'warn' : 'ok'); });
+            d.querySelector('[data-storeedit]').addEventListener('click', () => { App.closeOverlay(); ctx.navigate('directories', { tab: 'stores', store: p.id }); });
+          } });
+      });
 
       // ----- handlers -----
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; delete ctx.params.tab; ctx.rerender(); });

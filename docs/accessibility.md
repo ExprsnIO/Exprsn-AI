@@ -145,7 +145,7 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   track; both are now above 3:1.
 
 - **axe-core 4** (tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`, plus `wcag2aaa` in Enhanced) on
-  sign-in and every signed-in screen (31 since Sprint 30), in Standard and Enhanced, light and dark, against the e2e server's seeded data.
+  sign-in and every signed-in screen (36 since Sprint 30), in Standard and Enhanced, light and dark, against the e2e server's seeded data.
   No violations remain; the last findings fixed were low-contrast helper text on Classifiers, an unfocusable scrolling
   YAML block on Profiles, and toggles that picked up the browser's grey button background in dark mode.
 - **In CI** since 1.2.0 (B-1101, B-1102): the Playwright suite checks every screen, each of its design states (applied
@@ -170,6 +170,18 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   when the page, the overlay or the dialog scrolls sideways or anything in it sticks out past its edge, other than
   tables and code in a named scroller. Fixed on the way: at 640 px and below a long breadcrumb with its label (a
   connection's) overlapped the header tools and pushed the page 2 px sideways; the breadcrumb now shrinks and clips.
+- **Sprint 30 screens** (B-3414): Certificates, Vault, Plugins and events, Apps and Files, and the identity additions
+  on Identity, User stores, Settings and Sign in, joined the sweeps above (every design state, Standard and Enhanced,
+  light and dark, reflow at 320 and 640 px for the screens and their dialogs and drawers). Each opens a dialog from its
+  own controls (New profile, Add grant, Upload, New folder, the Grants dialog…), Vault and Plugins also a drawer.
+  Fixed on the way: stacked checkboxes (plugin grants, sign-up, MFA and invitation roles) and inline tag links in Files
+  were below the 24 px target size (WCAG 2.5.8) and now have 24 px rows or 12 px gaps; the remove control of a state or
+  filter chip in Apps is its own labelled icon button rather than a clickable span; Apps' records grid and form rows
+  are focusable and select with Enter or Space; Apps' state diagram scales to the width instead of scrolling sideways
+  and carries a text alternative; the Plugins catalogue and the Vault engine inspector no longer stick out at 320 px;
+  Apps re-renders after a `change` only once focus has moved on, and keeps it where it went; Certificates' issue dialog
+  redraws its form when the mode or profile changes while keeping the values entered and the focus. Vault's secret and
+  password copy buttons copy without echoing the value in a toast.
 - **Keyboard walk** in Chromium: skip link, landmarks, `aria-current`, focus on screen change, palette combobox and
   arrows, dialog labelling, focus trap in both directions, Esc and focus return, header re-render keeping focus,
   popover focus and Esc, focusable table rows, focus kept on re-render, persistence across reload, system contrast and

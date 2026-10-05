@@ -31,7 +31,10 @@
     groups: 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M21 20a6 6 0 0 0-6-6', messages: 'M4 4h12v9H8l-4 3zM20 9v9l-3-2h-7',
     moderation: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4', channels: 'M4 13a8 8 0 0 1 16 0M4 13v4h3v-5H4M20 13v4h-3v-5h3M17 19a4 4 0 0 1-4 2', roles: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16',
     grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z', clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2', brain: 'M9 4a3 3 0 0 0-3 3v10a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3zM15 4a3 3 0 0 1 3 3v10a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3z',
-    calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6'
+    calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
+    // Sprint 30 (B-3402 to B-3404, B-3407, B-3408): the trust, apps and files screens
+    certificates: 'M12 3l2.5 2 3-.5.5 3 2 2.5-2 2.5-.5 3-3-.5L12 17l-2.5-2-3 .5-.5-3L4 10l2-2.5.5-3 3 .5zM9 17l-1 5 4-2 4 2-1-5', vault: 'M4 4h16v16H4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 10v2M20 8h2M20 16h2',
+    plugins: 'M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3', files: 'M3 6h6l2 2h10v11H3z', apps: 'M4 4h16v16H4zM4 9h16M9 9v11'
   };
   const icon = (name, size, extra) => {
     const d = ICONS[name] || ICONS.info;
@@ -155,6 +158,8 @@
       { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', live: true },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', live: true }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', live: true }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', live: true },
       { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'scripts:run', live: true }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', live: true }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', live: true },
+      // Sprint 30 (B-3408, B-3407): files and low-code apps
+      { id: 'files', label: 'Files', icon: 'files', perm: 'files:read', live: true }, { id: 'apps', label: 'Apps', icon: 'apps', perm: 'records:read', live: true },
       // 1.5.0 (Sprint 30): groups and events, messages and the workspace feed
       { id: 'groups', label: 'Groups and events', icon: 'groups', perm: 'groups:read', live: true }, { id: 'messages', label: 'Messages and feed', icon: 'messages', perm: 'messages:read', live: true }
     ] },
@@ -165,6 +170,8 @@
       { id: 'moderation', label: 'Moderation', icon: 'moderation', perm: 'moderation:review', live: true }, { id: 'channels', label: 'Channels', icon: 'channels', perm: 'channels:review', live: true }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
       { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true }, { id: 'roles', label: 'Roles and access', icon: 'roles', perm: 'roles:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
+      // Sprint 30 (B-3402 to B-3404): the trust screens
+      { id: 'certificates', label: 'Certificates', icon: 'certificates', perm: 'pki:manage', live: true }, { id: 'vault', label: 'Vault', icon: 'vault', perm: 'secrets:admin', live: true }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins', perm: 'plugins:manage', live: true },
       { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];
