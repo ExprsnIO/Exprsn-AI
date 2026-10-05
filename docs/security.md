@@ -191,8 +191,11 @@ filter, private `/tmp`, only the state directory writable.
   schema is sampled from the first documents of each collection, so the tree and convention-based PII masking only
   know the top-level fields seen there; values the classifier recognises are masked anywhere in a document. A
   knowledge source's watermark is compared with `$gt` as each type its text can stand for, and documents sharing the
-  last watermark value with a later insert can be missed, as with the SQL watermark. OpenBao dynamic credentials do not
-  apply to MongoDB.
+  last watermark value with a later insert can be missed, as with the SQL watermark. A source added without `fields`
+  indexes the text fields seen in that sample, so a text field that first appears later is not indexed until the source
+  is added again with it named. Admin-marked PII paths inside sub-documents (`tickets.customer.email`) are masked when a
+  knowledge source names that path, not inside a whole sub-document returned by a query (there only field names like
+  `email` and values the classifier recognises are masked). OpenBao dynamic credentials do not apply to MongoDB.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
   to N times each limit. Since 1.3.0 an outage is visible: each instance probes Redis every `RATELIMIT_PROBE_SECONDS`,

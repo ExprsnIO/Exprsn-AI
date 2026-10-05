@@ -45,6 +45,25 @@
   met; 67 ms with autovacuum off. The records scenario reports each query body's p95 and signs in 128 users (64 hit
   the per-user API limit once queries got faster). `docs/loadtest.md`.
 
+### MongoDB data connections (Sprint 30, B-3602)
+
+- `engine: mongodb` on `POST /api/admin/connections`, merged from `feat/mongodb-connections`. Reads are `find` and
+  `aggregate` only, written as JSON; writes, DDL, `$out`, `$merge`, server-side JavaScript (`$where`, `$function`,
+  `$accumulator`, Code values, `mapReduce`) and stages off a read-only list are refused before anything is sent and
+  checked again in the driver. Collections read through `$lookup`, `$graphLookup` and `$unionWith` must be on the
+  allow-list (names or patterns such as `orders_*`); `system.*` and other databases are refused. Reads use the
+  connection's row limit (plus one, to report capping) and timeout (`maxTimeMS`), mask personal fields inside
+  sub-documents too, and are audited as for the other engines.
+- One direct connection to the checked address (no replica-set discovery or SRV), no retries, credentials as options
+  (sealed, or a `vault:` reference). The account authenticates against the connection's database unless the
+  username is `<authdb>/<user>`. Test connection reports an account with write privileges, or a server without
+  authentication, as `degraded`. OpenBao dynamic credentials stay PostgreSQL and MySQL only (`409`).
+- Collections as knowledge sources (`kind: database`): `fields` to index (by default the text fields of the sampled
+  schema), `idColumn` (`_id`), a watermark field (`updatedAt` or `updated_at` when sampled), and an access field as for
+  B-1002. No migration; the metadata is tested on SQLite, PostgreSQL and MySQL (`TEST_MONGODB_URL` gates the
+  real-server test; CI runs a `mongo:8` service).
+- Dependency: the official `mongodb` driver 7.7.0 (pinned).
+
 ## 1.4.0
 
 ### AT-Protocol firehose ingest (Sprint 27, B-1908)

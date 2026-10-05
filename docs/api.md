@@ -1333,7 +1333,7 @@ body through the `user-input` checkpoint: a block, hold or redaction refuses wit
 
 | Route | Notes |
 | --- | --- |
-| `GET /knowledge/connections` | PostgreSQL and MySQL connections: `[{id, name, engine, label, objects, columns}]` |
+| `GET /knowledge/connections` | PostgreSQL, MySQL and MongoDB connections: `[{id, name, engine, label, objects, columns}]` |
 | `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …" \| "mysql: …", connectionId, idColumn?, watermarkColumn?, accessColumn?, accessKind?: group \| user, replication?, publication?}` | MySQL tables and views sync by watermark like PostgreSQL (names default to the connection's database). `accessColumn` (B-1002) names who may retrieve each row: a list of directory groups (`accessKind: group`, the default) or usernames, emails or user ids (`user`), as a comma or semicolon list, a JSON array or a PostgreSQL array. The list is carried onto the row's document and chunks; search, chat context and the document list for members drop rows that do not name the reader or one of their groups (matched case-insensitively against the groups of the user's identities); an empty value admits nobody. `replication: true` (B-1003, PostgreSQL tables only, `409` for views and MySQL) streams changes through logical replication (`publication` defaults to `exprsn_knowledge`) |
 | `GET /knowledge/bases/:id` | Each database source carries `replication: {state: starting \| streaming \| fallback \| stopped, slot, publication, lsn, lastChangeAt, changes, error}` when it asked for it |
 | `DELETE /knowledge/sources/:id` | Also stops the source's stream and drops its replication slot |
@@ -3306,12 +3306,13 @@ entry for a route that is gone, or a route whose `requireAuth`, `requirePermissi
 middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
 their middleware implies, for review.
 
-## MongoDB connections (1.4.0)
+## Sprint 30 (1.5.0): MongoDB connections (B-3602)
 
 `engine: mongodb` on `POST /admin/connections` (`connections:manage`, same routes, checks and audit as the other
 engines). `endpoint` is `host:port` (27017 by default); `database` is required and is the only database read. The
-account is a sealed username and password or a `vault:` password reference (B-1705); it authenticates against `admin`
-unless the username is written `<authdb>/<user>`. `baoRole` is refused (`409`): OpenBao dynamic credentials are for
+account is a sealed username and password or a `vault:` password reference (B-1705); it authenticates against the
+connection's database (as a URI naming that database would) unless the username is written `<authdb>/<user>`, such as
+`admin/reader`. `baoRole` is refused (`409`): OpenBao dynamic credentials are for
 PostgreSQL and MySQL. Zones and `CONNECTIONS_ALLOWED_HOSTS` apply as for the other engines: the host is resolved and
 checked once and the checked address is dialled (TLS still verifies the name), with one direct connection (no
 replica-set discovery), no retries and the connection's timeout as the server-selection, connect and `maxTimeMS` limit.
@@ -3340,10 +3341,12 @@ replica-set discovery), no retries and the connection's timeout as the server-se
   inside sub-documents too.
 
 Knowledge sources (`POST /knowledge/bases/:id/sources`, `kind: database`): on a MongoDB connection `location` is
-`mongo: <collection>` (introspected and allowed), and `fields` (required, 1 to 50, dotted paths allowed) names the fields
-whose text becomes the document; `idColumn` is the id field (`_id` by default), `watermarkColumn` an optional field that
-grows on every change (`updatedAt` or `updated_at` when the sampled schema has one), compared after the stored watermark
-as a date, number, ObjectId or text; `accessColumn` and `accessKind` name a field listing the groups or users who may
+`mongo: <collection>` or the bare collection name (introspected and allowed), and `fields` (1 to 50, dotted paths
+allowed) names the fields whose text becomes the document; without `fields`, the text fields of the sampled schema other
+than the id, watermark and access fields are indexed (`400` when there are none). `idColumn` is the id field (`_id` by
+default), `watermarkColumn` an optional field that grows on every change (`updatedAt` or `updated_at` when the sampled
+schema has one; `null` keeps none, so every sync reads the collection again), compared after the stored watermark as a
+date, number, ObjectId or text; `accessColumn` and `accessKind` name a field listing the groups or users who may
 retrieve each document (an array or a list, as for B-1002). Only the id, the fields, the watermark and the access field
 are fetched. `replication` and `roleMappings` are refused (`409`). Documents carry at least the connection's label.
 `GET /knowledge/connections` lists MongoDB connections with the allowed collections and their sampled fields.

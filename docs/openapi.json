@@ -18162,7 +18162,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "PostgreSQL and MySQL connections: [{id, name, engine, label, objects, columns}]",
+        "summary": "PostgreSQL, MySQL and MongoDB connections: [{id, name, engine, label, objects, columns}]",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
