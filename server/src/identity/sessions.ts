@@ -143,10 +143,13 @@ export class SessionService {
     return { token, session: { ...s, ...upd } };
   }
 
-  /** Records a fresh password or factor check on the session (step-up re-authentication). */
-  async markAuthenticated(sessionId: string): Promise<number> {
+  /**
+   * Records a fresh password or factor check on the session (step-up re-authentication). With `mfa` (a TOTP code or a
+   * passkey) the session's second-factor time moves too: 1.5.0 (B-3101) app passwords need a fresh one.
+   */
+  async markAuthenticated(sessionId: string, o: { mfa?: boolean } = {}): Promise<number> {
     const t = Date.now();
-    await this.db('sessions').where({ id: sessionId }).update({ auth_at: t });
+    await this.db('sessions').where({ id: sessionId }).update(o.mfa ? { auth_at: t, mfa_verified_at: t } : { auth_at: t });
     return t;
   }
 

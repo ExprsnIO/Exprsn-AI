@@ -43,6 +43,7 @@ import * as m030b from './030b_social.js';
 import * as m030c from './030c_feed.js';
 import * as m031 from './031_access.js';
 import * as m031b from './031b_record_queries.js';
+import * as m032 from './032_dav.js';
 import * as m032c from './032c_memory.js';
 
 interface Migration {
@@ -96,6 +97,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '030c_feed': m030c,
   '031_access': m031,
   '031b_record_queries': m031b,
+  '032_dav': m032,
   '032c_memory': m032c
 };
 

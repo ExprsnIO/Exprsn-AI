@@ -64,7 +64,10 @@ export const PERMISSIONS = [
   // comments in the workspaces one may act in, and set and run each workspace's digest.
   'feed:read', 'feed:write', 'feed:manage',
   // 1.5.0 (Sprint 29, B-33): tenant-defined roles, the role and effective-access matrices, and access reviews.
-  'roles:manage'
+  'roles:manage',
+  // 1.5.0 (Sprint 30, B-31): personal calendars (CalDAV; group events stay under groups:*) and contacts (the directory
+  // as an address book within one's clearance, and personal address books). read: list and fetch; write: change them.
+  'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write'
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -101,7 +104,9 @@ const MEMBER: readonly Permission[] = [
   // Sprint 28b (B-26): their own conversations.
   'messages:read', 'messages:write',
   // Sprint 28c (B-27): the feeds of their workspaces and groups.
-  'feed:read', 'feed:write'
+  'feed:read', 'feed:write',
+  // 1.5.0, Sprint 30 (B-31): their own calendars and address books, and the directory within their clearance.
+  'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write'
 ];
 
 /** The member baseline. Any other permission is an admin permission (B-3302: a custom role holding one is under dual control). */
@@ -112,7 +117,7 @@ const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage', 'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage', 'channels:review'], requiresMfa: true, grantableBy: ADMINS },

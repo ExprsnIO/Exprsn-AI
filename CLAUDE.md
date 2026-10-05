@@ -192,6 +192,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `migrate --check`); `platform/shamir.ts` and `platform/escrow.ts` (`kms:escrow`, `kms:recover`); `zones/kube.ts` and
   `zones/cluster.ts` (`ZONES_APPLY=kubernetes`); `knowledge/crawl.ts` (the internal web crawler). Prometheus rules and
   Grafana dashboards are in `deploy/observability/`.
+- 1.5.0 modules: **`dav/`** (CalDAV and CardDAV at `/dav`, `docs/dav.md`: `handler.ts` the router and methods,
+  `auth.ts` app-password Basic auth, `tree.ts` the namespace, `caldav.ts`, `carddav.ts`, `filters.ts` the query
+  operators, `sync.ts`, `store.ts` personal collections and dead properties, `passwords.ts` and `routes.ts` for
+  `/api/me/app-passwords`; the conformance fixtures are in `server/test/fixtures/dav/`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

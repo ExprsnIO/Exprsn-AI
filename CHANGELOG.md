@@ -22,6 +22,29 @@
   by recency while it runs, and only vectors of the query's model are compared (B-3703).
 - The event catalogue lists a `memory.*` group for the memory audit actions.
 
+### CalDAV and CardDAV (Sprint 30, B-3101 to B-3104)
+
+- New permissions `calendars:read`, `calendars:write`, `contacts:read` and `contacts:write` (members and tenant
+  admins). Migration `032_dav`. Described in `docs/dav.md`.
+- App passwords for DAV clients under `/api/me/app-passwords` (list, create, revoke): per device, shown once, with
+  DAV-only scopes (`caldav`, `carddav`, `webdav`) and an optional expiry; creating one needs a second factor confirmed
+  within the step-up window (a TOTP or passkey step-up now records the factor on the session); the list shows the last
+  use. They authenticate `/dav` only (HTTP Basic over TLS) and are refused by `/api`, `/v1` and the console (B-3101).
+- The WebDAV core at `/dav` with `/.well-known/caldav` and `/.well-known/carddav` discovery: PROPFIND, PROPPATCH (all
+  or nothing; dead properties sealed), REPORT, ETags with `If-Match`, `If-None-Match` and the If header (a stale ETag is
+  412), `sync-collection` (RFC 6578), strict XML parsing (no DOCTYPE or entities, size and depth caps), its own rate
+  limit and failed-credential limits (B-3101).
+- CalDAV over personal calendars (MKCALENDAR, validated objects stored sealed with indexed time spans) and the
+  calendars of one's groups: `calendar-query` with every RFC 4791 filter operator, `calendar-multiget`,
+  `free-busy-query`; answering a group event from a client (its `PARTSTAT`) is written back as the RSVP, and
+  moderators' edits and cancellations go through the groups service (B-3102). The iCalendar writer of B-2504 renders
+  organisers and attendees and a METHOD-less object form.
+- CardDAV: the directory as a read-only address book filtered by clearance (a contact above the caller's clearance is
+  never returned), and personal address books (extended MKCOL, vCard 3.0 and 4.0), `addressbook-query` with every RFC
+  6352 operator and `addressbook-multiget` (B-3103).
+- A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
+  replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
+
 ### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
 
 - New permission `roles:manage` (tenant admins). Migration `031_access`.

@@ -54,6 +54,9 @@ export function toOpenApi(p: string): string[] {
   return [out || '/'];
 }
 
+/** The HTTP methods an OpenAPI 3.1 path item can describe. */
+export const OPENAPI_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']);
+
 const join = (a: string, b: string) => (a === '/' ? '' : a.replace(/\/$/, '')) + (b === '/' ? '' : b);
 
 /** Every method and path the app answers, with mount prefixes resolved. */
@@ -66,7 +69,9 @@ export function listRoutes(app: { router: { stack: Layer[] } } | unknown): Route
         for (const raw of paths)
           for (const p of toOpenApi(join(prefix, raw)))
             for (const [m, on] of Object.entries(layer.route.methods)) {
-              if (!on || m === '_all') continue;
+              // WebDAV methods (PROPFIND, REPORT, MKCALENDAR…) have no OpenAPI 3.1 operation: docs/dav.md describes
+              // them and the route permission registry declares them.
+              if (!on || m === '_all' || !OPENAPI_METHODS.has(m.toLowerCase())) continue;
               const method = m.toLowerCase();
               out.set(`${method} ${p}`, { method, path: p });
             }

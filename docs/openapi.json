@@ -35,6 +35,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "A plugin handler run's scoped token (xpt_…), B-2004"
+      },
+      "davBasic": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "DAV clients (B-3101): the account's username and an app password (exai_d1_...), over HTTPS; accepted at /dav only"
       }
     },
     "schemas": {
@@ -7237,6 +7242,100 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/caldav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CalDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CalDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CalDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/carddav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CardDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CardDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CardDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
           },
           "default": {
             "$ref": "#/components/responses/Default"
@@ -18659,6 +18758,299 @@
         }
       }
     },
+    "/api/me/app-passwords": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's app passwords for DAV clients (revoked and expired ones listed for 30 days)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "prefix": {
+                        "type": "string"
+                      },
+                      "scopes": {
+                        "type": "array",
+                        "items": {
+                          "enum": [
+                            "caldav",
+                            "carddav",
+                            "webdav"
+                          ]
+                        }
+                      },
+                      "state": {
+                        "enum": [
+                          "active",
+                          "expired",
+                          "revoked"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "integer"
+                      },
+                      "expiresAt": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "lastUsedAt": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "lastUsedIp": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "lastUsedAgent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "revokedAt": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "prefix",
+                      "scopes",
+                      "state",
+                      "createdAt"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Creates an app password (DAV-only scopes); needs a browser session with a second factor confirmed within STEPUP_WINDOW_SECONDS. The password is shown once",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "enum": [
+                        "caldav",
+                        "carddav",
+                        "webdav"
+                      ]
+                    }
+                  },
+                  "ttlDays": {
+                    "enum": [
+                      30,
+                      90,
+                      180,
+                      365,
+                      null
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "scopes"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "prefix": {
+                          "type": "string"
+                        },
+                        "scopes": {
+                          "type": "array",
+                          "items": {
+                            "enum": [
+                              "caldav",
+                              "carddav",
+                              "webdav"
+                            ]
+                          }
+                        },
+                        "state": {
+                          "enum": [
+                            "active",
+                            "expired",
+                            "revoked"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "integer"
+                        },
+                        "expiresAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "lastUsedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "lastUsedIp": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "lastUsedAgent": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "revokedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "prefix",
+                        "scopes",
+                        "state",
+                        "createdAt"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "password": {
+                          "type": "string"
+                        },
+                        "username": {
+                          "type": "string"
+                        },
+                        "server": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string"
+                            },
+                            "caldav": {
+                              "type": "string"
+                            },
+                            "carddav": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "notice": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "password",
+                        "username",
+                        "server"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/app-passwords/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Revokes an app password: the next DAV request with it is refused",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/me/atproto": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -25361,6 +25753,345 @@
         ],
         "summary": "Also: charge.refunded (the charge's amount_refunded is the running total: the statement becomes refunded when it covers the charge's amount, else partly refunded; an older, smaller total is ignored), credit_note.created/updated/voided (reco",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/dav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "A calendar object or vCard (text/calendar, text/vcard) with its ETag; If-None-Match answers 304",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/vcard": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Headers of GET",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Stores a calendar object or contact, or answers a group event (PARTSTAT becomes the RSVP); a stale If-Match is 412",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "204": {
+            "description": "Updated"
+          },
+          "412": {
+            "description": "Precondition failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "text/calendar": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/vcard": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Deletes a personal object or collection; cancels a group event (moderators and owners)",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "DAV compliance classes and the methods allowed",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/dav/{path}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "A calendar object or vCard (text/calendar, text/vcard) with its ETag; If-None-Match answers 304",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/vcard": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Headers of GET",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Stores a calendar object or contact, or answers a group event (PARTSTAT becomes the RSVP); a stale If-Match is 412",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "204": {
+            "description": "Updated"
+          },
+          "412": {
+            "description": "Precondition failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "text/calendar": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/vcard": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Deletes a personal object or collection; cancels a group event (moderators and owners)",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "DAV compliance classes and the methods allowed",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
