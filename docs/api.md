@@ -659,7 +659,7 @@ A memory view also carries `embedModel`, `merge: {memories: [id, id], similarity
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/connections` | `[connection]` |
-| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
+| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch\|mongodb, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
 | `GET /admin/connections/:id` | One connection |
 | `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused; a new zone or label is checked against the zones as on registration |
 | `PUT /admin/connections/:id/credential` `{username, password}` or `{baoRole}` | Replaces the credential with a sealed account, or switches to OpenBao dynamic credentials for that role; any OpenBao lease this instance holds for the connection is revoked |
@@ -1378,7 +1378,7 @@ body through the `user-input` checkpoint: a block, hold or redaction refuses wit
 
 | Route | Notes |
 | --- | --- |
-| `GET /knowledge/connections` | PostgreSQL and MySQL connections: `[{id, name, engine, label, objects, columns}]` |
+| `GET /knowledge/connections` | PostgreSQL, MySQL and MongoDB connections: `[{id, name, engine, label, objects, columns}]` |
 | `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …" \| "mysql: …", connectionId, idColumn?, watermarkColumn?, accessColumn?, accessKind?: group \| user, replication?, publication?}` | MySQL tables and views sync by watermark like PostgreSQL (names default to the connection's database). `accessColumn` (B-1002) names who may retrieve each row: a list of directory groups (`accessKind: group`, the default) or usernames, emails or user ids (`user`), as a comma or semicolon list, a JSON array or a PostgreSQL array. The list is carried onto the row's document and chunks; search, chat context and the document list for members drop rows that do not name the reader or one of their groups (matched case-insensitively against the groups of the user's identities); an empty value admits nobody. `replication: true` (B-1003, PostgreSQL tables only, `409` for views and MySQL) streams changes through logical replication (`publication` defaults to `exprsn_knowledge`) |
 | `GET /knowledge/bases/:id` | Each database source carries `replication: {state: starting \| streaming \| fallback \| stopped, slot, publication, lsn, lastChangeAt, changes, error}` when it asked for it |
 | `DELETE /knowledge/sources/:id` | Also stops the source's stream and drops its replication slot |
@@ -3350,3 +3350,49 @@ all required; `{anyOf}` when one of several suffices), `authenticated` (any sign
 entry for a route that is gone, or a route whose `requireAuth`, `requirePermission` or `requireAnyPermission`
 middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
 their middleware implies, for review.
+
+## Sprint 30 (1.5.0): MongoDB connections (B-3602)
+
+`engine: mongodb` on `POST /admin/connections` (`connections:manage`, same routes, checks and audit as the other
+engines). `endpoint` is `host:port` (27017 by default); `database` is required and is the only database read. The
+account is a sealed username and password or a `vault:` password reference (B-1705); it authenticates against the
+connection's database (as a URI naming that database would) unless the username is written `<authdb>/<user>`, such as
+`admin/reader`. `baoRole` is refused (`409`): OpenBao dynamic credentials are for
+PostgreSQL and MySQL. Zones and `CONNECTIONS_ALLOWED_HOSTS` apply as for the other engines: the host is resolved and
+checked once and the checked address is dialled (TLS still verifies the name), with one direct connection (no
+replica-set discovery), no retries and the connection's timeout as the server-selection, connect and `maxTimeMS` limit.
+
+- `POST /admin/connections/:id/test`: `ping`, `buildInfo` and `connectionStatus` with privileges. `readOnly: false` (and
+  `degraded`) when the account holds a write action (`insert`, `update`, `remove`, index or collection changes, user
+  administration, `anyAction`) or the server takes connections without an account; `degraded` when the account cannot
+  `find` in the database; `unreachable` with the scrubbed driver message on a failed connection or authentication.
+- `POST /admin/connections/:id/schema`: the database's collections and views (not `system.*`), with top-level fields and
+  types sampled from the first 20 documents of each of the first 200 collections.
+- `PUT /admin/connections/:id/allow-list`: collection names (case-sensitive) or patterns such as `orders_*`.
+- `POST /admin/connections/:id/query` (and `/export`): `query` is JSON, `{"find": "<collection>", "filter": {…},
+  "projection": {…}, "sort": {…}, "limit": n, "skip": n}` or `{"aggregate": "<collection>", "pipeline": [ … ]}`; with
+  `object` (the collection picked in the schema tree) a bare object is the filter of a find on it. Values may use
+  relaxed extended JSON (`{"$date": "…"}`, `{"$oid": "…"}`). Pipeline stages must be one of `$match`, `$project`,
+  `$addFields`, `$set`, `$unset`, `$group`, `$sort`, `$limit`, `$skip`, `$count`, `$unwind`, `$lookup`, `$graphLookup`,
+  `$unionWith`, `$facet`, `$bucket`, `$bucketAuto`, `$sortByCount`, `$replaceRoot`, `$replaceWith`, `$sample`,
+  `$redact`, `$setWindowFields`, `$densify`, `$fill`, `$geoNear`; collections read through `$lookup`, `$graphLookup` and
+  `$unionWith` (also in sub-pipelines and `$facet`) must be on the allow-list. Refusals (`422`, audited as
+  `connection.query.refused`): `kind: write` for write commands, mongosh write methods (`db.orders.updateMany(…)`),
+  `$out` and `$merge`; `kind: ddl` for `drop`, `create`, index and collection changes; `kind: denied` for a stage off
+  the list, a collection off the allow-list, `system.*`, another database, `$where`, `$function`, `$accumulator`,
+  `$code` and `mapReduce`; `kind: unparsed` for anything else (not JSON, mongosh read syntax, unknown keys), which
+  cannot be confirmed. Reads fetch the row limit plus one (`$limit` appended to a pipeline), with `maxTimeMS`; documents
+  become rows over the union of their top-level fields, sub-documents as JSON. Masking applies as for the other engines,
+  inside sub-documents too.
+
+Knowledge sources (`POST /knowledge/bases/:id/sources`, `kind: database`): on a MongoDB connection `location` is
+`mongo: <collection>` or the bare collection name (introspected and allowed), and `fields` (1 to 50, dotted paths
+allowed) names the fields whose text becomes the document; without `fields`, the text fields of the sampled schema other
+than the id, watermark and access fields are indexed (`400` when there are none). `idColumn` is the id field (`_id` by
+default), `watermarkColumn` an optional field that grows on every change (`updatedAt` or `updated_at` when the sampled
+schema has one; `null` keeps none, so every sync reads the collection again), compared after the stored watermark as a
+date, number, ObjectId or text; `accessColumn` and `accessKind` name a field listing the groups or users who may
+retrieve each document (an array or a list, as for B-1002). Only the id, the fields, the watermark and the access field
+are fetched. `replication` and `roleMappings` are refused (`409`). Documents carry at least the connection's label.
+`GET /knowledge/connections` lists MongoDB connections with the allowed collections and their sampled fields.
+

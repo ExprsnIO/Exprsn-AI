@@ -41,7 +41,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `CLAMD_HOST`, `CLAMD_PORT` | —, `3310` | ClamAV daemon for attachment scanning; without it attachments get the type check and classifier only |
 | `MCP_ALLOWED_HOSTS` | — | MCP servers must resolve to internal addresses; this comma-separated list of hostnames (`*.example.com`) and CIDR networks allows others |
 | `IDENTITY_ALLOWED_HOSTS` | — | The same for LDAP directories and SQL user-store databases, checked before every connection |
-| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, MySQL, OpenSearch); PostgreSQL and MySQL dial the checked address, OpenSearch never follows redirects |
+| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, MySQL, OpenSearch, MongoDB); PostgreSQL, MySQL and MongoDB dial the checked address, OpenSearch never follows redirects |
 | `SECRET_REF_ENV` | — | Environment variables user stores and upstream IdPs may reference as `env:NAME`: names or `PREFIX*` patterns, comma-separated. Empty means none. The server's own settings (and their `_FILE` forms) are refused whatever this says |
 | `SECRET_REF_DIRS` | `/run/secrets,/run/credentials,/etc/exprsn-ai/credentials` | Directories `file:` references must resolve inside (symlinks followed); the server's own secret files are refused |
 | `MCP_TIMEOUT_MS`, `MCP_POLL_MINUTES` | `15000`, `15` | MCP request timeout; how often every server's tools are re-listed and re-hashed (0 turns off) |

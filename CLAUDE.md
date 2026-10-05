@@ -59,7 +59,8 @@ npm run build                # tsc to server/dist
 npm run cli -w server -- <migrate [--check] | admin:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
                              kms:recover | signer | backup:create | backup:restore-drill | backup:restore>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
-                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
+                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL,
+                                             # TEST_MONGODB_URL (an account that may create users)
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
 npm run loadtest:platform -- --help        # webhook, records, OCSP and firehose load test (docs/loadtest.md)

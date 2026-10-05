@@ -194,6 +194,20 @@ filter, private `/tmp`, only the state directory writable.
   expire at its TTL. Writes through a connection are refused outright. Hosts must be internal unless
   `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. The MySQL
   classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
+- MongoDB connections: read-only rests on the query model (only `find` and `aggregate` with allow-listed stages, no
+  `$where`, `$function`, `$accumulator` or Code values, re-checked by the driver) and on the account; MongoDB has no
+  read-only session the way PostgreSQL and MySQL have a read-only transaction, so an account with the `readWrite` role
+  is only reported (`degraded` on Test connection), not prevented. Use an account with the `read` role. The driver
+  dials one server directly (no replica-set discovery or SRV records), so a connection names one member; there is no
+  per-connection CA file for TLS (the system trust store, plus `NODE_EXTRA_CA_CERTS`, as for the other engines). The
+  schema is sampled from the first documents of each collection, so the tree and convention-based PII masking only
+  know the top-level fields seen there; values the classifier recognises are masked anywhere in a document. A
+  knowledge source's watermark is compared with `$gt` as each type its text can stand for, and documents sharing the
+  last watermark value with a later insert can be missed, as with the SQL watermark. A source added without `fields`
+  indexes the text fields seen in that sample, so a text field that first appears later is not indexed until the source
+  is added again with it named. Admin-marked PII paths inside sub-documents (`tickets.customer.email`) are masked when a
+  knowledge source names that path, not inside a whole sub-document returned by a query (there only field names like
+  `email` and values the classifier recognises are masked). OpenBao dynamic credentials do not apply to MongoDB.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
   to N times each limit. Since 1.3.0 an outage is visible: each instance probes Redis every `RATELIMIT_PROBE_SECONDS`,
