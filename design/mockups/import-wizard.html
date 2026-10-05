@@ -1,0 +1,830 @@
+<!-- Design mockup. Static storyboard; the runnable prototype is design/prototype (route #/import). Console tokens inlined from design/prototype/css/app.css. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import wizard mockup · Exprsn-AI</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Exprsn-AI console prototype — tokens and components.
+   Values are lifted from the design boards (exprsn-ai-design-dc). */
+:root{
+  --bg:#F3F3F2; --nav:#FAFAF9; --panel:#FFFFFF; --panel2:#FAFAF9;
+  --line:#DCDCDA; --line2:#EBEBE9; --sel:#EBEBE9; --bubble:#EBEBE9;
+  --fg:#1A1A19; --fg2:#4E4E49; --muted:#66665F; --faint:#C9C9C5;
+  --accent:#B4380A; --accent-fg:#FFFFFF; --accent-tint:#FBEBE3;
+  --warn-bg:#FBF1D9; --warn-fg:#7A5200;
+  --danger-bg:#FBE7E5; --danger-fg:#A01E18;
+  --info-bg:#E6EEF8; --info-fg:#1B4C8C;
+  --ok-bg:#E6F2EA; --ok-fg:#1C6A38;
+  --meter:#8F8F89; --bar:#1A1A19; --bar-off:#DCDCDA;
+  --shadow:0 8px 24px rgba(26,26,25,.14);
+  --sans:'Source Sans 3','Segoe UI',system-ui,sans-serif;
+  --serif:'Source Serif 4',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sidebar-w:200px; --header-h:48px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#121212; --nav:#161615; --panel:#1B1B1A; --panel2:#1F1F1E;
+    --line:#31312F; --line2:#262625; --sel:#262625; --bubble:#31312F;
+    --fg:#EFEFEC; --fg2:#BDBDB7; --muted:#9C9C95; --faint:#4A4A47;
+    --accent:#FF8150; --accent-fg:#1A0D06; --accent-tint:#3A1E12;
+    --warn-bg:#332708; --warn-fg:#E5B95A;
+    --danger-bg:#3A1616; --danger-fg:#F28B82;
+    --info-bg:#172A44; --info-fg:#8FB6EE;
+    --ok-bg:#12301C; --ok-fg:#7FCB98;
+    --meter:#8A8A84; --bar:#EFEFEC; --bar-off:#31312F;
+    --shadow:0 8px 24px rgba(0,0,0,.5);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121212; --nav:#161615; --panel:#1B1B1A; --panel2:#1F1F1E;
+  --line:#31312F; --line2:#262625; --sel:#262625; --bubble:#31312F;
+  --fg:#EFEFEC; --fg2:#BDBDB7; --muted:#9C9C95; --faint:#4A4A47;
+  --accent:#FF8150; --accent-fg:#1A0D06; --accent-tint:#3A1E12;
+  --warn-bg:#332708; --warn-fg:#E5B95A;
+  --danger-bg:#3A1616; --danger-fg:#F28B82;
+  --info-bg:#172A44; --info-fg:#8FB6EE;
+  --ok-bg:#12301C; --ok-fg:#7FCB98;
+  --meter:#8A8A84; --bar:#EFEFEC; --bar-off:#31312F;
+  --shadow:0 8px 24px rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.4;overflow:hidden}
+a{color:var(--accent)}a:hover{color:var(--fg)}
+button,input,select,textarea{font-family:inherit;font-size:13px;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mono{font-family:var(--mono);font-size:12px}
+.serif{font-family:var(--serif)}
+.muted{color:var(--muted)}.fg2{color:var(--fg2)}
+.num{font-variant-numeric:tabular-nums}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.hstack{display:flex;align-items:center;gap:8px}
+.vstack{display:flex;flex-direction:column;gap:8px}
+.grow{flex-grow:1}
+.wrap{flex-wrap:wrap}
+.right{margin-left:auto}
+.gap4{gap:4px}.gap6{gap:6px}.gap12{gap:12px}.gap16{gap:16px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- Shell ---------- */
+.app{display:flex;height:100%;width:100%}
+.app.signed-out .sidebar,.app.signed-out .header{display:none}
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;gap:8px;padding:10px 8px;background:var(--nav);border-right:1px solid var(--line);overflow-y:auto}
+.tenant{display:flex;align-items:center;justify-content:space-between;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer;text-align:left;width:100%}
+.tenant b{display:block;font-size:13px;line-height:1.15}
+.tenant small{display:block;font-size:11px;color:var(--muted);line-height:1.15}
+.tenant .sw{font-size:10px;color:var(--muted)}
+.navlist{display:flex;flex-direction:column;gap:1px}
+.navlist a{display:flex;align-items:center;gap:10px;height:27px;padding:0 10px;border-radius:5px;text-decoration:none;font-size:13px;font-weight:500;color:var(--fg2)}
+.navlist a svg{flex-shrink:0;width:15px;height:15px}
+.navlist a:hover{background:var(--sel);color:var(--fg)}
+.navlist a.active{background:var(--sel);color:var(--fg);font-weight:600}
+.navlist a.active svg{stroke:var(--accent)}
+.navlist a .count{margin-left:auto;font-size:11px;font-weight:600;color:var(--muted)}
+.navlist a.active .count,.navlist a .count.hot{color:var(--accent)}
+.navhead{padding:4px 10px 0;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.me{margin-top:auto;display:flex;align-items:center;gap:8px;height:36px;padding:0 8px;border-radius:6px;text-decoration:none;color:var(--fg);font-weight:500}
+.me:hover{background:var(--sel)}
+.me.active{background:var(--sel)}
+.avatar{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:10px;font-weight:700;flex-shrink:0}
+.body{flex-grow:1;min-width:0;display:flex;flex-direction:column}
+.header{height:var(--header-h);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--bg)}
+.crumbs{display:flex;align-items:center;gap:8px;min-width:0}
+.crumbs .c1{font-weight:500;color:var(--muted)}
+.crumbs .sep{color:var(--faint)}
+.crumbs .c2{font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.htools{display:flex;align-items:center;gap:8px}
+.cmdbtn{display:flex;align-items:center;justify-content:space-between;width:260px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);cursor:pointer}
+.cmdbtn kbd{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--fg2);cursor:pointer;position:relative}
+.iconbtn:hover{color:var(--fg)}
+.iconbtn.sm{width:26px;height:26px}
+.iconbtn.ghost{border-color:transparent;background:transparent}
+.iconbtn .dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.menubtn{display:none}
+.main{flex-grow:1;min-height:0;display:flex;overflow:hidden}
+.main > .page{flex-grow:1;min-width:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+.main > .page.tight{padding:0;gap:0}
+.main > .page > *{flex-shrink:0}
+.inspector{width:320px;flex-shrink:0;display:flex;flex-direction:column;gap:14px;padding:14px;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto}
+.inspector.w360{width:360px}.inspector.w300{width:300px}
+.leftpane{width:260px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;padding:10px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
+.leftpane.w320{width:320px}.leftpane.w170{width:170px}
+.listlink{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 8px;border-radius:5px;text-decoration:none;color:var(--fg);cursor:pointer;border:0;background:transparent;width:100%;text-align:left;font-family:inherit}
+.listlink:hover{background:var(--sel);color:var(--fg)}
+.listlink.active{background:var(--accent-tint)}
+.listlink > span:first-child{min-width:0;flex-grow:1}
+.listlink .t{font-size:13px;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.listlink .s{font-size:12px;color:var(--muted);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- Page header ---------- */
+.pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.pagehead h1{margin:0;font-size:20px;font-weight:600;line-height:1.2;text-wrap:balance}
+.pagehead .sub{font-size:13px;color:var(--muted);margin-top:2px}
+.pagehead .actions{display:flex;gap:8px;flex-wrap:wrap}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.search{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);width:300px;max-width:100%}
+.search input{border:0;background:transparent;outline:none;flex-grow:1;min-width:0;color:var(--fg)}
+.search input::placeholder{color:var(--muted)}
+
+/* ---------- Buttons ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;background:var(--panel);color:var(--fg);border:1px solid var(--line);text-decoration:none}
+.btn:hover{border-color:var(--muted);color:var(--fg)}
+.btn svg{width:14px;height:14px;flex-shrink:0}
+.btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn.primary:hover{filter:brightness(.94)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--fg2)}
+.btn.ghost:hover{background:var(--sel)}
+.btn.danger{color:var(--danger-fg)}
+.btn.sm{height:26px;padding:0 10px}
+.btn.xs{height:20px;padding:0 6px;font-size:12px}
+.btn[disabled],.btn.disabled{opacity:.5;cursor:not-allowed;pointer-events:none}
+.btn.active{background:var(--sel);border-color:var(--muted)}
+.btn.block{width:100%;justify-content:center}
+
+/* ---------- Badges ---------- */
+.label{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:var(--panel);font-size:12px;font-weight:600;color:var(--fg);white-space:nowrap;vertical-align:middle}
+.label.sm{font-size:11px;height:18px}
+.label .bars{display:inline-flex;align-items:flex-end;gap:1px;height:10px}
+.label .bars i{display:block;width:3px;background:var(--bar-off);border-radius:1px}
+.label .bars i:nth-child(1){height:4px}.label .bars i:nth-child(2){height:6px}.label .bars i:nth-child(3){height:8px}.label .bars i:nth-child(4){height:10px}
+.label .bars i.on{background:var(--bar)}
+.label.restricted{color:var(--danger-fg)}
+.label.restricted .bars i{background:var(--danger-fg)}
+.pill{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:10px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--sel);color:var(--fg2);vertical-align:middle}
+.pill.info{background:var(--info-bg);color:var(--info-fg)}
+.pill.ok{background:var(--ok-bg);color:var(--ok-fg)}
+.pill.warn{background:var(--warn-bg);color:var(--warn-fg)}
+.pill.danger{background:var(--danger-bg);color:var(--danger-fg)}
+.pill.outline{background:var(--panel);border:1px solid var(--line);color:var(--fg2)}
+.pill.accent{background:var(--accent-tint);color:var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:12px;background:var(--panel);font-size:12px;color:var(--fg2);cursor:pointer;white-space:nowrap}
+.chip.on,.chip:hover{border-color:var(--muted);color:var(--fg)}
+.chip .x{color:var(--muted);font-size:11px}
+
+/* ---------- Panels, kv, tables ---------- */
+.panel{display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;min-width:0}
+.panel.pad0{padding:0}
+.panel > .phead{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.panel > .phead .eyebrow{flex-grow:1}
+.panel.tint{background:var(--panel2)}
+.kv{display:grid;gap:10px 16px;grid-template-columns:repeat(var(--cols,2),minmax(0,1fr))}
+.kv > div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.kv .k{font-size:11px;font-weight:600;color:var(--muted)}
+.kv .v{font-size:13px;overflow-wrap:anywhere}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.tablewrap.bare{background:transparent;border:0}
+table.dt{width:100%;border-collapse:collapse;min-width:520px}
+table.dt th{text-align:left;padding:7px 10px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap}
+table.dt td{padding:6px 10px;font-size:13px;border-bottom:1px solid var(--line2);vertical-align:middle;font-variant-numeric:tabular-nums}
+table.dt tr:last-child td{border-bottom:0}
+table.dt tbody tr.row{cursor:pointer}
+table.dt tbody tr.row:hover td{background:var(--sel)}
+table.dt tbody tr.selected td{background:var(--accent-tint)}
+table.dt td.r,table.dt th.r{text-align:right}
+table.dt .actions{white-space:nowrap}
+
+/* ---------- Tabs ---------- */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line)}
+.tabs a,.tabs button{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;background:transparent;text-decoration:none;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer}
+.tabs a:hover,.tabs button:hover{color:var(--fg)}
+.tabs .active{color:var(--fg);font-weight:600;border-bottom-color:var(--accent)}
+.tabs .count{font-size:11px;color:var(--muted)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--panel)}
+.seg button{height:26px;padding:0 10px;border:0;background:transparent;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer}
+.seg button + button{border-left:1px solid var(--line)}
+.seg button.active{background:var(--sel);color:var(--fg)}
+
+/* ---------- Forms ---------- */
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field label,.field .fl{font-size:12px;font-weight:600;color:var(--fg2)}
+.field .hint{font-size:12px;color:var(--muted)}
+.input,.select,.textarea{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--fg);width:100%}
+.textarea{height:auto;min-height:72px;padding:8px 10px;resize:vertical;line-height:1.4}
+.input:focus,.select:focus,.textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 14px) 12px,calc(100% - 10px) 12px;background-size:4px 4px;background-repeat:no-repeat;padding-right:26px}
+.toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px}
+.toggle .sw{width:30px;height:18px;border-radius:9px;background:var(--line);position:relative;transition:background .15s;flex-shrink:0}
+.toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--panel);transition:left .15s}
+.toggle.on .sw{background:var(--accent)}
+.toggle.on .sw::after{left:14px}
+.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.check input{margin:0;accent-color:var(--accent)}
+.formgrid{display:grid;gap:12px 16px;grid-template-columns:repeat(var(--cols,2),minmax(0,1fr))}
+.formgrid .span2{grid-column:1/-1}
+
+/* ---------- Meter, progress, notice, empty, problem ---------- */
+.meter{display:flex;flex-direction:column;gap:4px}
+.meter .mrow{display:flex;justify-content:space-between;font-size:12px;color:var(--fg2)}
+.meter .track{height:6px;background:var(--sel);border-radius:3px;overflow:hidden}
+.meter .fill{height:6px;background:var(--meter);border-radius:3px;transition:width .3s}
+.meter.warn .fill{background:var(--warn-fg)}
+.meter.accent .fill{background:var(--accent)}
+.meter.danger .fill{background:var(--danger-fg)}
+.notice{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:6px;font-size:13px}
+.notice.warn{background:var(--warn-bg);color:var(--warn-fg)}
+.notice.info{background:var(--info-bg);color:var(--info-fg)}
+.notice.danger{background:var(--danger-bg);color:var(--danger-fg)}
+.notice.ok{background:var(--ok-bg);color:var(--ok-fg)}
+.notice.accent{background:var(--accent-tint);color:var(--fg)}
+.notice .grow{flex-grow:1}
+.notice a{color:inherit;font-weight:600}
+.notice .btn{height:26px;padding:0 10px}
+.empty{display:flex;flex-direction:column;gap:8px;padding:24px;align-items:flex-start}
+.empty h3{margin:0;font-size:14px;font-weight:600}
+.empty p{margin:0;color:var(--fg2);max-width:52ch}
+.problem{display:flex;flex-direction:column;gap:6px;padding:14px;background:var(--panel);border:1px solid var(--danger-fg);border-radius:6px}
+.problem .ptitle{font-size:14px;font-weight:600;color:var(--danger-fg)}
+.problem .ptext{color:var(--fg2)}
+.problem .trace{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.ctxblock{display:flex;flex-direction:column;gap:6px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px}
+.ctxblock .chead{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:var(--fg2)}
+.ctxblock .chead .eyebrow{font-size:10px;margin-right:6px}
+.ctxblock pre{margin:0;font-family:var(--mono);font-size:12px;color:var(--fg2);white-space:pre-wrap;overflow-wrap:anywhere}
+.codebox{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--fg);overflow:auto;white-space:pre}
+.codebox .ln{display:inline-block;width:2.2em;color:var(--faint);user-select:none}
+.codebox .k{color:var(--accent)}.codebox .s{color:var(--ok-fg)}.codebox .c{color:var(--muted)}.codebox .n{color:var(--info-fg)}
+.reviewbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--info-bg);border-radius:6px;color:var(--info-fg)}
+.reviewbar .grow{flex-grow:1}
+.divider{height:1px;background:var(--line);margin:4px 0}
+.timeline{display:flex;flex-direction:column;gap:0}
+.timeline .tl{display:grid;grid-template-columns:18px 1fr;gap:10px}
+.timeline .tl .dotcol{display:flex;flex-direction:column;align-items:center}
+.timeline .tl .dotcol i{width:9px;height:9px;border-radius:50%;background:var(--muted);margin-top:5px;flex-shrink:0}
+.timeline .tl .dotcol i.ok{background:var(--ok-fg)}.timeline .tl .dotcol i.warn{background:var(--warn-fg)}.timeline .tl .dotcol i.danger{background:var(--danger-fg)}.timeline .tl .dotcol i.accent{background:var(--accent)}
+.timeline .tl .dotcol b{width:1px;flex-grow:1;background:var(--line);min-height:12px}
+.timeline .tl .tbody{padding-bottom:12px}
+.stat{display:flex;flex-direction:column;gap:2px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.stat .n{font-size:22px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat .l{font-size:12px;color:var(--muted)}
+.stat .d{font-size:12px;color:var(--fg2)}
+.stats{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.grid2{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid3{display:grid;gap:14px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.grid4{display:grid;gap:14px;grid-template-columns:repeat(4,minmax(0,1fr))}
+.cols{display:flex;gap:14px;align-items:flex-start}
+.cols > *{min-width:0}
+.spark{display:inline-flex;align-items:flex-end;gap:2px;height:22px}
+.spark i{display:block;width:4px;background:var(--meter);border-radius:1px}
+.spark i.hi{background:var(--accent)}
+.state-strip{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.state-card{display:flex;flex-direction:column;gap:6px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;cursor:pointer;text-align:left;font-family:inherit}
+.state-card:hover{border-color:var(--muted)}
+.state-card .st{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.state-card .st.danger{color:var(--danger-fg)}.state-card .st.warn{color:var(--warn-fg)}.state-card .st.ok{color:var(--ok-fg)}.state-card .st.info{color:var(--info-fg)}.state-card .st.neutral{color:var(--fg2)}
+.state-card .sd{font-size:13px;color:var(--fg2)}
+
+/* ---------- Overlays ---------- */
+.overlay{position:fixed;inset:0;background:rgba(26,26,25,.35);display:flex;align-items:flex-start;justify-content:center;padding:80px 16px 16px;z-index:50;overflow:auto}
+.overlay.center{align-items:center;padding:16px}
+.modal{width:min(560px,100%);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:14px;padding:18px}
+.modal.wide{width:min(820px,100%)}
+.modal h2{margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.modal .mfoot{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--panel);border-left:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:14px;padding:18px;z-index:51;overflow:auto}
+.drawer h2{margin:0;font-size:16px;font-weight:600}
+.palette{width:min(620px,100%);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+.palette input{width:100%;height:44px;padding:0 16px;border:0;border-bottom:1px solid var(--line);background:transparent;font-size:15px;outline:none;color:var(--fg)}
+.palette .plist{max-height:min(420px,60vh);overflow:auto;padding:6px}
+.palette .pgroup{padding:8px 10px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.palette .pitem{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:5px;cursor:pointer;color:var(--fg)}
+.palette .pitem:hover,.palette .pitem.active{background:var(--sel)}
+.palette .pitem .pk{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.palette .pitem .ps{font-size:12px;color:var(--muted)}
+.toasts{position:fixed;bottom:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
+.toast{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--fg);color:var(--bg);border-radius:6px;box-shadow:var(--shadow);font-size:13px;max-width:360px;animation:tin .18s ease-out}
+.toast.warn{background:var(--warn-bg);color:var(--warn-fg)}
+.toast.danger{background:var(--danger-bg);color:var(--danger-fg)}
+.toast.ok{background:var(--ok-bg);color:var(--ok-fg)}
+@keyframes tin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.popover{position:absolute;top:calc(100% + 6px);right:0;width:340px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:10px;z-index:40;display:flex;flex-direction:column;gap:6px}
+.popover .ph{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:2px 4px}
+.popover .pi{display:flex;flex-direction:column;gap:2px;padding:8px;border-radius:5px;cursor:pointer;border:0;background:transparent;text-align:left;font-family:inherit;color:var(--fg)}
+.popover .pi:hover{background:var(--sel)}
+.popover .pi .t{font-size:13px;font-weight:600}
+.popover .pi .s{font-size:12px;color:var(--muted)}
+.dropdown{position:absolute;top:calc(100% + 4px);left:0;min-width:180px;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);padding:4px;z-index:40;display:flex;flex-direction:column}
+.dropdown button{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:0;background:transparent;border-radius:4px;text-align:left;font-size:13px;color:var(--fg);cursor:pointer;font-family:inherit}
+.dropdown button:hover{background:var(--sel)}
+.dropdown button.on{font-weight:600}
+.dropdown .dh{padding:6px 10px 2px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.relative{position:relative}
+.skeleton{background:linear-gradient(90deg,var(--sel) 25%,var(--line2) 50%,var(--sel) 75%);background-size:200% 100%;animation:sk 1.2s infinite;border-radius:4px;height:12px}
+@keyframes sk{from{background-position:200% 0}to{background-position:-200% 0}}
+.blink{animation:blink 1s steps(2) infinite}
+@keyframes blink{to{visibility:hidden}}
+.prototip{position:fixed;left:16px;bottom:16px;z-index:45;display:flex;gap:6px}
+.map-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.map-card{display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer;text-align:left;font-family:inherit;color:var(--fg)}
+.map-card:hover{border-color:var(--accent)}
+.map-card .t{font-weight:600}
+.map-card .s{font-size:12px;color:var(--muted)}
+
+/* ---------- Responsive ---------- */
+@media (max-width:1100px){
+  .inspector,.inspector.w360{width:280px}
+  .grid4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:900px){
+  .sidebar{position:fixed;top:0;bottom:0;left:0;z-index:55;transform:translateX(-100%);transition:transform .18s;box-shadow:none;width:240px}
+  .app.nav-open .sidebar{transform:none;box-shadow:var(--shadow)}
+  .menubtn{display:inline-flex}
+  .cmdbtn{width:36px;padding:0}
+  .cmdbtn span,.cmdbtn kbd{display:none}
+  .cmdbtn::before{content:"⌕";font-size:16px;width:100%;text-align:center}
+  .main{flex-direction:column;overflow:auto}
+  .main > .page{overflow:visible;padding:12px}
+  .inspector,.inspector.w360,.inspector.w300{width:100%;border-left:0;border-top:1px solid var(--line)}
+  .leftpane,.leftpane.w320{width:100%;border-right:0;border-bottom:1px solid var(--line);max-height:220px}
+  .kv,.formgrid{--cols:1}
+  .grid2,.grid3,.grid4{grid-template-columns:1fr}
+  .cols{flex-direction:column}
+  .cols > *{width:100%!important}
+  .search{width:100%}
+  .drawer{width:100%}
+}
+
+</style>
+<style>
+/* Mockup storyboard layout. Everything inside a .frame uses the console's own classes and tokens. */
+body{overflow:auto}
+.doc{max-width:1280px;margin:0 auto;padding:28px 24px 80px;display:flex;flex-direction:column;gap:36px}
+.doc h1{font-family:var(--serif);font-size:30px;font-weight:600;margin:0;line-height:1.15;text-wrap:balance}
+.doc h2{font-size:18px;font-weight:600;margin:0}
+.doc h3{font-size:14px;font-weight:600;margin:0}
+.doc p{margin:0;max-width:72ch;color:var(--fg2)}
+.doc .lede{font-size:15px;color:var(--fg2);max-width:80ch}
+.meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.topbar{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.topbar nav{display:flex;gap:4px;flex-wrap:wrap}
+.topbar nav a{font-size:12px;font-weight:600;color:var(--fg2);text-decoration:none;padding:4px 8px;border-radius:5px}
+.topbar nav a:hover{background:var(--sel);color:var(--fg)}
+.section{display:flex;flex-direction:column;gap:14px;scroll-margin-top:70px}
+.frame{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:18px;align-items:start}
+.frame .screen{border:1px solid var(--line);border-radius:8px;background:var(--bg);overflow:hidden;box-shadow:var(--shadow)}
+.frame .screen .fhead{height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--nav);font-size:12px;color:var(--muted)}
+.frame .screen .fhead b{color:var(--fg)}
+.frame .screen .fbody{display:flex;min-height:420px}
+.frame .screen .fpage{flex-grow:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px}
+.frame .screen .finsp{width:250px;flex-shrink:0;border-left:1px solid var(--line);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:10px;font-size:12px}
+.notes{display:flex;flex-direction:column;gap:10px}
+.notes ol{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.notes li{display:grid;grid-template-columns:22px 1fr;gap:8px;font-size:13px;color:var(--fg2)}
+.notes li b{color:var(--fg)}
+.callout,.notes li .n{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-fg);font-size:11px;font-weight:700;flex-shrink:0;vertical-align:middle}
+.callout{position:relative;top:-1px;margin-left:4px}
+.steps{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:12px}
+.steps span{display:inline-flex;align-items:center;gap:6px;padding:0 8px;height:28px;color:var(--muted);font-weight:500}
+.steps span.cur{color:var(--fg);font-weight:700}.steps span.done{color:var(--fg2)}
+.steps .n{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);font-size:11px}
+.steps .cur .n{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}.steps .done .n{background:var(--fg2);color:var(--bg);border-color:var(--fg2)}
+.steps .sep{color:var(--faint)}
+.flow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.flow .box{display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.flow .box .t{font-weight:600}
+.flow .box .s{font-size:12px;color:var(--muted)}
+.entry{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.repos{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.repo{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px}
+.repo.on{border-color:var(--accent);background:var(--accent-tint)}
+.repo b{font-size:13px}
+.minitable table.dt{min-width:0}
+.minitable table.dt td,.minitable table.dt th{padding:5px 8px;font-size:12px}
+.frame .notice,.doc .notice{display:block}.frame .notice .btn{margin-left:6px}
+.fb{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line)}
+.facets{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px}
+.facets .fl{display:flex;flex-direction:column;gap:3px;font-size:12px}
+.facets .fl .row{display:flex;justify-content:space-between;padding:3px 6px;border-radius:4px;color:var(--fg)}
+.facets .fl .row.on{background:var(--accent-tint)}
+.facets .fl .row span:last-child{color:var(--muted)}
+.twocol{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.theme{margin-left:auto}
+@media (max-width:1000px){.frame{grid-template-columns:1fr}.flow{grid-template-columns:repeat(2,1fr)}.entry,.twocol{grid-template-columns:1fr}.frame .screen .fbody{flex-direction:column}.frame .screen .finsp{width:100%;border-left:0;border-top:1px solid var(--line)}.facets{grid-template-columns:1fr}}
+@media print{.topbar{position:static}.frame .screen{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="doc">
+
+<div class="topbar">
+  <span class="eyebrow">Exprsn-AI console · design mockup</span>
+  <nav><a href="#overview">Overview</a><a href="#entry">Entry points</a><a href="#s1">1 Source</a><a href="#s2">2 Browse</a><a href="#s3">3 Select</a><a href="#s4">4 Review</a><a href="#s5">5 Destination</a><a href="#s6">6 Confirm</a><a href="#queue">Imports</a><a href="#repos">Repositories</a><a href="#model">Data model</a><a href="#states">States</a><a href="#backlog">1.5.0 rollup</a></nav>
+  <button type="button" class="btn sm theme" id="theme">Theme: system</button>
+</div>
+
+<header class="section" id="overview">
+  <h1>Model and dataset import wizard</h1>
+  <p class="lede">One guided path from a public repository to a registered draft model, a versioned training dataset, a classifier evaluation set or a knowledge set. It extends the Model catalog, Training, Classifiers and Knowledge screens instead of replacing them: every result lands where those screens already govern it, with the licence, label, digest and requester recorded on the manifest.</p>
+  <div class="meta"><span>Release 1.5.0 rollup, console screens epic B-34</span><span>Prototype board: <span class="mono">design/prototype/js/screens/import.js</span> (route <span class="mono">#/import</span>)</span><span>5 October 2026</span><span>Example data for the Northwind tenant</span></div>
+  <div class="flow">
+    <div class="box"><span class="eyebrow">1</span><span class="t">Source</span><span class="s">Model or dataset; pick a repository or the import share</span></div>
+    <div class="box"><span class="eyebrow">2</span><span class="t">Browse</span><span class="s">Search the snapshot or live source; filter by classification, format, licence, size, region</span></div>
+    <div class="box"><span class="eyebrow">3</span><span class="t">Select</span><span class="s">Tags, variants and files; configurations, splits, resources and a schema preview</span></div>
+    <div class="box"><span class="eyebrow">4</span><span class="t">Review</span><span class="s">Format, pickle, licence, access, size, PII, connectivity checks; label and attribution</span></div>
+    <div class="box"><span class="eyebrow">5</span><span class="t">Destination</span><span class="s">Draft tag and pools; dataset version; classifier eval set; knowledge set with refresh schedule</span></div>
+    <div class="box"><span class="eyebrow">6</span><span class="t">Confirm</span><span class="s">Summary, start or queue for the bundle, progress and the link to the result</span></div>
+  </div>
+  <div class="twocol">
+    <div class="panel"><div class="eyebrow">Design rules carried over</div>
+      <ul style="margin:0;padding-left:18px;color:var(--fg2);display:flex;flex-direction:column;gap:4px">
+        <li>Weights enter only through the signed import path: GGUF and safetensors are accepted, pickle checkpoints are refused before anything is written.</li>
+        <li>Connected deployments fetch through the staging proxy; air-gapped ones queue the request for the weekly bundle. The wizard is the same, only step 6 differs.</li>
+        <li>Licences are recorded on the manifest and checked against the tenant allow list. Non-commercial terms raise an exception for legal; an unknown licence waits for review before approval.</li>
+        <li>Datasets are scrubbed, hashed and versioned exactly as Training does today; a knowledge set is a knowledge base whose single source has kind <span class="mono">dataset</span>.</li>
+        <li>Every control works in light and dark themes with the console's tokens; copy stays plain and specific.</li>
+      </ul></div>
+    <div class="panel"><div class="eyebrow">Repositories in the first cut</div>
+      <div class="repos">
+        <div class="repo"><b>Hugging Face Hub</b><span class="muted">Global · models, datasets</span><span>Hub API, Git LFS, gated repos, read token</span></div>
+        <div class="repo"><b>Ollama library</b><span class="muted">Global · models</span><span>OCI registry, manifests and blobs</span></div>
+        <div class="repo"><b>ModelScope</b><span class="muted">Asia, China · models, datasets</span><span>Hub API mirror</span></div>
+        <div class="repo"><b>data.gov</b><span class="muted">US · datasets</span><span>CKAN API 3, DCAT-US</span></div>
+        <div class="repo"><b>data.europa.eu</b><span class="muted">EU · datasets</span><span>DCAT-AP 3.0, SPARQL</span></div>
+        <div class="repo"><b>Eurostat and ECB</b><span class="muted">EU · time series</span><span>SDMX 2.1, JSON-stat</span></div>
+        <div class="repo"><b>data.gov.sg</b><span class="muted">Asia, Singapore</span><span>Datastore API v2</span></div>
+        <div class="repo"><b>data.go.jp, e-Stat</b><span class="muted">Asia, Japan</span><span>CKAN, e-Stat API 3.0</span></div>
+        <div class="repo"><b>data.gov.in</b><span class="muted">Asia, India</span><span>OGD API with key</span></div>
+        <div class="repo"><b>data.go.kr</b><span class="muted">Asia, Korea</span><span>Open API, service key, disabled until recorded</span></div>
+        <div class="repo"><b>OpenML</b><span class="muted">Global · tabular</span><span>REST, parquet and ARFF</span></div>
+        <div class="repo"><b>Zenodo</b><span class="muted">EU, CERN · DOIs</span><span>InvenioRDM REST</span></div>
+        <div class="repo"><b>Kaggle</b><span class="muted">Global · needs token</span><span>Kaggle API 1.6</span></div>
+        <div class="repo"><b>Import share</b><span class="muted">Internal · signed bundles</span><span>Weekly bundle through the diode</span></div>
+      </div></div>
+  </div>
+</header>
+
+<section class="section" id="entry">
+  <h2>Entry points on the existing screens</h2>
+  <p>The wizard opens from the four screens it enhances, with the kind and destination preselected. It also has three palette commands and its own route for the Imports queue and the Repositories registry.</p>
+  <div class="entry">
+    <div class="panel"><div class="eyebrow">Models</div><div class="hstack wrap gap6"><button type="button" class="btn sm">Browse repositories</button><button type="button" class="btn sm">Import safetensors</button><button type="button" class="btn sm primary">Request import</button></div><p style="font-size:12px">Opens the wizard for a model with destination <b>Model catalog</b>. Result: a draft tag with digest, licence and pools, waiting for evals.</p></div>
+    <div class="panel"><div class="eyebrow">Training, Datasets tab</div><div class="hstack wrap gap6"><button type="button" class="btn sm">Import dataset</button><button type="button" class="btn sm">Register dataset version</button></div><p style="font-size:12px">Opens the wizard for a dataset with destination <b>Training dataset</b>. Result: a scrubbed, hashed version with splits and a scrub report.</p></div>
+    <div class="panel"><div class="eyebrow">Classifiers</div><div class="hstack wrap gap6"><button type="button" class="btn sm">Import eval set</button><button type="button" class="btn sm">Run batch classification</button><button type="button" class="btn sm primary">Test text</button></div><p style="font-size:12px">Destination <b>Classifier eval set</b>: rows become the evaluation set of a new or existing classifier; a classifier model imports as an engine.</p></div>
+    <div class="panel"><div class="eyebrow">Knowledge</div><div class="hstack wrap gap6"><button type="button" class="btn sm">Create from dataset</button><button type="button" class="btn sm">Reindex</button><button type="button" class="btn sm primary">Add source</button></div><p style="font-size:12px">Destination <b>Knowledge set</b>: a knowledge base built from the rows, with column mapping, embedding model, label floor and a refresh schedule that follows the publisher.</p></div>
+  </div>
+</section>
+
+<section class="section" id="s1">
+  <h2>Step 1, Source</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Source</div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Import models and datasets</h1><div class="sub">Browse repositories, record licence and label, and register the result</div></div><div class="actions"><button type="button" class="btn sm">Connectivity: direct <span class="callout">1</span></button><button type="button" class="btn sm primary">New import</button></div></div>
+        <nav class="tabs"><button type="button" class="active">New import</button><button type="button">Imports <span class="count">6</span></button><button type="button">Repositories <span class="count">14</span></button></nav>
+        <div class="steps"><span class="cur"><i class="n">1</i>Source</span><span class="sep">›</span><span><i class="n">2</i>Browse</span><span class="sep">›</span><span><i class="n">3</i>Select</span><span class="sep">›</span><span><i class="n">4</i>Review</span><span class="sep">›</span><span><i class="n">5</i>Destination</span><span class="sep">›</span><span><i class="n">6</i>Confirm</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Step 1 of 6</div><span class="fg2" style="font-weight:600">Choose where to import from</span></div>
+          <div class="hstack wrap gap12"><span class="fg2">What are you importing?</span><div class="seg"><button type="button">A model</button><button type="button" class="active">A dataset</button></div><span class="callout">2</span></div>
+          <div class="repos">
+            <div class="repo"><div class="hstack"><b class="grow">Hugging Face Hub</b><span class="pill ok">reachable</span></div><span class="muted">huggingface.co · Global</span><span>1.9M models, 420k datasets</span></div>
+            <div class="repo on"><div class="hstack"><b class="grow">data.gov</b><span class="pill ok">reachable</span></div><span class="muted">catalog.data.gov · US</span><span>306k datasets, 12k publishers</span></div>
+            <div class="repo"><div class="hstack"><b class="grow">data.europa.eu</b><span class="pill ok">reachable</span></div><span class="muted">data.europa.eu · EU</span><span>1.7M datasets, 36 countries</span></div>
+            <div class="repo"><div class="hstack"><b class="grow">Eurostat</b><span class="pill ok">reachable</span></div><span class="muted">ec.europa.eu/eurostat · EU</span><span>7,900 tables</span></div>
+            <div class="repo"><div class="hstack"><b class="grow">data.gov.sg</b><span class="pill ok">reachable</span></div><span class="muted">data.gov.sg · Asia, Singapore</span><span>4,100 datasets</span></div>
+            <div class="repo"><div class="hstack"><b class="grow">ModelScope</b><span class="pill warn">rate limited</span></div><span class="muted">modelscope.cn · Asia, China</span><span>70k models, 9k datasets</span></div>
+            <div class="repo" style="opacity:.55"><div class="hstack"><b class="grow">data.go.kr</b><span class="pill">disabled</span></div><span class="muted">data.go.kr · Asia, Korea</span><span>service key not recorded <span class="callout">3</span></span></div>
+            <div class="repo"><div class="hstack"><b class="grow">Import share</b><span class="pill ok">reachable</span></div><span class="muted">staging/import · Internal</span><span>3 bundles waiting</span></div>
+          </div>
+          <div class="fb"><button type="button" class="btn sm" disabled>Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+        </div>
+      </div>
+      <div class="finsp"><div class="hstack"><b>data.gov</b><span class="pill ok">reachable</span></div><div class="kv" style="--cols:1"><div><div class="k">Protocol</div><div class="v">CKAN API 3, DCAT-US 1.1</div></div><div><div class="k">Snapshot</div><div class="v">05 Oct 05:00, harvest daily</div></div><div><div class="k">Licence policy</div><div class="v">US public domain unless the resource states otherwise</div></div></div><div class="notice info" style="font-size:12px">Browsing uses the metadata snapshot. Files, digests and licences are re-read when the import runs. <span class="callout">4</span></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Connectivity</b> is an instance setting surfaced here: direct through the staging proxy, or weekly bundle for air-gapped deployments. It changes only step 6.</span></li>
+      <li><span class="n">2</span><span><b>Kind first.</b> The repository grid filters to sources that offer that kind; a dataset import never shows the Ollama library.</span></li>
+      <li><span class="n">3</span><span><b>Disabled sources stay visible</b> with the reason, so an admin knows what a recorded key would unlock. Clicking one toasts the reason and points to Repositories.</span></li>
+      <li><span class="n">4</span><span>The inspector explains the snapshot model: catalogues are harvested on a schedule through the proxy; nothing is trusted from the snapshot at import time.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="s2">
+  <h2>Step 2, Browse and filter by classification</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Browse</div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Source</span><span class="sep">›</span><span class="cur"><i class="n">2</i>Browse</span><span class="sep">›</span><span><i class="n">3</i>Select</span><span class="sep">›</span><span><i class="n">4</i>Review</span><span class="sep">›</span><span><i class="n">5</i>Destination</span><span class="sep">›</span><span><i class="n">6</i>Confirm</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Step 2 of 6</div><span class="fg2" style="font-weight:600">Browse Hugging Face Hub</span></div>
+          <div class="toolbar"><div class="search" style="width:240px">⌕ <input type="search" value="finance sentiment"></div><button type="button" class="chip on">classification: text-classification <span class="x">×</span></button><span class="callout">1</span><span class="muted right" style="font-size:12px">4 of 11 in snapshot · live search on <span class="callout">2</span></span></div>
+          <div class="facets">
+            <div class="fl"><div class="eyebrow">Classification</div><div class="row on"><span>text-classification</span><span>4</span></div><div class="row"><span>instruction</span><span>3</span></div><div class="row"><span>pretraining</span><span>1</span></div><div class="row"><span>evaluation</span><span>1</span></div><div class="eyebrow" style="margin-top:6px">Domain</div><div class="row"><span>finance</span><span>3</span></div><div class="row"><span>security</span><span>1</span></div><div class="eyebrow" style="margin-top:6px">Licence</div><div class="row"><span>cc-by-4.0</span><span>1</span></div><div class="row"><span>cc-by-nc-sa-4.0</span><span>1</span></div><div class="row"><span>mit</span><span>2</span></div><div class="eyebrow" style="margin-top:6px">Rows</div><div class="row"><span>under 10k rows</span><span>2</span></div><div class="row"><span>10k to 1M rows</span><span>2</span></div><span class="callout">3</span></div>
+            <div class="minitable tablewrap"><table class="dt"><thead><tr><th>Dataset</th><th>Publisher</th><th>Classification</th><th>Rows</th><th>Licence</th><th>Updates</th></tr></thead><tbody>
+              <tr class="row selected"><td><b>Financial PhraseBank</b><div class="mono muted" style="font-size:11px">takala/financial_phrasebank</div></td><td>Aalto University</td><td>text-classification<div class="muted">finance</div></td><td>4,840</td><td>cc-by-nc-sa-4.0</td><td>static</td></tr>
+              <tr class="row"><td><b>Twitter financial news sentiment</b><div class="mono muted" style="font-size:11px">zeroshot/twitter-financial-news-sentiment</div></td><td>zeroshot</td><td>text-classification<div class="muted">finance</div></td><td>11,931</td><td>mit</td><td>static</td></tr>
+              <tr class="row"><td><b>Banking77</b><div class="mono muted" style="font-size:11px">PolyAI/banking77</div></td><td>PolyAI</td><td>text-classification<div class="muted">finance</div></td><td>13,083</td><td>cc-by-4.0</td><td>static</td></tr>
+              <tr class="row"><td><b>Prompt injections</b><div class="mono muted" style="font-size:11px">deepset/prompt-injections</div></td><td>deepset</td><td>text-classification<div class="muted">security</div></td><td>662</td><td>apache-2.0</td><td>static</td></tr>
+            </tbody></table></div>
+          </div>
+          <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+        </div>
+      </div>
+      <div class="finsp"><div class="mono" style="font-size:13px;font-weight:500">Financial PhraseBank</div><div class="mono muted" style="font-size:11px">takala/financial_phrasebank</div><div class="hstack wrap gap4"><span class="pill outline">Hugging Face Hub</span><span class="pill info">text-classification</span><span class="pill danger">cc-by-nc-sa-4.0</span> <span class="callout">4</span></div><p style="font-size:12px">Sentences from financial news annotated positive, negative or neutral by 5 to 8 annotators. Four agreement configurations.</p><div class="kv" style="--cols:1"><div><div class="k">Publisher</div><div class="v">Aalto University</div></div><div><div class="k">Rows</div><div class="v">4,840</div></div><div><div class="k">Configurations</div><div class="v">sentences_allagree, 75agree, 66agree, 50agree</div></div><div><div class="k">Columns</div><div class="v">2, none flagged</div></div></div><div class="eyebrow">Suggested destination</div><div class="hstack wrap gap4"><span class="chip on">Training dataset</span><span class="chip">Classifier eval set</span> <span class="callout">5</span></div><div class="hstack gap6"><button type="button" class="btn sm">Open card on source</button><button type="button" class="btn sm primary">Select</button></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Active filters are chips</b> in the toolbar and can be cleared one at a time. Search and facets both narrow the table.</span></li>
+      <li><span class="n">2</span><span><b>Snapshot or live.</b> A reachable source answers searches live through the proxy; a rate-limited or air-gapped one shows the snapshot date and says live search is off.</span></li>
+      <li><span class="n">3</span><span><b>Classification facets</b> follow the source's own taxonomy: pipeline tags for models (text-generation, text-classification, feature-extraction, speech), task categories, domain, format, licence, size, region and update cadence for datasets. Counts come from the snapshot.</span></li>
+      <li><span class="n">4</span><span>The inspector is the card. Licence pills are coloured by tenant policy: green allowed, amber unknown, red outside policy.</span></li>
+      <li><span class="n">5</span><span><b>Suggested destinations</b> are derived from the classification: text-classification suggests a classifier eval set, government and time-series data suggest a knowledge set, instruction data suggests a training dataset.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="s3">
+  <h2>Step 3, Select files, splits and a schema preview</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Select</div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Source</span><span class="sep">›</span><span class="done"><i class="n">2</i>Browse</span><span class="sep">›</span><span class="cur"><i class="n">3</i>Select</span><span class="sep">›</span><span><i class="n">4</i>Review</span><span class="sep">›</span><span><i class="n">5</i>Destination</span><span class="sep">›</span><span><i class="n">6</i>Confirm</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Step 3 of 6</div><span class="fg2" style="font-weight:600">Select from Consumer Complaint Database</span></div>
+          <div class="formgrid" style="--cols:3"><div class="field"><label>Configuration</label><select class="select"><option>complaints</option></select></div><div class="field"><label>Row limit</label><input class="input" value="all rows" readonly><div class="hint"><span class="toggle"><span class="sw"></span>Sample rows only</span> <span class="callout">1</span></div></div><div class="field"><label>Format to fetch</label><select class="select"><option>csv</option><option>json</option><option>api</option></select></div></div>
+          <div class="eyebrow">Resources</div>
+          <div class="minitable tablewrap"><table class="dt"><thead><tr><th></th><th>Resource</th><th>Format</th><th>Size</th></tr></thead><tbody><tr><td><input type="checkbox" checked></td><td class="mono">complaints.csv.zip</td><td>csv</td><td>1.9 GB</td></tr><tr><td><input type="checkbox"></td><td class="mono">complaints.json.zip</td><td>json</td><td>2.4 GB</td></tr><tr><td><input type="checkbox"></td><td class="mono">Search API, /data-research/consumer-complaints/search/api/v1/</td><td>api</td><td>streamed <span class="callout">2</span></td></tr></tbody></table></div>
+          <div class="eyebrow">Schema preview, first 2,000 rows <span class="callout">3</span></div>
+          <div class="minitable tablewrap"><table class="dt"><thead><tr><th>Column</th><th>Type</th><th>Sample value</th><th>PII</th></tr></thead><tbody>
+            <tr><td><b>Date received</b></td><td>date</td><td class="fg2">2026-09-30</td><td class="muted">none</td></tr>
+            <tr><td><b>Product</b></td><td>class (18)</td><td class="fg2">Credit card</td><td class="muted">none</td></tr>
+            <tr><td><b>Consumer complaint narrative</b></td><td>string, free text</td><td class="fg2">I was charged twice for…</td><td><span class="pill warn">free text may name people and account numbers</span></td></tr>
+            <tr><td><b>State, ZIP code</b></td><td>string</td><td class="fg2">TX, 750XX</td><td><span class="pill warn">quasi-identifier</span></td></tr>
+            <tr><td><b>Company response to consumer</b></td><td>class (8)</td><td class="fg2">Closed with explanation</td><td class="muted">none</td></tr>
+          </tbody></table></div>
+          <div class="notice warn">2 columns flagged by the PII classifier. The scrub step masks free text and generalises quasi-identifiers; you can also drop a column under Destination.</div>
+          <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+        </div>
+      </div>
+      <div class="finsp"><div class="mono" style="font-size:13px;font-weight:500">Consumer Complaint Database</div><div class="hstack wrap gap4"><span class="pill outline">data.gov</span><span class="pill info">government</span><span class="pill ok">us-pd</span></div><div class="kv" style="--cols:1"><div><div class="k">Publisher</div><div class="v">Consumer Financial Protection Bureau</div></div><div><div class="k">Rows</div><div class="v">7.4M</div></div><div><div class="k">Updates</div><div class="v">daily, last 04 Oct 2026</div></div></div><div class="divider"></div><div class="eyebrow">Selected</div><div class="kv" style="--cols:1"><div><div class="k">Items</div><div class="v">all · complaints</div></div><div><div class="k">Size</div><div class="v">1.9 GB</div></div><div><div class="k">Destination</div><div class="v">Knowledge set</div></div></div><span class="callout">4</span></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Sampling</b> is offered everywhere and required above the 500 GB quota (FineWeb-Edu at 3.7 TB). A sample streams in publication order with a fixed seed.</span></li>
+      <li><span class="n">2</span><span><b>API resources</b> (CKAN datastore, Socrata, SDMX, e-Stat, OGD) are first-class: the import pages through them and records the query, so a refresh can repeat it.</span></li>
+      <li><span class="n">3</span><span><b>Schema preview</b> types the columns from a 2,000-row sample and runs the PII classifier over them. The flags feed the Review step and the column mapping in Destination.</span></li>
+      <li><span class="n">4</span><span>For models the same step lists Ollama tags or GGUF variants with resulting tag names, and repository files with their format verdict (accepted, optional, pickle refused). Gated repositories show no files until the gate is accepted with the recorded token.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="s4">
+  <h2>Step 4, Review: policy checks, licence and label</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Review</div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Source</span><span class="sep">›</span><span class="done"><i class="n">2</i>Browse</span><span class="sep">›</span><span class="done"><i class="n">3</i>Select</span><span class="sep">›</span><span class="cur"><i class="n">4</i>Review</span><span class="sep">›</span><span><i class="n">5</i>Destination</span><span class="sep">›</span><span><i class="n">6</i>Confirm</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Step 4 of 6</div><span class="fg2" style="font-weight:600">Policy checks, licence and label</span></div>
+          <div class="minitable tablewrap"><table class="dt"><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
+            <tr><td><b>Format</b></td><td><span class="pill ok">passed</span></td><td class="fg2">2 GGUF variants. Pickle scan runs again at staging.</td></tr>
+            <tr><td><b>Licence</b></td><td><span class="pill danger">not allowed</span></td><td class="fg2">CC BY-NC-SA 4.0 is outside tenant policy (open licences only). Request an exception or choose another source. <span class="callout">1</span></td></tr>
+            <tr><td><b>Access</b></td><td><span class="pill warn">gated</span></td><td class="fg2">The repository is gated. Accept the licence on huggingface.co with the recorded token before files can be fetched. <span class="callout">2</span></td></tr>
+            <tr><td><b>Serving path</b></td><td><span class="pill ok">ollama</span></td><td class="fg2">Registers as a draft tag; conformance and hardware evals run before approval.</td></tr>
+            <tr><td><b>Connectivity</b></td><td><span class="pill ok">direct</span></td><td class="fg2">Fetched through the staging proxy now; digests are recorded as the blobs land.</td></tr>
+          </tbody></table></div>
+          <div class="notice danger">A check is failing. Fix it or go back and change the selection; Next stays disabled.</div>
+          <div class="panel tint"><div class="eyebrow">Licence and label</div>
+            <div class="formgrid" style="--cols:3"><div class="field"><label>Licence recorded on the manifest</label><input class="input" value="CC BY-NC-SA 4.0 (non-commercial)" readonly></div><div class="field"><label>Max classification label</label><select class="select"><option>internal</option></select><div class="hint">Highest data label the model may serve <span class="callout">3</span></div></div><div class="field"><label>Attribution</label><input class="input" value="Aalto University, Hugging Face Hub"></div></div>
+            <div class="hstack wrap gap12"><label class="check"><input type="checkbox"><span>Licence reviewed by legal for commercial internal use</span></label><button type="button" class="btn sm">Request licence exception</button></div>
+          </div>
+          <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary" disabled>Next</button></div>
+        </div>
+      </div>
+      <div class="finsp"><div class="eyebrow">Checks by kind</div><div class="kv" style="--cols:1"><div><div class="k">Models</div><div class="v">Format and pickle scan, licence, access (gated), serving path (Ollama, classifier worker, media workers), connectivity</div></div><div><div class="k">Datasets</div><div class="v">Size against quota, licence, PII preview, refresh cadence, connectivity</div></div><div><div class="k">Blocking</div><div class="v">Any red check disables Next. Amber checks explain what will happen and let the import continue.</div></div></div><span class="callout">4</span></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Licence policy</b> is the tenant allow list (Apache, MIT, Llama, Gemma, public domain, CC BY, CC BY-SA, ODC, national open licences). Anything else raises an exception request to legal; the import can queue and waits for the decision.</span></li>
+      <li><span class="n">2</span><span><b>Gates</b> are accepted by staging with the recorded organisation token; the acceptance and the licence text are stored with the manifest.</span></li>
+      <li><span class="n">3</span><span><b>Label</b> is the model's highest servable label or the dataset's label floor. Government and statistical data defaults to public; everything else to internal.</span></li>
+      <li><span class="n">4</span><span>The check list is the same table in the Imports log afterwards, so a refused import shows exactly which check refused it.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="s5">
+  <h2>Step 5, Destination: knowledge set from a dataset</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Destination</div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Source</span><span class="sep">›</span><span class="done"><i class="n">2</i>Browse</span><span class="sep">›</span><span class="done"><i class="n">3</i>Select</span><span class="sep">›</span><span class="done"><i class="n">4</i>Review</span><span class="sep">›</span><span class="cur"><i class="n">5</i>Destination</span><span class="sep">›</span><span><i class="n">6</i>Confirm</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Step 5 of 6</div><span class="fg2" style="font-weight:600">Where it goes</span></div>
+          <div class="hstack wrap gap12"><span class="fg2">Create</span><div class="seg"><button type="button">Training dataset</button><button type="button">Classifier eval set</button><button type="button" class="active">Knowledge set</button><button type="button">Store only</button></div><span class="callout">1</span></div>
+          <div class="formgrid" style="--cols:3">
+            <div class="field"><label>Knowledge set name</label><input class="input" value="Consumer complaints"><div class="hint">A knowledge base whose source is this dataset</div></div>
+            <div class="field"><label>Workspace</label><select class="select"><option>Finance Ops</option></select></div>
+            <div class="field"><label>Embedding model</label><select class="select"><option>nomic-embed-text:v1.5 (approved)</option></select></div>
+            <div class="field"><label>Document body</label><select class="select"><option>one document per row</option><option>group rows by a column</option></select></div>
+            <div class="field"><label>Title column</label><select class="select"><option>Product</option></select></div>
+            <div class="field"><label>Text columns</label><input class="input" value="Consumer complaint narrative, Issue"><div class="hint">Embedded and searchable <span class="callout">2</span></div></div>
+            <div class="field"><label>Metadata columns</label><input class="input" value="Date received, Product, Company, State"><div class="hint">Filterable in retrieval, shown with citations</div></div>
+            <div class="field"><label>Refresh schedule</label><select class="select"><option>follow the publisher (daily)</option></select><div class="hint">Re-fetch, re-scrub and swap the index <span class="callout">3</span></div></div>
+            <div class="field"><label>Auto-labelling</label><select class="select"><option>PII detector only</option><option>Finance sensitivity classifier</option></select></div>
+          </div>
+          <div class="hstack wrap gap12"><label class="check"><input type="checkbox"><span>Drop flagged PII columns instead of masking</span></label><label class="check"><input type="checkbox" checked><span>Enable in chat for workspace members once indexed</span></label></div>
+          <div class="notice info">Creates <b>Consumer complaints</b> under Knowledge with one source of kind <span class="mono">dataset</span>, label floor public, index v1. Each row becomes a document with citations back to the row. <span class="callout">4</span></div>
+          <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Review summary</button></div>
+        </div>
+      </div>
+      <div class="finsp"><div class="eyebrow">Other destinations</div><div class="kv" style="--cols:1"><div><div class="k">Model catalog</div><div class="v">Tag, family, capabilities, GGUF quantization for safetensors, allowed pools, evals to queue, profile to attach after approval. Classifier models register as an engine; speech models store for the media workers.</div></div><div><div class="k">Training dataset</div><div class="v">Name and next version, prompt and response columns, splits, PII scrub (always on), conversation opt-in, open a job when ready.</div></div><div><div class="k">Classifier eval set</div><div class="v">New or existing classifier, text and label columns, engine, held-out share, minimum samples per label.</div></div><div><div class="k">Store only</div><div class="v">Manifest and hash in MinIO; register a version or a knowledge set later.</div></div></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>One wizard, four destinations.</b> The segment switches the form; the chosen destination is what the entry point preselected, and the inspector's suggestion chips can change it.</span></li>
+      <li><span class="n">2</span><span><b>Column mapping</b> turns a table into documents: title, text and metadata columns, one document per row or grouped by a column (for example one document per company). Defaults are guessed from column names and types.</span></li>
+      <li><span class="n">3</span><span><b>Refresh follows the publisher.</b> Daily complaints, monthly HICP, quarterly SEC filings: the schedule re-runs the same query, re-scrubs and swaps the index like any knowledge source.</span></li>
+      <li><span class="n">4</span><span>The result is an ordinary knowledge base; the Knowledge screen shows the dataset as a source with kind <span class="mono">dataset</span>, its watermark and last sync, and the usual label and sharing controls apply.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="s6">
+  <h2>Step 6, Confirm and progress</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Confirm</div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Source</span><span class="sep">›</span><span class="done"><i class="n">2</i>Browse</span><span class="sep">›</span><span class="done"><i class="n">3</i>Select</span><span class="sep">›</span><span class="done"><i class="n">4</i>Review</span><span class="sep">›</span><span class="done"><i class="n">5</i>Destination</span><span class="sep">›</span><span class="cur"><i class="n">6</i>Confirm</span></div>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Step 6 of 6</div><span class="fg2" style="font-weight:600">Confirm and run</span></div>
+          <div class="panel tint"><div class="eyebrow">Summary</div>
+            <div class="kv" style="--cols:2"><div><div class="k">Source</div><div class="v">Eurostat, eurostat/prc_hicp_midx</div></div><div><div class="k">Creates</div><div class="v">Knowledge set: Euro area inflation</div></div><div><div class="k">Size</div><div class="v">90 MB</div></div><div><div class="k">Licence</div><div class="v">CC BY 4.0</div></div><div><div class="k">Label</div><div class="v"><span class="label sm">public</span></div></div><div><div class="k">Mode</div><div class="v">direct through the staging proxy <span class="callout">1</span></div></div><div><div class="k">Requested by</div><div class="v">Mara Okafor, model admin</div></div><div><div class="k">Approvals</div><div class="v">none before indexing <span class="callout">2</span></div></div></div>
+            <div class="divider"></div>
+            <div class="hstack"><b>IMP-2026-42</b><span class="pill ok">complete</span><span class="muted right" style="font-size:12px">done</span></div>
+            <div class="meter"><div class="mrow"><span>Done</span><span>100%</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+            <div class="timeline"><div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">Request accepted</div><div class="muted" style="font-size:12px">licence CC BY 4.0, label public</div></div></div><div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">SDMX fetch</div><div class="muted" style="font-size:12px">1.9M observations, sha256 recorded</div></div></div><div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">PII scrub</div><div class="muted" style="font-size:12px">nothing to mask; report attached</div></div></div><div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">Embedding rows</div><div class="muted" style="font-size:12px">nomic-embed-text on cpu-helpers, 12,400 chunks</div></div></div><div class="tl"><div class="dotcol"><i class="ok"></i></div><div class="tbody"><div style="font-weight:600">Ready</div><div class="muted" style="font-size:12px">Knowledge set: Euro area inflation, index v1, refresh monthly</div></div></div></div>
+            <div class="notice ok"><span class="grow"><b>Knowledge set: Euro area inflation</b> is ready.</span><button type="button" class="btn sm">Open knowledge set</button><button type="button" class="btn sm ghost">Import another</button> <span class="callout">3</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="finsp"><div class="eyebrow">Air-gapped variant</div><div class="kv" style="--cols:1"><div><div class="k">Button</div><div class="v">Queue for bundle 2026-41</div></div><div><div class="k">State</div><div class="v"><span class="pill info">queued for bundle</span></div></div><div><div class="k">Then</div><div class="v">Staging fetches, scans and signs on Thursday; the item appears after the diode transfer and the requester is notified.</div></div></div><span class="callout">4</span></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span>The summary repeats every decision in one place: source and revision, what is created, size, licence, label, mode, requester and the approvals still ahead.</span></li>
+      <li><span class="n">2</span><span><b>Approvals are not skipped.</b> A model still needs evals and a model admin; a confidential training dataset still waits for an ML admin before a job starts.</span></li>
+      <li><span class="n">3</span><span>Progress is the job's log, the same one shown under Imports. On completion the notice links straight to the result on Models, Training, Classifiers or Knowledge.</span></li>
+      <li><span class="n">4</span><span>In bundle mode the only change is the final button and state. The requester gets a notification when the bundle lands.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="queue">
+  <h2>Imports tab: the queue and history</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Imports</div>
+      <div class="fbody"><div class="fpage">
+        <nav class="tabs"><button type="button">New import</button><button type="button" class="active">Imports <span class="count">6</span></button><button type="button">Repositories <span class="count">14</span></button></nav>
+        <div class="minitable tablewrap"><table class="dt"><thead><tr><th>Import</th><th>Kind</th><th>Item</th><th>Source</th><th>Creates</th><th>Progress</th><th>State</th></tr></thead><tbody>
+          <tr class="row selected"><td><b>IMP-2026-41</b></td><td>model</td><td class="mono">mistral-small:24b-instruct-2501-q4_K_M</td><td>Ollama library</td><td>Models, draft tag</td><td><div class="meter accent"><div class="mrow"><span></span><span>62%</span></div><div class="track"><div class="fill" style="width:62%"></div></div></div></td><td><span class="pill info">pulling</span></td></tr>
+          <tr class="row"><td><b>IMP-2026-40</b></td><td>dataset</td><td class="mono">Consumer Complaint Database</td><td>data.gov</td><td>Knowledge set: Consumer complaints</td><td><div class="meter accent"><div class="mrow"><span></span><span>35%</span></div><div class="track"><div class="fill" style="width:35%"></div></div></div></td><td><span class="pill info">indexing</span></td></tr>
+          <tr class="row"><td><b>IMP-2026-39</b></td><td>dataset</td><td class="mono">PolyAI/banking77</td><td>Hugging Face Hub</td><td>Classifier eval set: banking-intent</td><td class="muted">done</td><td><span class="pill ok">complete</span></td></tr>
+          <tr class="row"><td><b>IMP-2026-38</b></td><td>model</td><td class="mono">ProsusAI/finbert</td><td>Hugging Face Hub</td><td>Models, draft tag</td><td class="muted">done</td><td><span class="pill danger">refused</span></td></tr>
+          <tr class="row"><td><b>IMP-2026-37</b></td><td>dataset</td><td class="mono">takala/financial_phrasebank</td><td>Hugging Face Hub</td><td>Training dataset finance-sentiment v1</td><td><div class="meter"><div class="mrow"><span></span><span>20%</span></div><div class="track"><div class="fill" style="width:20%"></div></div></div></td><td><span class="pill warn">waiting on licence exception</span></td></tr>
+          <tr class="row"><td><b>IMP-2026-36</b></td><td>dataset</td><td class="mono">Eurostat prc_hicp_midx</td><td>Eurostat</td><td>Knowledge set: Euro area inflation</td><td class="muted">done</td><td><span class="pill ok">complete</span></td></tr>
+        </tbody></table></div>
+        <div class="notice info">Every import records its source, revision, digest, licence and the user who requested it on the manifest, and writes an audit entry. Refused imports write nothing.</div>
+      </div>
+      <div class="finsp"><div class="hstack"><b>IMP-2026-41</b><span class="pill info">pulling</span></div><div class="mono" style="font-size:12px">mistral-small:24b-instruct-2501-q4_K_M</div><div class="kv" style="--cols:1"><div><div class="k">Note</div><div class="v">gpu-large-1, 41 MB/s, 6 min left</div></div><div><div class="k">Started</div><div class="v">05 Oct 09:12, Mara Okafor</div></div></div><div class="meter accent"><div class="mrow"><span>Progress</span><span>62%</span></div><div class="track"><div class="fill" style="width:62%"></div></div></div><div class="hstack gap6"><button type="button" class="btn sm danger">Cancel</button><button type="button" class="btn sm ghost">Import log</button></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span>Running imports can be cancelled (partial blobs deleted, nothing registered); refused ones offer a retry from another source; completed ones link to the result.</span></li>
+      <li><span class="n">2</span><span>Scheduled refreshes of knowledge sets appear here with "schedule" as the requester, so the queue is the one place to see what is moving data in.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="repos">
+  <h2>Repositories tab: the source registry</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Import</b> / Repositories</div>
+      <div class="fbody"><div class="fpage">
+        <div class="toolbar"><span class="fg2">11 of 14 repositories reachable through the staging proxy</span><span class="right"><button type="button" class="btn sm primary">Add repository</button></span></div>
+        <div class="minitable tablewrap"><table class="dt"><thead><tr><th>Repository</th><th>Region</th><th>Offers</th><th>Protocol</th><th>Authentication</th><th>Status</th></tr></thead><tbody>
+          <tr class="row"><td><b>Hugging Face Hub</b></td><td>Global</td><td>models, datasets</td><td>Hub API v1, Git LFS</td><td>Read token recorded</td><td><span class="pill ok">reachable</span></td></tr>
+          <tr class="row"><td><b>data.gov</b></td><td>US</td><td>datasets</td><td>CKAN API 3, DCAT-US 1.1</td><td>Anonymous</td><td><span class="pill ok">reachable</span></td></tr>
+          <tr class="row"><td><b>data.europa.eu</b></td><td>EU</td><td>datasets</td><td>DCAT-AP 3.0, SPARQL</td><td>Anonymous</td><td><span class="pill ok">reachable</span></td></tr>
+          <tr class="row"><td><b>data.go.jp and e-Stat</b></td><td>Asia, Japan</td><td>datasets</td><td>CKAN API 3; e-Stat API 3.0</td><td>e-Stat application ID recorded</td><td><span class="pill ok">reachable</span></td></tr>
+          <tr class="row"><td><b>data.gov.in</b></td><td>Asia, India</td><td>datasets</td><td>OGD Platform API</td><td>API key recorded</td><td><span class="pill ok">reachable</span></td></tr>
+          <tr class="row selected"><td><b>data.go.kr</b></td><td>Asia, Korea</td><td>datasets</td><td>Open API with service key</td><td>Service key required, not recorded</td><td><span class="pill">disabled</span></td></tr>
+          <tr class="row"><td><b>Kaggle</b></td><td>Global</td><td>datasets, models</td><td>Kaggle API 1.6</td><td>API token required, not recorded</td><td><span class="pill warn">needs token</span></td></tr>
+        </tbody></table></div>
+        <div class="notice info">Repository types: Hugging Face compatible hub, Ollama compatible registry, CKAN portal, DCAT-AP catalogue, SDMX provider, OpenML, InvenioRDM, Kaggle, signed bundles on the import share. Credentials are stored in the vault and never shown again.</div>
+      </div>
+      <div class="finsp"><div class="hstack"><b>data.go.kr</b><span class="pill">disabled</span></div><div class="kv" style="--cols:1"><div><div class="k">Protocol</div><div class="v">Open API with service key, file downloads</div></div><div><div class="k">Licence policy</div><div class="v">KOGL type 1</div></div><div><div class="k">Catalogue</div><div class="v">88k datasets</div></div></div><div class="hstack gap6 wrap"><button type="button" class="btn sm">Edit</button><button type="button" class="btn sm" disabled>Refresh snapshot</button><button type="button" class="btn sm">Enable</button></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Adding a repository is dual-controlled</b> and allow-lists the host on the staging proxy. The type decides the harvester: CKAN, DCAT-AP, SDMX, Hub API, OCI registry, InvenioRDM.</span></li>
+      <li><span class="n">2</span><span>Enabling a keyed source tests the key with one catalogue call, stores it in the vault and queues the first harvest.</span></li>
+      <li><span class="n">3</span><span>Each repository carries its own licence policy text and rate limit, shown on the card in step 1 and used by the Review checks.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="model">
+  <h2>Data model additions</h2>
+  <p>New tables sit beside the existing <span class="mono">models</span>, <span class="mono">training_datasets</span>, <span class="mono">knowledge_bases</span> and <span class="mono">knowledge_sources</span> tables; the wizard writes into those through the existing services and only adds the repository registry, the catalogue snapshot and the import job.</p>
+  <div class="twocol">
+    <div class="panel"><div class="eyebrow">import_repositories</div><div class="minitable tablewrap bare"><table class="dt"><tbody>
+      <tr><td class="mono">id, tenant_id, name, host</td><td class="fg2">as on the card</td></tr>
+      <tr><td class="mono">type</td><td class="fg2">hf_hub | ollama_registry | ckan | dcat_ap | sdmx | openml | invenio | kaggle | bundle_share</td></tr>
+      <tr><td class="mono">region, kinds</td><td class="fg2">text; JSON array of model | dataset</td></tr>
+      <tr><td class="mono">credential_ref</td><td class="fg2">vault path, never the secret</td></tr>
+      <tr><td class="mono">mirror_schedule, snapshot_at</td><td class="fg2">daily | weekly | manual; last harvest</td></tr>
+      <tr><td class="mono">licence_policy, rate_limit</td><td class="fg2">text; JSON {rpm, parallel}</td></tr>
+      <tr><td class="mono">state</td><td class="fg2">reachable | rate_limited | needs_token | disabled</td></tr>
+      <tr><td class="mono">proposed_by, confirmed_by</td><td class="fg2">dual control</td></tr>
+    </tbody></table></div></div>
+    <div class="panel"><div class="eyebrow">import_catalog (snapshot rows)</div><div class="minitable tablewrap bare"><table class="dt"><tbody>
+      <tr><td class="mono">repository_id, kind, external_id</td><td class="fg2">Qwen/Qwen2.5-7B-Instruct, cfpb/consumer-complaint-database</td></tr>
+      <tr><td class="mono">name, publisher, description</td><td class="fg2">from the source card</td></tr>
+      <tr><td class="mono">classification</td><td class="fg2">pipeline tag or task category, plus domain tags</td></tr>
+      <tr><td class="mono">formats, licence, gated</td><td class="fg2">JSON array; SPDX or "other"; boolean</td></tr>
+      <tr><td class="mono">size_bytes, rows, parameters</td><td class="fg2">for the size facets</td></tr>
+      <tr><td class="mono">region, update_cadence, updated_at</td><td class="fg2">for the dataset facets</td></tr>
+      <tr><td class="mono">revision, harvested_at</td><td class="fg2">commit, manifest digest or DCAT modified</td></tr>
+    </tbody></table></div></div>
+    <div class="panel"><div class="eyebrow">import_jobs</div><div class="minitable tablewrap bare"><table class="dt"><tbody>
+      <tr><td class="mono">id, tenant_id, kind</td><td class="fg2">IMP-2026-41; model | dataset</td></tr>
+      <tr><td class="mono">repository_id, external_id, revision</td><td class="fg2">what was asked for</td></tr>
+      <tr><td class="mono">selection</td><td class="fg2">JSON: variants, files, configuration, splits, resources, sample</td></tr>
+      <tr><td class="mono">checks</td><td class="fg2">JSON: the Review table with results</td></tr>
+      <tr><td class="mono">licence, label, attribution, exception_id</td><td class="fg2">recorded on the manifest</td></tr>
+      <tr><td class="mono">destination</td><td class="fg2">models | training | classifiers | knowledge | store, plus the form as JSON</td></tr>
+      <tr><td class="mono">mode</td><td class="fg2">direct | bundle, with bundle_id</td></tr>
+      <tr><td class="mono">state, pct, log, error</td><td class="fg2">queued | pulling | scrubbing | indexing | waiting | complete | refused | cancelled</td></tr>
+      <tr><td class="mono">result_ref</td><td class="fg2">model id, dataset id, classifier id or kb id</td></tr>
+      <tr><td class="mono">requested_by, created_at, finished_at</td><td class="fg2">audit</td></tr>
+    </tbody></table></div></div>
+    <div class="panel"><div class="eyebrow">Existing tables, small additions</div><div class="minitable tablewrap bare"><table class="dt"><tbody>
+      <tr><td class="mono">models.source</td><td class="fg2">already free text; gains a structured <span class="mono">import_job_id</span> and <span class="mono">attribution</span></td></tr>
+      <tr><td class="mono">training_datasets.source_kind</td><td class="fg2">adds <span class="mono">import</span> beside inline | staging, with <span class="mono">import_job_id</span></td></tr>
+      <tr><td class="mono">knowledge_sources.kind</td><td class="fg2">adds <span class="mono">dataset</span> beside upload | s3 | git | database; config holds the column mapping and the repeatable query</td></tr>
+      <tr><td class="mono">knowledge_sources.schedule</td><td class="fg2">adds weekly | monthly | quarterly to 15m | hourly | daily | manual</td></tr>
+      <tr><td class="mono">classifiers</td><td class="fg2">eval set reference to a training dataset version; engine kind <span class="mono">imported_model</span></td></tr>
+      <tr><td class="mono">permissions</td><td class="fg2"><span class="mono">imports:run</span> (model admin, ML admin, knowledge admin by destination), <span class="mono">imports:repositories</span> (model admin, dual control)</td></tr>
+    </tbody></table></div></div>
+  </div>
+</section>
+
+<section class="section" id="states">
+  <h2>States to design from this page</h2>
+  <div class="state-strip">
+    <div class="state-card"><div class="st warn">Gated repository</div><div class="sd">A gated Hugging Face model lists no files until the licence gate is accepted with the recorded token. Next stays disabled.</div></div>
+    <div class="state-card"><div class="st danger">Pickle refused</div><div class="sd">The repository publishes only pytorch_model.bin. The format check fails, nothing is written and no tag is registered.</div></div>
+    <div class="state-card"><div class="st danger">Licence outside policy</div><div class="sd">A CC BY-NC dataset is outside the tenant allow list. The import waits on a licence exception from legal.</div></div>
+    <div class="state-card"><div class="st warn">PII in the preview</div><div class="sd">The PII classifier flags columns in the 2,000-row sample. The scrub masks free text and generalises quasi-identifiers before rows are stored.</div></div>
+    <div class="state-card"><div class="st warn">Dataset over quota</div><div class="sd">A multi-terabyte dataset exceeds the 500 GB quota. Only a streamed sample or a smaller configuration can be imported.</div></div>
+    <div class="state-card"><div class="st warn">Source rate limited</div><div class="sd">ModelScope is rate limiting the staging proxy. Browsing falls back to the weekly snapshot and downloads queue with backoff.</div></div>
+    <div class="state-card"><div class="st info">Air-gapped: joins the bundle</div><div class="sd">With no outbound path, the request joins the weekly bundle. Staging fetches, scans and signs; the item appears after the diode transfer.</div></div>
+    <div class="state-card"><div class="st ok">Knowledge set created</div><div class="sd">A monthly Eurostat table becomes a knowledge set with a refresh schedule; rows are documents with citations back to the row.</div></div>
+  </div>
+</section>
+
+<section class="section" id="backlog">
+  <h2>Proposed items for the 1.5.0 rollup</h2>
+  <p>Written in the style of <span class="mono">Backlog-1.5.0.md</span>, as a new epic B-38 beside B-34 (B-37 is memory management). Points use the same scale (1 point is about half a day with tests).</p>
+  <div class="minitable tablewrap"><table class="dt"><thead><tr><th>ID</th><th>Item</th><th>Done when</th><th class="r">Pts</th></tr></thead><tbody>
+    <tr><td><b>B-3801</b></td><td>Repository registry: types (Hub, OCI registry, CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle, bundle share), credentials in the vault, proxy allow-list, dual-controlled add, harvest schedules and the catalogue snapshot</td><td>A CKAN portal added from the screen is harvested and browsable after confirmation</td><td class="r">8</td></tr>
+    <tr><td><b>B-3802</b></td><td>Catalogue browse: search, classification and licence facets, live search through the proxy when reachable, snapshot fallback with backoff</td><td>A facet count equals the rows the filter returns</td><td class="r">5</td></tr>
+    <tr><td><b>B-3803</b></td><td>Model import: tags, variants and files, gate acceptance, format and pickle checks, licence policy and exceptions, GGUF conversion, draft registration with digest pinning; bundle mode for air-gapped instances</td><td>A pickle-only repository is refused with nothing written; a safetensors import registers a draft with a matching digest</td><td class="r">8</td></tr>
+    <tr><td><b>B-3804</b></td><td>Dataset import: configurations, splits, resources and API paging, schema preview with PII flags, sampling above quota, scrub and versioning into <span class="mono">training_datasets</span></td><td>An imported version has a manifest, hash and scrub report identical in shape to an inline one</td><td class="r">8</td></tr>
+    <tr><td><b>B-3805</b></td><td>Knowledge sets: <span class="mono">knowledge_sources.kind = dataset</span> with column mapping, grouping, refresh schedules that follow the publisher, citations back to the row</td><td>A monthly SDMX table refreshes on schedule and the index swaps without downtime</td><td class="r">8</td></tr>
+    <tr><td><b>B-3806</b></td><td>Classifier eval sets and imported classifier engines: rows into an eval set with minimum-sample warnings; a text-classification model served by the classifier worker</td><td>An imported eval set shows precision and recall per label on the Classifiers screen</td><td class="r">5</td></tr>
+    <tr><td><b>B-3807</b></td><td>Import screen: wizard, Imports queue with cancel, retry and logs, Repositories tab; entry points on Models, Training, Classifiers and Knowledge; Playwright and axe coverage</td><td>Every state on the board is reachable in the e2e suite in light and dark</td><td class="r">8</td></tr>
+  </tbody></table></div>
+  <p>Total 50 points. B-3801 to B-3803 fit Sprint 30 beside the domain screens; B-3804 to B-3807 fit Sprint 31, or slip to 1.6 if the PDS work takes the sprint.</p>
+  <p>Runnable prototype: <a href="../prototype/screens/import.html">design/prototype/screens/import.html</a> (sign in with any password), or <span class="mono">#/import</span> in <a href="../prototype/index.html">index.html</a>.</p>
+</section>
+
+</div>
+<script>
+(function () {
+  var b = document.getElementById('theme'); var order = [null, 'light', 'dark']; var i = 0;
+  try { var t = localStorage.getItem('exprsn.theme'); if (t) { i = order.indexOf(t); document.documentElement.setAttribute('data-theme', t); } } catch (e) {}
+  function label() { b.textContent = 'Theme: ' + (order[i] || 'system'); }
+  label();
+  b.addEventListener('click', function () {
+    i = (i + 1) % order.length; var t = order[i];
+    if (t) document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme');
+    try { t ? localStorage.setItem('exprsn.theme', t) : localStorage.removeItem('exprsn.theme'); } catch (e) {}
+    label();
+  });
+})();
+</script>
+</body>
+</html>
