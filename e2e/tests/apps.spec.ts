@@ -187,6 +187,13 @@ test.describe('Apps', () => {
     await trow.locator('[data-tdel]').click();
     await confirmDialog(page, 'Delete');
     await toast(page, 'Trigger deleted.');
+
+    // The Workflows spec starts from a workspace without workflows: remove the one seeded here.
+    const cleanup = await apiAs('root');
+    const session = await cleanup.get('/api/auth/session');
+    const gone = await cleanup.ctx.delete(`/api/workflows/${wf.id}`, { headers: { 'x-csrf-token': session.csrf, origin: serverState().url } });
+    expect(gone.status()).toBe(204);
+    await cleanup.close();
   });
 
   test.describe('as a member', () => {
