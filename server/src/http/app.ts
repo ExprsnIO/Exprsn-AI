@@ -70,6 +70,7 @@ import { appRoutes } from '../routes/apps.js';
 import { publicAppRoutes } from '../routes/apps-public.js';
 import { channelRoutes } from '../routes/channels.js';
 import { publicChannelRoutes } from '../routes/channels-public.js';
+import { authzRoutes } from '../routes/authz.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -258,6 +259,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(messagingRoutes(s));
   // Sprint 28c (B-2701 to B-2705): the workspace feed.
   api.use(feedRoutes(s));
+  // 1.5.0, Sprint 29 (B-3301 to B-3305): role and effective-access matrices, custom roles and access reviews.
+  api.use(authzRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

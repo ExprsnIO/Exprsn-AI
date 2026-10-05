@@ -2,7 +2,7 @@ import { ulid } from 'ulid';
 import { actorFrom, type AuditActor } from '../audit/chain.js';
 import { csvLine } from '../audit/exports.js';
 import { clears, isLabel, labelRank, type Label } from '../authz/labels.js';
-import { ROLES } from '../authz/permissions.js';
+import { rolesGranting } from '../authz/permissions.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { randomToken } from '../crypto/index.js';
 import { json } from '../db/knex.js';
@@ -183,7 +183,6 @@ const aad = {
 export const channelAad = aad;
 
 /** Roles holding `channels:review` (for escalation notices). */
-const REVIEWER_ROLES = ROLES.filter((r) => r.permissions === '*' || r.permissions.includes('channels:review')).map((r) => r.id);
 
 /** The guidance every channel's answers start from, before the profile's, agent's and channel's own instructions. */
 const BASE_SYSTEM = 'You answer customers of this organisation in a support channel. Be accurate, brief and polite. If you cannot help or are unsure, say so and tell the customer that a person from the team will follow up. Never claim to be a person.';
@@ -660,11 +659,11 @@ export class ChannelService {
     const rows = (await db('users as u')
       .join('user_roles as r', 'r.user_id', 'u.id')
       .where({ 'u.tenant_id': c.tenant_id, 'u.state': 'active' })
-      .whereIn('r.role', REVIEWER_ROLES)
+      .whereIn('r.role', rolesGranting('channels:review', c.tenant_id))
       .distinct('u.id', 'u.clearance')) as { id: string; clearance: string }[];
     const ws = await this.s().tenants.workspace(c.tenant_id, c.workspace_id);
     const members = ws?.visibility === 'tenant' ? null : new Set(((await db('workspace_members').where({ workspace_id: c.workspace_id }).select('user_id')) as { user_id: string }[]).map((r) => r.user_id));
-    const admins = new Set(((await db('user_roles').whereIn('user_id', rows.map((r) => r.id)).whereIn('role', ['tenant-admin', 'system-admin']).select('user_id')) as { user_id: string }[]).map((r) => r.user_id));
+    const admins = new Set(((await db('user_roles').whereIn('user_id', rows.map((r) => r.id)).whereIn('role', rolesGranting('tenant:manage', c.tenant_id)).select('user_id')) as { user_id: string }[]).map((r) => r.user_id));
     return rows.filter((u) => isLabel(u.clearance) && clears(u.clearance, c.label) && (!members || members.has(u.id) || admins.has(u.id))).map((u) => u.id);
   }
 

@@ -1,10 +1,9 @@
 import { Router, type Request, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
-import { authorize } from '../authz/policy.js';
 import { LABELS } from '../authz/labels.js';
 import type { Permission } from '../authz/permissions.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
 import { entryView, SIDE_EFFECTS } from '../registry/service.js';
 import { DEFAULT_LIMITS, LANGUAGES, MAX_LIMITS } from '../scripts/runner.js';
 import type { Services } from '../services.js';
@@ -23,10 +22,7 @@ export function scriptRoutes(s: Services): Router {
   const r = Router();
   r.use(['/scripts', '/script-runs'], noStore, requireAuth());
   const run = requirePermission(s, 'scripts:run');
-  const anyOf = (...perms: Permission[]): RequestHandler => async (req, res, next) => {
-    const p = principalOf(req);
-    await requirePermission(s, perms.find((x) => authorize(p, x).allow) ?? perms[0]!)(req, res, next);
-  };
+  const anyOf = (...perms: Permission[]): RequestHandler => requireAnyPermission(s, perms);
   const scripts = s.scripts;
   const load = (req: Request) => scripts.get(principalOf(req), String(req.params.id));
   const audit = (req: Request, action: string, sc: { id: string; name: string }, detail?: Record<string, unknown>) => {

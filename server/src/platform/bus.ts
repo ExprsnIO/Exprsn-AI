@@ -102,8 +102,20 @@ export const TOPICS = {
   /** 1.4.0 (B-2002): a tenant's plugin installs changed: `{ tenantId, pluginId }`. */
   pluginChanged: 'plugin.changed',
   /** 1.4.0 (B-2606, B-2702): a block, mute or follow between two users changed: `SocialRelationEvent` (social/service.ts). */
-  socialRelation: 'social.relation'
+  socialRelation: 'social.relation',
+  /**
+   * 1.5.0 (B-3302, B-3305): a tenant's custom role definitions changed (`definitions`), or grants of some users were
+   * removed (`userIds`): `RolesChangedEvent`. Every instance reloads the definitions and re-decides socket rooms.
+   */
+  rolesChanged: 'authz.roles'
 } as const;
+
+/** 1.5.0: see `TOPICS.rolesChanged`. */
+export interface RolesChangedEvent {
+  tenantId: string;
+  definitions?: boolean;
+  userIds?: string[];
+}
 
 /** Sprint 21: workspaces a user is no longer a member of; live shared watches through them end at once. */
 export interface MembershipEvent {

@@ -83,7 +83,7 @@ export function meRoutes(s: Services): Router {
     const upstream = await upstreamOf(req);
     res.json({
       user: { id: p.userId, username: p.username, displayName: p.displayName, clearance: p.clearance },
-      roles: p.roles.map((id) => ({ id, name: getRole(id)?.name ?? id })),
+      roles: p.roles.map((id) => ({ id, name: getRole(id, p.tenantId)?.name ?? id })),
       permissions: [...effectivePermissions(p)].sort(),
       tenant: tenant ? { id: tenant.id, slug: tenant.slug, name: tenant.name } : null,
       workspaces: workspaces.map((w) => ({ id: w.id, name: w.name, label: w.label_ceiling })),

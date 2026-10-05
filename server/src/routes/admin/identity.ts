@@ -220,13 +220,13 @@ export function identityAdminRoutes(s: Services): Router {
       z.object({
         providerId: z.string().length(26).nullable().default(null),
         group: z.string().trim().min(1).max(512),
-        role: z.string().refine(isRole, 'Unknown role'),
+        role: z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role'),
         clearance: z.enum(LABELS),
         workspaceId: z.string().length(26).nullable().default(null)
       }),
       req.body
     );
-    if (!canGrant(p.roles, body.role)) throw forbidden(`Your roles cannot grant ${body.role}.`, { step: 'role' });
+    if (!canGrant(p.roles, body.role, p.tenantId)) throw forbidden(`Your roles cannot grant ${body.role}.`, { step: 'role' });
     if (!clears(p.clearance, body.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
     if (body.providerId && !(await s.providers.get(p.tenantId, body.providerId))) throw notFound('User store');
     if (body.workspaceId && !(await s.tenants.workspace(p.tenantId, body.workspaceId))) throw notFound('Workspace');
@@ -242,13 +242,13 @@ export function identityAdminRoutes(s: Services): Router {
     const body = parseBody(
       z.object({
         group: z.string().trim().min(1).max(512).optional(),
-        role: z.string().refine(isRole, 'Unknown role').optional(),
+        role: z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role').optional(),
         clearance: z.enum(LABELS).optional(),
         workspaceId: z.string().length(26).nullable().optional()
       }),
       req.body
     );
-    if (!canGrant(p.roles, existing.role) || (body.role && !canGrant(p.roles, body.role))) throw forbidden('Your roles cannot grant this role.', { step: 'role' });
+    if (!canGrant(p.roles, existing.role, p.tenantId) || (body.role && !canGrant(p.roles, body.role, p.tenantId))) throw forbidden('Your roles cannot grant this role.', { step: 'role' });
     if (body.clearance && !clears(p.clearance, body.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
     if (body.workspaceId && !(await s.tenants.workspace(p.tenantId, body.workspaceId))) throw notFound('Workspace');
     await s.users.updateMapping(p.tenantId, existing.id, body);
@@ -260,7 +260,7 @@ export function identityAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const existing = (await s.users.mappings(p.tenantId)).find((m) => m.id === req.params.id);
     if (!existing) throw notFound('Group mapping');
-    if (!canGrant(p.roles, existing.role)) throw forbidden(`Your roles cannot change mappings for ${existing.role}.`, { step: 'role' });
+    if (!canGrant(p.roles, existing.role, p.tenantId)) throw forbidden(`Your roles cannot change mappings for ${existing.role}.`, { step: 'role' });
     await s.users.removeMapping(p.tenantId, existing.id);
     await audit(req, 'identity.mapping.deleted', { mapping: existing.id, group: existing.group_name, role: existing.role }, { note: 'Takes effect at each user\'s next sign-in.' });
     res.status(204).end();

@@ -1,10 +1,9 @@
-import { Router, type Request, type RequestHandler } from 'express';
+import { Router, type Request } from 'express';
 import { actorFrom } from '../audit/chain.js';
 import { z } from 'zod';
 import { LABELS } from '../authz/labels.js';
-import { effectivePermissions } from '../authz/policy.js';
 import { CHANNEL_KINDS, REVIEW_MODES, SESSION_STATES, TARGET_KINDS, type Ctx } from '../channels/service.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
 import { badRequest } from '../http/problem.js';
 import type { Services } from '../services.js';
 
@@ -60,7 +59,7 @@ export function channelRoutes(s: Services): Router {
   const ctx = (req: Request): Ctx => ({ p: principalOf(req), ip: ip(req), traceId: req.traceId ?? null });
   const idOf = (req: Request, key = 'id') => parseBody(id26, (req.params as Record<string, string>)[key]);
   // Reading a channel: either permission (a refusal is recorded as a `channels:review` denial).
-  const either: RequestHandler = (req, res, next) => (effectivePermissions(principalOf(req)).has('channels:manage') ? manage(req, res, next) : review(req, res, next));
+  const either = requireAnyPermission(s, ['channels:review', 'channels:manage']);
 
   r.get('/channels', either, async (req, res) => {
     const q = parseBody(z.object({ workspace: id26.optional() }), req.query);

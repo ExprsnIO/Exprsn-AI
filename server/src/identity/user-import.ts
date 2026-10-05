@@ -245,9 +245,9 @@ export class UserImportService {
     const s = this.s();
     const tenantId = importer.kind === 'user' ? importer.principal.tenantId : importer.tenantId;
     const actor: AuditActor = importer.kind === 'user' ? actorFrom(importer.principal, null) : { service: 'cli' };
-    const mayGrant = (role: string) => importer.kind === 'cli' || canGrant(importer.principal.roles, role);
+    const mayGrant = (role: string) => importer.kind === 'cli' || canGrant(importer.principal.roles, role, tenantId);
     const mayClear = (l: Label) => importer.kind === 'cli' || clears(importer.principal.clearance, l);
-    const mayManage = (roles: string[]) => importer.kind === 'cli' || canManage(importer.principal.roles, roles);
+    const mayManage = (roles: string[]) => importer.kind === 'cli' || canManage(importer.principal.roles, roles, tenantId);
     const audit = (action: string, target: Record<string, unknown>, detail: Record<string, unknown>) => s.audit.append({ tenantId, action, kind: 'admin', actor, target, detail: { ...detail, via: 'import' } });
 
     const providers = await s.providers.list(tenantId);
@@ -285,7 +285,7 @@ export class UserImportService {
           continue;
         }
         const roles = roleList(r.get('roles'));
-        const badRole = roles.find((x) => !isRole(x));
+        const badRole = roles.find((x) => !isRole(x, tenantId));
         if (badRole) {
           fail(username, `Unknown role ${badRole}.`);
           continue;
@@ -468,7 +468,7 @@ export class UserImportService {
           fail(key, 'A mapping needs a group (up to 512 characters).');
           continue;
         }
-        if (!isRole(role)) {
+        if (!isRole(role, tenantId)) {
           fail(key, `A mapping names one known role in the roles column; ${role || '(empty)'} is not one.`);
           continue;
         }

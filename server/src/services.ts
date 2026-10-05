@@ -111,6 +111,9 @@ import { SocialService } from './social/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
+import { CustomRoleService } from './authz/custom-roles.js';
+import { AccessService } from './authz/access.js';
+import { AccessReviewService } from './authz/reviews.js';
 
 export interface Services {
   cfg: Config;
@@ -254,6 +257,12 @@ export interface Services {
   messagingInsights: MessagingInsights;
   /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
   feed: FeedService;
+  /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
+  customRoles: CustomRoleService;
+  /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
+  access: AccessService;
+  /** 1.5.0, Sprint 29 (B-3305): access review campaigns. */
+  accessReviews: AccessReviewService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -512,6 +521,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
+    // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
+    customRoles: new CustomRoleService(() => s),
+    access: new AccessService(() => s),
+    accessReviews: new AccessReviewService(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -630,6 +643,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
   s.feed.init();
   s.feed.digests.registerJobs();
+  // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
+  s.customRoles.init();
+  s.accessReviews.registerJobs();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -691,4 +707,5 @@ export function startSchedules(s: Services): void {
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
+  s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation
 }
