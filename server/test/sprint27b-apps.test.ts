@@ -164,7 +164,7 @@ describe('low-code apps (Sprint 27b)', () => {
     expect(idx.map((x) => x.field).sort()).toEqual(['amount', 'stage', 'title', 'twice']);
     expect(idx.find((x) => x.field === 'title')!.v_norm).toBe('delta');
 
-    const q = async (body: object) => (await m.post('/api/apps/crm/entities/deal/records/query', body).expect(200)).body as { total: number; records: { id: string; values: Record<string, unknown> }[] };
+    const q = async (body: object) => (await m.post('/api/apps/crm/entities/deal/records/query', body).expect(200)).body as { total: number; nextCursor: string | null; records: { id: string; values: Record<string, unknown> }[] };
     const titles = (r: { records: { values: Record<string, unknown> }[] }) => r.records.map((x) => x.values.title);
     expect(titles(await q({ filter: { field: 'amount', op: 'gte', value: 50 }, sort: [{ field: 'amount', dir: 'desc' }, { field: 'title', dir: 'asc' }] }))).toEqual(['Charlie', 'Alpha', 'delta']);
     expect(titles(await q({ filter: { and: [{ field: 'stage', op: 'in', value: ['lead', 'WON'] }, { not: { field: 'amount', op: 'eq', value: 50 } }] } }))).toEqual(['Bravo']);
@@ -182,6 +182,15 @@ describe('low-code apps (Sprint 27b)', () => {
     const page = await q({ sort: [{ field: 'title', dir: 'asc' }], limit: 2, offset: 2 });
     expect(page.total).toBe(5);
     expect(titles(page)).toEqual(['Charlie', 'delta']);
+    // B-3601: keyset paging, the body and the GET form, to the last page
+    const c1 = await q({ sort: [{ field: 'title', dir: 'asc' }], limit: 2 });
+    expect([titles(c1), typeof c1.nextCursor]).toEqual([['Alpha', 'Bravo'], 'string']);
+    const c2 = await q({ sort: [{ field: 'title', dir: 'asc' }], limit: 2, cursor: c1.nextCursor });
+    expect(titles(c2)).toEqual(['Charlie', 'delta']);
+    const c3 = (await m.get(`/api/apps/crm/entities/deal/records?sort=title:asc&limit=2&cursor=${encodeURIComponent(c2.nextCursor!)}`).expect(200)).body;
+    expect([titles(c3), c3.nextCursor, c3.total]).toEqual([['Echo 100%'], null, 5]);
+    await m.post('/api/apps/crm/entities/deal/records/query', { sort: [{ field: 'title', dir: 'desc' }], cursor: c1.nextCursor }).expect(400);
+    await m.post('/api/apps/crm/entities/deal/records/query', { sort: [{ field: 'title', dir: 'asc' }], offset: 2, cursor: c1.nextCursor }).expect(400);
     // the GET form takes the filter as JSON and the sort as field:dir
     const got = (await m.get(`/api/apps/crm/entities/deal/records?filter=${encodeURIComponent(JSON.stringify({ field: 'amount', op: 'lt', value: 10 }))}&sort=amount:asc`).expect(200)).body;
     expect(titles(got)).toEqual(['Echo 100%', 'Bravo']);

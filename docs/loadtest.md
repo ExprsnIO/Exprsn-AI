@@ -202,7 +202,7 @@ missed, `2` the setup failed.
 | Scenario | What happens | What is measured |
 | --- | --- | --- |
 | Webhook fan-out | `--endpoints` webhooks (default 10) subscribe to `record.*`; `record.created` events are emitted at `--events-per-s` (default 10) for `--duration` seconds, so 100 deliveries a second. Phase 1: every endpoint answers at once. Phase 2: the last endpoint answers after `--slow-ms` (3 s), past `WEBHOOK_TIMEOUT_MS` (1 s in the run) | Latency from the delivery being queued to the receiver having it, for the healthy endpoints; deliveries a second; lost and duplicate deliveries; HMAC signatures checked on every delivery; in phase 2 how many attempts reach the slow endpoint and whether its breaker opened (once) |
-| Record writes | `--concurrency` clients (16) over `--users` signed-in members (64, so the per-user API limit is not what is measured). Phase 1 creates records (one in 25 reuses an existing title in another case, which must be refused as a duplicate); phase 2 updates the indexed `amount` and `stage`; phase 3 runs filtered, sorted, paged queries on indexed fields (an `and` of an enum and a number range, a title prefix, a date range with an offset) | Requests a second and latency per phase; duplicates refused and accepted; records stored against records created |
+| Record writes | `--concurrency` clients (16) over `--users` signed-in members (128, so the per-user API limit is not what is measured; 64 were enough until the queries got faster in 1.5.0). Phase 1 creates records (one in 25 reuses an existing title in another case, which must be refused as a duplicate); phase 2 updates the indexed `amount` and `stage`; phase 3 runs filtered, sorted, paged queries on indexed fields (an `and` of an enum and a number range, a title prefix, a date range with an offset) | Requests a second and latency per phase, and the query p95 of each of the three query bodies; duplicates refused and accepted; records stored against records created |
 | OCSP | `--concurrency` relying parties post requests for the 40 serials to `/pki/ocsp`, each from its own documentation address (the public limit is per address). Phase 1 sends a nonce, so every answer is built and signed by the delegated responder key in the signer; phase 2 sends none, so the responder's cache answers | Signed answers a second and latency; every answer is parsed and its status (good or revoked) checked |
 | Firehose | A fake Jetstream holds `--posts` posts (20,000, one in ten with a pattern the moderation rule flags) and sends them as fast as the socket takes them. A third of the way it drops the connection (as a relay drops a slow consumer); two thirds of the way the subscription is stopped and started (as a restart does). Every post goes through the moderation check | Posts checked a second from the first connection to the last cursor; posts lost and checked twice (from `moderation_objects`); the consumer queue's maximum against `FIREHOSE_QUEUE_MAX` (1000), how often the socket was paused, and that every reconnection asked for a cursor |
 
@@ -217,9 +217,9 @@ Redis.
 The targets are judged on this setup, which is a developer workstation rather than a server, and the numbers below
 come from it:
 
-- Apple M2 Max (12 cores), 32 GB, macOS. The project, its `node_modules` and Node 24 live on an external USB drive;
-  start-up and the first module loads are slow there (seeding took from 2 to 250 s between runs), but the measured
-  phases run from memory.
+- Apple M2 Max (12 cores), 32 GB, macOS. For 1.4.0's runs the project, its `node_modules` and Node 24 lived on an
+  external USB drive, where start-up and the first module loads are slow (seeding took from 2 to 250 s between runs);
+  for 1.5.0's on the internal SSD (seeding about 5 s). The measured phases run from memory either way.
 - PostgreSQL 18.6 from the project toolchain, a throwaway cluster (`initdb`, `pg_ctl`) with its data on the internal
   disk under `/private/tmp`, default settings except `max_connections=100`; the application's pool is the default
   `DB_POOL_MAX=10`.
@@ -232,40 +232,48 @@ is expected to do at least as well on latency; throughput there is bounded by th
 firehose, and by the job slots for webhooks. CI runs the scenarios on SQLite in memory on a shared runner with the
 `ci` target set (`--targets ci`: latencies times three, rates divided by three).
 
-### Targets for 1.4.0 and results
+### Targets and results
 
-PostgreSQL, the reference setup, default options (15 s per phase), two full runs on fresh databases (each run
-delivers 2850 webhooks, writes about 32,000 records, answers about 320,000 OCSP requests and checks 20,000 posts):
+PostgreSQL, the reference setup, default options (15 s per phase), two full runs on fresh databases with 1.5.0 (the
+record query changes of B-3601; each run delivers 2850 webhooks, writes about 31,000 records, answers about 320,000
+OCSP requests and checks 20,000 posts):
 
 | Target | Reference | Run 1 | Run 2 |
 | --- | --- | --- | --- |
-| Webhooks: healthy endpoints, p95 queued to received | below 500 ms | 6 ms | 7 ms |
-| Webhooks: healthy endpoints while one hangs, p95 | below 2 s | 108 ms (p99 636) | 111 ms (p99 644) |
+| Webhooks: healthy endpoints, p95 queued to received | below 500 ms | 6 ms | 8 ms |
+| Webhooks: healthy endpoints while one hangs, p95 | below 2 s | 107 ms (p99 647) | 117 ms (p99 647) |
 | Webhooks: deliveries a second (100 offered) | at least 90 | 100 | 100 |
 | Webhooks: lost deliveries | none | 0 of 2850 | 0 of 2850 |
 | Webhooks: attempts reaching the hanging endpoint | at most 8 (the breaker threshold of 5, plus attempts in flight when it opens) | 6, breaker opened once | 6, breaker opened once |
-| Records: p95 create, p95 update | below 100 ms | 17.5 ms, 18.1 ms | 17.4 ms, 17.7 ms |
-| Records: writes a second | at least 300 | 1045 (create 1086) | 1063 (create 1092) |
-| Records: p95 filtered query (about 16,000 records, 50 a page) | below 250 ms | 121 ms | **758 ms, missed** (106 ms in a records-only run) |
-| Records: errors (a duplicate accepted, a failed request, a record missing) | none | 0 (678 duplicates refused) | 0 (681 duplicates refused) |
-| OCSP: signed answers a second, p95 | at least 1000, below 50 ms | 6645, 3.9 ms | 6533, 4.0 ms |
-| OCSP: cached answers a second | at least 3000 | 14836 | 14913 |
+| Records: p95 create, p95 update | below 100 ms | 18.3 ms, 18.5 ms | 19.0 ms, 19.2 ms |
+| Records: writes a second | at least 300 | 1020 (create 1059) | 991 (create 1014) |
+| Records: p95 filtered query (about 15,500 records, 50 a page) | below 250 ms | 65 ms (420 a second) | 62 ms (465 a second) |
+| Records: errors (a duplicate accepted, a failed request, a record missing) | none | 0 (661 duplicates refused) | 0 (633 duplicates refused) |
+| OCSP: signed answers a second, p95 | at least 1000, below 50 ms | 6513, 3.9 ms | 6524, 4.0 ms |
+| OCSP: cached answers a second | at least 3000 | 14836 | 14877 |
 | OCSP: wrong or failed answers | none | 0 | 0 |
-| Firehose: posts checked a second | at least 300 | 1183 | 1062 |
+| Firehose: posts checked a second | at least 300 | 1042 | 1062 |
 | Firehose: posts lost, posts checked twice | none | 0, 0 | 0, 0 |
-| Firehose: queue above `FIREHOSE_QUEUE_MAX` | at most 250 (one socket read) | 92 (max 1092, paused 23 times) | 103 (max 1103, paused 22 times) |
+| Firehose: queue above `FIREHOSE_QUEUE_MAX` | at most 250 (one socket read) | 95 (max 1095, paused 23 times) | 87 (max 1087, paused 22 times) |
 
 The rates are well above today's needs on purpose: Bluesky's whole network creates on the order of tens of posts a
 second, and a tenant's webhooks see the events of its own users. The targets leave room for a slower server.
 
-**Status.** One target is not met: the records query p95 on PostgreSQL. Run 1 met every target; run 2 missed it
-while the machine was busy with other builds; a third, confirming full run (2026-10-05, the project moved to the
-internal SSD, nothing else running) missed it again with **732 ms** against 250 ms, every other target met (webhooks
-p95 7 ms and 106 ms while one endpoint hung, 0 lost; records 1059 writes a second, create and update p95 17.5 and
-17.7 ms; OCSP 6592 signed answers a second, p95 3.9 ms; firehose 1138 posts a second, 0 lost, 0 checked twice). So the
-miss is the query path, not the machine: see the query note below; the fix is planned for 1.5.0. The full SQLite run
-with `--targets ci`, as CI runs it, met every target (webhooks p95 14 ms and 261 ms, 0 lost; records query p95 359 ms
-against 750 ms; OCSP 6884 signed answers a second; firehose 2701 posts a second, 0 lost). MySQL is not measured.
+**Status.** Every target is met on PostgreSQL in both runs (2026-10-05, the project on the internal SSD; other
+sessions' builds and tests may have shared the machine). 1.4.0 missed one: the records query p95, 121 ms in its first run but 758 ms and, in a confirming run on a
+quiet machine, 732 ms in the others; the cause and the fix (B-3601, 1.5.0) are in the query note below. The full
+SQLite run with `--targets ci`, as CI runs it, meets every target too (records query p95 95 ms against 750 ms; it was
+359 ms with 1.4.0). MySQL is not measured.
+
+The record query p95 of each query body, PostgreSQL, the records scenario alone (`--scenarios records`) and the full
+runs above:
+
+| Query body | 1.4.0, no planner statistics yet | 1.4.0, with statistics | 1.5.0, no statistics (autovacuum off) | 1.5.0, full runs 1 and 2 |
+| --- | --- | --- | --- | --- |
+| `stage` eq and `amount` gte, by `amount` desc, 50 a page | 740 ms | 138 ms | 72 ms | 71, 68 ms |
+| `title` startsWith, by `title` asc, 25 a page | 575 ms | 80 ms | 39 ms | 36, 35 ms |
+| `due` range, by `due` asc, 50 a page at offsets 0 to 200 | 618 ms | 101 ms | 55 ms | 52, 50 ms |
+| All three (the target) | 704 ms (28 a second) | 128 ms (183 a second) | 67 ms (359 a second) | 65, 62 ms |
 
 A heavier webhook run (`--events-per-s 50`, 500 deliveries a second, PostgreSQL) delivered 5000 of 5000 at 496 a
 second with p95 4 ms, and while one endpoint hung 4500 of 4500 with p95 847 ms (the one-timeout dip described
@@ -289,17 +297,42 @@ below), 6 attempts on the hanging endpoint.
   failed now gets at most half the job slots (`JOB_CONCURRENCY / 2`, at least one) from an instance; its other
   deliveries wait until the oldest attempt has had its timeout. Healthy endpoints are not limited.
 
+- **Record queries depended on the planner's statistics, and sorted every match (B-3601, 1.5.0).** The records
+  scenario queries an entity whose 15,000 records were all written in the 30 seconds before; PostgreSQL's autovacuum
+  visits a database about once a minute, so whether the tables had statistics when the queries ran was chance. Without
+  them every condition looks as if it matches one row, and the plan read the entity's records in full from the
+  `(tenant_id, entity_id)` index, looked up each condition's value row per record, then sorted every match on
+  `case when … is null` keys and a `COLLATE "C"` expression no index provides (about 200 ms of database time per page
+  and 80 to 140 ms for its count; 28 queries a second, p95 704 ms). With statistics the same queries took 7 to 40 ms,
+  which is why runs varied between 106 and 758 ms. Now (`apps/query.ts`, migration `031b_record_queries`):
+  - A page sorted on a value field starts from that field's rows in the value index, `(entity_id, field, v_num,
+    record_id)` or `(entity_id, field, v_norm COLLATE "C", record_id COLLATE "C")` (on PostgreSQL partial, `where …
+    is not null`), reads them in order and stops at the page; the filter's top-level conditions on the same field are
+    tested on that index row (a range or prefix becomes the index range), the others by the value primary key, and
+    the record by its primary key. Records without a value come after, in a second query only reached when the first
+    runs out. Before: 200 ms; now 0.1 to 7 ms a page, with or without statistics.
+  - The count starts from the most selective-looking top-level condition (equality, then lists, prefixes and ranges)
+    in the same way, instead of from every record of the entity: 4 to 30 ms.
+  - The record itself is matched by tenant but no longer by entity (the value row's entity is the record's), so the
+    planner has no index on `app_records` to prefer over the primary key when it has no statistics; without that, the
+    first version of this change scanned the entity's records once per value row (100 s queries).
+  - Empty values sort last with `NULLS LAST` on PostgreSQL (MySQL and SQLite keep a `case` key; they have no `NULLS
+    LAST` or sort NULL first), text compares and sorts with `COLLATE "C"` there, as its indexes are built, and keyset
+    paging (`cursor`, `nextCursor`) keeps every page as cheap as the first. SQLite, MySQL and PostgreSQL give the same
+    rows in the same order (`server/test/integration/apps.test.ts`: the 19 queries of 1.4.0 and six more, each also
+    paged one and three records at a time by cursor and by offset).
+- **The harness's 64 users ran into the per-user API limit** (600 requests a minute) once queries got faster: the
+  writes of the first two phases use most of each user's minute. The default is now 128 users.
+
 Not fixed, and why:
 
 - When an endpoint starts hanging, its first attempts can still hold every job slot for one `WEBHOOK_TIMEOUT_MS` before
   the first failure marks it (the dip in phase 2: p99 about 640 ms with a 1 s timeout). With the default 10 s timeout
   the other endpoints' deliveries can wait up to 10 s once. Lower `WEBHOOK_TIMEOUT_MS`, or raise `JOB_CONCURRENCY`, where
   that matters; a per-endpoint queue is the real fix and is left for a later release.
-- Record queries count every match and check each condition with an `EXISTS` over the value index, so a query reads
-  the entity's records in full: about 40 ms of PostgreSQL CPU per query at 16,000 records, growing with the entity.
-  At 16 concurrent queries PostgreSQL used about nine cores, so the result depends on what else the machine runs:
-  on the shared machine p95 was 106, 121 and 758 ms in three runs. Keyset pagination and an estimated total are the fix for large
-  entities.
+- A record query still counts every match for `total`, on every page and when paging by cursor too: the count now
+  starts from one condition's index rows, but it grows with the matches (30 ms for 2,700 of 15,500 records). An
+  estimated or optional total is left for a later release (the export job already counts only once).
 - The firehose queue can pass `FIREHOSE_QUEUE_MAX` by the messages of the socket read under way when it pauses (about
   100 to 200 posts); it stays bounded.
 

@@ -668,8 +668,12 @@ filter, private `/tmp`, only the state directory writable.
   it by someone with database access. Indexed text is compared lower-cased after Unicode NFC, byte-wise (no accent
   folding, no locale collation: `é` sorts after `z`), and is at most 255 characters, so an indexed text field has a
   `maxLength` of at most 255; uniqueness is case-insensitive. Filters cover a tested subset (`eq`, `ne`, `gt`, `gte`,
-  `lt`, `lte`, `in`, `contains`, `startsWith`, `exists`, with `and`, `or`, `not`); there is no PostgreSQL-only fast
-  path. Offset pagination stops at 100,000. An existing field cannot become unique while the entity has records, and
+  `lt`, `lte`, `in`, `contains`, `startsWith`, `exists`, with `and`, `or`, `not`), with the same results on every
+  dialect; PostgreSQL's plans differ only in its collated, partial value indexes (031b). Offset pagination stops at
+  100,000; a cursor (keyset paging, B-3601, 1.5.0) goes further at the cost of the first page, but each page still
+  counts every match for `total`, so an entity with very many matching records costs that count on every page (an
+  estimated total is not offered yet). A cursor is opaque but not sealed: it carries the last record's sort values
+  and id, which the caller has just read, and is checked against the sort it is sent with. An existing field cannot become unique while the entity has records, and
   a field's type cannot change then. Formulas are parsed and walked (no `eval`), read only the entity's own non-computed
   fields, and give null on any error; they are computed on write (and by the reindex job), so `today()` and `now()`
   are the time of the last write. AI fields are filled by a job after the write, fail soft (an error leaves the field

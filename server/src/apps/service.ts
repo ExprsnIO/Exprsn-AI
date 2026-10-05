@@ -14,7 +14,7 @@ import type { Services } from '../services.js';
 import { generate } from './ai.js';
 import { AppBundles } from './bundles.js';
 import { AppForms } from './forms.js';
-import { aggregate, applyFilter, applySearch, applySort, checkFilterSize, type AggregateInput, type Filter, type QueryContext, type Sort } from './query.js';
+import { aggregate, applyFilter, applySearch, applySort, checkFilterSize, countRecords, pageRecords, type AggregateInput, type Filter, type QueryContext, type Sort } from './query.js';
 import {
   checkDefinition,
   computeFormulas,
@@ -405,8 +405,8 @@ export class AppService {
     return LABELS.filter((l) => clears(p.clearance, l));
   }
 
-  private qctx(def: EntityDefinition): QueryContext {
-    return { db: this.db, def, pg: this.s().cfg.DB_CLIENT === 'pg' };
+  private qctx(entity: EntityRow): QueryContext {
+    return { db: this.db, def: entity.definition, entityId: entity.id, pg: this.s().cfg.DB_CLIENT === 'pg' };
   }
 
   /** Records of an entity the caller can read: cleared, not hidden. */
@@ -422,26 +422,28 @@ export class AppService {
     return { id: r.id, app: app.name, entity: entity.name, label: r.label, state: r.state, values: values ?? (await this.open(r)), version: r.version, source: r.source, aiState: r.ai_state, aiError: r.ai_error, createdBy: r.created_by, updatedBy: r.updated_by, createdAt: r.created_at, updatedAt: r.updated_at };
   }
 
-  async query(p: Principal, appRef: string, entityRef: string, input: { filter?: Filter; sort?: Sort; q?: string; limit?: number; offset?: number }) {
+  /**
+   * A page of records (B-2202): from an offset, or after a cursor from the previous page (keyset paging, B-3601), with
+   * the cursor of the next page. `total` counts every match; `count: false` leaves it null (the export's later pages).
+   */
+  async query(p: Principal, appRef: string, entityRef: string, input: { filter?: Filter; sort?: Sort; q?: string; limit?: number; offset?: number; cursor?: string; count?: boolean }) {
     const { app, entity } = await this.resolve(p, appRef, entityRef);
-    const ctx = this.qctx(entity.definition);
-    const q = this.base(p, entity);
-    if (input.filter) {
-      checkFilterSize(input.filter);
-      applyFilter(q, input.filter, ctx);
-    }
-    if (input.q) applySearch(q, input.q, ctx);
-    const total = Number(((await q.clone().count({ n: '*' })) as Record<string, unknown>[])[0]?.n ?? 0);
+    const ctx = this.qctx(entity);
+    if (input.filter) checkFilterSize(input.filter);
+    const match = { ...(input.filter ? { filter: input.filter } : {}), ...(input.q ? { q: input.q } : {}) };
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
-    applySort(q, input.sort?.length ? input.sort : [{ field: 'createdAt', dir: 'asc' }], ctx);
-    const rows = ((await q.select('r.*').limit(limit).offset(offset)) as Record<string, unknown>[]).map(recordFrom);
-    return { app, entity, total, limit, offset, records: await Promise.all(rows.map((r) => this.view(app, entity, r))) };
+    // What `base` reads, for the query builder: the tenant's records (of ctx's entity, not hidden) at cleared labels.
+    const who = { tenantId: p.tenantId, labels: this.cleared(p) };
+    const page = await pageRecords(who, { ...match, sort: input.sort ?? [], limit, offset, ...(input.cursor ? { cursor: input.cursor } : {}) }, ctx);
+    const total = input.count === false ? null : await countRecords(who, match, ctx);
+    const rows = page.rows.map(recordFrom);
+    return { app, entity, total, limit, offset, nextCursor: page.nextCursor, records: await Promise.all(rows.map((r) => this.view(app, entity, r))) };
   }
 
   async aggregate(p: Principal, appRef: string, entityRef: string, input: AggregateInput) {
     const { entity } = await this.resolve(p, appRef, entityRef);
-    const ctx = this.qctx(entity.definition);
+    const ctx = this.qctx(entity);
     const q = this.base(p, entity).select('r.id', 'r.state');
     if (input.filter) {
       checkFilterSize(input.filter);
@@ -741,8 +743,8 @@ export class AppService {
     const display = (f.type === 'lookup' ? f.display : undefined) ?? titleFieldOf(target.definition);
     const displayField = display ? target.definition.fields.find((x) => x.name === display) : undefined;
     const qb = this.base(p, target);
-    if (needle && displayField && (displayField.indexed || displayField.unique)) applyFilter(qb, { field: displayField.name, op: 'contains', value: q! }, this.qctx(target.definition));
-    applySort(qb, displayField && (displayField.indexed || displayField.unique) ? [{ field: displayField.name, dir: 'asc' }] : [], this.qctx(target.definition));
+    if (needle && displayField && (displayField.indexed || displayField.unique)) applyFilter(qb, { field: displayField.name, op: 'contains', value: q! }, this.qctx(target));
+    applySort(qb, displayField && (displayField.indexed || displayField.unique) ? [{ field: displayField.name, dir: 'asc' }] : [], this.qctx(target));
     const rows = ((await qb.select('r.*').limit(needle && !(displayField?.indexed || displayField?.unique) ? 500 : limit)) as Record<string, unknown>[]).map(recordFrom);
     const out: { value: string; label: string }[] = [];
     for (const r of rows) {
@@ -965,9 +967,9 @@ export class AppService {
     if (input.filter) checkFilterSize(input.filter);
     // Check the query now, so a bad filter is a 400 and not a failed job.
     const probe = this.base(p, entity);
-    if (input.filter) applyFilter(probe, input.filter, this.qctx(entity.definition));
-    if (input.q) applySearch(probe, input.q, this.qctx(entity.definition));
-    applySort(probe, input.sort ?? [], this.qctx(entity.definition));
+    if (input.filter) applyFilter(probe, input.filter, this.qctx(entity));
+    if (input.q) applySearch(probe, input.q, this.qctx(entity));
+    applySort(probe, input.sort ?? [], this.qctx(entity));
     const id = ulid();
     await this.db('app_transfers').insert({ id, tenant_id: p.tenantId, app_id: app.id, entity_id: entity.id, kind: 'export', state: 'queued', dry_run: false, input: JSON.stringify(input), blob_key: null, summary: null, report: null, error: null, job_id: null, created_by: p.userId, created_at: Date.now(), finished_at: null });
     const job = await this.s().jobs.enqueue({ tenantId: p.tenantId, type: 'apps.export', payload: { transferId: id }, createdBy: p.userId, maxAttempts: 2 });
@@ -994,18 +996,23 @@ export class AppService {
     const input = json<{ filter?: Filter; q?: string; sort?: Sort }>(t.input, {});
     const fields = entity.definition.fields;
     const lines = [['id', 'state', 'label', 'createdAt', 'updatedAt', ...fields.map((f) => f.name)].map(csvCell).join(',')];
-    let offset = 0;
+    let done = 0;
+    let total = 0;
+    let cursor: string | null = null;
     let label: Label = entity.label;
     for (;;) {
-      const page = await this.query(p, app.id, entity.id, { ...(input.filter ? { filter: input.filter } : {}), ...(input.q ? { q: input.q } : {}), sort: input.sort ?? [], limit: 500, offset });
+      // Keyset pages (B-3601): each page starts where the last ended, and only the first counts the matches.
+      const page = await this.query(p, app.id, entity.id, { ...(input.filter ? { filter: input.filter } : {}), ...(input.q ? { q: input.q } : {}), sort: input.sort ?? [], limit: 500, ...(cursor ? { cursor, count: false } : {}) });
+      if (page.total != null) total = page.total;
       for (const r of page.records) {
         lines.push([r.id, r.state, r.label, new Date(r.createdAt).toISOString(), new Date(r.updatedAt).toISOString(), ...fields.map((f) => r.values[f.name])].map(csvCell).join(','));
         label = highest(label, r.label);
       }
-      offset += page.records.length;
-      await ctx.progress(page.total ? Math.min(99, Math.round((offset * 100) / page.total)) : 99, `${offset} of ${page.total} records`);
-      if (!page.records.length || offset >= page.total) break;
-      if (offset >= this.o.maxExportRows) {
+      done += page.records.length;
+      cursor = page.nextCursor;
+      await ctx.progress(total ? Math.min(99, Math.round((done * 100) / total)) : 99, `${done} of ${total} records`);
+      if (!cursor) break;
+      if (done >= this.o.maxExportRows) {
         await this.finishTransfer(transferId, { state: 'failed', error: `More than ${this.o.maxExportRows} records match (APPS_EXPORT_MAX_ROWS); narrow the filter.` });
         return { error: 'too many' };
       }

@@ -3011,6 +3011,17 @@
           "offset": {
             "type": "integer"
           },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "B-3601 (1.5.0): the cursor of the next page (pass it as cursor with the same sort); null on the last page"
+          },
           "records": {
             "type": "array",
             "items": {
@@ -3022,6 +3033,7 @@
           "total",
           "limit",
           "offset",
+          "nextCursor",
           "records"
         ],
         "additionalProperties": false
@@ -26815,7 +26827,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,…), q, limit, offset",
+        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,…), q, limit, offset or cursor (keyset paging, B-3601)",
         "responses": {
           "200": {
             "description": "OK",
@@ -26883,7 +26895,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. B-2202: filter, sort, search and paginate records (body form)",
+        "summary": "records:read. B-2202: filter, sort, search and paginate records (body form); B-3601: by offset or after the cursor of the previous page",
         "requestBody": {
           "required": true,
           "content": {
@@ -26905,6 +26917,11 @@
                   },
                   "offset": {
                     "type": "integer"
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "maxLength": 16000,
+                    "description": "B-3601 (1.5.0): nextCursor of the previous page, with the same sort; not with an offset"
                   }
                 },
                 "additionalProperties": false

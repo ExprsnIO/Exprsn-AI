@@ -6,6 +6,9 @@
  *                                  the same filters, sorts, searches and aggregations return the same rows in the same
  *                                  order as on SQLite (B-2202), including mixed case, accents, wildcards, empty values
  *                                  and ties
+ *                                  B-3601: every query paged by cursor (keyset) and by offset gives the same rows in
+ *                                  the same order, across the records with and without a value in the sort field;
+ *                                  empty values last in descending sorts too; cursors for another sort are refused
  */
 import { describe, expect, it } from 'vitest';
 import { bootstrap } from '../../src/bootstrap.js';
@@ -48,7 +51,14 @@ const QUERIES: { name: string; filter?: Filter; sort?: Sort; q?: string }[] = [
   { name: 'ties fall back to id order', sort: [{ field: 'tier', dir: 'asc' }] },
   { name: 'search', q: 'ALP', sort: [{ field: 'code', dir: 'asc' }] },
   { name: 'formula', filter: { field: 'double', op: 'gt', value: 99 }, sort: [{ field: 'double', dir: 'asc' }, { field: 'code', dir: 'asc' }] },
-  { name: 'state and system fields', filter: { and: [{ field: 'state', op: 'eq', value: 'new' }, { field: 'createdAt', op: 'gt', value: 0 }] }, sort: [{ field: 'code', dir: 'asc' }] }
+  { name: 'state and system fields', filter: { and: [{ field: 'state', op: 'eq', value: 'new' }, { field: 'createdAt', op: 'gt', value: 0 }] }, sort: [{ field: 'code', dir: 'asc' }] },
+  // B-3601: empty values last when descending, and a filter on the sort field (tested on its index row)
+  { name: 'dates descending, empty last', sort: [{ field: 'due', dir: 'desc' }, { field: 'code', dir: 'asc' }] },
+  { name: 'booleans descending, empty last', sort: [{ field: 'active', dir: 'desc' }, { field: 'code', dir: 'asc' }] },
+  { name: 'enum descending, empty last', sort: [{ field: 'tier', dir: 'desc' }, { field: 'code', dir: 'asc' }] },
+  { name: 'filter and sort on one field', filter: { and: [{ field: 'amount', op: 'gte', value: 0 }, { field: 'tier', op: 'ne', value: 'bronze' }] }, sort: [{ field: 'amount', dir: 'desc' }, { field: 'code', dir: 'desc' }] },
+  { name: 'prefix on the sort field', filter: { field: 'code', op: 'startsWith', value: 'b' }, sort: [{ field: 'code', dir: 'desc' }] },
+  { name: 'system field descending', sort: [{ field: 'createdAt', dir: 'desc' }] }
 ];
 
 const DEFINITION = entityDefinitionSchema.parse({
@@ -110,7 +120,46 @@ async function scenario(client: 'sqlite' | 'pg' | 'mysql', url?: string) {
     }
     const agg = await s.apps.aggregate(p, app.id, entity.id, { groupBy: 'tier', metrics: [{ op: 'count' }, { op: 'sum', field: 'amount' }, { op: 'min', field: 'due' }] });
     const page = await s.apps.query(p, app.id, entity.id, { sort: [{ field: 'amount', dir: 'asc' }, { field: 'code', dir: 'asc' }], limit: 3, offset: 3 });
-    return { out, agg: agg.groups, page: { total: page.total, codes: page.records.map((x) => String(x.values.code)) }, ids: new Map([...codes].map(([id, code]) => [code, id])) };
+
+    // B-3601: each query again, a few records at a time, by cursor and by offset
+    const byCursor: Record<string, string[]> = {};
+    const byOffset: Record<string, string[]> = {};
+    for (const q of QUERIES) {
+      const base = { ...(q.filter ? { filter: q.filter } : {}), ...(q.sort ? { sort: q.sort } : {}), ...(q.q ? { q: q.q } : {}) };
+      for (const limit of [1, 3]) {
+        const viaCursor: string[] = [];
+        let cursor: string | null = null;
+        for (let i = 0; i < 20; i++) {
+          const r: Awaited<ReturnType<typeof s.apps.query>> = await s.apps.query(p, app.id, entity.id, { ...base, limit, ...(cursor ? { cursor } : {}) });
+          viaCursor.push(...r.records.map((x) => String(x.values.code)));
+          cursor = r.nextCursor;
+          if (!cursor) break;
+        }
+        const viaOffset: string[] = [];
+        for (let offset = 0; offset < 20; offset += limit) {
+          const r = await s.apps.query(p, app.id, entity.id, { ...base, limit, offset });
+          viaOffset.push(...r.records.map((x) => String(x.values.code)));
+          if (r.nextCursor == null) break;
+        }
+        byCursor[`${q.name} (${limit})`] = viaCursor;
+        byOffset[`${q.name} (${limit})`] = viaOffset;
+      }
+    }
+    const first = await s.apps.query(p, app.id, entity.id, { sort: [{ field: 'city', dir: 'asc' }], limit: 2 });
+    const refused = await Promise.all([
+      s.apps.query(p, app.id, entity.id, { sort: [{ field: 'city', dir: 'desc' }], limit: 2, cursor: first.nextCursor! }).catch((e: { status?: number }) => e.status),
+      s.apps.query(p, app.id, entity.id, { sort: [{ field: 'city', dir: 'asc' }], limit: 2, offset: 2, cursor: first.nextCursor! }).catch((e: { status?: number }) => e.status),
+      s.apps.query(p, app.id, entity.id, { sort: [{ field: 'city', dir: 'asc' }], limit: 2, cursor: 'bm90IGEgY3Vyc29y' }).catch((e: { status?: number }) => e.status)
+    ]);
+    return {
+      out,
+      byCursor,
+      byOffset,
+      refused,
+      agg: agg.groups,
+      page: { total: page.total, codes: page.records.map((x) => String(x.values.code)) },
+      ids: new Map([...codes].map(([id, code]) => [code, id]))
+    };
   } finally {
     await s.close();
     await db.destroy();
@@ -136,7 +185,12 @@ const EXPECTED: Record<string, string[]> = {
   'unicode names sort': ['A-1', 'A-2', 'B-2', 'B-1', 'C-2', 'D-2', 'C-1', 'D-1'],
   search: ['A-1', 'A-2'],
   formula: ['A-1', 'B-2', 'D-2', 'B-1', 'D-1'],
-  'state and system fields': ['A-1', 'A-2', 'B-1', 'B-2', 'C-1', 'C-2', 'D-1', 'D-2']
+  'state and system fields': ['A-1', 'A-2', 'B-1', 'B-2', 'C-1', 'C-2', 'D-1', 'D-2'],
+  'dates descending, empty last': ['D-1', 'A-1', 'C-2', 'B-1', 'A-2', 'C-1', 'B-2', 'D-2'],
+  'booleans descending, empty last': ['A-1', 'B-2', 'D-1', 'A-2', 'C-1', 'B-1', 'C-2', 'D-2'],
+  'enum descending, empty last': ['A-2', 'C-2', 'A-1', 'B-2', 'D-1', 'D-2', 'B-1', 'C-1'],
+  'filter and sort on one field': ['D-1', 'D-2', 'B-2', 'A-1', 'A-2', 'C-2'],
+  'prefix on the sort field': ['B-2', 'B-1']
 };
 
 function check(r: Awaited<ReturnType<typeof scenario>>) {
@@ -151,6 +205,14 @@ function check(r: Awaited<ReturnType<typeof scenario>>) {
     { key: null, values: [1, -2.5, Date.parse('2025-12-31T00:00:00Z')] }
   ]);
   expect(r.page).toEqual({ total: 8, codes: ['A-1', 'B-2', 'D-2'] });
+  // B-3601: paging never changes the rows or their order, whether by cursor or by offset
+  for (const q of QUERIES) {
+    for (const limit of [1, 3]) {
+      expect(r.byCursor[`${q.name} (${limit})`], `${q.name} by cursor, ${limit} a page`).toEqual(r.out[q.name]);
+      expect(r.byOffset[`${q.name} (${limit})`], `${q.name} by offset, ${limit} a page`).toEqual(r.out[q.name]);
+    }
+  }
+  expect(r.refused).toEqual([400, 400, 400]);
 }
 
 describe('low-code records across dialects (B-2201, B-2202)', () => {
