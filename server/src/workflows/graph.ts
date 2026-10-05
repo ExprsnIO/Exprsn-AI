@@ -9,7 +9,7 @@ import { CHECKPOINTS } from '../guardrails/types.js';
  * step. Validation reports every problem with the node (and edge) it belongs to, so the editor can point at it.
  */
 
-export const NODE_KINDS = ['trigger', 'model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool'] as const;
+export const NODE_KINDS = ['trigger', 'model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool', 'record'] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 
 /** Limits a published workflow must stay within (the board's "40 steps, 200k tokens, 2 h"). */
@@ -120,7 +120,8 @@ export function graphVaultRefs(g: { nodes: { kind: string; config: unknown }[] }
 }
 
 export const CONFIGS = {
-  trigger: z.object({ source: z.enum(['manual', 'api']).default('manual') }).strict(),
+  // 1.4.0 (B-2206): `record` and `schedule` workflows are started by an app's triggers (the run input names the event).
+  trigger: z.object({ source: z.enum(['manual', 'api', 'record', 'schedule']).default('manual') }).strict(),
   model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text') }).strict(),
   transform: z.object({ fields: z.record(propName, template).refine((f) => Object.keys(f).length > 0 && Object.keys(f).length <= 50, 'Between 1 and 50 fields') }).strict(),
   branch: z.object({ left: template.min(1), op: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists']), right: z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]).optional() }).strict(),
@@ -141,7 +142,23 @@ export const CONFIGS = {
   calc: z.object({ expression: template.min(1).max(2000) }).strict(),
   wait: z.object({ ms: z.number().int().min(1000).max(LIMITS.maxWaitMs) }).strict(),
   /** `args` maps the tool's argument names to templates; without it the step passes on the matching fields of its input. */
-  tool: z.object({ tool: z.string().max(200).default(''), args: z.union([z.record(propName, template), template]).optional(), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict()
+  tool: z.object({ tool: z.string().max(200).default(''), args: z.union([z.record(propName, template), template]).optional(), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict(),
+  /**
+   * 1.4.0 (B-2206): creates, updates or moves a low-code app record as the run's owner. `record` is the record id (a
+   * template); `values` maps field names to templates; `to` is the target state of a transition.
+   */
+  record: z
+    .object({
+      action: z.enum(['create', 'update', 'transition']),
+      app: z.string().min(1).max(63),
+      entity: z.string().min(1).max(63),
+      record: template.max(200).optional(),
+      values: z.record(propName, template).default({}),
+      to: z.string().regex(/^[a-z][a-z0-9_-]{0,59}$/).optional()
+    })
+    .strict()
+    .refine((c) => c.action === 'create' || !!c.record, 'An update or transition names the record (a template such as {{input.record.id}})')
+    .refine((c) => c.action !== 'transition' || !!c.to, 'A transition names the state to move to')
 } satisfies Record<NodeKind, z.ZodType>;
 
 export type NodeConfig<K extends NodeKind> = z.infer<(typeof CONFIGS)[K]>;
@@ -231,6 +248,8 @@ export function outputSchemaOf(n: WfNode, incoming: PortSchema, tool?: ToolInfo)
         return obj({});
       case 'tool':
         return n.output ?? (tool ? toolOutputPort(tool) : { type: 'object' });
+      case 'record':
+        return obj({ id: { type: 'string' }, state: ANY, label: { type: 'string' }, values: { type: 'object' } });
     }
   };
   return PASS_THROUGH.includes(n.kind) ? mergeSchemas([incoming, own()]) : own();
@@ -374,8 +393,8 @@ export function references(tpl: string): { steps: string[]; bad: string[] } {
 function templatesOf(n: WfNode): string[] {
   const c = n.config as Record<string, unknown>;
   const out: string[] = [];
-  for (const k of ['prompt', 'text', 'show', 'left', 'url', 'body', 'expression', 'args']) if (typeof c[k] === 'string') out.push(c[k] as string);
-  for (const k of ['fields', 'args']) if (c[k] && typeof c[k] === 'object') for (const v of Object.values(c[k] as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
+  for (const k of ['prompt', 'text', 'show', 'left', 'url', 'body', 'expression', 'args', 'record']) if (typeof c[k] === 'string') out.push(c[k] as string);
+  for (const k of ['fields', 'args', 'values']) if (c[k] && typeof c[k] === 'object') for (const v of Object.values(c[k] as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
   if (c.headers && typeof c.headers === 'object') for (const v of Object.values(c.headers as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
   return out;
 }

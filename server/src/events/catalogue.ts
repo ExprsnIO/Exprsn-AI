@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 2;
+export const CATALOGUE_VERSION = 3;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -57,7 +57,9 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants; since Sprint 25 also plugin.audited, plugin.action.refused, plugin.call.refused and plugin.throttled (audit actions)' },
   // 1.4.0, Sprint 25 (B-1608 to B-1611)
   { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels (audit actions)' },
-  { pattern: 'record.*', description: 'Low-code app records: created, updated, deleted, transitioned (reserved until B-22)' },
+  { pattern: 'record.*', description: 'Low-code app records (Sprint 27): created, updated, deleted, transitioned' },
+  // 1.4.0, Sprint 27 (B-2201 to B-2208)
+  { pattern: 'app.*', description: 'Low-code apps: apps, entities, record changes, imports and exports, forms and public submissions, triggers fired and skipped, AI fields, bundles and drafts (audit actions; never record values)' },
   { pattern: 'file.*', description: 'File store (Sprint 26d): uploaded, updated, deleted (to the trash), restored, shared; and audit actions for uploads received, versions ready or rejected, downloads, shares, trash, purges and quotas' },
   { pattern: 'group.*', description: 'Groups and their members (reserved until B-25)' },
   { pattern: 'message.*', description: 'Messaging: sent, edited, deleted (reserved until B-26)' },
@@ -83,7 +85,7 @@ const approval = {
     obj({ kind: { const: 'agent' }, run: str(64), agent: str(200) })
   ]
 };
-// Domain events (files emitted since Sprint 26d, the others reserved): ids and names only; content stays in the
+// Domain events (files emitted since Sprint 26d, records since Sprint 27, the others reserved): ids and names only; content stays in the
 // tenant, sealed, and is fetched through the API.
 const record = (extra: Record<string, JsonSchema> = {}) => obj({ app: id26, entity: str(120), record: id26, workspace: nullable(id26), actor: nullable(id26), ...extra });
 const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folder: nullable(id26), workspace: id26, version: { type: 'integer', minimum: 1 }, actor: nullable(id26), ...extra });
@@ -109,10 +111,10 @@ export const EVENT_TYPES: EventType[] = [
   ...(['succeeded', 'failed', 'cancelled'] as const).map((st) => ({ type: `job.${st}`, group: 'job.*', version: 1, since: '1.1.0', status: 'emitted' as const, description: `A job ${st}`, data: job })),
   ...flagActions.map(([a, d]) => ({ type: `flag.${a}`, group: 'flag.*', version: 1, since: '1.1.0', status: 'emitted' as const, description: d, data: flag })),
   { type: 'approval.requested', group: 'approval.*', version: 1, since: '1.1.0', status: 'emitted', description: 'An agent run or a workflow waits for an approval', data: approval },
-  { type: 'record.created', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A record was created', data: record() },
-  { type: 'record.updated', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A record was updated', data: record({ fields: { type: 'array', items: str(120), maxItems: 500 } }) },
-  { type: 'record.deleted', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: 'A record was deleted', data: record() },
-  { type: 'record.transitioned', group: 'record.*', version: 1, since: '1.4.0', status: 'reserved', description: "A record moved through its entity's state machine", data: record({ from: str(60), to: str(60) }) },
+  { type: 'record.created', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A record was created', data: record() },
+  { type: 'record.updated', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A record was updated', data: record({ fields: { type: 'array', items: str(120), maxItems: 500 } }) },
+  { type: 'record.deleted', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A record was deleted', data: record() },
+  { type: 'record.transitioned', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: "A record moved through its entity's state machine", data: record({ from: str(60), to: str(60) }) },
   { type: 'file.uploaded', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file passed quarantine and was stored', data: file() },
   { type: 'file.updated', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A new version of a file was stored', data: file() },
   { type: 'file.deleted', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file went to the trash', data: file() },

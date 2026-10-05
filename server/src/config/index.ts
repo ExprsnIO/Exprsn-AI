@@ -548,7 +548,21 @@ const base = z.object({
      */
     MODERATION_SWEEP_SECONDS: z.coerce.number().int().min(0).max(24 * 3600).default(60),
     MODERATION_EXTERNAL_PROVIDERS: bool.default(false),
-    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000)
+    MODERATION_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5000),
+    /**
+     * Sprint 27 (B-2201 to B-2208): low-code apps. Public form submissions are limited per address to
+     * APPS_PUBLIC_FORM_PER_MINUTE (each form also has its own limit). A CSV import is at most APPS_IMPORT_MAX_BYTES (it
+     * travels in the JSON body, so within the API's 256 kB limit) and APPS_IMPORT_MAX_ROWS rows; an export at most
+     * APPS_EXPORT_MAX_ROWS records; a bulk write at most APPS_BULK_MAX operations. Chains of record triggers stop at
+     * APPS_TRIGGER_MAX_DEPTH; schedule triggers are checked every APPS_SCHEDULE_TICK_SECONDS (0 turns them off).
+     */
+    APPS_PUBLIC_FORM_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(10),
+    APPS_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(250_000).default(200_000),
+    APPS_IMPORT_MAX_ROWS: z.coerce.number().int().min(1).max(100_000).default(10_000),
+    APPS_EXPORT_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(100_000),
+    APPS_BULK_MAX: z.coerce.number().int().min(1).max(1000).default(500),
+    APPS_TRIGGER_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60)
   });
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
