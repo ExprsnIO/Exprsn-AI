@@ -1,7 +1,7 @@
 import { test, expect, open, settle, type Page } from './support/fixtures';
 import { expectAccessible } from './support/a11y';
 import { expectAxeClean } from './support/axe';
-import { SCREENS } from './support/sweep';
+import { SWEEP } from './support/sweep';
 
 // B-1101: the in-page WCAG A/AA check on every screen, on each of its design states (applied through
 // App.applyState, which also opens the screens' drawers and dialogs; the console has no visible control for them), and on a streaming chat answer, in light and dark. Runs after the primary
@@ -65,7 +65,7 @@ for (const scheme of ['light', 'dark'] as const) {
       // Colour transitions would let a check read a colour half-way through the mode switch.
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
       const pace = pacer(page);
-      for (const route of [...SCREENS, 'settings']) {
+      for (const route of SWEEP) {
         await test.step(route, async () => {
           await pace();
           await open(page, route);
