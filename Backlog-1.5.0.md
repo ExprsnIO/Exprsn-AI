@@ -22,7 +22,7 @@ the same policy pipeline.
 
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
-| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | Planned |
+| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
 | 30 | Domain screens; CalDAV, CardDAV and WebDAV | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3201–B-3203 | 73 | `032_dav` | Planned |
 | 31 | AT-Protocol PDS and feed generator, release | B-2901–B-2906, B-3001–B-3004, B-3406, B-3501 | 65 | `033_pds_feeds` | Planned |
 
@@ -52,7 +52,8 @@ permission: `roles:manage`.
 
 ### B-34 Console screens (88 points)
 
-Screens for everything 1.4.0 and 1.5.0 add, starting from prototype boards. Each live screen joins the Playwright
+Screens for everything 1.4.0 and 1.5.0 add, starting from prototype boards. B-3401 landed on `sprint-29` (2026-10-05): the
+boards for every screen below plus the B-3413 additions are in `design/prototype/` (see `Sprints.md`, Sprint 29). Each live screen joins the Playwright
 suite with axe-core (Standard and Enhanced, light and dark) and the reflow checks for its dialogs and drawers.
 
 | ID | Item | Done when | Pts |
@@ -148,8 +149,8 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 - [ ] PDS hosting: which tenants may host repositories, and the handle domain each uses (a tenant subdomain or the
   tenant's own domain).
-- [ ] Custom roles: can a workspace define roles, or only the tenant?
-- [ ] Access reviews: who reviews by default (the workspace admin, the member's manager from the directory, or both)?
+- [x] Custom roles: the tenant only (decided 2026-10-05 for the B-3412 board; workspaces reuse tenant roles).
+- [x] Access reviews: the workspace admin reviews by default (decided 2026-10-05); a campaign may name other reviewers.
 - [ ] DAV app passwords: allowed for roles that require MFA, or refused for them?
 
 ## Risks

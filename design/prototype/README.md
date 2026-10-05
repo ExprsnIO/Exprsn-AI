@@ -40,4 +40,6 @@ To change a screen, edit its file under `js/screens/` (or `css/app.css`, `js/app
 
 Screens: sign-in, chat, compare, runs, knowledge, memory, media, images, models, profiles, pools, training, registry, MCP servers, workflows, scripts, connections, guardrails, flags, classifiers, usage and audit, tenants, identity, zones, platform, settings, plus the shared-components sheet.
 
+Sprint 29 (B-3401 in `Backlog-1.5.0.md`) adds the boards for the 1.4.0 domains, which have no live console screen yet: files, apps, groups and events, messages and feed (workspace), and moderation, channels, roles and access, certificates, vault, plugins and events, AT-Protocol (admin), plus the 1.4.0 identity additions on sign-in (self-registration, invitation and verification links, trusted devices, email codes, GitHub and AT-Protocol sign-in), settings (security, trusted devices, factors, the user's DID) and identity (user stores, sign-up and MFA policy, invitations, CSV imports, DID bindings). Each board is the specification for its live screen in a later sprint; its "States to design from this page" strip is wired like the others.
+
 Everything shown is example data for the Northwind tenant. Nothing is persisted beyond the browser tab except the theme choice and the signed-in flag.

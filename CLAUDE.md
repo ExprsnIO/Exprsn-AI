@@ -39,7 +39,10 @@ ACME server, a secrets vault with leases, the event catalogue and plugins; AT-Pr
 firehose ingest; moderation actions and appeals, the file store, low-code data apps, groups and events,
 customer-service channels, messaging and the workspace feed, and a platform load test) made version `1.4.0`; they are
 server-only, and their console screens are planned in `Backlog-1.5.0.md`.
-Every console screen is live. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
+Every console screen is live. Sprint 29 (B-3401, `Backlog-1.5.0.md`) added the prototype boards for the 1.4.0 domains
+(`files`, `apps`, `groups`, `messages`, `moderation`, `channels`, `roles`, `certificates`, `vault`, `plugins`, `atproto`,
+plus identity additions to `signin`, `settings` and `identity`); they exist only in `design/prototype/` until their sprint
+makes them live in `web/`. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
 
 ## Commands
 
