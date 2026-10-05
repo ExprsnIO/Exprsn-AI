@@ -35,6 +35,7 @@ import { FakeRunner } from '../server/test/fake-runner.js';
 import { FakeImageBackend, FakeMediaRunner, FakeSafety } from '../server/test/sprint8-fakes.js';
 import { FakeTrainer } from '../server/test/fake-trainer.js';
 import { startFakeAcme } from '../server/test/fake-acme.js';
+import { FakePlcDirectory } from '../server/test/sprint25b-fakes.js';
 import { startSigner } from '../server/src/signer/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +71,9 @@ async function main() {
   // keys, so the Certificates screen can create issuers and issue (without it key-making routes answer 409 custody).
   const signerToken = randomBytes(24).toString('base64url') + 'e2e-signer';
   const signer = await startSigner({ socketPath: path.join(dir, 'signer', 's.sock'), key: randomBytes(32).toString('base64'), token: signerToken });
+  // A PLC directory (Sprint 25): did:plc identities and the PDS accounts' DIDs (Sprint 31) are registered here.
+  const plc = new FakePlcDirectory();
+  await plc.start();
   let baseUrl = url;
   const acme = await startFakeAcme(async (_domain, token) => {
     const r = await fetch(`${baseUrl}/.well-known/acme-challenge/${token}`);
@@ -101,6 +105,9 @@ async function main() {
     ACME_DIRECTORY_URL: acme.directory,
     ACME_POLL_MS: '20',
     ACME_CONTACT: 'pki@example.internal',
+    // AT-Protocol (Sprints 25 and 31): the PLC directory double, and a handle domain for the PDS (the AT-Protocol screen).
+    ATPROTO_PLC_URL: plc.url,
+    PDS_HANDLE_DOMAIN: 'pds.example.test',
     // Every browser test signs in from 127.0.0.1; the per-address limiter must not throttle the suite.
     LOCKOUT_MAX_ATTEMPTS: '50',
     ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('E2E_ENV_')).map(([k, v]) => [k.slice(8), v]))
@@ -119,6 +126,9 @@ async function main() {
     trainer
   });
   s.scripts.runner = runner;
+  // The deployment stays air-gapped for the other screens; only the PDS may treat its zone as having egress, so the
+  // AT-Protocol screen can switch hosting on (in production the zone's egress decides, docs/pds.md).
+  s.pds.zoneProblem = async () => null;
   await bootstrap(s);
   const tenant = (await s.tenants.bySlug(cfg.DEFAULT_TENANT))!;
   const tenantId = tenant.id;
@@ -228,6 +238,7 @@ async function main() {
       await mcp.stop();
       await acme.close();
       await signer.close();
+      await plc.stop();
     } catch {
       /* best effort */
     }
