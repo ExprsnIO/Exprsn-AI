@@ -108,7 +108,7 @@
         + '.profiles-yaml{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre;overflow:auto;min-height:210px}'
         + '</style>'
         + sideList
-        + '<div class="page">' + main + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '<div class="page">' + main + '</div>';
 
       // ---- events ----
       ctx.on('click', '[data-profile]', (e, t) => { st.selected = t.dataset.profile; ctx.rerender(); });
@@ -116,7 +116,6 @@
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go, t.dataset.go === 'models' ? { model: target.model } : undefined); });
       ctx.on('change', '[data-f]', (e, t) => { st.form[target.id] = st.form[target.id] || {}; st.form[target.id][t.dataset.f] = t.value; st.dirty = true; ctx.rerender(); });
       ctx.on('click', '[data-save]', () => { st.dirty = false; ctx.toast('Draft saved for <b>' + esc(p.id) + '</b>. The published version keeps serving until a model admin publishes the draft.', 'ok', 5000); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-raise]', () => ctx.modal({ title: 'Raise tool budget for analyst', body: UI.field('maxTools', UI.input('32', { attrs: 'class="input mono"' }).replace('class="input" ', '')) + UI.field('maxSchemaTokens', UI.input('9000', { attrs: 'class="input mono"' }).replace('class="input" ', '')) + UI.notice('A 32B model keeps tool-calling accuracy up to about 30 tools in the conformance suite. Above that, find_tools stays the safer choice.', 'warn'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save to draft', { kind: 'primary', attrs: 'data-close data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { st.overBudget = false; target.maxTools = 32; target.maxSchema = 9000; ctx.rerender(); ctx.toast('Budget raised to 32 tools, 9,000 schema tokens in the draft.', 'ok'); }); } }));
 
       ctx.on('click', '[data-promote]', async () => {

@@ -87,7 +87,7 @@
             + UI.kv([['Priority', esc(job.priority)], ['Hardware', esc(job.hw)], ['Deadline', esc(job.deadline)], ['Last checkpoint', esc(job.checkpoint)]], 4)
             + '<div class="hstack wrap muted" style="font-size:12px;gap:12px"><span>Owner ' + esc(job.owner) + '</span><span>Tenant Northwind</span><span>Container <span class="mono">trainer:2026.09.1, sha256:5be0…</span></span><span>Progress streams on <span class="mono">train.progress</span></span><span class="right"><a href="#" data-go="pools">Pool health</a></span></div>');
       } else if (st.tab === 'datasets') {
-        body = '<div class="toolbar">' + UI.search('Filter datasets', 'data-search', st.query) + '<span class="right">' + UI.btn('Register dataset version', { attrs: 'data-newds' }) + '</span></div>'
+        body = '<div class="toolbar">' + UI.search('Filter datasets', 'data-search', st.query) + '<span class="right">' + UI.btn('Import dataset', { icon: 'download', attrs: 'data-importds' }) + UI.btn('Register dataset version', { attrs: 'data-newds' }) + '</span></div>'
           + UI.table(['Dataset', 'Version', 'Rows', 'Label', 'Source', 'PII scrub', 'Hash', 'Used by'], DATASETS.filter((d) => !q || (d.id + ' ' + d.source).toLowerCase().includes(q)).map((d, i) => ({ cells: ['<b>' + esc(d.id) + '</b>', esc(d.ver), esc(d.rows), UI.label(d.label, { sm: true }), esc(d.source), d.withdrawn ? '<span style="color:var(--danger-fg)">' + esc(d.pii) + '</span>' : esc(d.pii), '<span class="mono">' + esc(d.hash) + '</span>', esc(d.used)], attrs: 'data-ds="' + i + '"' })))
           + UI.notice('Datasets are versioned in MinIO with a manifest: row count, hash, label, source and PII-scrub report. Conversation data enters only with tenant opt-in and at or below the target model\'s label ceiling.', 'info');
       } else if (st.tab === 'schedules') {
@@ -123,15 +123,15 @@
         + UI.pagehead('Training', 'TypeScript orchestrates and governs, Python GPU workers train, Ollama serves only the approved, converted result', UI.btn('Schedule recurring', { attrs: 'data-recurring' }) + UI.btn('Submit job', { kind: 'primary', attrs: 'data-newjob' }))
         + UI.tabs([{ id: 'jobs', label: 'Jobs', count: jobs.length }, { id: 'datasets', label: 'Datasets', count: DATASETS.length }, { id: 'schedules', label: 'Schedules' }, { id: 'evals', label: 'Evals', count: EVALS.length }], st.tab)
         + body
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>' + inspector;
 
       // ---- events ----
       ctx.on('click', '.tabs [data-tab]', (e, t) => { st.tab = t.dataset.tab; st.query = ''; ctx.rerender(); });
+      ctx.on('click', '[data-importds]', () => ctx.navigate('import', { kind: 'dataset', target: 'training' }));
       ctx.on('click', '[data-segs] [data-seg]', (e, t) => { st.stateFilter = t.dataset.seg; ctx.rerender(); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', 'tr.row[data-job]', (e, t) => { st.selected = t.dataset.job; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-clear]', (e, t) => { st[t.dataset.clear] = false; ctx.rerender(); });
       ctx.on('click', '[data-rec]', (e, t) => { const r = st.recurring[+t.dataset.rec]; r.on = !r.on; ctx.rerender(); ctx.toast(esc(r.name) + (r.on ? ' enabled.' : ' paused; the next run is skipped.')); });

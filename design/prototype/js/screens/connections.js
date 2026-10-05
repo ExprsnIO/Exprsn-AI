@@ -146,7 +146,7 @@
         + UI.notice('Read-only is enforced by the database account and its grants. The query parser is advisory.', 'ok')
         + UI.tabs([{ id: 'settings', label: 'Settings' }, { id: 'allow', label: 'Schema allow-list' }, { id: 'sync', label: 'Sync', count: conn.syncs.length }, { id: 'browser', label: 'Browser' }], st.tab)
         + (st.tab === 'settings' ? settings : st.tab === 'allow' ? allow : st.tab === 'sync' ? sync : browser)
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       if (st.register) { st.register = false; openRegister(ctx); }
 
@@ -190,7 +190,6 @@
       ctx.on('click', '[data-saveallow]', () => { ctx.toast('Allow-list saved. The cached schema the model sees is rebuilt.', 'ok'); });
       ctx.on('click', '[data-clearance]', () => { ctx.toast('Request sent to the tenant admin. Clearance comes from your LDAP group, not from this console.'); });
       ctx.on('click', '[data-register]', () => openRegister(ctx));
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 

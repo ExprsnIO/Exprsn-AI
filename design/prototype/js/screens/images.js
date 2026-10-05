@@ -99,7 +99,7 @@
         + '<div class="page">' + UI.pagehead('Images', 'Jobs run one per GPU on the image pool and never evict chat models')
         + (st.honest ? UI.notice('<b>Honest waiting.</b> Each card shows its queue position or the real denoising step reported by the worker. There is no spinner and no invented percentage.', 'info') : '')
         + '<div class="images-grid">' + cards.map(card).join('') + '</div>'
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + '<aside class="inspector w300" aria-label="Inspector"><div class="eyebrow">Selected image</div>' + insp
         + '<div class="divider"></div><div class="eyebrow">Prompt</div><div class="fg2" style="font-size:12px">' + esc(sel.prompt) + '</div>' + UI.kv([['Size', esc(sel.size)], ['Provider', esc((PROVIDERS.find((p) => p.value === st.provider) || PROVIDERS[0]).label.split(',')[0])]], 2) + '</aside>';
 
@@ -129,7 +129,6 @@
         ctx.modal({ title: 'Download ' + UI.label(c.label, { sm: true }), body: (high ? UI.notice('<b>This image is ' + esc(c.label) + '.</b> Downloading copies it outside the console. The export is written to the audit log with your name and the trace ID.', 'warn') : '') + UI.kv([['File', '<span class="mono">' + esc(c.id.replace(/\./g, '-')) + '.png</span>'], ['Size', esc(c.size)], ['Provenance', 'C2PA manifest embedded, signed by Exprsn-AI'], ['Label', UI.label(c.label, { sm: true }) + ' <span class="muted">in the manifest and the sidecar</span>'], ['Safety', 'passed, ' + c.safety.toFixed(2)], ['Trace', '<span class="mono">7e2c19a4b0d84f3e</span>']], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(high ? 'Download and log' : 'Download', { kind: 'primary', icon: 'download', attrs: 'data-close data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => ctx.toast('Downloaded with the provenance manifest.' + (high ? ' Audit entry written.' : ''), 'ok')); } });
       };
       ctx.on('click', '[data-download]', openDownload);
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       if (st.openDownload) { st.openDownload = false; setTimeout(openDownload, 50); }
 
       // honest progress ticker: queued jobs move to denoising one per GPU, steps come from the worker

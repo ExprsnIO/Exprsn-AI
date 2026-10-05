@@ -250,11 +250,10 @@
         + left
         + '<div class="page">' + UI.pagehead(app.title, esc(app.description) + ' <span class="muted">' + esc(app.scope === 'tenant' ? 'Tenant-wide' : 'Workspace ' + app.workspace) + ', by ' + esc(app.createdBy) + ', updated ' + esc(app.updatedAt) + '</span>', UI.label(app.label) + UI.btn('Edit app', { size: 'sm', icon: 'edit', attrs: 'data-editapp' }) + UI.btn('Delete app', { size: 'sm', kind: 'ghost', attrs: 'data-delapp' }))
         + tabs + body
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>'
+        + '</div>'
         + inspector;
 
       // ----- shared events -----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-app]', (e, t) => { st.app = t.dataset.app; st.entity = null; st.record = null; st.problem = null; st.filters = []; st.page = 0; ctx.rerender(); });
       ctx.on('input', '[data-appsearch]', (e, t) => { st.appQuery = t.value; const list = root.querySelector('.leftpane .vstack'); list.innerHTML = st.apps.filter((a) => (a.title + ' ' + a.name + ' ' + a.description).toLowerCase().includes(t.value.toLowerCase())).map((a) => UI.listItem(esc(a.title), esc(a.scope === 'tenant' ? 'Tenant-wide' : a.workspace) + ', ' + a.entities.length + ' entities', { active: a.id === st.app, attrs: 'data-app="' + esc(a.id) + '"', right: UI.label(a.label, { sm: true }) })).join(''); });
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; st.problem = null; ctx.rerender(); });

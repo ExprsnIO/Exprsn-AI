@@ -183,10 +183,9 @@
         + '#main .inspector .kv .v{overflow-wrap:anywhere}'
         + '</style>'
         + left + '<div class="page">' + head + tabs + body
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>' + aside;
+        + '</div>' + aside;
 
       // ---- events ----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
       ctx.on('click', '[data-modeseg] [data-seg]', (e, t) => { st.mode = t.dataset.seg; st.sel = null; ctx.rerender(); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); if (i) { i.focus(); i.value = v; } });

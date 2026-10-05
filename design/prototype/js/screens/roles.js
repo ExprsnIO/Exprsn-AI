@@ -78,7 +78,7 @@
     { id: 'legacy-exporter', name: 'Legacy exporter', desc: 'Retired 1 Sep: usage exports moved to the auditor role.', perms: ['usage:read'], mfa: false, grantableBy: 'tenant-admin', holders: [], version: 3, state: 'retired', versions: [{ v: 3, at: '1 Sep 08:00', by: 'Jonas Lindqvist', perms: ['usage:read'] }] }
   ];
   const baseReviews = () => [
-    { id: 'rv-q3-fin', name: 'Q3 certification, Finance Ops', scope: 'workspace', ws: 'Finance Ops', reviewer: 'Jonas Lindqvist (workspace admin)', due: '30 Sep 2026', state: 'open', cadence: 'quarterly', grants: [
+    { id: 'rv-q3-fin', name: 'Q3 certification, Finance Ops', scope: 'workspace', ws: 'Finance Ops', reviewer: 'Jonas Lindqvist (workspace admin), Noor Rahimi (directory manager)', due: '30 Sep 2026', state: 'open', cadence: 'quarterly', grants: [
       { id: 'g1', member: 'Priya Nair', what: 'role flag-reviewer', ws: 'Finance Ops', lastUsed: 'today 14:02', decision: 'pending' },
       { id: 'g2', member: 'Priya Nair', what: 'custom role Close reviewer v2', ws: 'Finance Ops', lastUsed: 'today 11:02', decision: 'pending' },
       { id: 'g3', member: 'Tomasz Weber', what: 'role member', ws: 'Finance Ops', lastUsed: 'today 11:40', decision: 'confirm', by: 'Jonas Lindqvist', at: '17 Sep 10:02' },
@@ -88,9 +88,9 @@
       { id: 'g7', member: 'Lena Hoffmann', what: 'role knowledge-curator', ws: 'Finance Ops', lastUsed: '12 Sep 16:40', decision: 'confirm', by: 'Jonas Lindqvist', at: '17 Sep 10:05' },
       { id: 'g8', member: 'Samir Haddad', what: 'workspace membership', ws: 'Finance Ops', lastUsed: 'never', decision: 'pending' }
     ] },
-    { id: 'rv-po', name: 'Annual certification, People Ops', scope: 'workspace', ws: 'People Ops', reviewer: 'Aisha Bello (workspace admin)', due: '15 Sep 2026', state: 'overdue', escalatedTo: 'tenant admins (Jonas Lindqvist), 16 Sep 00:05', cadence: 'yearly', grants: [
+    { id: 'rv-po', name: 'Annual certification, People Ops', scope: 'workspace', ws: 'People Ops', reviewer: 'Aisha Bello (workspace admin), Samir Haddad (directory manager)', due: '15 Sep 2026', state: 'overdue', escalatedTo: 'tenant admins (Jonas Lindqvist), 16 Sep 00:05', cadence: 'yearly', grants: [
       { id: 'h1', member: 'Noor Rahimi', what: 'role member', ws: 'People Ops', lastUsed: 'today 08:10', decision: 'pending' }, { id: 'h2', member: 'Aisha Bello', what: 'role identity-admin', ws: 'People Ops', lastUsed: 'today 09:00', decision: 'pending' }, { id: 'h3', member: 'Jonas Lindqvist', what: 'role member', ws: 'People Ops', lastUsed: '11 Sep', decision: 'confirm', by: 'Aisha Bello', at: '12 Sep 11:00' }] },
-    { id: 'rv-fs', name: 'Q4 certification, Field Sales', scope: 'workspace', ws: 'Field Sales', reviewer: 'Lena Hoffmann (workspace admin)', due: '1 Nov 2026', state: 'scheduled', cadence: 'quarterly', grants: [] },
+    { id: 'rv-fs', name: 'Q4 certification, Field Sales', scope: 'workspace', ws: 'Field Sales', reviewer: 'Lena Hoffmann (workspace admin); no manager attribute, admin only', due: '1 Nov 2026', state: 'scheduled', cadence: 'quarterly', grants: [] },
     { id: 'rv-admins', name: 'Tenant admin roles', scope: 'tenant', ws: null, reviewer: 'System admins', due: '30 Jun 2026', state: 'closed', cadence: 'half-yearly', grants: [{ id: 'k1', member: 'Jonas Lindqvist', what: 'role tenant-admin', ws: 'Northwind', lastUsed: '29 Jun', decision: 'confirm', by: 'Mara Okafor', at: '29 Jun 15:00' }, { id: 'k2', member: 'Former contractor', what: 'role tenant-admin', ws: 'Northwind', lastUsed: '90 d', decision: 'revoke', by: 'Mara Okafor', at: '29 Jun 15:02' }] }
   ];
 
@@ -146,12 +146,11 @@
         + '#main .roles-step{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}#main .roles-step .n{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;background:var(--sel)}#main .roles-step.ok .n{background:var(--ok-bg);color:var(--ok-fg)}#main .roles-step.deny .n{background:var(--danger-bg);color:var(--danger-fg)}'
         + '#main .roles-permpick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px 12px;max-height:280px;overflow:auto;padding:8px;border:1px solid var(--line);border-radius:6px}#main .roles-permpick .check{font-size:12px}#main .roles-permpick .check.off{opacity:.45}'
         + '</style>'
-        + (rv ? rv.left : '') + '<div class="page">' + UI.pagehead('Roles and access', 'Every answer here comes from the one policy pipeline (role, scopes, tenant, clearance, zone ceiling). Custom roles are defined by the tenant only; access reviews go to the workspace admin by default.', UI.btn('Export matrix', { size: 'sm', icon: 'download', attrs: 'data-export' }) + UI.btn('Who can…', { size: 'sm', icon: 'search', attrs: 'data-whocan' }))
+        + (rv ? rv.left : '') + '<div class="page">' + UI.pagehead('Roles and access', 'Every answer here comes from the one policy pipeline (role, scopes, tenant, clearance, zone ceiling). Custom roles are defined by the tenant only; access reviews are assigned to the workspace admin and the member\'s directory manager (the admin alone when the manager attribute is empty); the first decision stands.', UI.btn('Export matrix', { size: 'sm', icon: 'download', attrs: 'data-export' }) + UI.btn('Who can…', { size: 'sm', icon: 'search', attrs: 'data-whocan' }))
         + tabs + body
-        + '<div style="margin-top:auto;padding-top:12px"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       ctx.on('click', '.tabs [data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-export]', (e, t) => openMenu(ctx, t, [['csv', 'CSV (GET /api/authz/matrix?format=csv)'], ['json', 'JSON (GET /api/authz/matrix)'], ['md', 'docs/permissions.md (generated)']], null, (v) => ctx.toast(v === 'md' ? 'docs/permissions.md is generated from the catalogue; the test fails when it drifts.' : 'Matrix exported as ' + v.toUpperCase() + ': ' + PERMS.length + ' permissions × ' + (ROLES.length + st.custom.filter((r) => r.state === 'active').length) + ' roles.', 'ok')));
       ctx.on('click', '[data-whocan]', () => { st.tab = 'effective'; st.whoCan = true; ctx.rerender(); });
       wireMatrix(ctx, st); wireCustom(ctx, st); wireEffective(ctx, st); wireReviews(ctx, st);

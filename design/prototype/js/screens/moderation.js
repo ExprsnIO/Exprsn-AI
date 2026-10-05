@@ -211,11 +211,10 @@
         + '#main .inspector .kv .v{overflow-wrap:anywhere}'
         + '</style>'
         + '<div class="page">' + head + tabs + body
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>' + aside;
+        + '</div>' + aside;
 
       // ---- events ----
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-goflags]', () => ctx.navigate('flags'));
       ctx.on('click', '[data-openflag]', (e, t) => { e.preventDefault(); ctx.navigate('flags', { id: t.dataset.openflag }); });
       ctx.on('click', '[data-gorule]', () => ctx.navigate('guardrails'));

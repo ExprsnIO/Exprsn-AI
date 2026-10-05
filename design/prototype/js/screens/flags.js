@@ -96,7 +96,7 @@
         + '<div class="flags-list">' + list.map((x) => UI.listItem(esc(x.rule), esc(subText(x)), { active: x.id === st.sel, attrs: 'data-flag="' + x.id + '"', right: x.restricted ? UI.pill('reassign', 'info') : UI.pill(x.sev, x.sev === 'high' ? 'danger' : x.sev === 'medium' ? 'warn' : '') })).join('') + (list.length ? '' : UI.empty('No flags match', 'Clear the severity filter to see the rest of the queue.')) + '</div>'
         + (st.open > st.queue.length ? '<div class="muted" style="font-size:12px;padding:4px 8px">' + (st.open - st.queue.length) + ' more in workspaces you also review. <a href="#" data-other>Show</a></div>' : '') + '</div>'
         + '<div class="page">' + main
-        + '<div style="margin-top:auto"><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div></div>';
+        + '</div>';
 
       // ---- keyboard shortcuts while this screen is shown ----
       root.setAttribute('tabindex', '-1');
@@ -128,7 +128,6 @@
       ctx.on('click', '[data-goaudit]', (e) => { e.preventDefault(); ctx.navigate('usage-audit'); });
       ctx.on('click', '[data-other]', (e) => { e.preventDefault(); ctx.toast('People Ops and Field Sales queues open in their own workspace context. Switch workspace from the sidebar.'); });
       ctx.on('click', '[data-reload]', () => { st.queue = baseFlags(); st.open = 14; st.sel = null; st.breached = false; st.lastDecision = null; ctx.rerender(); });
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
     }
   });
 

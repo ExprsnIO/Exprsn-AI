@@ -77,11 +77,10 @@
         + '<div class="pools-legend"><span><i style="background:var(--meter)"></i>weights</span><span><i style="background:var(--accent)"></i>new version loading</span><span><i style="background:var(--faint)"></i>KV cache</span><span><i style="background:var(--sel);border:1px solid var(--line)"></i>free</span><span class="right">Polled from /api/ps and /api/tags every 5 s. Zone <a href="#" data-go="zones">inference</a>, gpu-east-private.</span></div>'
         + poolPanels
         + UI.panel('gpu-amd and mac-overflow', '<div class="fg2">rocm and metal pools are validated in Phase 5. Mac nodes serve development only until the signed node agent ships.</div>' + UI.kv([['gpu-amd', 'rocm, 2 nodes MI300X 192 GB, ollama/ollama:rocm, zone inference. Evals per class pending.'], ['mac-overflow', 'metal, 3 Mac Studio 192 GB unified, native Ollama over WireGuard. One schedulable unit per Mac, development only.']], 2) + '<div>' + UI.btn('Hardware classes in the plan', { kind: 'ghost', size: 'sm', attrs: 'data-go="platform"' }) + '</div>')
-        + '<div><div class="eyebrow" style="margin-bottom:8px">States to design from this page</div>' + UI.states(this.states) + '</div>'
+        + ''
         + '</div>';
 
       // ---- events ----
-      ctx.on('click', '.state-card', (e, t) => ctx.app.applyState(+t.dataset.state));
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-clear]', (e, t) => { st[t.dataset.clear] = null; ctx.rerender(); });
       ctx.on('click', '[data-cancelswap]', () => { st.scheduled = null; ctx.rerender(); ctx.toast('Scheduled swap cancelled. The pointer stays on the current version.'); });
