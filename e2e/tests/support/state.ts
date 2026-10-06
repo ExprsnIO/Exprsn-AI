@@ -14,7 +14,7 @@ export interface ServerState {
   tenant: string;
   workspace: { id: string; name: string };
   totp: Record<string, string>;
-  fakes: { ollama: string; mcp: string; acme: string };
+  fakes: { ollama: string; mcp: string; acme: string; fmSocket: string };
   users: User[];
 }
 

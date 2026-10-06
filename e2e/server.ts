@@ -30,6 +30,7 @@ import { hashPassword } from '../server/src/identity/passwords.js';
 import type { Label } from '../server/src/authz/labels.js';
 import type { ProfileRow } from '../server/src/gateway/repo.js';
 import { FakeOllama } from '../server/test/fake-ollama.js';
+import { FakeOpenAIServer } from '../server/test/fake-openai-server.js';
 import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
 import { FakeImageBackend, FakeMediaRunner, FakeSafety } from '../server/test/sprint8-fakes.js';
@@ -59,6 +60,11 @@ async function main() {
   for (const d of ['blobs', 'media', 'drills']) mkdirSync(path.join(dir, d));
 
   // ---- fakes that the configuration has to name ----
+  // B-43: Apple's fm serve on a Unix socket (the on-device model, and Private Cloud Compute listed but refused), for
+  // the Models screen's model servers. Nothing is registered on it: the Models spec does that through the console.
+  const fm = new FakeOpenAIServer();
+  fm.add({ id: 'system', ownedBy: 'Apple' }).add({ id: 'pcc', ownedBy: 'Apple', available: false, reason: 'PCC inference is not available in this context.' });
+  await fm.start({ socketPath: path.join(tmpdir(), `exprsn-e2e-fm-${process.pid}.sock`) });
   const ollama = await new FakeOllama().start();
   ollama.chatDelayMs = 15;
   // An agent whose system prompt holds "E2E-CALL <function> [json arguments]" makes that tool call first (the runs
@@ -225,7 +231,7 @@ async function main() {
     tenant: cfg.DEFAULT_TENANT,
     workspace: { id: workspace.id, name: workspace.name },
     totp,
-    fakes: { ollama: ollama.url, mcp: mcp.url, acme: acme.directory },
+    fakes: { ollama: ollama.url, mcp: mcp.url, acme: acme.directory, fmSocket: fm.socketPath },
     users: ['root', 'root2', 'ops', 'mladmin', 'member', 'enrol']
   };
   mkdirSync(path.dirname(opt.state!), { recursive: true });
@@ -244,6 +250,7 @@ async function main() {
       await s.close();
       await db.destroy();
       await ollama.stop();
+      await fm.stop();
       await mcp.stop();
       await acme.close();
       await signer.close();

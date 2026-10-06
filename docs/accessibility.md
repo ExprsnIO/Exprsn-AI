@@ -151,6 +151,23 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   Retire or Delete is unavailable. `e2e/tests/runs-chain.spec.ts` runs axe-core and the in-page checker on the tree in
   light and dark and the reflow check at 320 and 640 px.
 
+## Screens changed in 1.6.0
+
+- **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
+  Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
+  unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not
+  answer. Register model server is a labelled form: the kind, the transport, the socket path or URL and the bearer
+  token (a password field with `autocomplete="off"`) are each labelled with a hint; choosing Ollama or a URL hides the
+  fields that no longer apply with `hidden`, so they leave the tab order and the accessibility tree. Request import has
+  a named segmented group ("Where the model comes from", pressed-state buttons) that swaps the form inside the same
+  dialog, so focus stays in it. The server-held models are a `fieldset` with a legend ("Models the servers hold") of
+  radio buttons; a model the server reports unavailable (Apple's Private Cloud Compute), already catalogued or on a
+  server that is not answering is a disabled radio whose label says why in text. A held model's inspector and card
+  say "held by the server, no digest" and list what the server reported in words. `e2e/tests/models.spec.ts` runs
+  axe-core and the in-page checker on the register form, the drawer and the picker and checks each at 320 px; the
+  new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
+  `y-reflow-overlays.spec.ts`.
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values
