@@ -82,14 +82,23 @@ export interface EntryRow {
   updated_at: number;
 }
 
+/**
+ * A JSON column, also when it was stored encoded twice (a JSON string holding JSON: rows written by an early setup
+ * script that passed already-encoded values). Without this, one such row broke the whole registry listing.
+ */
+const jsonCol = <T>(v: unknown, fallback: T): T => {
+  const once = json<unknown>(v, fallback);
+  return (typeof once === 'string' ? json<T>(once, fallback) : once) as T;
+};
+
 const fromRow = (r: Record<string, unknown>): EntryRow => ({
   ...(r as unknown as EntryRow),
   rate_per_hour: r.rate_per_hour == null ? null : Number(r.rate_per_hour),
-  input_schema: json<JsonSchema | null>(r.input_schema, null),
-  output_schema: json<JsonSchema | null>(r.output_schema, null),
-  definition: json<Record<string, unknown>>(r.definition, {}),
-  checks: json<CheckResult[]>(r.checks, []),
-  publish_workspaces: json<string[]>(r.publish_workspaces, []),
+  input_schema: jsonCol<JsonSchema | null>(r.input_schema, null),
+  output_schema: jsonCol<JsonSchema | null>(r.output_schema, null),
+  definition: jsonCol<Record<string, unknown>>(r.definition, {}),
+  checks: jsonCol<CheckResult[]>(r.checks, []),
+  publish_workspaces: jsonCol<string[]>(r.publish_workspaces, []),
   checked_at: r.checked_at == null ? null : Number(r.checked_at),
   submitted_at: r.submitted_at == null ? null : Number(r.submitted_at),
   reviewed_at: r.reviewed_at == null ? null : Number(r.reviewed_at),
@@ -99,7 +108,7 @@ const fromRow = (r: Record<string, unknown>): EntryRow => ({
 
 const toRow = (e: Partial<EntryRow>): Record<string, unknown> => {
   const out: Record<string, unknown> = { ...e };
-  for (const k of ['input_schema', 'output_schema', 'definition', 'checks', 'publish_workspaces'] as const) if (k in e) out[k] = e[k] == null ? null : JSON.stringify(e[k]);
+  for (const k of ['input_schema', 'output_schema', 'definition', 'checks', 'publish_workspaces'] as const) if (k in e) out[k] = e[k] == null ? null : typeof e[k] === 'string' ? e[k] : JSON.stringify(e[k]); // already-encoded JSON is stored once
   return out;
 };
 
