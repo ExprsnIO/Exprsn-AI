@@ -302,7 +302,7 @@ every workspace at once. Five tabs.
 | B-4206 | Social and messaging live: feed approval policy and trending exclusions, group defaults and calendar feed revocation, messaging limits and legal-hold export, realtime room counts, contact rules | A revoked calendar feed answers 404 on its next fetch | 5 |
 | B-4207 | Accessibility and reflow for the five screens; `docs/accessibility.md` updated | No axe or reflow finding on any of the five | 3 |
 
-39 points. B-4201 is this design. The rest fit Sprint 31 beside the release, or open 1.6; see question 12.
+39 points. B-4201 is this design. The rest fit Sprint 35, the first of 1.6.0, unless question 12 says otherwise; 1.5.0 is full at six sprints. (Numbered B-42 because sprint-29 took B-39 for Workflows 2.)
 
 ## Open questions
 
