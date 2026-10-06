@@ -154,6 +154,15 @@ account on every CI run, and fails when an operator of either filter grammar is 
 were written from the clients' request formats (their sources and published traces), not captured from devices on
 this server; add a captured exchange the same way when a client misbehaves.
 
+**Capturing real traffic (B-3606).** `npx tsx server/test/dav-capture/capture.ts --out <dir> [--port 55540]
+[--tls-cert <crt> --tls-key <key>]` starts a throwaway server on SQLite (port+1) with a member `exprsntest` and a
+CalDAV/CardDAV-only app password, and a recording proxy on the port that appends every exchange to
+`<dir>/exchanges.jsonl` with the Authorization header and the app password redacted. Apple's clients (macOS 27
+`accountsd`/`dataaccessd`) do not send Basic credentials over plain HTTP: they stop at the 401, so the proxy needs TLS,
+and a certificate from a throwaway CA makes Calendar ask to trust it. Accepting that writes a user-domain trust
+setting for the certificate, so the capture waits for the owner to choose how to run it; the fixtures stay written
+until then.
+
 exprsn-platform's CalDAV, which this replaces, negated text matches wrongly and ignored `is-not-defined`; each such
 operator has its own exchange here.
 
