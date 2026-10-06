@@ -433,6 +433,7 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['GET /api/workflow-approvals', 'authenticated'],
   ['GET /api/workflow-runs/{id}', 'authenticated'],
   ['GET /api/workflow-tools', 'agents:run'],
+  ['GET /api/workflow-callees', 'agents:run'],
   ['GET /api/workflows', 'agents:run'],
   ['GET /api/workflows/{id}', 'agents:run'],
   ['GET /api/workflows/{id}/runs', 'agents:run'],

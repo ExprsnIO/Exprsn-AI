@@ -46,6 +46,7 @@ import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
+import { ChainService } from './chain/context.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
@@ -164,6 +165,8 @@ export interface Services {
   agents: AgentService;
   /** Workflow graphs, versions and durable runs (Sprint 8). */
   workflows: WorkflowService;
+  /** Sprint 32 (B-4101): the chain context every invocation records itself in. */
+  chains: ChainService;
   /** Media assets, presets and ffmpeg jobs (Sprint 8). */
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
@@ -373,14 +376,23 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
+  const chains = new ChainService(db, {
+    maxDepth: cfg.CHAIN_MAX_DEPTH,
+    kindCaps: { 'workflow-run': cfg.WORKFLOW_MAX_DEPTH, 'agent-run': cfg.AGENT_MAX_DEPTH },
+    defaults: { tokens: cfg.CHAIN_MAX_TOKENS, steps: cfg.CHAIN_MAX_STEPS, wallMs: cfg.CHAIN_MAX_WALL_SECONDS * 1000, gpuMs: cfg.CHAIN_MAX_GPU_SECONDS * 1000 }
+  }, audit);
+  tools.useChains(chains);
   const agents = new AgentService(db, keys, gateway, registry, tools, quotas, audit, bus, jobs, notifications, async (tenantId, userId, workspaceId) => {
     const p = await loadPrincipal(s, tenantId, userId, {});
     if (p) p.workspaceId = workspaceId;
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) } });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents });
   tools.useWorkflows(workflows);
+  // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
+  agents.chains = chains;
+  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : undefined);
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
     runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),
@@ -458,6 +470,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tools,
     agents,
     workflows,
+    chains,
     media,
     images,
     imageSafety: overrides.imageSafety ?? (cfg.IMAGE_SAFETY_URL ? new HttpSafety(cfg.IMAGE_SAFETY_URL) : noSafety),

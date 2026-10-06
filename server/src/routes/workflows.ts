@@ -19,7 +19,7 @@ const semver = z.string().trim().regex(/^\d+\.\d+\.\d+(?:-[\w.]+)?$/, 'A semanti
  */
 export function workflowRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/workflows', '/workflow-runs', '/workflow-approvals', '/workflow-tools'], noStore, requireAuth());
+  r.use(['/workflows', '/workflow-runs', '/workflow-approvals', '/workflow-tools', '/workflow-callees'], noStore, requireAuth());
   const run = requirePermission(s, 'agents:run');
   const manage = requirePermission(s, 'workflows:manage');
   const wf = s.workflows;
@@ -32,6 +32,11 @@ export function workflowRoutes(s: Services): Router {
   /** Registry tools a tool step may call from the current workspace, for the editor's palette. */
   r.get('/workflow-tools', run, async (req, res) => {
     res.json(await wf.callableTools(principalOf(req)));
+  });
+
+  /** Sprint 32 (B-3901, B-3902): published workflows, agents and skills the sub, agent and model steps may use here. */
+  r.get('/workflow-callees', run, async (req, res) => {
+    res.json(await wf.callees(principalOf(req)));
   });
 
   r.get('/workflows', run, async (req, res) => {
