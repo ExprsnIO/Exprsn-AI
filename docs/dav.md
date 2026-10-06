@@ -33,6 +33,9 @@ and write goes through the services, policy pipeline and audit chain the API use
 | Windows Explorer | Map network drive | `https://<server>/dav/files/<workspace>/` (WebClient needs HTTPS for Basic) |
 | DAVx5 (Android) | Log in with URL and user name | `https://<server>/` |
 
+Settings shows the WebDAV URL as `https://<server>/dav/files/` (`server.webdav` in `GET /api/me/dav`); a file client
+needs an app password with the WebDAV scope (a CalDAV- or CardDAV-only one gets `403` there).
+
 The settings list shows each app password's last use (time, address and client). Revoking one stops it at once: the
 next request with it is refused. App passwords authenticate `/dav` only: the API, `/v1` and the console never accept
 them, as a bearer token or as HTTP Basic; and sessions and cookies never authenticate `/dav`.
@@ -140,7 +143,7 @@ resource; DELETE and MOVE drop the locks on the old path.
 
 **litmus (B-3203).** CI builds litmus 0.17 and runs its basic, copymove, props, locks and http groups against
 `/dav/files/<workspace>/` (`npx tsx server/test/dav-litmus.ts --litmus <path>`; without `--litmus` it serves and
-prints the credentials). Every test of the five groups passes.
+prints the credentials). Every test of the five groups passes (106 of 106, rerun on Sprint 34b).
 
 ## Conformance (B-3104)
 

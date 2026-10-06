@@ -4,7 +4,7 @@ import { harness, login, type Harness } from './helpers.js';
 import { FakeClamd, FakePreviewRenderer } from './sprint26d-fakes.js';
 
 /*
- * B-32 (planned for Sprint 34, built on Sprint 30's DAV core): the file store over WebDAV. Folders and files as
+ * B-32 (Sprint 34, built on Sprint 30's DAV core): the file store over WebDAV. Folders and files as
  * collections; PUT through quarantine, the type check and ClamAV, with versions kept (B-3201); COPY, MOVE, LOCK and
  * UNLOCK (B-3202); quota properties and shares (B-3203). litmus runs in CI (`.github/workflows/ci.yml`).
  */

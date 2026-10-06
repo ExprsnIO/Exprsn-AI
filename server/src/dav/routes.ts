@@ -14,7 +14,8 @@ import { appPasswordView, DAV_SCOPES, SCOPE_PERMISSIONS, type DavScope } from '.
  * `POST /api/me/step-up` with a code or a passkey); a password alone is not enough, and an account without a second
  * factor sets one up first. The password is shown once. `GET /api/me/dav` (Sprint 32, B-3415) gives Settings the
  * discovery URLs, the username a client signs in with, the scopes the caller's roles can use and whether the second
- * factor is fresh enough to create one now.
+ * factor is fresh enough to create one now. The WebDAV URL is the file store's collection, `/dav/files/` (B-32,
+ * Sprint 34), so a client mounting it lands on the caller's workspaces.
  */
 export function appPasswordRoutes(s: Services): Router {
   const r = Router();
@@ -33,7 +34,7 @@ export function appPasswordRoutes(s: Services): Router {
 
   const urls = () => {
     const base = s.cfg.PUBLIC_URL.replace(/\/+$/, '');
-    return { url: `${base}/dav/`, caldav: `${base}/.well-known/caldav`, carddav: `${base}/.well-known/carddav`, webdav: `${base}/dav/` };
+    return { url: `${base}/dav/`, caldav: `${base}/.well-known/caldav`, carddav: `${base}/.well-known/carddav`, webdav: `${base}/dav/files/` };
   };
 
   r.get('/dav', active, async (req, res) => {

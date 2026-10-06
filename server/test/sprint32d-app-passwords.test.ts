@@ -35,7 +35,7 @@ describe('Settings: app passwords for DAV clients (B-3415)', () => {
     expect(fresh.server.caldav).toMatch(/\/\.well-known\/caldav$/);
     expect(fresh.server.carddav).toMatch(/\/\.well-known\/carddav$/);
     expect(fresh.server.url).toMatch(/\/dav\/$/);
-    expect(fresh.server.webdav).toMatch(/\/dav\/$/);
+    expect(fresh.server.webdav).toMatch(/\/dav\/files\/$/);
     expect(fresh.scopes.map((x) => x.scope)).toEqual(['caldav', 'carddav', 'webdav']);
     expect(fresh.scopes.find((x) => x.scope === 'caldav')!.available).toBe(true);
     // Signing in with the factor just now: creating one needs no step-up for the window.
@@ -67,7 +67,7 @@ describe('Settings: app passwords for DAV clients (B-3415)', () => {
     await localUser(h, 'ta', ['tenant-admin']);
     const a = await loginAdmin(h, 'ta');
     const created = (await a.agent.post('/api/me/app-passwords').set('x-csrf-token', a.csrf).send({ name: 'Work Mac', scopes: ['caldav'], ttlDays: 90 }).expect(201)).body;
-    expect(created.server.webdav).toMatch(/\/dav\/$/);
+    expect(created.server.webdav).toMatch(/\/dav\/files\/$/);
     expect(created.expiresAt - created.createdAt).toBe(90 * 86_400_000);
     // The list never carries the secret.
     const before = (await a.agent.get('/api/me/app-passwords').expect(200)).body as Record<string, unknown>[];
@@ -86,5 +86,27 @@ describe('Settings: app passwords for DAV clients (B-3415)', () => {
     expect(after.revokedAt).toBeGreaterThan(0);
     // Revoking twice, or someone else's, is a 404.
     await a.agent.delete(`/api/me/app-passwords/${created.id}`).set('x-csrf-token', a.csrf).expect(404);
+  });
+
+  it('the WebDAV URL Settings shows answers: the file store, for a password with the WebDAV scope (B-32, Sprint 34)', async () => {
+    await localUser(h, 'ta', ['tenant-admin']);
+    const a = await loginAdmin(h, 'ta');
+    const ws = (await h.s.tenants.createWorkspace(h.tenantId, 'Shared drive', 'internal')).id;
+    const user = (await h.s.users.list(h.tenantId)).find((u) => u.username === 'ta')!;
+    await h.s.tenants.addMember(ws, user.id);
+    const info = (await a.agent.get('/api/me/dav').expect(200)).body as DavInfo;
+    const path = new URL(info.server.webdav).pathname;
+    expect(path).toBe('/dav/files/');
+
+    const files = (await a.agent.post('/api/me/app-passwords').set('x-csrf-token', a.csrf).send({ name: 'Finder', scopes: ['webdav'], ttlDays: 30 }).expect(201)).body;
+    const dav = davClient(h, 'ta', files.password);
+    const listing = await dav('PROPFIND', path).set('Depth', '1').expect(207);
+    expect(listing.text).toContain('<d:displayname>Shared drive</d:displayname>');
+    expect((await dav('OPTIONS', path).expect(200)).headers.dav).toMatch(/\b2\b/);
+
+    // A calendar-only password does not reach the files.
+    const cal = (await a.agent.post('/api/me/app-passwords').set('x-csrf-token', a.csrf).send({ name: 'Phone', scopes: ['caldav'], ttlDays: 30 }).expect(201)).body;
+    const r = await davClient(h, 'ta', cal.password)('PROPFIND', path).set('Depth', '1');
+    expect(r.status).toBe(403);
   });
 });
