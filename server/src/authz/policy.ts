@@ -21,6 +21,8 @@ export interface Principal {
   workspaceId?: string | null;
   /** Profiles an OAuth token is bound to (`inference:invoke:<profile>` scopes); absent or null means any profile. */
   profiles?: string[] | null;
+  /** 1.5.0 (B-3101): the DAV app password the request was made with (DAV requests only). */
+  appPasswordId?: string | null;
 }
 
 export interface Resource {

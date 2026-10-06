@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 5;
+export const CATALOGUE_VERSION = 6;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -74,7 +74,11 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
   { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
   // 1.4.0, Sprint 25c (B-1704 to B-1706)
-  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' }
+  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' },
+  // 1.5.0, Sprint 30 (B-3101 to B-3103)
+  { pattern: 'dav.*', description: 'CalDAV and CardDAV: app passwords created and revoked; personal calendars and address books created, changed and deleted; objects created, updated, copied, moved and deleted; properties changed (audit actions; never the content)' },
+  // 1.5.0, Sprint 30 (B-3701 to B-3703)
+  { pattern: 'memory.*', description: 'Memory: added, edited, proposed, accepted, rejected, merged, forgotten and exported; proposals refused by the memory checkpoint, extraction fallbacks to the rules, consolidation runs, merge and expiry proposals and their decisions, settings changes and reindexes (audit actions; never the text)' }
 ];
 
 const id26 = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };

@@ -75,6 +75,43 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   level and value are in the text).
 - **Target size**: the smallest button (`.btn.xs`) is 24 px high (WCAG 2.5.8).
 
+## Screens made live in 1.5.0 (Sprint 30)
+
+Each joins the Playwright suite like the others: axe-core and the in-page checker on the screen and every design state
+(Standard and Enhanced, light and dark), the screen reflow at 320 and 640 px, and its dialogs and drawers through
+`e2e/tests/y-reflow-overlays.spec.ts` (B-3414). What each adds to the shell's behaviour:
+
+- **Moderation** (B-3405): one tab list (Queues, Reports, Appeals, Actions, Sanctions, Providers, Dead letters) with a
+  single tabpanel. Selectable queues, flags, appeals and actions are keyboard-operable table rows that update a labelled
+  inspector (`aside` "Selected flag" or "Selected appeal"). Filters are named segmented groups; the label chips in the
+  queue dialog and the object-type chips in the provider dialog are toggle buttons with `aria-pressed`. Refusals such as
+  appeal independence and "already redriven" are problem panels, not colour-only cues. Hide, uphold, deny, lift and
+  redrive go through confirm dialogs with labelled note and reason fields, and the step-up dialog for sanctions reports
+  errors in a `role="alert"` region. `e2e/tests/moderation.spec.ts` also checks every tab in both modes.
+- **Groups and events** (B-3409): the month calendar is a list of day items, each named with its date, "today" and its
+  number of events; each event is a button of at least 24 × 24 px named with its title, date, start time and
+  "cancelled" where it applies, and the selected one carries `aria-current`. The weekday header row is hidden from
+  assistive technology because each day names itself, and the month heading is a polite live region, so Previous and
+  Next month announce the new month. The RSVP choice is a labelled group of pressed-state buttons, and the check-in
+  toggles in the Attendees drawer are switches named for the person.
+- **Channels** (B-3410): a channel's sessions, held replies, settings, email and exports share one tabpanel. Each held
+  reply is a panel whose actions are named buttons (Approve, Edit and send, Reject); edit and reject open labelled
+  dialogs that return focus to the button that opened them. Transcript messages wrap long text rather than scrolling
+  sideways, and each message's report control is an icon button named "Report message N". Live updates over
+  `channels.changed` wait while a dialog is open, so an edited reply being typed is never interrupted.
+- **Messages and feed** (B-3411): the conversation timeline is a `role="log"` polite live region, so messages that
+  arrive over the socket are announced; the typing and read line under it is a separate polite region updated in place,
+  without a re-render that would move focus. Message actions stay visible rather than appearing on hover, so keyboard,
+  touch and zoom users reach them. The Messages, Feed and People switchers, the conversation filter, the feed sections
+  and the search modes are labelled button groups with `aria-pressed`. `e2e/tests/messages.spec.ts` also runs both
+  checkers on views with real conversations and posts, which the sweep (as a system admin with none) does not see.
+- **Roles and access** (B-3412): both matrices are real tables with a caption for screen readers, `th scope="col"` for
+  roles or permissions and `th scope="row"` for permissions or members, each in a `.tablewrap` that scrolls sideways
+  only (one named tab stop). Every effective-access cell is a `<button>` named for its subject, permission and outcome
+  (for example "Explain Sam Rivera, chat:read: deny at clearance"); the outcome is in the name and an icon as well as
+  colour. Enter or a click opens the `explain` drawer with the policy steps in order, and focus returns to the cell when
+  it closes. In the role matrix, granted and not-granted cells carry text for screen readers.
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values
@@ -108,7 +145,7 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   track; both are now above 3:1.
 
 - **axe-core 4** (tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`, plus `wcag2aaa` in Enhanced) on
-  sign-in and all 26 signed-in screens, in Standard and Enhanced, light and dark, against the e2e server's seeded data.
+  sign-in and every signed-in screen (36 since Sprint 30), in Standard and Enhanced, light and dark, against the e2e server's seeded data.
   No violations remain; the last findings fixed were low-contrast helper text on Classifiers, an unfocusable scrolling
   YAML block on Profiles, and toggles that picked up the browser's grey button background in dark mode.
 - **In CI** since 1.2.0 (B-1101, B-1102): the Playwright suite checks every screen, each of its design states (applied
@@ -133,6 +170,18 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   when the page, the overlay or the dialog scrolls sideways or anything in it sticks out past its edge, other than
   tables and code in a named scroller. Fixed on the way: at 640 px and below a long breadcrumb with its label (a
   connection's) overlapped the header tools and pushed the page 2 px sideways; the breadcrumb now shrinks and clips.
+- **Sprint 30 screens** (B-3414): Certificates, Vault, Plugins and events, Apps and Files, and the identity additions
+  on Identity, User stores, Settings and Sign in, joined the sweeps above (every design state, Standard and Enhanced,
+  light and dark, reflow at 320 and 640 px for the screens and their dialogs and drawers). Each opens a dialog from its
+  own controls (New profile, Add grant, Upload, New folder, the Grants dialog…), Vault and Plugins also a drawer.
+  Fixed on the way: stacked checkboxes (plugin grants, sign-up, MFA and invitation roles) and inline tag links in Files
+  were below the 24 px target size (WCAG 2.5.8) and now have 24 px rows or 12 px gaps; the remove control of a state or
+  filter chip in Apps is its own labelled icon button rather than a clickable span; Apps' records grid and form rows
+  are focusable and select with Enter or Space; Apps' state diagram scales to the width instead of scrolling sideways
+  and carries a text alternative; the Plugins catalogue and the Vault engine inspector no longer stick out at 320 px;
+  Apps re-renders after a `change` only once focus has moved on, and keeps it where it went; Certificates' issue dialog
+  redraws its form when the mode or profile changes while keeping the values entered and the focus. Vault's secret and
+  password copy buttons copy without echoing the value in a toast.
 - **Keyboard walk** in Chromium: skip link, landmarks, `aria-current`, focus on screen change, palette combobox and
   arrows, dialog labelling, focus trap in both directions, Esc and focus return, header re-render keeping focus,
   popover focus and Esc, focusable table rows, focus kept on re-render, persistence across reload, system contrast and

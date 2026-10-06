@@ -803,7 +803,14 @@ export class ModerationService {
     const ws = (await this.workspaces(p))!;
     const rows = ((await s.db('guard_flags').where({ tenant_id: p.tenantId, queue_id: q.id, state: 'open' }).orderBy('due_at').limit(1000)) as Record<string, unknown>[]).map(flagFromRow).filter((f) => s.guard.flags.reviewable(f, p, ws));
     const now = Date.now();
-    return { queue: queueView(q), open: rows.length, overdue: rows.filter((f) => f.due_at < now).length, escalated: rows.filter((f) => f.escalated_to).length, items: rows.map((f) => ({ ...s.guard.flags.view(f, p), queueId: f.queue_id ?? null, escalatedAt: f.escalated_at ?? null })) };
+    return { queue: queueView(q), open: rows.length, overdue: rows.filter((f) => f.due_at < now).length, escalated: rows.filter((f) => f.escalated_to).length, items: rows.map((f) => {
+      const v = s.guard.flags.view(f, p);
+      // 1.5.0 (B-3405): the object the flag points at, so the console can name it and offer "Hide object" only when a
+      // registered type can be hidden (withheld above the reviewer's clearance, like the rest of the flag).
+      const h = f.source_kind ? this.registry.get(f.source_kind) : undefined;
+      const object = v.restricted || !f.source_kind || !f.source_id ? null : { type: f.source_kind, id: f.source_id, hideable: !!h?.hide && f.kind !== 'hold' };
+      return { ...v, queueId: f.queue_id ?? null, escalatedAt: f.escalated_at ?? null, object };
+    }) };
   }
 
   /** The sweep (B-1904, B-1905): routed flags past their SLA escalate; sanctions past their end expire. */

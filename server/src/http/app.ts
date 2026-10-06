@@ -71,6 +71,8 @@ import { publicAppRoutes } from '../routes/apps-public.js';
 import { channelRoutes } from '../routes/channels.js';
 import { publicChannelRoutes } from '../routes/channels-public.js';
 import { authzRoutes } from '../routes/authz.js';
+import { davRoutes } from '../dav/handler.js';
+import { appPasswordRoutes } from '../dav/routes.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -167,6 +169,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(atprotoPublicRoutes(s));
   // Sprint 27c (B-2504): signed iCalendar feeds (public; the URL's signature is the credential, rate-limited).
   app.use(calendarPublicRoutes(s));
+  // 1.5.0, Sprint 30 (B-3101 to B-3103): CalDAV and CardDAV at /dav, with /.well-known discovery. App passwords over
+  // HTTP Basic only (never sessions), XML bodies read raw and parsed strictly, its own rate limit.
+  app.use(davRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -197,6 +202,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/auth', signupPublicRoutes(s));
   api.use(generalLimit);
   api.use('/me', meRoutes(s));
+  // 1.5.0, Sprint 30 (B-3101): app passwords for DAV clients.
+  api.use('/me', appPasswordRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
   api.use('/admin', userAdminRoutes(s));
   api.use('/admin', auditAdminRoutes(s));

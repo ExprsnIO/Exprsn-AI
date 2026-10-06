@@ -104,6 +104,7 @@ import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
+import { DavService } from './dav/service.js';
 import { ChannelService } from './channels/service.js';
 import type { ChannelIo, ChannelMailer } from './channels/mail.js';
 import nodemailer from 'nodemailer';
@@ -263,6 +264,8 @@ export interface Services {
   access: AccessService;
   /** 1.5.0, Sprint 29 (B-3305): access review campaigns. */
   accessReviews: AccessReviewService;
+  /** 1.5.0, Sprint 30 (B-31): DAV app passwords, personal calendars and address books, dead properties. */
+  dav: DavService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -275,7 +278,7 @@ export interface ServiceOverrides {
   imageSafety?: ImageSafety;
   vectors?: VectorStore;
   /** Data connection drivers by engine (tests use in-process fakes). */
-  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql', DriverFactory>>;
+  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql' | 'mongodb', DriverFactory>>;
   /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
   dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
@@ -403,6 +406,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
   agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
+  agents.memoryExtract = (e) => memory.onRun(e);
+  memory.runTexts = (t, id) => agents.runTexts(t, id);
   chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
@@ -525,6 +530,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
     accessReviews: new AccessReviewService(() => s),
+    // 1.5.0, Sprint 30: CalDAV and CardDAV.
+    dav: new DavService(() => s, db, cfg.SESSION_SECRET),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -688,6 +695,7 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
   s.knowledge.replication.start(); // Sprint 19: logical replication streams for PostgreSQL knowledge sources
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
+  s.scheduler.every('memory.consolidate', 24 * 60 * 60_000, activeTenants); // Sprint 30 (B-3702)
   s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
   s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);
   s.training.schedule(s.scheduler, activeTenants);

@@ -398,6 +398,23 @@ export class GroupService {
     return Number(r[0]?.n ?? 0);
   }
 
+  /**
+   * People a moderator may invite (Sprint 30, the console's invitation picker): active users of the group's workspace,
+   * cleared for its label, not members and without a pending request or invitation. At most 50, matched on the name.
+   */
+  async candidates(p: Principal, id: string, q?: string) {
+    const a = await this.require(p, id, 'invite');
+    const g = a.group;
+    const like = q ? `%${q.toLowerCase().replace(/[%_\\]/g, '')}%` : null;
+    const rows = (await this.db('workspace_members as wm').join('users as u', 'u.id', 'wm.user_id')
+      .where({ 'wm.workspace_id': g.workspace_id, 'u.tenant_id': g.tenant_id, 'u.state': 'active' })
+      .whereNotIn('u.id', this.db('group_members').where({ group_id: g.id }).select('user_id'))
+      .whereNotIn('u.id', this.db('group_requests').where({ group_id: g.id, state: 'pending' }).andWhere('expires_at', '>', Date.now()).select('user_id'))
+      .modify((qb) => { if (like) qb.andWhere((w) => { void w.whereRaw('lower(u.username) like ?', [like]).orWhereRaw('lower(u.display_name) like ?', [like]); }); })
+      .distinct('u.id', 'u.username', 'u.display_name', 'u.clearance').orderBy('u.display_name').limit(200)) as { id: string; username: string; display_name: string | null; clearance: string }[];
+    return rows.filter((u) => isLabel(u.clearance) && clears(u.clearance, g.label)).slice(0, 50).map((u) => ({ userId: u.id, username: u.username, displayName: u.display_name ?? u.username }));
+  }
+
   private async addMember(g: GroupRow, userId: string, role: GroupRole, by: string | null): Promise<boolean> {
     try {
       await this.db('group_members').insert({ group_id: g.id, tenant_id: g.tenant_id, user_id: userId, role, added_by: by, joined_at: Date.now() });

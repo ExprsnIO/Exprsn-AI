@@ -119,6 +119,32 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Model-based memory management (1.5.0, Sprint 30): the tenant's memory profile reads the user's chat messages and
+  agent runs' tasks and answers (through the gateway, within the profile's label and the pool's ceiling). The text is
+  sent as JSON data with an instruction to treat it as such, and only a strictly valid JSON answer is used, but a
+  message can still steer the model into proposing a memory its author chose; the defence is that every proposal
+  passes the `memory` checkpoint and the credential ban and waits for a person. The profile's answers do not pass the
+  `model-output` checkpoint (each proposal passes the `memory` one instead), and its calls (extraction and
+  consolidation judgements) are neither admitted against nor metered in the tenant's quotas; embeddings are metered as
+  before. The rejection list compares one-line, lower-case text, so a paraphrase of a rejected memory can be proposed
+  again (a rejected merge pair is not judged again). Consolidation compares up to 300 memories per owner and judges at
+  most 50 pairs per run, in the job's process memory; larger sets are consolidated over several runs. While a reindex
+  runs, the whole tenant's recall is by recency; if it fails it stays `failed` (retried up to three times) and recall
+  uses only the vectors already made with the model in effect, until `POST /memory/reindex` succeeds.
+
+- CalDAV and CardDAV (1.5.0, Sprint 30, `docs/dav.md`): DAV clients authenticate with HTTP Basic and an app
+  password, so the password crosses every request (over TLS; plain HTTP is refused when `COOKIE_SECURE` is set, but a
+  deployment without it accepts Basic in the clear). A DAV request counts as MFA-verified because the app password was
+  created after a fresh second factor; it is narrowed to DAV scopes and never accepted by `/api`, `/v1` or the
+  console. Failed attempts are limited per address and per app password in the shared counter store, not by the
+  account lockout table. Group calendars and the directory are views without a change log: their sync tokens refuse a
+  removal they cannot name, so clients re-fetch the collection then. A time-range query on a recurring object is
+  inclusive (the span of all its instances), and a non-IANA TZID is read with its VTIMEZONE's standard offset.
+  Directory entries carry their person's clearance as their label; the directory lists the tenant's active users
+  who share a workspace with the caller (all of them when the caller is in a workspace open to the whole tenant),
+  within the caller's clearance (owner's decision, 2026-10-05). The conformance fixtures were written from the
+  clients' request formats, not captured from devices, so B-3104 counts as partial until real traffic from Apple
+  Calendar and Contacts, Thunderbird and DAVx5 is captured and replayed (owner's decision, 2026-10-05).
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another
@@ -182,6 +208,20 @@ filter, private `/tmp`, only the state directory writable.
   expire at its TTL. Writes through a connection are refused outright. Hosts must be internal unless
   `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. The MySQL
   classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
+- MongoDB connections: read-only rests on the query model (only `find` and `aggregate` with allow-listed stages, no
+  `$where`, `$function`, `$accumulator` or Code values, re-checked by the driver) and on the account; MongoDB has no
+  read-only session the way PostgreSQL and MySQL have a read-only transaction, so an account with the `readWrite` role
+  is only reported (`degraded` on Test connection), not prevented. Use an account with the `read` role. The driver
+  dials one server directly (no replica-set discovery or SRV records), so a connection names one member; there is no
+  per-connection CA file for TLS (the system trust store, plus `NODE_EXTRA_CA_CERTS`, as for the other engines). The
+  schema is sampled from the first documents of each collection, so the tree and convention-based PII masking only
+  know the top-level fields seen there; values the classifier recognises are masked anywhere in a document. A
+  knowledge source's watermark is compared with `$gt` as each type its text can stand for, and documents sharing the
+  last watermark value with a later insert can be missed, as with the SQL watermark. A source added without `fields`
+  indexes the text fields seen in that sample, so a text field that first appears later is not indexed until the source
+  is added again with it named. Admin-marked PII paths inside sub-documents (`tickets.customer.email`) are masked when a
+  knowledge source names that path, not inside a whole sub-document returned by a query (there only field names like
+  `email` and values the classifier recognises are masked). OpenBao dynamic credentials do not apply to MongoDB.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
   to N times each limit. Since 1.3.0 an outage is visible: each instance probes Redis every `RATELIMIT_PROBE_SECONDS`,

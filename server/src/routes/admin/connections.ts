@@ -4,7 +4,7 @@ import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
 import { LABELS, type Label } from '../../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { conflict } from '../../http/problem.js';
-import { connectionView, ENGINES } from '../../connections/service.js';
+import { connectionView, ENGINES, type Engine } from '../../connections/service.js';
 import { isVaultRef } from '../../vault/policy.js';
 import type { Services } from '../../services.js';
 
@@ -61,7 +61,7 @@ export function connectionAdminRoutes(s: Services): Router {
         .strict(),
       req.body
     );
-    if (!(ENGINES as readonly string[]).includes(body.engine)) throw conflict('That engine is not installed on this platform. Register offers PostgreSQL, MySQL and OpenSearch.');
+    if (!(ENGINES as readonly string[]).includes(body.engine)) throw conflict('That engine is not installed on this platform. Register offers PostgreSQL, MySQL, OpenSearch and MongoDB.');
     // Sprint 25 (B-1705): a vault password reference must be readable by the admin saving it; it resolves as them.
     if (body.username && body.password && isVaultRef(body.password)) await s.vault.assertRefsReadable(p, [body.password], { ip: ip(req), traceId: req.traceId });
     try {
@@ -69,7 +69,7 @@ export function connectionAdminRoutes(s: Services): Router {
         await s.audit.append({ tenantId: p.tenantId, action: 'connection.register.refused', kind: 'admin', actor: actorFrom(p, ip(req)), target: { name: body.name }, label: body.label, detail: { zone: body.zone, reason: (err as Error).message }, traceId: req.traceId });
         throw err;
       });
-      const row = await c.create(p, { ...body, engine: body.engine as 'postgres' | 'opensearch' | 'mysql' });
+      const row = await c.create(p, { ...body, engine: body.engine as Engine });
       await audit(req, 'connection.registered', { connection: row.id, name: row.name }, row.label, { engine: row.engine, endpoint: row.endpoint, zone: row.zone, account: row.account, credentialSource: row.credential_source, baoRole: row.bao_role, passwordFromVault: !!row.vault_owner });
       res.status(201).json(await view(p.tenantId, row.id));
     } catch (err) {

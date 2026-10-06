@@ -609,12 +609,57 @@ working on…"); accepted memories of the user and the current workspace go into
 (each through the `memory` checkpoint), recalled by vector similarity when an embedding model is approved, else by
 recency. Expired memories are purged hourly from every backend.
 
+#### Model-based memory management (1.5.0, Sprint 30: B-3701 to B-3703)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /memory/settings` | `knowledge:manage`. `{profile, embedModel, effectiveEmbedModel, similarity, staleDays, reindex: {state: idle\|running\|done\|failed, model, jobId, done, total, error, startedAt, finishedAt}, updatedBy, updatedAt, embeddingModels: [{name, label, state}]}` for the tenant |
+| `PUT /memory/settings` `{profile?: name\|null, embedModel?: name\|null, similarity?: 0.5-0.99, staleDays?: 1-3650\|null}` | `knowledge:manage`. `422` for a profile that does not resolve or a model that is not an approved embedding model. When the embedding model in effect changes, `memory.reindex` starts (`reindex.state: running`). Audited (`memory.settings.updated`, `memory.reindex.started`) |
+| `POST /memory/consolidate` | `knowledge:manage`. `202 {jobId}`: a `memory.consolidate` run now (it also runs daily for every tenant) |
+| `POST /memory/reindex` | `knowledge:manage`. `202` with the settings: re-embeds every active memory with the model in effect (memories already embedded with it are skipped). `409` without an embedding model |
+| `POST /memory/:id/expiry/accept` | `memory:write`, the owner (a curator for workspace and agent memories). The memory expires at the proposed time (a day after the proposal) and is purged; a new version notes why. `409` without a proposal |
+| `POST /memory/:id/expiry/reject` | Clears the proposal; the memory is not proposed for expiry again for the same reason, and a contradicting pair is not judged again |
+
+- **The memory profile** (`profile`): a published model profile of the tenant. After a chat answer completes,
+  `memory.extract` asks it for proposals from the user's message; after an agent run succeeds under a memory policy
+  that allows proposals (`memory.write: propose`), it asks it for `progress` or `quirk` proposals from the run's task
+  and answer, within what `maxPerRun` still allows after the `remember` tool's proposals. The text goes to the model
+  as a JSON string and the prompt says nothing in it is an instruction; the answer must be one JSON object matching
+  `{memories: [{text, type?}]}` (at most 5, each 4 to 300 characters), else it counts as a failure. With no profile, or
+  when the profile fails (it does not resolve, its model is not approved, the text's label is above the profile's,
+  the call fails or times out, or the answer is not that JSON), the rules extract as before and
+  `memory.extraction.fallback` records the reason. Either way every proposal passes the `memory` checkpoint (tenant
+  policy, the credential ban, the guardrail rules; refusals are audited as `memory.proposal.refused`), is skipped when
+  it is held already or was rejected before (the rejection list compares one-line, lower-case text), and carries the
+  label of its source (the message's, or the run's). The memory's first version notes which extracted it.
+- **Consolidation** (`memory.consolidate`, daily and on request; nothing changes until a person accepts):
+  episodic and progress memories untouched for `staleDays` get an expiry proposal (`reason: stale`). With a profile and
+  an embedding model, the active memories of each owner (up to 300, most recent first) are embedded and every pair at
+  least `similarity` alike (cosine) is judged by the profile (at most 50 pairs per run), which answers
+  `{relation: same|contradicts|distinct, merged?, outdated?: a|b}` strictly. `same` becomes a **merge proposal**: a new
+  proposed memory (`origin: consolidation`) with the merged text, labelled as high as the two, whose `source` keeps both
+  memories' ids, versions, origins and sources; `contradicts` becomes an expiry proposal (`reason: contradicted, by`)
+  on the outdated one. Memories in a pending proposal are left out, and a pair whose proposal was rejected is not
+  judged again. Accepting a merge (`POST /memory/:id/accept`, as for any proposal) activates the new memory and
+  retires both: `state: superseded`, `supersededBy`, a version noting `merged into <id>`, their vectors deleted;
+  `409` when either changed or was forgotten since the proposal. Audit: `memory.merge.proposed`,
+  `memory.expiry.proposed`, `memory.consolidated`, `memory.merged`, `memory.expiry.accepted`, `memory.expiry.rejected`.
+- **The embedding model** (`embedModel`): memories are embedded with it when it is an approved embedding model
+  cleared for their label (else they are recalled by recency); unset, the first approved embedding model by name, as
+  before. `memory.reindex` re-embeds every active memory in batches per label and reports progress; while it is
+  `running`, recall is by recency (the vectors are of two models), and afterwards only vectors of the model the query
+  was embedded with are compared. A later model change supersedes a running reindex.
+
+A memory view also carries `embedModel`, `merge: {memories: [id, id], similarity} | null`, `supersededBy` and
+`expiryProposal: {expiresAt, reason: stale|contradicted, by, similarity, proposedAt} | null`; `origin` may be `agent` or
+`consolidation`.
+
 ### Data connections (`connections:manage`)
 
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/connections` | `[connection]` |
-| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
+| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch\|mongodb, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
 | `GET /admin/connections/:id` | One connection |
 | `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused; a new zone or label is checked against the zones as on registration |
 | `PUT /admin/connections/:id/credential` `{username, password}` or `{baoRole}` | Replaces the credential with a sealed account, or switches to OpenBao dynamic credentials for that role; any OpenBao lease this instance holds for the connection is revoked |
@@ -1333,7 +1378,7 @@ body through the `user-input` checkpoint: a block, hold or redaction refuses wit
 
 | Route | Notes |
 | --- | --- |
-| `GET /knowledge/connections` | PostgreSQL and MySQL connections: `[{id, name, engine, label, objects, columns}]` |
+| `GET /knowledge/connections` | PostgreSQL, MySQL and MongoDB connections: `[{id, name, engine, label, objects, columns}]` |
 | `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …" \| "mysql: …", connectionId, idColumn?, watermarkColumn?, accessColumn?, accessKind?: group \| user, replication?, publication?}` | MySQL tables and views sync by watermark like PostgreSQL (names default to the connection's database). `accessColumn` (B-1002) names who may retrieve each row: a list of directory groups (`accessKind: group`, the default) or usernames, emails or user ids (`user`), as a comma or semicolon list, a JSON array or a PostgreSQL array. The list is carried onto the row's document and chunks; search, chat context and the document list for members drop rows that do not name the reader or one of their groups (matched case-insensitively against the groups of the user's identities); an empty value admits nobody. `replication: true` (B-1003, PostgreSQL tables only, `409` for views and MySQL) streams changes through logical replication (`publication` defaults to `exprsn_knowledge`) |
 | `GET /knowledge/bases/:id` | Each database source carries `replication: {state: starting \| streaming \| fallback \| stopped, slot, publication, lsn, lastChangeAt, changes, error}` when it asked for it |
 | `DELETE /knowledge/sources/:id` | Also stops the source's stream and drops its replication slot |
@@ -2392,7 +2437,7 @@ notifies. The sweep (`MODERATION_SWEEP_SECONDS`) ends sanctions whose time is up
 | `GET /api/moderation/queues` | `moderation:review` or `moderation:manage`. `{items: [{id, name, workspaceId, rules, labels, kinds, priority, slaMinutes, escalateTo, escalationSlaMinutes, enabled, createdAt, updatedAt}]}` |
 | `POST /api/moderation/queues` `{name, workspaceId?, rules?, labels?, kinds?, priority?, slaMinutes, escalateTo: workspace \| tenant \| platform, escalationSlaMinutes?, enabled?}` | `moderation:manage`. B-1905. A new flag goes to the first enabled queue (lowest `priority`) whose workspace, rules (rule ids or names), labels and kinds (flag kind, object type or checkpoint) all match; its timer becomes the queue's SLA. The sweep escalates a routed flag past its timer to `escalateTo` with a fresh `escalationSlaMinutes` timer and notifies that level (event `flag.escalated`, audit `moderation.queue.escalated`). `409` for a name in use. Audited `moderation.queue.created` |
 | `PATCH /api/moderation/queues/:id`, `DELETE /api/moderation/queues/:id` | `moderation:manage`. Audited `moderation.queue.updated`, `moderation.queue.deleted` (its flags become unrouted); `204` on delete |
-| `GET /api/moderation/queues/:id/flags` | `moderation:review`. `{queue, open, overdue, escalated, items: [flag as in /api/flags, queueId, escalatedAt]}`, the flags the reviewer may work |
+| `GET /api/moderation/queues/:id/flags` | `moderation:review`. `{queue, open, overdue, escalated, items: [flag as in /api/flags, queueId, escalatedAt, object]}`, the flags the reviewer may work. Since 1.5.0 `object` is `{type, id, hideable}` (whether "Hide object" applies), or null for a flag above the reviewer's clearance or without an object |
 | `GET /api/moderation/dead-letters[?state]` | `moderation:manage`. Moderation jobs (`moderation.provider`) that failed their last attempt: `{items: [{id, jobId, type, error, attempts, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveJobId}]}`. Audited `moderation.job.dead_lettered` when one lands |
 | `POST /api/moderation/dead-letters/:id/redrive` | `moderation:manage`. Queues the job again with its payload (texts in it stay sealed); `409` when already redriven. Audited `moderation.job.redriven`. `201 {…, jobId}` |
 
@@ -2447,6 +2492,9 @@ verified addresses and the local account has an unproven one (a new link is sent
 when the second factor was skipped. `POST /api/auth/mfa/totp`, `/mfa/recovery` and `/mfa/webauthn` take
 `rememberDevice: true` (not for recovery codes) and then answer `trustedDevice: {until}` (or `null` when the tenant
 allows no trusted devices). `GET /api/auth/sign-in-options` adds `signup: false | {approval, verifyEmail}`.
+Since Sprint 30 (B-3413) the session body at the `mfa` stage also carries `mfa.trustedDeviceDays`: the tenant's
+period, or `0` when the account may not have a trusted device (admin roles, accounts marked as needing a factor), so the
+sign-in page offers "trust this browser" only when it applies. `GET /api/me` adds `user.email` and `user.emailVerified`.
 
 ### Invitations by workspace admins (`members:invite`)
 
@@ -2743,6 +2791,7 @@ webhooks and plugins (ids only).
 | `DELETE /api/groups/:id/members/:userId` | Leave (one's own id) or remove (moderators remove members, owners anyone). The last owner cannot leave (`409`). The member's sockets leave the group's room at once |
 | `POST /api/groups/:id/join` | `open`: `200 {joined: true, role}`. `request`: `202 {requested: true, request}` (the same pending request again if there is one; moderators are notified). `invite`: `403` (`step: join-mode`) unless the caller holds an invitation, which this accepts. Outside the workspace or below the label: `404` |
 | `POST /api/groups/:id/invites` `{userId, role?: member}` | Moderators (owners for `moderator` and `owner`). The invitee must be active, in the group's workspace and cleared for its label (`422`, `step: workspace`); one pending invitation or request per user (`409`). Expires after `GROUP_INVITE_DAYS`. `201` with the invitation; the invitee is notified |
+| `GET /api/groups/:id/candidates?q=` | Since 1.5.0. Moderators (the invite right). Up to 50 people the caller may invite: active members of the group's workspace cleared for its label, not members, without a pending request or invitation. `[{userId, username, displayName}]` |
 | `GET /api/groups/:id/requests?state=` | Moderators. Requests and invitations (default `pending`; expired ones are marked so) |
 | `GET /api/group-requests` | The caller's pending requests and the invitations waiting for them: `[{id, groupId, groupName, kind: request \| invite, role, state, expiresAt, …}]` |
 | `POST /api/group-requests/:id/accept` | An invitation by its invitee; a request by a moderator. The workspace boundary and label are checked again now (`422`); expired is `410` |
@@ -2961,6 +3010,7 @@ Limits per user: 5,000 blocks, mutes and follows each, 100 lists of up to 1,000 
 | --- | --- |
 | `GET /api/social/settings` | `{contactRule: workspace \| following \| nobody}` |
 | `PUT /api/social/settings` `{contactRule}` | Sets the caller's contact rule (audited `social.contact-rule.updated` when it changes) |
+| `GET /api/social/people?q=&limit=200` | Since 1.5.0. The people who share a workspace with the caller now (active, not the caller), optionally matching `q` in the username or display name: `[{userId, username, displayName, workspaces: [{id, name}]}]`, for the console's person picker. Whether someone accepts the caller is still decided when they act |
 | `GET /api/social/users/:id` | The caller's relation with one person: `{userId, blocking, muting, following, followedBy, canMessage}`. Someone outside the caller's workspaces is `404` unless the caller blocked or muted them. Being blocked by them shows only as `canMessage: false` |
 | `GET /api/social/blocks` | `[{userId, username, displayName, createdAt}]` |
 | `POST /api/social/blocks` `{userId}` | `201 {userId, blocked: true, created: true}`; `200` with `created: false` when already blocked; `422` for oneself |
@@ -3305,3 +3355,81 @@ all required; `{anyOf}` when one of several suffices), `authenticated` (any sign
 entry for a route that is gone, or a route whose `requireAuth`, `requirePermission` or `requireAnyPermission`
 middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
 their middleware implies, for review.
+
+## Sprint 30 (1.5.0): MongoDB connections (B-3602)
+
+`engine: mongodb` on `POST /admin/connections` (`connections:manage`, same routes, checks and audit as the other
+engines). `endpoint` is `host:port` (27017 by default); `database` is required and is the only database read. The
+account is a sealed username and password or a `vault:` password reference (B-1705); it authenticates against the
+connection's database (as a URI naming that database would) unless the username is written `<authdb>/<user>`, such as
+`admin/reader`. `baoRole` is refused (`409`): OpenBao dynamic credentials are for
+PostgreSQL and MySQL. Zones and `CONNECTIONS_ALLOWED_HOSTS` apply as for the other engines: the host is resolved and
+checked once and the checked address is dialled (TLS still verifies the name), with one direct connection (no
+replica-set discovery), no retries and the connection's timeout as the server-selection, connect and `maxTimeMS` limit.
+
+- `POST /admin/connections/:id/test`: `ping`, `buildInfo` and `connectionStatus` with privileges. `readOnly: false` (and
+  `degraded`) when the account holds a write action (`insert`, `update`, `remove`, index or collection changes, user
+  administration, `anyAction`) or the server takes connections without an account; `degraded` when the account cannot
+  `find` in the database; `unreachable` with the scrubbed driver message on a failed connection or authentication.
+- `POST /admin/connections/:id/schema`: the database's collections and views (not `system.*`), with top-level fields and
+  types sampled from the first 20 documents of each of the first 200 collections.
+- `PUT /admin/connections/:id/allow-list`: collection names (case-sensitive) or patterns such as `orders_*`.
+- `POST /admin/connections/:id/query` (and `/export`): `query` is JSON, `{"find": "<collection>", "filter": {…},
+  "projection": {…}, "sort": {…}, "limit": n, "skip": n}` or `{"aggregate": "<collection>", "pipeline": [ … ]}`; with
+  `object` (the collection picked in the schema tree) a bare object is the filter of a find on it. Values may use
+  relaxed extended JSON (`{"$date": "…"}`, `{"$oid": "…"}`). Pipeline stages must be one of `$match`, `$project`,
+  `$addFields`, `$set`, `$unset`, `$group`, `$sort`, `$limit`, `$skip`, `$count`, `$unwind`, `$lookup`, `$graphLookup`,
+  `$unionWith`, `$facet`, `$bucket`, `$bucketAuto`, `$sortByCount`, `$replaceRoot`, `$replaceWith`, `$sample`,
+  `$redact`, `$setWindowFields`, `$densify`, `$fill`, `$geoNear`; collections read through `$lookup`, `$graphLookup` and
+  `$unionWith` (also in sub-pipelines and `$facet`) must be on the allow-list. Refusals (`422`, audited as
+  `connection.query.refused`): `kind: write` for write commands, mongosh write methods (`db.orders.updateMany(…)`),
+  `$out` and `$merge`; `kind: ddl` for `drop`, `create`, index and collection changes; `kind: denied` for a stage off
+  the list, a collection off the allow-list, `system.*`, another database, `$where`, `$function`, `$accumulator`,
+  `$code` and `mapReduce`; `kind: unparsed` for anything else (not JSON, mongosh read syntax, unknown keys), which
+  cannot be confirmed. Reads fetch the row limit plus one (`$limit` appended to a pipeline), with `maxTimeMS`; documents
+  become rows over the union of their top-level fields, sub-documents as JSON. Masking applies as for the other engines,
+  inside sub-documents too.
+
+Knowledge sources (`POST /knowledge/bases/:id/sources`, `kind: database`): on a MongoDB connection `location` is
+`mongo: <collection>` or the bare collection name (introspected and allowed), and `fields` (1 to 50, dotted paths
+allowed) names the fields whose text becomes the document; without `fields`, the text fields of the sampled schema other
+than the id, watermark and access fields are indexed (`400` when there are none). `idColumn` is the id field (`_id` by
+default), `watermarkColumn` an optional field that grows on every change (`updatedAt` or `updated_at` when the sampled
+schema has one; `null` keeps none, so every sync reads the collection again), compared after the stored watermark as a
+date, number, ObjectId or text; `accessColumn` and `accessKind` name a field listing the groups or users who may
+retrieve each document (an array or a list, as for B-1002). Only the id, the fields, the watermark and the access field
+are fetched. `replication` and `roleMappings` are refused (`409`). Documents carry at least the connection's label.
+`GET /knowledge/connections` lists MongoDB connections with the allowed collections and their sampled fields.
+
+## Sprint 30 (1.5.0): CalDAV and CardDAV (B-3101 to B-3104)
+
+New permissions `calendars:read`, `calendars:write` (personal calendars), `contacts:read`, `contacts:write` (the
+directory address book and personal address books); members and tenant admins hold them. Group events stay under
+`groups:read` and `groups:write`. The protocols themselves are at `/dav` and are described in `docs/dav.md`; only
+app passwords are JSON API routes. Migration `032_dav`.
+
+### App passwords (B-3101)
+
+An app password authenticates DAV clients (HTTP Basic, with the account's username) at `/dav` and nowhere else:
+`/api`, `/v1` and the console refuse it. It carries DAV scopes (`caldav`, `carddav`, `webdav`), narrowed on every
+request to what the owner's roles grant then. Roles that require MFA may have them, but creating one needs a browser
+session whose second factor was confirmed within `STEPUP_WINDOW_SECONDS` (signing in with a factor, or
+`POST /me/step-up` with a TOTP code or a passkey; a password step-up does not count): `401` with `step_up: true` and
+`factor: true` otherwise, and `403` (`step: mfa`) for an account with no second factor. Created and revoked passwords
+send a security notice and are audited (`dav.app_password.created`, `dav.app_password.revoked`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/app-passwords` | The caller's app passwords: `[{id, name, prefix, scopes, state, createdAt, expiresAt, lastUsedAt, lastUsedIp, lastUsedAgent, revokedAt}]`; `state` is active, expired or revoked (kept listed 30 days) |
+| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`). At most 50 active per user |
+| `DELETE /api/me/app-passwords/:id` | Revokes it: the next DAV request with it is refused (`204`) |
+
+### DAV endpoints
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/caldav`, `GET /.well-known/carddav` | `301` to `/dav/` (RFC 6764; also `HEAD`, `OPTIONS` and `PROPFIND`). Public |
+| `GET /dav/:path` | A calendar object (`text/calendar`) or vCard (`text/vcard`) with its `ETag`; `If-None-Match` answers `304`. Also `HEAD` |
+| `PUT /dav/:path` | Stores a calendar object or contact, or answers a group event (the caller's `PARTSTAT` becomes their RSVP). `If-Match` with a stale ETag is `412` |
+| `DELETE /dav/:path` | Deletes a personal object or collection; cancels a group event (moderators and owners) |
+| `OPTIONS /dav/:path` | `DAV: 1, 3, calendar-access, addressbook, extended-mkcol` and the methods allowed |

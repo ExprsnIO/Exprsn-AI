@@ -59,7 +59,8 @@ npm run build                # tsc to server/dist
 npm run cli -w server -- <migrate [--check] | admin:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
                              kms:recover | signer | backup:create | backup:restore-drill | backup:restore>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
-                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
+                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL,
+                                             # TEST_MONGODB_URL (an account that may create users)
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
 npm run loadtest:platform -- --help        # webhook, records, OCSP and firehose load test (docs/loadtest.md)
@@ -154,8 +155,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `linear.ts`, `flags.ts` (the review queue, including held answers), `stream.ts` (sentence-by-sentence screening of
   streamed output).
 - **`knowledge/`** (sources, extraction, chunking, keyword terms, hybrid search with RRF, blue/green reindex),
-  **`memory/`** (scopes, proposals, forget, export), **`connections/`** (PostgreSQL, MySQL and OpenSearch drivers,
-  query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
+  **`memory/`** (scopes, proposals, forget, export; since 1.5.0 the tenant's memory settings, consolidation and
+  reindex jobs, and `model.ts`: the memory profile's prompts and strict JSON parsing), **`connections/`** (PostgreSQL,
+  MySQL and OpenSearch drivers, query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
   **`platform/vectors.ts`** (`VectorStore`: table scan or pgvector).
 - **`registry/`** (entries, checks, schemas, `dispatch.ts`: the one tool dispatcher for chat, agents, workflows and
   the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs
@@ -190,6 +192,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `migrate --check`); `platform/shamir.ts` and `platform/escrow.ts` (`kms:escrow`, `kms:recover`); `zones/kube.ts` and
   `zones/cluster.ts` (`ZONES_APPLY=kubernetes`); `knowledge/crawl.ts` (the internal web crawler). Prometheus rules and
   Grafana dashboards are in `deploy/observability/`.
+- 1.5.0 modules: **`dav/`** (CalDAV and CardDAV at `/dav`, `docs/dav.md`: `handler.ts` the router and methods,
+  `auth.ts` app-password Basic auth, `tree.ts` the namespace, `caldav.ts`, `carddav.ts`, `filters.ts` the query
+  operators, `sync.ts`, `store.ts` personal collections and dead properties, `passwords.ts` and `routes.ts` for
+  `/api/me/app-passwords`; the conformance fixtures are in `server/test/fixtures/dav/`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

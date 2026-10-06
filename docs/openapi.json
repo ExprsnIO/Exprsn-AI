@@ -35,9 +35,190 @@
         "type": "http",
         "scheme": "bearer",
         "description": "A plugin handler run's scoped token (xpt_…), B-2004"
+      },
+      "davBasic": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "DAV clients (B-3101): the account's username and an app password (exai_d1_...), over HTTPS; accepted at /dav only"
       }
     },
     "schemas": {
+      "MemorySettings": {
+        "type": "object",
+        "required": [
+          "profile",
+          "embedModel",
+          "effectiveEmbedModel",
+          "similarity",
+          "staleDays",
+          "reindex",
+          "embeddingModels"
+        ],
+        "properties": {
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The memory profile: extracts proposals from chat turns and agent runs, judges consolidation pairs. Null: the rules extract and nothing is merged"
+          },
+          "embedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The memory embedding model. Null: the first approved embedding model by name"
+          },
+          "effectiveEmbedModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "similarity": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 0.99
+          },
+          "staleDays": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reindex": {
+            "type": "object",
+            "required": [
+              "state",
+              "model",
+              "jobId",
+              "done",
+              "total",
+              "error",
+              "startedAt",
+              "finishedAt"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "idle",
+                  "running",
+                  "done",
+                  "failed"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "jobId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "done": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "finishedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "embeddingModels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "label",
+                "state"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "label": {
+                  "enum": [
+                    "public",
+                    "internal",
+                    "confidential",
+                    "restricted"
+                  ]
+                },
+                "state": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "MemorySettingsUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "embedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "similarity": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 0.99
+          },
+          "staleDays": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 3650
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "properties": {
@@ -7068,6 +7249,100 @@
         }
       }
     },
+    "/.well-known/caldav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CalDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CalDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CalDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/carddav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CardDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CardDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "CardDAV discovery (RFC 6764): 301 to /dav/",
+        "responses": {
+          "301": {
+            "description": "Moved permanently to /dav/"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/.well-known/did.json": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -7819,7 +8094,7 @@
         "tags": [
           "admin/connections"
         ],
-        "summary": "mysql\\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?} | Registers; the credential is sealed with the tenant key and never returned. With baoRole (PostgreSQL and MySQL; needs OPENBAO_AD",
+        "summary": "mysql\\|opensearch\\|mongodb, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?} | Registers; the credential is sealed with the tenant key and never returned. With baoRole (PostgreSQL and MySQL; needs O",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -18162,7 +18437,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "PostgreSQL and MySQL connections: [{id, name, engine, label, objects, columns}]",
+        "summary": "PostgreSQL, MySQL and MongoDB connections: [{id, name, engine, label, objects, columns}]",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -18477,6 +18752,299 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/app-passwords": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's app passwords for DAV clients (revoked and expired ones listed for 30 days)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "prefix": {
+                        "type": "string"
+                      },
+                      "scopes": {
+                        "type": "array",
+                        "items": {
+                          "enum": [
+                            "caldav",
+                            "carddav",
+                            "webdav"
+                          ]
+                        }
+                      },
+                      "state": {
+                        "enum": [
+                          "active",
+                          "expired",
+                          "revoked"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "integer"
+                      },
+                      "expiresAt": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "lastUsedAt": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "lastUsedIp": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "lastUsedAgent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "revokedAt": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "prefix",
+                      "scopes",
+                      "state",
+                      "createdAt"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Creates an app password (DAV-only scopes); needs a browser session with a second factor confirmed within STEPUP_WINDOW_SECONDS. The password is shown once",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "enum": [
+                        "caldav",
+                        "carddav",
+                        "webdav"
+                      ]
+                    }
+                  },
+                  "ttlDays": {
+                    "enum": [
+                      30,
+                      90,
+                      180,
+                      365,
+                      null
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "scopes"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "prefix": {
+                          "type": "string"
+                        },
+                        "scopes": {
+                          "type": "array",
+                          "items": {
+                            "enum": [
+                              "caldav",
+                              "carddav",
+                              "webdav"
+                            ]
+                          }
+                        },
+                        "state": {
+                          "enum": [
+                            "active",
+                            "expired",
+                            "revoked"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "integer"
+                        },
+                        "expiresAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "lastUsedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "lastUsedIp": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "lastUsedAgent": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "revokedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "prefix",
+                        "scopes",
+                        "state",
+                        "createdAt"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "password": {
+                          "type": "string"
+                        },
+                        "username": {
+                          "type": "string"
+                        },
+                        "server": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string"
+                            },
+                            "caldav": {
+                              "type": "string"
+                            },
+                            "carddav": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "notice": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "password",
+                        "username",
+                        "server"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/app-passwords/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Revokes an app password: the next DAV request with it is refused",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -19778,6 +20346,212 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/memory/consolidate": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. Queues a consolidation run now (memory.consolidate; it also runs daily): merge proposals for near-duplicates the memory profile confirms, expiry proposals for stale or contradicted memories. Nothing changes until accepted",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "jobId"
+                  ],
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/reindex": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. Re-embeds every active memory with the tenant's embedding model (memory.reindex); recall is by recency while it runs. 409 without an embedding model",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/settings": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. The tenant's memory settings: memory profile, embedding model (and the one in effect), consolidation similarity, stale days, the reindex state, and the embedding models to choose from",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "knowledge:manage. Changes the memory settings (422 for a profile that does not resolve or a model that is not an approved embedding model); a change of the embedding model in effect starts a reindex. Audited (memory.settings.updated)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorySettingsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/{id}/expiry/accept": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "Accepts the memory's expiry proposal (the owner, or a curator for workspace and agent memories): it expires at the proposed time and is then purged. 409 without a proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The memory (see docs/api.md, Memory), with expiryProposal cleared and, on accept, expiresAt set"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/{id}/expiry/reject": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "memory"
+        ],
+        "summary": "Rejects the memory's expiry proposal; it is not proposed again for the same reason (nor the contradicting pair judged again)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The memory (see docs/api.md, Memory), with expiryProposal cleared and, on accept, expiresAt set"
+                }
+              }
+            }
           }
         }
       }
@@ -24985,6 +25759,345 @@
         }
       }
     },
+    "/dav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "A calendar object or vCard (text/calendar, text/vcard) with its ETag; If-None-Match answers 304",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/vcard": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Headers of GET",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Stores a calendar object or contact, or answers a group event (PARTSTAT becomes the RSVP); a stale If-Match is 412",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "204": {
+            "description": "Updated"
+          },
+          "412": {
+            "description": "Precondition failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "text/calendar": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/vcard": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Deletes a personal object or collection; cancels a group event (moderators and owners)",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "DAV compliance classes and the methods allowed",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/dav/{path}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "A calendar object or vCard (text/calendar, text/vcard) with its ETag; If-None-Match answers 304",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/vcard": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "head": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Headers of GET",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Stores a calendar object or contact, or answers a group event (PARTSTAT becomes the RSVP); a stale If-Match is 412",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "204": {
+            "description": "Updated"
+          },
+          "412": {
+            "description": "Precondition failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "text/calendar": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/vcard": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "Deletes a personal object or collection; cancels a group event (moderators and owners)",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "options": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "dav"
+        ],
+        "summary": "DAV compliance classes and the methods allowed",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "The resource under /dav (see docs/dav.md)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "davBasic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/device": {
       "get": {
         "tags": [
@@ -29314,6 +30427,67 @@
         }
       }
     },
+    "/api/groups/{id}/candidates": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "Sprint 30, moderators. People the caller may invite: active members of the group's workspace cleared for its label, not members and without a pending request or invitation (at most 50)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "username",
+                      "displayName"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/groups/{id}/members": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -33389,6 +34563,89 @@
                     "userId",
                     "muted"
                   ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/social/people": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "Sprint 30. People who share a workspace with the caller (active, without the caller), optionally matching q in the username or display name: names and shared workspaces only",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "workspaces": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "username",
+                      "displayName",
+                      "workspaces"
+                    ]
+                  }
                 }
               }
             }

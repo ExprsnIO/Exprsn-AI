@@ -11,6 +11,7 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { Guardrails } from '../guardrails/types.js';
 import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSearch, classifySql, type Classification } from './classify.js';
 import type { DynamicCredentials } from './dynamic.js';
+import { allowedCollection, classifyMongo } from './mongo.js';
 import { isVaultRef } from '../vault/policy.js';
 import type { ConnectionSpec, DriverFactory, QueryResult, RoleCheck, SchemaObject } from './drivers.js';
 import type { ReplicationOptions, RowChange } from './replication.js';
@@ -23,7 +24,7 @@ export interface MaskedReplicationStream {
 }
 
 export type Engine = ConnectionSpec['engine'];
-export const ENGINES: readonly Engine[] = ['postgres', 'opensearch', 'mysql'];
+export const ENGINES: readonly Engine[] = ['postgres', 'opensearch', 'mysql', 'mongodb'];
 
 export interface ConnectionRow {
   id: string;
@@ -85,6 +86,35 @@ export const maskValue = (v: unknown): string => {
   return s.length <= 4 ? '••••' : `••••${s.slice(-4)}`;
 };
 
+/** A string the classifier recognises as personal data (an email address, IBAN, card or phone number, SSN). */
+const looksPersonal = (v: string): boolean => {
+  if (v.length < 6) return false;
+  const d = classifyText(v).detections;
+  return !!(d.email || d.iban || d.payment_card || d.us_ssn || d.phone);
+};
+
+/** Masks fields with personal names and values that look personal inside a document or JSON value. */
+function maskDeep(v: unknown, onMask: () => void, depth = 0): unknown {
+  if (v == null || depth > 50) return v;
+  if (v instanceof Date) return v.toISOString();
+  if (Array.isArray(v)) return v.map((x) => maskDeep(x, onMask, depth + 1));
+  if (typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (x != null && typeof x !== 'object' && PII_NAME.test(k)) {
+        onMask();
+        out[k] = maskValue(x);
+      } else out[k] = maskDeep(x, onMask, depth + 1);
+    }
+    return out;
+  }
+  if (typeof v === 'string' && looksPersonal(v)) {
+    onMask();
+    return maskValue(v);
+  }
+  return v;
+}
+
 export const connectionView = (c: ConnectionRow, usedBy: { kbId: string; kb: string; sourceId: string; object: string; lastSyncAt: number | null; state: string; docs: number }[] = []) => {
   const pii = piiColumns(c);
   const objects = c.schema ?? [];
@@ -119,9 +149,13 @@ export const connectionView = (c: ConnectionRow, usedBy: { kbId: string; kb: str
   };
 };
 
-function allowed(c: ConnectionRow, object: string): boolean {
-  return c.engine === 'postgres' ? allowedSql(object, c.allow_list) : c.engine === 'mysql' ? allowedMysql(object, c.allow_list, c.database) : allowedIndex(object, c.allow_list);
+/** Whether an object (table, view, index or collection) is on the connection's allow-list. */
+export function allowed(c: ConnectionRow, object: string): boolean {
+  return c.engine === 'postgres' ? allowedSql(object, c.allow_list) : c.engine === 'mysql' ? allowedMysql(object, c.allow_list, c.database) : c.engine === 'mongodb' ? allowedCollection(object, c.allow_list) : allowedIndex(object, c.allow_list);
 }
+
+/** OpenBao's database engine issues SQL accounts only. */
+const DYNAMIC_ENGINES: readonly Engine[] = ['postgres', 'mysql'];
 
 /** "object.column" (lower case) for every PII column: named by convention or marked by an admin. */
 export function piiColumns(c: ConnectionRow): Set<string> {
@@ -145,7 +179,7 @@ export interface CallContext {
 }
 
 /**
- * Data connections: PostgreSQL and OpenSearch, with credentials sealed under the tenant key (never shown again),
+ * Data connections: PostgreSQL, MySQL, OpenSearch and MongoDB, with credentials sealed under the tenant key (never shown again),
  * a schema allow-list, and a query path that classifies before anything is sent: writes, DDL, several statements
  * and objects outside the allow-list are refused and audited; syntax the parser cannot read runs only after the
  * user confirms. Reads run on the read-only account in a read-only transaction with a statement timeout and a row
@@ -206,8 +240,9 @@ export class ConnectionService {
 
   async create(p: Principal, input: { name: string; engine: Engine; endpoint: string; database: string | null; zone: string; label: Label; rowLimit: number; timeoutS: number; tls: boolean; username: string | null; password: string | null; baoRole?: string | null }): Promise<ConnectionRow> {
     if (!clears(p.clearance, input.label)) throw forbidden(`Your clearance is ${p.clearance}; a ${input.label} connection is above it.`, { step: 'clearance' });
+    if (input.baoRole && !DYNAMIC_ENGINES.includes(input.engine)) throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections; give this connection a sealed read-only account (or a vault: reference).');
     if (input.baoRole && !this.dynamic) throw conflict('OpenBao dynamic credentials need OPENBAO_ADDR and OPENBAO_TOKEN on the server.');
-    if (input.baoRole && input.engine === 'opensearch') throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections.');
+    if (input.engine === 'mongodb' && !input.database) throw conflict('A MongoDB connection names the database it reads.');
     const id = ulid();
     const t = Date.now();
     const row = {
@@ -251,6 +286,7 @@ export class ConnectionService {
   async update(p: Principal, id: string, patch: { endpoint?: string; database?: string | null; zone?: string; label?: Label; rowLimit?: number; timeoutS?: number; tls?: boolean }): Promise<ConnectionRow> {
     const c = await this.get(p.tenantId, id);
     if (patch.label && !clears(p.clearance, patch.label)) throw forbidden(`Your clearance is ${p.clearance}.`, { step: 'clearance' });
+    if (c.engine === 'mongodb' && patch.database === null) throw conflict('A MongoDB connection names the database it reads.');
     const upd: Record<string, unknown> = { updated_at: Date.now(), version: c.version + 1 };
     if (patch.endpoint !== undefined) upd.endpoint = patch.endpoint;
     if (patch.database !== undefined) upd.database = patch.database;
@@ -275,8 +311,8 @@ export class ConnectionService {
   /** Switches a connection to OpenBao dynamic credentials for `role`; the static credential is dropped. */
   async setDynamicRole(p: Principal, id: string, role: string): Promise<ConnectionRow> {
     const c = await this.get(p.tenantId, id);
+    if (!DYNAMIC_ENGINES.includes(c.engine)) throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections; give this connection a sealed read-only account (or a vault: reference).');
     if (!this.dynamic) throw conflict('OpenBao dynamic credentials need OPENBAO_ADDR and OPENBAO_TOKEN on the server.');
-    if (c.engine === 'opensearch') throw conflict('OpenBao dynamic credentials are for PostgreSQL and MySQL connections.');
     await this.db('data_connections').where({ id: c.id }).update({ credential: null, account: null, credential_source: 'openbao', bao_role: role, vault_owner: null, version: c.version + 1, updated_at: Date.now(), health: 'unknown' });
     await this.dynamic.forget(c.id);
     return this.get(p.tenantId, id);
@@ -360,11 +396,11 @@ export class ConnectionService {
   }
 
   classify(c: ConnectionRow, input: QueryInput): Classification {
-    const cl = c.engine === 'postgres' ? classifySql(input.query) : c.engine === 'mysql' ? classifyMysql(input.query) : classifyOpenSearch(input.query, input.object ?? null);
+    const cl = c.engine === 'postgres' ? classifySql(input.query) : c.engine === 'mysql' ? classifyMysql(input.query) : c.engine === 'mongodb' ? classifyMongo(input.query, input.object ?? null) : classifyOpenSearch(input.query, input.object ?? null);
     if (cl.kind === 'read' || cl.kind === 'unparsed') {
       const bad = cl.objects.find((o) => !allowed(c, o));
       if (bad) return { ...cl, kind: 'denied', denied: bad, reason: `${bad} is not on the schema allow-list for ${c.name}.` };
-      if (cl.kind === 'read' && !cl.objects.length && c.engine !== 'opensearch') return { ...cl, kind: 'unparsed', reason: 'The query reads no table or view the parser could find.' };
+      if (cl.kind === 'read' && !cl.objects.length && c.engine !== 'opensearch' && c.engine !== 'mongodb') return { ...cl, kind: 'unparsed', reason: 'The query reads no table or view the parser could find.' };
     }
     return cl;
   }
@@ -378,14 +414,19 @@ export class ConnectionService {
       row.map((v, i) => {
         if (v == null) return v;
         if (byColumn[i]) return maskValue(v);
-        if (typeof v === 'string' && v.length >= 6) {
-          const d = classifyText(v).detections;
-          if (d.email || d.iban || d.payment_card || d.us_ssn || d.phone) {
-            masked.add(r.columns[i]!);
-            return maskValue(v);
-          }
+        if (typeof v === 'string' && looksPersonal(v)) {
+          masked.add(r.columns[i]!);
+          return maskValue(v);
         }
-        return v instanceof Date ? v.toISOString() : typeof v === 'object' ? JSON.stringify(v) : v;
+        if (v instanceof Date) return v.toISOString();
+        if (typeof v === 'object') {
+          // Documents and JSON values (MongoDB sub-documents, json columns): personal fields and values inside are masked too.
+          let hit = false;
+          const out = maskDeep(v, () => (hit = true));
+          if (hit) masked.add(r.columns[i]!);
+          return JSON.stringify(out);
+        }
+        return v;
       })
     );
     return { rows, masked: [...masked] };
@@ -419,7 +460,8 @@ export class ConnectionService {
       await record('connection.query.refused', { reason: cl.reason ?? null, ...(cl.denied ? { object: cl.denied } : {}) });
       throw this.refuse(c, cl);
     }
-    if (cl.kind === 'unparsed' && c.engine === 'opensearch') {
+    // OpenSearch and MongoDB requests are sent as parsed, so one the parser could not read cannot run at all.
+    if (cl.kind === 'unparsed' && (c.engine === 'opensearch' || c.engine === 'mongodb')) {
       await record('connection.query.refused', { reason: cl.reason ?? null });
       throw new HttpProblem(422, 'Request refused', cl.reason ?? 'The request could not be read.', { extensions: { kind: 'unparsed' } });
     }
@@ -466,12 +508,12 @@ export class ConnectionService {
    * Rows of an allow-listed object for a knowledge source, masked the same way. `rawColumn` (a row-level access
    * column, B-1002) is also returned unmasked beside the rows, as it decides who may retrieve each row.
    */
-  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; rawColumn?: string | null; role?: string | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string; raw?: unknown[] }> {
+  async readRows(tenantId: string, id: string, object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; rawColumn?: string | null; role?: string | null; fields?: string[] | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; label: Label; name: string; raw?: unknown[] }> {
     const c = await this.get(tenantId, id);
-    if (c.engine !== 'postgres' && c.engine !== 'mysql') throw conflict('Only PostgreSQL and MySQL tables and views can be a knowledge source.');
+    if (c.engine === 'opensearch') throw conflict('Only PostgreSQL and MySQL tables and views, and MongoDB collections, can be a knowledge source.');
     if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
     if (opts.role && c.engine !== 'postgres') throw conflict('Reading as a database role is for PostgreSQL connections.');
-    const r = await (await this.driver(c)).rows(object, { watermarkColumn: opts.watermarkColumn, after: opts.after, limit: opts.limit, timeoutMs: c.timeout_s * 1000, ...(opts.role ? { role: opts.role } : {}) });
+    const r = await (await this.driver(c)).rows(object, { watermarkColumn: opts.watermarkColumn, after: opts.after, limit: opts.limit, timeoutMs: c.timeout_s * 1000, ...(opts.role ? { role: opts.role } : {}), ...(opts.fields?.length ? { fields: opts.fields } : {}) });
     const at = opts.rawColumn ? r.columns.indexOf(opts.rawColumn) : -1;
     const raw = at >= 0 ? r.rows.map((row) => row[at]) : undefined;
     const m = this.mask(c, [object], r);

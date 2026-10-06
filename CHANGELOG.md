@@ -2,6 +2,49 @@
 
 ## 1.5.0 (in progress)
 
+### Model-based memory management (Sprint 30, B-3701 to B-3703)
+
+- Per-tenant memory settings under `GET`/`PUT /api/memory/settings` (`knowledge:manage`, audited as
+  `memory.settings.updated`). Migration `032c_memory` (`memory_settings`; `memories.superseded_by` and
+  `memories.expiry_proposal`).
+- A tenant `memory` profile extracts proposals from chat turns and, under an agent's memory policy, from succeeded
+  agent runs (`memory.extract`). The text goes to the model as JSON data and its answer must be one JSON object that
+  a zod schema accepts; with no profile, or when the model fails or answers anything else, the rules extract as before
+  (`memory.extraction.fallback` records why). Every proposal still passes the `memory` checkpoint, the credential ban
+  and the rejection list, and carries its source's label (B-3701).
+- Consolidation (`memory.consolidate`, daily and `POST /api/memory/consolidate`): near-duplicates found by embedding
+  similarity and confirmed by the profile become one merge proposal (keeping both sources); stale and contradicted
+  memories get expiry proposals, decided with `POST /api/memory/{id}/expiry/accept|reject`. Nothing changes until a
+  person accepts; accepting a merge activates the new memory and retires both (`superseded`, `supersededBy`, audited
+  as `memory.merged`) (B-3702).
+- The memory embedding model is a tenant setting (unset: the first approved embedding model by name, as before).
+  Changing it starts `memory.reindex` (also `POST /api/memory/reindex`), which re-embeds every active memory; recall is
+  by recency while it runs, and only vectors of the query's model are compared (B-3703).
+- The event catalogue lists a `memory.*` group for the memory audit actions.
+
+### CalDAV and CardDAV (Sprint 30, B-3101 to B-3104)
+
+- New permissions `calendars:read`, `calendars:write`, `contacts:read` and `contacts:write` (members and tenant
+  admins). Migration `032_dav`. Described in `docs/dav.md`.
+- App passwords for DAV clients under `/api/me/app-passwords` (list, create, revoke): per device, shown once, with
+  DAV-only scopes (`caldav`, `carddav`, `webdav`) and an optional expiry; creating one needs a second factor confirmed
+  within the step-up window (a TOTP or passkey step-up now records the factor on the session); the list shows the last
+  use. They authenticate `/dav` only (HTTP Basic over TLS) and are refused by `/api`, `/v1` and the console (B-3101).
+- The WebDAV core at `/dav` with `/.well-known/caldav` and `/.well-known/carddav` discovery: PROPFIND, PROPPATCH (all
+  or nothing; dead properties sealed), REPORT, ETags with `If-Match`, `If-None-Match` and the If header (a stale ETag is
+  412), `sync-collection` (RFC 6578), strict XML parsing (no DOCTYPE or entities, size and depth caps), its own rate
+  limit and failed-credential limits (B-3101).
+- CalDAV over personal calendars (MKCALENDAR, validated objects stored sealed with indexed time spans) and the
+  calendars of one's groups: `calendar-query` with every RFC 4791 filter operator, `calendar-multiget`,
+  `free-busy-query`; answering a group event from a client (its `PARTSTAT`) is written back as the RSVP, and
+  moderators' edits and cancellations go through the groups service (B-3102). The iCalendar writer of B-2504 renders
+  organisers and attendees and a METHOD-less object form.
+- CardDAV: the directory as a read-only address book filtered by clearance (a contact above the caller's clearance is
+  never returned), and personal address books (extended MKCOL, vCard 3.0 and 4.0), `addressbook-query` with every RFC
+  6352 operator and `addressbook-multiget` (B-3103).
+- A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
+  replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
+
 ### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
 
 - New permission `roles:manage` (tenant admins). Migration `031_access`.
@@ -44,6 +87,25 @@
 - Platform load test on PostgreSQL: records query p95 65 and 62 ms in two full runs (732 ms at release), every target
   met; 67 ms with autovacuum off. The records scenario reports each query body's p95 and signs in 128 users (64 hit
   the per-user API limit once queries got faster). `docs/loadtest.md`.
+
+### MongoDB data connections (Sprint 30, B-3602)
+
+- `engine: mongodb` on `POST /api/admin/connections`, merged from `feat/mongodb-connections`. Reads are `find` and
+  `aggregate` only, written as JSON; writes, DDL, `$out`, `$merge`, server-side JavaScript (`$where`, `$function`,
+  `$accumulator`, Code values, `mapReduce`) and stages off a read-only list are refused before anything is sent and
+  checked again in the driver. Collections read through `$lookup`, `$graphLookup` and `$unionWith` must be on the
+  allow-list (names or patterns such as `orders_*`); `system.*` and other databases are refused. Reads use the
+  connection's row limit (plus one, to report capping) and timeout (`maxTimeMS`), mask personal fields inside
+  sub-documents too, and are audited as for the other engines.
+- One direct connection to the checked address (no replica-set discovery or SRV), no retries, credentials as options
+  (sealed, or a `vault:` reference). The account authenticates against the connection's database unless the
+  username is `<authdb>/<user>`. Test connection reports an account with write privileges, or a server without
+  authentication, as `degraded`. OpenBao dynamic credentials stay PostgreSQL and MySQL only (`409`).
+- Collections as knowledge sources (`kind: database`): `fields` to index (by default the text fields of the sampled
+  schema), `idColumn` (`_id`), a watermark field (`updatedAt` or `updated_at` when sampled), and an access field as for
+  B-1002. No migration; the metadata is tested on SQLite, PostgreSQL and MySQL (`TEST_MONGODB_URL` gates the
+  real-server test; CI runs a `mongo:8` service).
+- Dependency: the official `mongodb` driver 7.7.0 (pinned).
 
 ## 1.4.0
 

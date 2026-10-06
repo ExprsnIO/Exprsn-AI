@@ -66,15 +66,27 @@
   };
 
   App.register({
-    id: 'settings', title: 'Settings', summary: 'Profile, appearance, second factors, API keys, connected applications, sessions', crumb: ['Settings'], live: true,
+    id: 'settings', title: 'Settings', summary: 'Profile, appearance, security (email, factors, trusted devices), API keys, connected applications, sessions, AT-Protocol account', crumb: ['Settings'], live: true,
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
+    // B-3413: the account's own verification, trusted devices, email codes and DID. States open what the user would see
+    // (a dialog or a notice); none of them changes anything.
+    states: [
+      { title: 'Trusted devices forgotten', tone: 'neutral', text: 'Forgetting every trusted device makes the next sign-in from each browser ask for the second factor again. Audited as auth.trusted_device.removed.', apply(ctx) { ctx.state.openForget = true; ctx.rerender(); } },
+      { title: 'DID challenge pending', tone: 'info', text: 'A claim issued a challenge token, shown once. Until the profile description contains it, Verify answers 409 and the binding is unverified.', apply(ctx) { ctx.state.openAtLink = true; ctx.rerender(); } },
+      { title: 'Email factor added', tone: 'ok', text: 'An email one-time code is a second factor that admin roles may use (the Sprint 28 decision). Codes work once, for the session they were sent for.', apply(ctx) { ctx.state.openEmail = true; ctx.rerender(); } },
+      { title: 'Address not verified', tone: 'warn', text: 'The tenant requires verified addresses. Until the link is redeemed, password sign-in refuses with email_unverified.', apply(ctx) { ctx.state.verifyNote = true; ctx.rerender(); } }
+    ],
     render(root, ctx) {
       const st = ctx.state;
       const me = App.me;
+      // Back from the AT-Protocol OAuth flow in "link" mode (B-1807): the callback bound the DID.
+      if (ctx.params.atproto === 'linked') { st.linkedNote = true; delete ctx.params.atproto; st.loaded = false; try { history.replaceState(null, '', location.pathname + location.search + '#/settings'); } catch (e) { /* history unavailable */ } }
       if (!st.loaded && !st.loading) {
         st.loading = true;
-        Promise.all([App.get('/api/me/api-keys'), App.get('/api/me/sessions'), App.get('/api/me/mfa'), App.get('/api/me'), App.get('/api/me/grants')])
-          .then(([keys, sessions, mfa, fresh, grants]) => { st.keys = keys; st.sessions = sessions; st.mfa = mfa; st.grants = grants; App.setMe(fresh); st.loaded = true; })
+        // Trusted devices and the DID are extras: a failure there leaves their panel saying so.
+        const soft = (p) => p.catch((err) => ({ error: err }));
+        Promise.all([App.get('/api/me/api-keys'), App.get('/api/me/sessions'), App.get('/api/me/mfa'), App.get('/api/me'), App.get('/api/me/grants'), soft(App.get('/api/me/trusted-devices')), App.can('atproto:link') && me.credential !== 'api_key' ? soft(App.get('/api/me/atproto')) : Promise.resolve(null)])
+          .then(([keys, sessions, mfa, fresh, grants, trusted, atproto]) => { st.keys = keys; st.sessions = sessions; st.mfa = mfa; st.grants = grants; st.trusted = trusted; st.atproto = atproto; App.setMe(fresh); st.loaded = true; })
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (App.state.route === 'settings') ctx.rerender(); });
       }
@@ -100,10 +112,24 @@
         + '<span class="muted" style="font-size:12px">The accessibility mode is saved with your account and follows you to other browsers; the theme and shortcuts are saved in this browser. Standard meets WCAG 2.2 AA. Enhanced raises text contrast to 7:1, enlarges click targets, shows a focus ring on every focused control, underlines links, stops animation and keeps messages on screen longer. Reduced motion from your system is always honoured.</span>');
 
       const factors = st.mfa ? st.mfa.factors : [];
-      const mfaPanel = UI.panel('Second factors', (st.codes ? UI.notice('<b>New recovery codes. Store them now; they are shown once.</b><div class="mono" style="margin-top:4px;columns:2">' + st.codes.map((c) => '<div>' + esc(c) + '</div>').join('') + '</div>', 'warn', UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-codesdone' })) : '')
+      const hasEmailFactor = factors.some((f) => f.kind === 'email');
+      const addr = me.user.email;
+      const emailBlock = '<div class="eyebrow">Email address</div>'
+        + (!addr ? '<div class="fg2" style="font-size:13px">No email address on your account. ' + (pwHome.managedHere ? 'Ask an identity admin to add one.' : 'Your directory keeps it.') + '</div>'
+          : me.user.emailVerified ? '<div class="hstack wrap"><span class="mono" style="overflow-wrap:anywhere">' + esc(addr) + '</span>' + UI.pill('verified', 'ok') + '</div>'
+            : '<div class="hstack wrap"><span class="mono" style="overflow-wrap:anywhere">' + esc(addr) + '</span>' + UI.pill('not verified', 'warn') + (pwHome.managedHere ? UI.btn('Send verification link', { size: 'sm', attrs: 'data-sendverify' }) : '') + '</div>')
+        + (st.verifyNote ? UI.notice('When ' + esc(me.tenant ? me.tenant.name : 'the tenant') + ' requires verified addresses, password sign-in to a local account with an unproven address answers <span class="mono">403 email_unverified</span> and sends a new link, throttled, until the link is redeemed.' + (addr && me.user.emailVerified ? ' Your address is verified.' : ''), 'warn', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-verifydone' })) : '');
+      const tr = st.trusted && !st.trusted.error ? st.trusted : null;
+      const trustedBlock = '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Trusted devices' + (tr ? ', ' + tr.periodDays + ' days' : '') + '</div>' + UI.btn('Forget all', { kind: 'ghost', size: 'sm', attrs: 'data-forgetdevices', disabled: !(tr && tr.devices.length) }) + '</div>'
+        + (st.trusted && st.trusted.error ? UI.notice('Trusted devices could not be loaded: ' + esc(st.trusted.error.message), 'danger')
+          : !tr ? ''
+            : UI.table(['Browser', 'Trusted since', 'Until'], tr.devices.map((d) => [esc(d.browser || 'Unknown browser'), esc(when(d.createdAt)), esc(new Date(d.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))]), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No trusted devices', emptyText: tr.periodDays ? 'Tick "trust this browser" at the second-factor step to add one.' : 'Trusted devices are off in this tenant.' })
+              + (tr.thisDevice ? '<div class="hstack">' + UI.pill('this device', 'accent') + '<span class="muted" style="font-size:12px">This browser skips the second factor.</span></div>' : ''))
+        + '<span class="muted" style="font-size:12px">A trusted browser skips the second factor until its period ends, until you sign out everywhere or change your password, or until the tenant shortens the period. Accounts with admin roles are asked on every sign-in.</span>';
+      const mfaPanel = UI.panel('Security', emailBlock + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Second factors</div>' + (addr ? UI.btn('Add email code', { size: 'sm', icon: 'plus', attrs: 'data-addemail', disabled: hasEmailFactor }) : '') + '</div>' + (st.codes ? UI.notice('<b>New recovery codes. Store them now; they are shown once.</b><div class="mono" style="margin-top:4px;columns:2">' + st.codes.map((c) => '<div>' + esc(c) + '</div>').join('') + '</div>', 'warn', UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-codesdone' })) : '')
         + (st.totp ? UI.notice('Add this key to your authenticator app: <span class="mono" style="overflow-wrap:anywhere">' + esc(st.totp.secret.replace(/(.{4})/g, '$1 ').trim()) + '</span>, then enter the code it shows.' + '<div class="hstack gap6" style="margin-top:6px"><input class="input mono" data-totpcode inputmode="numeric" maxlength="6" placeholder="000000" style="width:110px">' + UI.btn('Confirm', { kind: 'primary', size: 'sm', attrs: 'data-totpconfirm' }) + UI.btn('Cancel', { kind: 'ghost', size: 'sm', attrs: 'data-totpcancel' }) + '</div>', 'info') : '')
-        + UI.table(['Factor', 'Added', 'Last used', { label: '', right: true }], factors.map((f) => ({ cells: [esc(f.label) + ' ' + UI.pill(f.kind === 'webauthn' ? 'passkey' : 'authenticator', 'outline'), esc(when(f.createdAt)), esc(when(f.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Remove', { kind: 'ghost', size: 'sm', attrs: 'data-rmfactor="' + esc(f.id) + '"' }) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No second factor', emptyText: 'Add one to protect your account. Admin roles require it.' })
-        + '<div class="hstack wrap gap6">' + UI.btn('Add authenticator app', { size: 'sm', attrs: 'data-addtotp' }) + (App.webauthn && App.webauthn.supported() ? UI.btn('Add passkey', { size: 'sm', icon: 'key', attrs: 'data-addpasskey' }) : '') + (factors.length ? UI.btn('New recovery codes', { kind: 'ghost', size: 'sm', attrs: 'data-newcodes' }) : '') + '<span class="muted grow" style="font-size:12px;text-align:right">' + (st.mfa ? st.mfa.recoveryCodesRemaining + ' recovery codes left' : '') + '</span></div>');
+        + UI.table(['Factor', 'Added', 'Last used', { label: '', right: true }], factors.map((f) => ({ cells: [esc(f.label) + ' ' + UI.pill(f.kind === 'webauthn' ? 'passkey' : f.kind === 'email' ? 'email code' : 'authenticator', 'outline'), esc(when(f.createdAt)), esc(when(f.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Remove', { kind: 'ghost', size: 'sm', attrs: 'data-rmfactor="' + esc(f.id) + '"' }) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No second factor', emptyText: 'Add one to protect your account. Admin roles require it.' })
+        + '<div class="hstack wrap gap6">' + UI.btn('Add authenticator app', { size: 'sm', attrs: 'data-addtotp' }) + (App.webauthn && App.webauthn.supported() ? UI.btn('Add passkey', { size: 'sm', icon: 'key', attrs: 'data-addpasskey' }) : '') + (factors.length ? UI.btn('New recovery codes', { kind: 'ghost', size: 'sm', attrs: 'data-newcodes' }) : '') + '<span class="muted grow" style="font-size:12px;text-align:right">' + (st.mfa ? st.mfa.recoveryCodesRemaining + ' recovery codes left' : '') + '</span></div>' + trustedBlock);
 
       const keys = st.keys || [];
       const keyRows = keys.map((k) => {
@@ -123,10 +149,19 @@
       const sessionsPanel = UI.panel('Sessions', UI.table(['Client', 'Signed in with', 'Address', 'Started', 'Last activity', { label: '', right: true }], sessions.map((s) => ({ cells: [esc(client(s.userAgent)) + (s.current ? ' ' + UI.pill('this session', 'accent') : ''), esc(s.method), '<span class="mono">' + esc(s.ip || '') + '</span>', esc(when(s.createdAt)), esc(when(s.lastSeenAt)), '<span class="hstack" style="justify-content:flex-end">' + (s.current ? '' : UI.btn('Sign out', { kind: 'ghost', size: 'sm', attrs: 'data-endsession="' + esc(s.id) + '"' })) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No sessions', emptyText: '' })
         + '<div class="hstack wrap"><span class="muted grow" style="font-size:12px">Signing a session out ends it at once, including its live connection. API keys are not affected.</span>' + UI.btn('Sign out other sessions', { kind: 'ghost', size: 'sm', attrs: 'data-signoutothers' }) + UI.btn('Sign out', { size: 'sm', icon: 'lock', attrs: 'data-signout' }) + '</div>');
 
+      const atb = st.atproto && !st.atproto.error ? st.atproto.binding : null;
+      const atPanel = !App.can('atproto:link') || me.credential === 'api_key' ? '' : UI.panel('AT-Protocol account', (st.atproto && st.atproto.error ? UI.notice('Your AT-Protocol account could not be loaded: ' + esc(st.atproto.error.message), 'danger') : '')
+        + (st.linkedNote && atb ? UI.notice('<b>Account linked.</b> The authorization server confirmed <span class="mono" style="overflow-wrap:anywhere">' + esc(atb.did) + '</span>; the binding is verified with proof <span class="mono">oauth</span>.', 'ok', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-linkeddone' })) : '')
+        + (!atb ? UI.empty('No account linked', 'Bind your own AT-Protocol DID to sign in with it and to label as yourself.', UI.btn('Link an account', { kind: 'primary', size: 'sm', attrs: 'data-atlink' }))
+          : UI.kv([['DID', '<span class="mono" style="overflow-wrap:anywhere">' + esc(atb.did) + '</span>'], ['Handle', atb.handle ? '<span class="mono">' + esc(atb.handle) + '</span>' + (atb.handleCheckedAt ? ' <span class="muted" style="font-size:12px">checked ' + esc(when(atb.handleCheckedAt)) + '</span>' : '') : '<span class="muted">none</span>'], ['State', atb.verified ? UI.pill('verified', 'ok') + ' <span class="muted" style="font-size:12px">proof ' + esc(atb.proof || '') + ', ' + esc(when(atb.verifiedAt)) + '</span>' : atb.challengePending ? UI.pill('challenge pending', 'warn') : UI.pill('unverified', 'warn')], ['PDS', atb.pds ? '<span class="mono" style="overflow-wrap:anywhere">' + esc(atb.pds) + '</span>' : '<span class="muted">unknown</span>']], 2)
+            + (atb.challengePending ? (st.atToken ? UI.notice('<b>Put this token in your profile description, then verify.</b> It is shown once and expires ' + esc(new Date(atb.challengeExpiresAt).toLocaleString()) + '.<div class="mono" style="margin-top:4px;overflow-wrap:anywhere">' + esc(st.atToken) + '</div>', 'warn', UI.btn('Copy', { size: 'sm', attrs: 'data-copytoken' })) : UI.notice('A challenge is open until ' + esc(new Date(atb.challengeExpiresAt).toLocaleString()) + '. Its token was shown once when it was issued; issue a new one from "Link an account" if you lost it.', 'info')) : '')
+            + '<div class="hstack wrap gap6">' + (atb.challengePending ? UI.btn('Verify now', { kind: 'primary', size: 'sm', attrs: 'data-atverify' }) : '') + (!atb.verified ? UI.btn('Link an account', { size: 'sm', attrs: 'data-atlink' }) : UI.btn('Change handle', { size: 'sm', attrs: 'data-athandle' })) + UI.btn('Remove', { kind: 'ghost', size: 'sm', attrs: 'data-atremove' }) + '</div>')
+        + '<span class="muted" style="font-size:12px">A bound DID signs in as you through the tenant\'s <span class="mono">atproto</span> store. The handle counts only while its DID document names it back.</span>');
+
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(me.user.displayName))
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + grantsPanel + '</div></div>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       if (ctx.$('[data-pwnew]')) App.passwordMeter.attach(ctx.$('[data-pwnew]'), ctx.$('[data-pwmeter]'));
@@ -206,6 +241,71 @@
       ctx.on('click', '[data-endsession]', async (e, t) => { const s = sessions.find((x) => x.id === t.dataset.endsession); const ok = await ctx.confirm({ title: 'Sign out ' + client(s.userAgent) + '?', tag: 'ends the session', tone: 'danger', kv: [['Signed in with', esc(s.method)], ['Address', esc(s.ip || '')], ['Last activity', esc(when(s.lastSeenAt))]], ok: 'Sign out that session' }); if (ok) act(() => App.del('/api/me/sessions/' + encodeURIComponent(s.id)), 'Session ended.'); });
       ctx.on('click', '[data-signoutothers]', async () => { const ok = await ctx.confirm({ title: 'Sign out other sessions?', tag: 'all but this one', tone: 'danger', body: '<div class="fg2">Every other session for <span class="mono">' + esc(me.user.username) + '</span> ends now. API keys are not affected.</div>', ok: 'Sign out other sessions' }); if (ok) act(async () => { const r = await App.post('/api/me/sessions/revoke-others'); ctx.toast(r.revoked + ' session' + (r.revoked === 1 ? '' : 's') + ' ended.', 'ok'); }); });
       ctx.on('click', '[data-signout]', () => App.signOut());
+      // ---- security: verification link, email codes, trusted devices (B-1802, B-1803, B-1806) ----
+      ctx.on('click', '[data-verifydone]', () => { st.verifyNote = false; ctx.rerender(); });
+      ctx.on('click', '[data-sendverify]', () => act(async () => { const r = await App.post('/api/me/email/verify'); ctx.toast(r.verified ? 'Your address is already verified.' : r.sent ? 'Verification link sent to ' + esc(me.user.email || 'your address') + '. It works once.' : 'The link could not be sent: email is not configured on this server.', r.verified || r.sent ? 'ok' : 'warn', 5000); }));
+      const emailModal = () => ctx.modal({ title: 'Add an email one-time code',
+        body: UI.notice('A six-digit code goes to <b>' + esc(me.user.email || 'your address') + '</b>. Codes are in the body of the email, work once and expire after a few minutes, and only a few are sent an hour. Wrong codes count in your lockout like wrong passwords.', 'info')
+          + '<div data-emailstep>' + UI.btn('Send the code', { kind: 'primary', size: 'sm', attrs: 'data-emailsend' }) + '</div><div data-emailerr role="alert"></div>',
+        actions: UI.btn('Cancel', { attrs: 'data-close' }),
+        onMount(m) {
+          const err = m.querySelector('[data-emailerr]');
+          m.querySelector('[data-emailsend]').addEventListener('click', async () => {
+            let r; try { r = await App.post('/api/me/mfa/email', {}); } catch (e) { err.innerHTML = UI.notice(esc((e.problem && e.problem.detail) || e.message), 'danger'); return; }
+            m.querySelector('[data-emailstep]').innerHTML = UI.field('Code from the email', UI.input('', { attrs: 'data-emailcode inputmode="numeric" maxlength="6" autocomplete="one-time-code"', placeholder: '000000' }), 'Sent to ' + esc(r.sentTo) + '.') + UI.btn('Confirm factor', { kind: 'primary', size: 'sm', attrs: 'data-emailconfirm' });
+            const input = m.querySelector('[data-emailcode]'); input.focus();
+            m.querySelector('[data-emailconfirm]').addEventListener('click', async () => {
+              try { const c = await App.post('/api/me/mfa/email/' + encodeURIComponent(r.id) + '/confirm', { code: input.value.trim() }); if (c.csrf) App.state.csrf = c.csrf; if (c.recoveryCodes) st.codes = c.recoveryCodes; App.closeOverlay(); ctx.toast('Email factor confirmed. Sign-in now offers "Email me a code".', 'ok'); reload(); }
+              catch (e) { const p = e.problem || {}; err.innerHTML = UI.notice(esc(p.detail || e.message) + (p.attempts_remaining != null ? ' Attempts remaining: ' + p.attempts_remaining + '.' : ''), 'danger'); }
+            });
+          });
+        } });
+      ctx.on('click', '[data-addemail]', emailModal);
+      const forget = async () => {
+        const tr = st.trusted && !st.trusted.error ? st.trusted : { devices: [], periodDays: 0 };
+        const ok = await ctx.confirm({ title: 'Forget all trusted devices?', tone: 'info', body: '<div class="fg2">Every browser asks for the second factor on its next sign-in, this one included.</div>', kv: [['Devices', String(tr.devices.length)], ['Period', tr.periodDays + ' days']], ok: 'Forget all' });
+        if (ok) act(async () => { const r = await App.del('/api/me/trusted-devices'); ctx.toast((r && r.removed != null ? r.removed : 0) + ' trusted device' + (r && r.removed === 1 ? '' : 's') + ' forgotten. Audited auth.trusted_device.removed.', 'ok'); });
+      };
+      ctx.on('click', '[data-forgetdevices]', forget);
+
+      // ---- AT-Protocol account (B-1807) ----
+      const atLink = () => ctx.modal({ title: 'Link an AT-Protocol account',
+        body: UI.field('Handle or DID', UI.input(atb && atb.handle ? atb.handle : '', { attrs: 'data-ataccount autocomplete="off" spellcheck="false"', placeholder: 'alice.bsky.social' }), 'Resolved handle, DID, document, PDS through the service URL checks; a refused address is never fetched.')
+          + '<div class="grid2">' + UI.panel('Prove it from your profile', '<div class="fg2" style="font-size:12px">We issue a challenge token; you put it in the profile description on your PDS, then verify here. Proof <span class="mono">profile</span>.</div><div>' + UI.btn('Issue challenge', { size: 'sm', kind: 'primary', attrs: 'data-atclaim' }) + '</div>')
+          + UI.panel('Sign in with the account', '<div class="fg2" style="font-size:12px">The AT-Protocol OAuth flow with PKCE and DPoP; the callback binds the DID to you. Proof <span class="mono">oauth</span>.</div><div>' + UI.btn('Start sign-in', { size: 'sm', attrs: 'data-atoauth' }) + '</div>') + '</div>'
+          + UI.notice('Needs a recent sign-in. A DID already bound to another user of the tenant is refused (409).', 'info') + '<div data-aterr role="alert"></div>',
+        actions: UI.btn('Cancel', { attrs: 'data-close' }),
+        onMount(m) {
+          const err = m.querySelector('[data-aterr]');
+          const account = () => { const v = m.querySelector('[data-ataccount]').value.trim(); if (v.length < 3) { err.innerHTML = UI.notice('Enter your handle or DID.', 'warn'); return null; } return v; };
+          const show = (e) => { const p = e.problem || {}; err.innerHTML = UI.notice('<b>' + esc(p.title || 'Not linked') + '.</b> ' + esc(p.detail || e.message) + (p.step ? ' <span class="mono">step: ' + esc(p.step) + (p.reason ? ', reason: ' + esc(p.reason) : '') + '</span>' : ''), 'danger'); };
+          m.querySelector('[data-atclaim]').addEventListener('click', async () => {
+            const v = account(); if (!v) return;
+            try { const r = await guarded(() => App.post('/api/me/atproto/claim', { account: v })); st.atToken = r.challenge.token; App.closeOverlay(); ctx.toast('Challenge issued. Copy the token now; it is shown once and stored as a hash.', 'warn', 5000); reload(); }
+            catch (e) { if (!e.cancelled) show(e); }
+          });
+          m.querySelector('[data-atoauth]').addEventListener('click', async () => {
+            const v = account(); if (!v) return;
+            try { const r = await guarded(() => App.post('/api/me/atproto/link', { account: v })); location.assign(r.url); }
+            catch (e) { if (!e.cancelled) show(e); }
+          });
+        } });
+      ctx.on('click', '[data-atlink]', atLink);
+      ctx.on('click', '[data-linkeddone]', () => { st.linkedNote = false; ctx.rerender(); });
+      ctx.on('click', '[data-copytoken]', () => { if (navigator.clipboard && st.atToken) navigator.clipboard.writeText(st.atToken).then(() => ctx.toast('Copied.', 'ok'), () => ctx.toast('Copy failed; select the token instead.', 'warn')); });
+      ctx.on('click', '[data-atverify]', () => act(async () => { await App.post('/api/me/atproto/verify', {}); st.atToken = null; ctx.toast('DID verified from the profile record. Handle checked both ways. Audited atproto.did.verified.', 'ok', 5000); }));
+      ctx.on('click', '[data-athandle]', () => ctx.modal({ title: 'Change the handle shown',
+        body: UI.field('Handle', UI.input(atb && atb.handle ? atb.handle : '', { attrs: 'data-newhandle autocomplete="off" spellcheck="false"' }), 'Must resolve to ' + esc(atb ? atb.did : 'your DID') + ' and be named by its DID document; otherwise 422 reason mismatch.') + '<div data-hderr role="alert"></div>',
+        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-savehandle' }),
+        onMount(m) { m.querySelector('[data-savehandle]').addEventListener('click', async () => { const h = m.querySelector('[data-newhandle]').value.trim(); try { await App.api('PUT', '/api/me/atproto/handle', { handle: h }); App.closeOverlay(); ctx.toast('Handle set. Audited atproto.handle.set.', 'ok'); reload(); } catch (e) { const p = e.problem || {}; m.querySelector('[data-hderr]').innerHTML = UI.notice(esc(p.detail || e.message) + (p.reason ? ' (reason ' + esc(p.reason) + ')' : ''), 'danger'); } }); } }));
+      ctx.on('click', '[data-atremove]', async () => {
+        if (!atb) return;
+        const ok = await ctx.confirm({ title: 'Remove the AT-Protocol binding?', tone: 'danger', body: '<div class="fg2">The DID no longer signs you in. Labels already signed by the tenant\'s labeler are unaffected.</div>', kv: [['DID', '<span class="mono" style="overflow-wrap:anywhere">' + esc(atb.did) + '</span>'], ['Handle', esc(atb.handle || 'none')]], ok: 'Remove' });
+        if (ok) act(() => App.del('/api/me/atproto'), 'Binding removed. Audited atproto.did.removed.');
+      });
+      if (st.openForget) { st.openForget = false; setTimeout(forget, 50); }
+      if (st.openAtLink) { st.openAtLink = false; if (App.can('atproto:link') && me.credential !== 'api_key') setTimeout(atLink, 50); }
+      if (st.openEmail) { st.openEmail = false; setTimeout(emailModal, 50); }
       if (st.openCreate) { st.openCreate = false; setTimeout(openCreate, 50); }
     }
   });

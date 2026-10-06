@@ -65,6 +65,8 @@ export function actorFrom(p: Principal | null | undefined, ip?: string | null): 
     name: p.displayName,
     session: p.sessionId,
     apiKey: p.apiKeyId,
+    // 1.5.0 (B-3101): a DAV request names the app password it came with.
+    ...(p.appPasswordId ? { via: `app-password:${p.appPasswordId}` } : {}),
     roles: p.roles,
     ip: ip ?? null
   };
