@@ -46,6 +46,10 @@ import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
+import { ChainService } from './chain/context.js';
+import { WorkflowBundles } from './workflows/bundles.js';
+import { WorkflowDeadLetters } from './workflows/dead-letters.js';
+import { WorkflowTriggers } from './workflows/triggers.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
@@ -114,6 +118,8 @@ import { SocialService } from './social/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
+import { BuiltinTools } from './registry/builtin/index.js';
+import { WorkflowStepKit } from './workflows/steps/index.js';
 import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
@@ -164,6 +170,8 @@ export interface Services {
   agents: AgentService;
   /** Workflow graphs, versions and durable runs (Sprint 8). */
   workflows: WorkflowService;
+  /** Sprint 32 (B-4101): the chain context every invocation records itself in. */
+  chains: ChainService;
   /** Media assets, presets and ffmpeg jobs (Sprint 8). */
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
@@ -275,6 +283,10 @@ export interface Services {
   dav: DavService;
   /** 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, the catalogue and model import. */
   imports: ImportService;
+  /** 1.5.0, Sprint 32b (B-3903, B-3906, B-3909): workflow triggers, dead letters and bundles. */
+  workflowTriggers: WorkflowTriggers;
+  workflowDeadLetters: WorkflowDeadLetters;
+  workflowBundles: WorkflowBundles;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -373,14 +385,24 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
+  const chains = new ChainService(db, {
+    maxDepth: cfg.CHAIN_MAX_DEPTH,
+    kindCaps: { 'workflow-run': cfg.WORKFLOW_MAX_DEPTH, 'agent-run': cfg.AGENT_MAX_DEPTH },
+    defaults: { tokens: cfg.CHAIN_MAX_TOKENS, steps: cfg.CHAIN_MAX_STEPS, wallMs: cfg.CHAIN_MAX_WALL_SECONDS * 1000, gpuMs: cfg.CHAIN_MAX_GPU_SECONDS * 1000 }
+  }, audit);
+  tools.useChains(chains);
   const agents = new AgentService(db, keys, gateway, registry, tools, quotas, audit, bus, jobs, notifications, async (tenantId, userId, workspaceId) => {
     const p = await loadPrincipal(s, tenantId, userId, {});
     if (p) p.workspaceId = workspaceId;
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) } });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents });
   tools.useWorkflows(workflows);
+  // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
+  agents.chains = chains;
+  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : undefined);
+  tools.useBuiltins(new BuiltinTools(() => s)); // B-3904: the domain built-ins act through the services as the caller
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
     runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),
@@ -458,6 +480,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tools,
     agents,
     workflows,
+    chains,
     media,
     images,
     imageSafety: overrides.imageSafety ?? (cfg.IMAGE_SAFETY_URL ? new HttpSafety(cfg.IMAGE_SAFETY_URL) : noSafety),
@@ -546,6 +569,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dav: new DavService(() => s, db, cfg.SESSION_SECRET),
     // 1.5.0, Sprint 30: the import wizard's server side.
     imports: new ImportService(() => s, cfg),
+    // 1.5.0, Sprint 32b: workflows started by events and schedules, dead letters, bundles.
+    workflowTriggers: new WorkflowTriggers(() => s, metrics.registry),
+    workflowDeadLetters: new WorkflowDeadLetters(() => s),
+    workflowBundles: new WorkflowBundles(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -553,6 +580,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await s.firehose.close().catch(() => undefined);
       s.webhooks.close();
       s.pluginRuntime.close();
+      s.workflowTriggers.close();
       await denials.flushAll().catch(() => undefined);
       chat.close();
       await chat.store.close();
@@ -640,6 +668,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // records as moderation objects (a takedown hides the record from every list and read; an upheld appeal shows it).
   s.apps.registerJobs();
   s.workflows.useRecords(s.apps.triggers);
+  s.workflows.useStepKit(new WorkflowStepKit(() => s)); // Sprint 32c (B-3907, B-3908): notify and webhook steps, approval forms
   if (!s.moderation.registry.get('record')) {
     s.moderation.registry.register({
       type: 'record',
@@ -670,6 +699,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.customRoles.init();
   s.accessReviews.registerJobs();
   s.imports.registerJobs(); // 1.5.0, Sprint 30 (B-3801 to B-3803): harvests, model imports, bundle matching
+  // 1.5.0, Sprint 32b (B-3903, B-3906): event and schedule triggers on workflows, dead letters of failed runs.
+  s.workflowTriggers.install();
+  s.workflowTriggers.registerJobs();
+  s.workflowTriggers.listen();
+  s.workflowDeadLetters.install();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -732,6 +766,7 @@ export function startSchedules(s: Services): void {
   s.pds.schedule(); // 1.5.0, Sprint 31 (B-2904): events past the backfill window and unused blobs
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.workflowTriggers.schedule(s.scheduler); // 1.5.0, Sprint 32b (B-3903): workflow schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation

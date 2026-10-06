@@ -20,7 +20,7 @@ export interface Capability {
 export const CAPABILITIES: readonly Capability[] = [
   { name: 'read:events', description: 'Receive the audit, job, flag and approval events the plugin subscribes to.', risk: 'low', events: ['job.*', 'flag.*', 'approval.*', 'workflow.*', 'agent.*', 'user.*', 'auth.*', 'authz.*', 'chat.*', 'conversation.*', 'billing.*', 'webhook.*', 'plugin.*'] },
   { name: 'read:records', description: 'Receive low-code record events and read records the installing tenant can see.', risk: 'low', events: ['record.*'] },
-  { name: 'read:files', description: 'Receive file store events and read file metadata.', risk: 'low', events: ['file.*'] },
+  { name: 'read:files', description: 'Receive file store events and read the files (metadata and content) the installing user can read.', risk: 'low', events: ['file.*'] },
   { name: 'read:groups', description: 'Receive group and membership events.', risk: 'low', events: ['group.*'] },
   { name: 'read:messages', description: 'Receive message events (ids only; bodies stay sealed).', risk: 'low', events: ['message.*'] },
   { name: 'read:posts', description: 'Receive workspace feed events.', risk: 'low', events: ['post.*'] },

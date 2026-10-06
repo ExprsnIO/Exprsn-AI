@@ -326,7 +326,8 @@ describe('script plugins (B-2004)', () => {
     await send(admin, 'post', `/api/admin/plugins/${p.id}/enable`).expect(200);
     await raiseFlag(h);
     await drain(h);
-    expect(statuses).toEqual({ log: 200, workflow: 403, records: 501, unknown: 404, badToken: 401, noToken: 401 });
+    // records.write is live since 1.5.0 (B-3904): an empty call is now a 400 for its missing arguments, not a 501.
+    expect(statuses).toEqual({ log: 200, workflow: 403, records: 400, unknown: 404, badToken: 401, noToken: 401 });
     expect((await auditActions(h, 'plugin.call.refused')).length).toBe(1);
   });
 

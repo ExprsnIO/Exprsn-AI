@@ -164,7 +164,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs
   with lanes, approvals, budgets, checkpoints and replay), **`scripts/`** (`ScriptRunner`: docker or podman sandbox).
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
-  step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
+  step; since Sprint 32 `steps/`: the Workflows 2 kinds, `kinds.ts` their publish-time definitions registered in
+  `STEP_KINDS`, `registry.ts` their runners in `STEP_RUNNERS`, `host.ts` what a runner gets from the service), **`chain/`**
+  (`context.ts`: the chain context, B-4101, `s.chains`), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
   URLs on `MEDIA_ORIGIN`), **`images/`** (`ImageBackend` for ComfyUI and diffusers, safety classifier, signed
   provenance in the PNG).
 - **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a
@@ -213,6 +215,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `catalog.ts` the snapshot with facets and live search, `fetcher.ts` the allow-listed import egress, `formats.ts`
   format, pickle and licence checks, `service.ts` model import jobs, licence exceptions and bundle mode, `adapters/`
   one per repository type); its fakes are `server/test/sprint30-imports-fakes.ts`.
+- 1.5.0 Sprint 32b additions to **`workflows/`**: `trigger-config.ts` (the trigger step's `event` and `schedule` +
+  `cron` sources and their publish checks), `triggers.ts` (event fan-out with the workspace, label, rate and loop
+  rules, the cron tick claimed once across instances, `workflowCause` the chain of workflows), `retry.ts` (per-step
+  retry policies and `branch: failure` edges), `dead-letters.ts` (failed runs and their redrive), `bundles.ts` (signed
+  `exprsn-workflow/1` export and import with re-bound references), hooked into `service.ts` through `useLifecycle`;
+  routes in `routes/workflow-operations.ts`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

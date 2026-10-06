@@ -446,13 +446,13 @@ started a dry run), with clearance for the run's label.
 | `GET /workflow-approvals` | Approvals waiting on the caller: `[{id, runId, nodeId, role, state, shown, dueAt, canDecide, workflow, step, label, mode}]` |
 | `POST /workflow-approvals/:id` `{decision: approve\|reject, reason?}` | Decides; the run resumes (approve) or ends `rejected`. Undecided approvals expire at `dueAt` and the run fails |
 
-A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?}], edges: [{from, to,
-branch?: true|false}], limits: {timeoutMs?, tokens?}}`. `input` and `output` are port schemas
+A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?, retry?}], edges: [{from,
+to, branch?: true|false|failure}], limits: {timeoutMs?, tokens?}}` (`retry` and `failure`: Sprint 32b, below). `input` and `output` are port schemas
 `{type: string|number|integer|boolean|array|object|any, properties?, required?, items?}`. Step kinds:
 
 | Kind | Config | Output |
 | --- | --- | --- |
-| `trigger` | `{source: manual\|api}` | the run input (checked against `output`) |
+| `trigger` | `{source: manual\|api\|record\|schedule\|event, event?, cron?}` (`event` and `cron`: Sprint 32b, below) | the run input (checked against `output`) |
 | `model` | `{profile, prompt, think?, format: text\|json}` | `{text}`, or the parsed JSON (checked against `output`) |
 | `transform` | `{fields: {name: template}}` | the fields |
 | `branch` | `{left, op: eq\|ne\|gt\|gte\|lt\|lte\|contains\|truthy\|exists, right?}` | input plus `{result}`; outgoing edges carry `branch` |
@@ -1894,7 +1894,7 @@ The complete route list, with request and response schemas for the routes below,
 no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes with their summary from this
 file.
 
-### Event catalogue (`webhooks:manage` or `plugins:manage`)
+### Event catalogue (`webhooks:manage`, `plugins:manage` or, since 1.5.0, `workflows:manage`)
 
 | Route | Notes |
 | --- | --- |
@@ -2067,12 +2067,13 @@ grants at that moment, allows `PLUGIN_MAX_CALLS` calls and is revoked when the h
 against the token's grants and the plugin's grants now: an ungranted call answers `403` (the handler sees an error
 with `status` 403) and is audited `plugin.call.refused`. Calls: `log`, `audit`, `notify`, `flag`, `webhook`
 (`args.data` as the body), `workflow` (as the actions above), and `records.read`, `records.write`, `files.read`,
-`groups.read`, `posts.write` (`501` until their domains ship). The handler's output and return value go to the
+`groups.read`, `posts.write` (live since 1.5.0, B-3904: they act as the user who installed the plugin; see Sprint 32c
+below). The handler's output and return value go to the
 plugin's log.
 
 | Route | Notes |
 | --- | --- |
-| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `501` |
+| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `400` (a domain call's arguments) |
 
 ### Plugins from signed import bundles (B-2005)
 
@@ -3424,8 +3425,9 @@ send a security notice and are audited (`dav.app_password.created`, `dav.app_pas
 | Method and path | What it does |
 | --- | --- |
 | `GET /api/me/app-passwords` | The caller's app passwords: `[{id, name, prefix, scopes, state, createdAt, expiresAt, lastUsedAt, lastUsedIp, lastUsedAgent, revokedAt}]`; `state` is active, expired or revoked (kept listed 30 days) |
-| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`). At most 50 active per user |
+| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`, `webdav`). At most 50 active per user |
 | `DELETE /api/me/app-passwords/:id` | Revokes it: the next DAV request with it is refused (`204`) |
+| `GET /api/me/dav` | For Settings (Sprint 32, B-3415): `{username, usernameWithTenant, server: {url, caldav, carddav, webdav}, scopes: [{scope, available}], stepUp: {hasFactor, windowSeconds, freshUntil}}`. `available` is whether the caller's roles grant any permission of the scope now; `freshUntil` is when the session's second-factor confirmation stops counting for creating an app password (null when it already has). The WebDAV file store answers under the same `/dav/` from B-32 |
 
 ### DAV endpoints
 
@@ -3715,3 +3717,219 @@ signed platform bundle under `imports/<import id>/` (the `models` mirror; Ollama
 promoted, `imports.bundle-match` (every `IMPORT_BUNDLE_POLL_MINUTES`) continues each request from the bundle's files with
 the same checks; a pin recorded at request time must still match. A `bundle` repository browses and imports promoted
 bundle files directly.
+
+## Sprint 32 (1.5.0): the chain context, sub-workflow, agent, map and loop steps (B-4101, B-3901, B-3902, B-3905)
+
+### The chain context (B-4101)
+
+Every invocation is a node of one chain (`server/src/chain/context.ts`, tables `chains` and `chain_nodes`): a chat turn
+whose answer called a tool, an agent run, a workflow run, a tool call, a skill load, a plugin action that started a
+workflow, an app trigger. The first is the root; what it causes are its descendants. The rules, read from the database
+so every instance gives the same answer:
+
+- **Principal**: a child acts as the root's principal; a call that would act as someone else is refused (an app trigger
+  owned by another user starts a chain of its own instead).
+- **Label**: a child's label is at least the chain's high-water mark, and the mark rises with every node and every
+  step output above it (a sub-workflow's result, an agent's answer). Nothing runs above a callee's ceiling: a tool call
+  whose chain carries data above the tool's ceiling is refused (`tool_unavailable`).
+- **Depth**: at most `CHAIN_MAX_DEPTH` (default 8; the root is depth 0) across kinds, with `WORKFLOW_MAX_DEPTH`
+  (3) nested workflow runs and `AGENT_MAX_DEPTH` (3) nested agent runs as per-kind caps; `PLUGIN_MAX_DEPTH` and
+  `APPS_TRIGGER_MAX_DEPTH` still apply to their own chains of events.
+- **Budgets**: tokens, steps, wall time and GPU time (the cost meter) of every node are charged to the root's budgets:
+  an agent root's are its run budgets, a workflow root's its graph limits (tokens, timeout; `CHAIN_MAX_STEPS` steps); a
+  chat turn, plugin action, app trigger or bare tool call gets `CHAIN_MAX_TOKENS`, `CHAIN_MAX_STEPS`,
+  `CHAIN_MAX_WALL_SECONDS` and `CHAIN_MAX_GPU_SECONDS`. Wall time is the time of the leaf work (model calls, tool
+  calls, steps that do not hand their work to a child), so nested runs are not counted twice. Once a budget is used up
+  the chain is `stopped` (audited `chain.stopped` once): nothing new begins in it, an agent run stops before its next
+  thinking step (state `budget`, its error naming the root's budget), a workflow run fails before its next step. Raising
+  a root agent run's budgets (`POST /api/runs/:id/resume`) raises its chain's.
+- **Retries and instances**: a node is unique by `(kind, ref)` (the run id for runs) and its chain rides on the run's
+  row (`chain_id`, `chain_node`), so a job retried on another instance resumes the node it began.
+
+A refused invocation (`code`: `depth`, `kind-depth`, `principal`, `budget`, `stopped`) is audited `chain.refused`
+`{chain, parent, kind, callee}` with `{rule, reason}`. A refused tool call comes back to the caller as an error
+`chain_limit: …` (the model sees it as a tool error) and is recorded as a `refused` node under its would-be parent. A
+refused sub-workflow, agent step or map item fails its step.
+
+Run views carry `chain: {id, node}` and `caller: {kind, id, node}`: `GET /api/runs/:id` (agent runs) and `GET
+/api/workflow-runs/:id`, which also lists `children: [{kind: workflow-run | agent-run, id, workflowId | agent, step,
+state, label, error}]` (within the caller's clearance) and `items: [{nodeId, index, state, error, childRun, tokens}]` (map
+and loop checkpoints). The tree view of a chain is `GET /api/chains/:id` (B-4107, Sprint 33).
+
+### New step kinds
+
+Validated at publish with the existing codes; a reference that is not published to the workflow's workspace is
+`unavailable`. Dry runs mock all four and call nothing.
+
+| Kind | Config | Output |
+| --- | --- | --- |
+| `sub` | `workflow` (name or id, same workspace), `version?` (pinned; else the version published when the step runs), `input?` (field templates, one template rendering to an object, or the step's input) | `{run, output}`: the child run and the merged output of its last steps |
+| `agent` | `agent` (registry name), `input?` (task template; the step's input as JSON when omitted), `budgets?` (`steps`, `tokens`, `wallSeconds`, `toolCalls`, up to the registry maximum) | `{run, text}` |
+| `map` | `over` (a template rendering to a list), one action (below), `maxParallel` (1–20, default 10), `maxItems` (1–200, default 200), `as` (field name, default `results`) | `{[as]: [...], count}` in item order |
+| `loop` | one action, `max` (1–40, default 5), `while?` `{left, op, right}` (branch operators, checked before every iteration) | `{iterations, last, results, stopped: condition \| max}` |
+
+An action (map item or loop iteration) is a model prompt (`profile`, `prompt`, `format?`), a registry tool (`tool`,
+`args?`; for a map without `args` the item itself, or `{item}`), or a published workflow run as a child (`workflow`,
+`version?`, `input?`; default `{item, index}` for a map, `{iteration, last, results}` for a loop). Templates read
+`{{item}}`, `{{index}}` (map), `{{iteration}}`, `{{last}}` and `{{results}}` (loop) as well as `input` and `steps`.
+
+- **Sub-workflow (B-3901)**: the child runs as the parent's owner, under the higher of the step's label and the
+  child workflow's, in the parent's chain (trigger `workflow:<parent run>`, `caller_kind: workflow-run`), audited
+  `workflow.run.started` with `{parentRun, parentWorkflow, step}`. It runs inside the step while it can; when it waits
+  on an approval the step and the parent wait, and the child's end resumes the parent with its output and label.
+  Cancelling the parent cancels its waiting children (and agent runs). A workflow cannot run itself; `workflow.*`
+  tools stay refused in tool steps and items; nesting is bounded by `WORKFLOW_MAX_DEPTH`.
+- **Agent step (B-3902)**: starts a run of the published agent as the run's owner (audited `agent.run.started` with
+  `{workflowRun, step}`), under the agent's ceiling (above it the step is blocked); the step waits without a worker and
+  continues when the agent run ends; a failed, cancelled or budget-stopped run fails the step.
+- **Skills on a model step (B-3902)**: `skills: [name…]` (up to 8) on a `model` step loads each published skill
+  (a `skill-load` node in the chain): its instructions join the system prompt and its tools are offered through the
+  dispatcher, so every call passes the tool's ceiling, its schema, the `tool-call` guardrail checkpoint and its rate
+  limit. A write or destructive call runs only when an Approval step comes before the model step on every path;
+  otherwise the model is told it needs an approval. At most six rounds of calls. The step's detail lists `skills`,
+  `tools`, `hidden` and `toolCalls: [{tool, ok, decision, error}]`.
+- **Map and loop (B-3905)**: items run at most `maxParallel` at once; every item and iteration is a step of the chain
+  (checked against the root's budgets before it starts) and its tokens count toward the run's token budget. A run's
+  maps fan out over at most 200 items (`maxItems` declared on the maps are summed at publish, the real lists at run
+  time); each loop iteration beyond the first counts toward the 40-step limit at publish. Each item's result is a
+  checkpoint (`workflow_items`, sealed) so a map resumes without running finished items again. Items never pause one
+  by one: a write tool in a map or loop needs an Approval step before it on every path (refused at publish otherwise),
+  and child workflows that wait leave the step waiting until all are done. The first failing item fails the step.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-callees` | `agents:run`. What the new steps may call from the current workspace, within the caller's clearance: `{workflows: [{id, name, label, version, input}], agents: [{name, version, description, label, budgets}], skills: [{name, version, description, label, tools}], limits: {chainMaxDepth, workflowMaxDepth, maxItems, maxParallel}}` |
+## Sprint 32b (1.5.0): workflow triggers, failure handling and bundles (B-3903, B-3906, B-3909)
+
+**Triggers on the workflow itself (B-3903).** The trigger step takes two more sources: `{source: event, event}` (a
+catalogue event type such as `file.uploaded`, or a group such as `file.*`; not `*`) and `{source: schedule, cron}` (five
+fields, UTC; a `schedule` trigger without `cron` is still started by an app's schedule trigger). Publishing checks the
+event against the catalogue (`config`; a reserved type is a warning) and the cron expression, and writes the version's
+trigger; republishing with another source removes it. Runs start as the person who published the version (the
+trigger's owner), with the roles, clearance and memberships they hold at that moment: an owner who is disabled, lost
+`agents:run`, left the workflow's workspace or is not cleared for the event gets a skip (`workflow.trigger.skipped`
+with the reason) instead of a run, as does an event for a version that is no longer the published one. An event run's
+input is `{event: {id, type, tenant, label, createdAt, data}, trigger: {id, kind: event, depth}}` and its trigger
+`event:<firing id>`; a schedule run's input is `{event: schedule, dueAt, trigger: {id, kind: schedule, depth: 1}}` and its
+trigger `schedule:<firing id>`.
+
+Event fan-out follows the plugin rules: a workflow in a workspace receives only events that name that workspace
+(`data.workspace` or the audit target's `workspace`), a tenant-level workflow the tenant's events; an event above the
+workflow's label is not delivered; each trigger fires at most `WORKFLOW_EVENT_RATE_PER_MINUTE` times a minute (dropped
+events are counted in `exprsn_workflow_trigger_dropped_total{reason}` and audited once a window as
+`workflow.trigger.throttled`); an event caused by a chain of workflows is never delivered to a workflow in that chain,
+events about a workflow's own runs never start it, and an event whose chain is `WORKFLOW_EVENT_MAX_DEPTH` long is
+dropped. Each delivery is a firing, unique per trigger and event id, and a `workflow.trigger` job. Schedule triggers are
+checked every `WORKFLOW_SCHEDULE_TICK_SECONDS`; each due time is claimed once across instances. Audited:
+`workflow.trigger.set`, `workflow.trigger.removed`, `workflow.trigger.updated`, `workflow.trigger.fired`,
+`workflow.trigger.skipped`, `workflow.trigger.throttled`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/triggers?limit` | `agents:run`. The trigger of the published version and its recent firings within the caller's clearance: `{workflowId, trigger: {id, workflowId, version, kind: event \| schedule, event, cron, schedule, ownerId, enabled, nextRunAt, lastFiredAt, lastRunId, lastResult, createdAt, updatedAt} \| null, firings: [{id, event, eventId, label, chain, state: queued \| starting \| started \| skipped, runId, reason, createdAt, finishedAt}]}` |
+| `PATCH /api/workflows/:id/triggers` `{enabled}` | `workflows:manage`. Turns the trigger off or on again (a schedule's next due time is recomputed); `404` without one |
+
+**Failure handling (B-3906).** A step may carry `retry: {max: 1-5, delayMs: 1000-3600000 (5000), backoff: fixed |
+exponential (exponential)}` (not on trigger, approval, wait or branch steps; a warning on writes): a step that fails is
+tried again up to `max` more times, waiting durably between attempts (the step is `waiting` with `resumeAt` and
+`detail: {retryAt, retries, lastError}`; the run is `waiting`). Label-ceiling and guardrail blocks and rejections are
+not retried. An edge with `branch: failure` (from any step but the trigger) is taken when its step fails for good: the
+steps on it receive `{error, step}` (also readable as `{{steps.<id>.error}}`), its other edges are skipped, and the run
+does not fail for it. A run (not a dry run) that fails for good is a dead letter, audited `workflow.run.dead_lettered`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-dead-letters?state&workflow&limit` | `workflows:manage`. Dead letters of the current workspace's workflows within the caller's clearance: `{items: [{id, workflowId, workflow, runId, nodeId, label, error, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveRunId}]}` |
+| `POST /api/workflow-dead-letters/:id/redrive` | `workflows:manage`. Replays the run from the step that failed (steps before it keep their checkpoints): `201` the dead letter, `redriven` with `redriveRunId`; `409` when it was redriven already. Audited `workflow.dead_letter.redriven` |
+
+**Bundles (B-3909).** `exprsn-workflow/1`: `{format, exportedAt, workflow: {name, description, label}, version (null for
+the draft), graph, references: {tools: [{name, version}], profiles, apps, vault, trigger}, key, signature}`, signed with
+the KMS HMAC key `<OPENBAO_KEY_PREFIX>workflow-bundles` over the canonical JSON of everything but the signature. Runs,
+versions, the registry tool a workflow is published as and app triggers are not part of it.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/bundle` | `workflows:manage`. The signed bundle of the published version (the draft when nothing is published), as an attachment. Audited `workflow.exported` |
+| `POST /api/workflows/import` `{bundle, name?, bindings?: {tools, profiles, apps, vault}}` | `workflows:manage`. Verifies the signature before reading anything else (changed after signing, another key or no signature: `422 Bundle refused`, audited `workflow.import.refused`), re-binds each reference (`bindings` maps a name to another; otherwise it keeps its name) and creates the workflow as a draft in the current workspace: `201 {workflow, bindings: [{kind: tool \| profile \| app \| vault \| trigger, from, to, status: bound \| missing \| on publish, detail}]}`. A taken name is `409`; a vault reference the importer cannot read is `409` (bind it). The trigger starts nothing until the importer publishes the workflow. Audited `workflow.imported` |
+
+## Sprint 32c (1.5.0): domain built-in tools, approval forms, notify and webhook steps (B-3904, B-3907, B-3908)
+
+### Domain built-ins (B-3904)
+
+Five platform registry tools with `impl: builtin` (published to every tenant, like `calculate`), seeded by migration
+`034c_workflow_steps`. They go through the one dispatcher, so chat, agent runs, workflow tool steps and the registry
+harness call them the same way: the input schema, the tool's ceiling, the `tool-call` checkpoint and the approval rule
+for writes (all five are `write`; a workflow tool step pauses for its approver role unless an Approval step comes
+before it on every path). Each acts as the caller through the domain service: the permission the domain's route needs,
+membership and rights, clearance and label ceilings, guardrails, the audit entry and the catalogue event. Data is never
+sent somewhere labelled below it: a call made with confidential data into an internal conversation, group or session
+fails with `Blocked by label ceiling: …`. The registry harness (`POST /admin/registry/:id/test`) holds writing
+built-ins (`needsApproval`, `sandboxed: false`) instead of acting on live data.
+
+| Tool | Arguments | Result | Needs |
+| --- | --- | --- | --- |
+| `messages.send` | `{conversation \| user, body, thread?}` (`user` opens or reuses the direct conversation) | `{conversation, message, label}` | `messages:write` |
+| `feed.post` | `{workspace?, group?, body}` (the caller's current workspace by default) | `{post, state, label, workspace}`; the post is at least the call's label and records its source | `feed:write` |
+| `files.write_version` | `{file, content, encoding?: utf8 \| base64, type?}` (up to 1 MB) | `{file, version, state, size}`; the version goes through quarantine and the scan, at least the call's label | `files:write` |
+| `groups.create_event` | `{group, title, start, end? \| durationMinutes?, timeZone, description?, location?, reminders?}` | `{event, group, startsAt, label}` | `groups:write` and the group's `events` right |
+| `channels.answer` | `{channel, session, text}` | `{message, seq}` | `channels:review` |
+
+A post made by a built-in or a plugin carries `source: {kind, id}` in its view (`GET /feed/posts/:id` and every feed
+page): `workflow-run` (a workflow tool step; the run's id), `agent-run`, `message` (chat), `api-request`, `plugin`.
+`feed.post.created` audits it in `detail.source`.
+
+**Plugin broker calls.** `records.read` `{app, entity, id? | filter?, q?, limit?}`, `records.write` `{app, entity,
+action?: create | update | transition, id?, values, to?, version?}`, `files.read` `{file, version?}` (`text` for text
+types, `base64` otherwise, at most 256 kB with `truncated`), `groups.read` `{group, events?}` (the group and its events
+for the next 90 days) and `posts.write` `{workspace?, group?, body}` answer `200` with the result. They need the
+capability (`read:records`, `write:records`, `read:files`, `read:groups`, `write:posts`) and act as the user who
+installed the plugin: that user must still be active and hold `records:read`, `records:write`, `files:read`,
+`groups:read` or `feed:write`, their clearance is capped at the plugin's max label, and a write carries at least the
+event's label (records are written with `source: plugin`, posts with `source: {kind: plugin, id}`). Bad arguments are
+`400`; a plugin installed from the command line, or whose installer is gone, is `403`.
+
+### Approval forms (B-3907)
+
+An `approval` step takes `form: {app, form}` (names or ids): the approver fills in that app form, and the answers
+become the step's output (`{…input, approved, by, answers}`; the port schema adds `answers: object`). The form must
+exist and be openable by whoever saves the graph (`422`, code `reference`, at save). When the step opens, the form is
+resolved as the run's owner and kept with the approval.
+
+| Method and path | Change |
+| --- | --- |
+| `GET /workflow-approvals`, `GET /workflow-runs/:id` | Each approval adds `form: {app, form, title, submitLabel, fields: [{name, label, help, type, required, options?, visibleIf…}]}` (null without one) and `answers` (once decided, within the caller's clearance) |
+| `POST /workflow-approvals/:id` `{decision, reason?, answers?}` | Approving a step with a form needs `answers`, validated like a submission of that form: only the visible fields are kept (the rest dropped), required ones (including those a condition shows) present, text through the `user-input` checkpoint, then the entity's types, options and links. `400` with `problems` when they do not pass (the approval stays pending); answers on an approval without a form are `400`. Nothing is written to the app. The answers are sealed with the approval, returned as `answers`, and audited in `workflow.approval.approved` `detail.answers` (at the run's label) |
+
+### Notify and webhook steps (B-3908)
+
+Two new step kinds, both writes (a workflow offered as a tool with one is at least `write`); a dry run mocks them.
+
+- `notify` `{users?: [template], roles?: [role], title, body?, email?: false, route?}`, output `{notified, skipped}`.
+  `users` render to user ids or usernames. Only active users of the tenant cleared for the step's label are told, and
+  for a workflow in a members-only workspace only its members; the rest (and unknown names) are skipped and counted.
+  The notice carries the step's label and opens `route` (`workflows?run=<id>` by default); `email: true` also mails
+  it. Audited `workflow.step.notified` `{notified, skipped, email, roles}`.
+- `webhook` `{url, event?: workflow.<name> (workflow.webhook), body?: {field: template} | template}`, output
+  `{webhook, delivery, event}`. The URL is fixed (no templates). It is checked against the operator's and the tenant's
+  outbound host rules when the graph is saved (`POST /workflows`, `PUT /workflows/:id/draft`, publish): an endpoint
+  outside them is refused with `422 Workflow invalid` and `errors: [{code: config, nodeId, message: "<step>: the
+  endpoint is refused by the outbound host rules: …"}]`, and nothing is saved. At run time the step queues one delivery
+  through the tenant's webhook path, on a webhook managed for the workflow and endpoint (`workflow:<id>:<hash>`, no
+  subscriptions, removed with the workflow): the body is `{id, type: event, tenant, label, createdAt, data: {workflow,
+  run, step, data}}` (`data` the step's input or its `body`), signed with the tenant's Ed25519 webhook key
+  (`X-Exprsn-Key-Id`, `X-Exprsn-Timestamp`, `X-Exprsn-Signature-Ed25519`; JWKS at `/webhooks/keys/<tenant slug>`), with
+  the webhook path's retries and breaker. One delivery per run and step (a retried job does not send twice; a replay is
+  a new run and sends again). Audited `workflow.step.webhook` `{host, event, delivery}`.
+
+
+## Sprint 32e (1.5.0): the live Workflows screen (B-3910)
+
+The console's Workflows screen now edits every step kind the server has (the 1.4.0 `record` step, `notify`,
+`webhook`, `sub`, `agent`, `map`, `loop`, skills on model steps, approval forms, vault references in HTTP headers,
+per-step retries and failure edges), sets the trigger's `event` and `schedule` sources, and shows the triggers and
+callers, dead letters and bundles of Sprint 32b. Two server changes back it:
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/callers` | `agents:run`. What else starts the workflow, for the Triggers and callers tab: `{workflowId, appTriggers: [{id, kind: record \| schedule, app, appName, appTitle, entity, entityTitle, events, cron, ownerId, ownerName, enabled, nextRunAt, lastRunAt, lastRunId, lastResult}] (apps the caller is cleared for), workflows: [{workflowId, workflow, label, publishedVersion, step, stepTitle, kind: sub \| map \| loop, version, in: draft \| published \| published and draft}] (other workflows of the workspace that run it), tools: [{id, name, version, status, sideEffect, label, workflowVersion}], plugins: [{id, key, name, version, state, maxLabel, installedBy, installedByName}] (granted call:workflow), lastRuns: {<kind>: {runId, at, state, trigger, count}}}`. `lastRuns` counts the last 500 runs (not dry runs) by kind of start (`manual`, `api`, `record`, `schedule`, `event`, `plugin`, `workflow`, `tool`, `replay`), the caller's own unless they hold `workflows:manage`. The workflow's own event or schedule trigger is `GET /workflows/:id/triggers` |
+| `GET /api/events/catalogue` | Also readable with `workflows:manage` (besides `webhooks:manage` and `plugins:manage`): the editor picks an event trigger's type from it |
