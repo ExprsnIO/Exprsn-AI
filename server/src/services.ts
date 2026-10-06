@@ -46,6 +46,9 @@ import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
+import { WorkflowBundles } from './workflows/bundles.js';
+import { WorkflowDeadLetters } from './workflows/dead-letters.js';
+import { WorkflowTriggers } from './workflows/triggers.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
@@ -275,6 +278,10 @@ export interface Services {
   dav: DavService;
   /** 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, the catalogue and model import. */
   imports: ImportService;
+  /** 1.5.0, Sprint 32b (B-3903, B-3906, B-3909): workflow triggers, dead letters and bundles. */
+  workflowTriggers: WorkflowTriggers;
+  workflowDeadLetters: WorkflowDeadLetters;
+  workflowBundles: WorkflowBundles;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -546,6 +553,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dav: new DavService(() => s, db, cfg.SESSION_SECRET),
     // 1.5.0, Sprint 30: the import wizard's server side.
     imports: new ImportService(() => s, cfg),
+    // 1.5.0, Sprint 32b: workflows started by events and schedules, dead letters, bundles.
+    workflowTriggers: new WorkflowTriggers(() => s, metrics.registry),
+    workflowDeadLetters: new WorkflowDeadLetters(() => s),
+    workflowBundles: new WorkflowBundles(() => s),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -553,6 +564,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await s.firehose.close().catch(() => undefined);
       s.webhooks.close();
       s.pluginRuntime.close();
+      s.workflowTriggers.close();
       await denials.flushAll().catch(() => undefined);
       chat.close();
       await chat.store.close();
@@ -670,6 +682,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.customRoles.init();
   s.accessReviews.registerJobs();
   s.imports.registerJobs(); // 1.5.0, Sprint 30 (B-3801 to B-3803): harvests, model imports, bundle matching
+  // 1.5.0, Sprint 32b (B-3903, B-3906): event and schedule triggers on workflows, dead letters of failed runs.
+  s.workflowTriggers.install();
+  s.workflowTriggers.registerJobs();
+  s.workflowTriggers.listen();
+  s.workflowDeadLetters.install();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -732,6 +749,7 @@ export function startSchedules(s: Services): void {
   s.pds.schedule(); // 1.5.0, Sprint 31 (B-2904): events past the backfill window and unused blobs
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.workflowTriggers.schedule(s.scheduler); // 1.5.0, Sprint 32b (B-3903): workflow schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation

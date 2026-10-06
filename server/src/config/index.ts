@@ -627,6 +627,15 @@ const base = z.object({
     APPS_TRIGGER_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
     APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
     /**
+     * Sprint 32b (B-3903): workflows started by their own triggers. An event trigger fires at most
+     * WORKFLOW_EVENT_RATE_PER_MINUTE times a minute (in the shared counter store), and an event caused by a chain of
+     * WORKFLOW_EVENT_MAX_DEPTH workflows is dropped (the cap B-4101's chain context keeps for this kind). Schedule
+     * triggers are checked every WORKFLOW_SCHEDULE_TICK_SECONDS (0 turns them off).
+     */
+    WORKFLOW_EVENT_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(60),
+    WORKFLOW_EVENT_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    WORKFLOW_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /**
      * Sprint 27c (B-2501, B-2504): groups and events. Invitations expire after GROUP_INVITE_DAYS and join requests after
      * GROUP_REQUEST_DAYS. Signed calendar feeds are rate-limited per address (CALENDAR_FEED_PER_MINUTE) and show
      * events labelled above CALENDAR_FEED_MAX_LABEL only as busy time (calendar clients copy feeds to other servers).

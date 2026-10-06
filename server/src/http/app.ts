@@ -25,6 +25,7 @@ import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
 import { scriptRoutes } from '../routes/scripts.js';
 import { workflowRoutes } from '../routes/workflows.js';
+import { workflowOperationRoutes } from '../routes/workflow-operations.js';
 import { mediaRoutes } from '../routes/media.js';
 import { imageRoutes } from '../routes/images.js';
 import { knowledgeRoutes } from '../routes/knowledge.js';
@@ -226,6 +227,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', mcpAdminRoutes(s));
   api.use(agentRoutes(s));
   api.use(scriptRoutes(s));
+  api.use(workflowOperationRoutes(s)); // 1.5.0, Sprint 32b: triggers, dead letters, bundles (before :id routes)
   api.use(workflowRoutes(s));
   api.use(mediaRoutes(s));
   api.use(imageRoutes(s));

@@ -44,7 +44,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
   { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached, reopened' },
   { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
-  { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
+  { pattern: 'workflow.*', description: 'Workflow runs and approvals; since 1.5.0 also triggers set, removed, updated, fired, skipped and throttled (workflow.trigger.*), runs dead-lettered and redriven, and bundles exported, imported and refused (audit actions)' },
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
   { pattern: 'user.*', description: 'Accounts created, synced and disabled (audit actions)' },
   { pattern: 'auth.*', description: 'Sign-ins and second factors (audit actions)' },
