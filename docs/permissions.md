@@ -59,7 +59,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `tenant:manage` | yes | 28 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `platform:manage` | yes | 50 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `platform:manage` | yes | 70 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `audit:read` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `usage:read` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `webhooks:manage` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -727,6 +727,26 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/pds/tenants/{tid}`
 - `GET /api/imports/bundle-requests`
 - `GET /api/imports/proxy-allowlist`
+- `GET /api/admin/platform/settings`
+- `GET /api/admin/platform/settings/export`
+- `GET /api/admin/storage/integrity`
+- `GET /api/admin/storage/migrations`
+- `GET /api/admin/storage/purges`
+- `GET /api/admin/storage/quarantine`
+- `GET /api/admin/storage/stores`
+- `GET /api/admin/storage/usage`
+- `POST /api/admin/platform/settings/{name}/proposals`
+- `POST /api/admin/platform/settings/proposals/{id}/approve`
+- `POST /api/admin/platform/settings/proposals/{id}/reject`
+- `POST /api/admin/platform/settings/proposals/{id}/withdraw`
+- `POST /api/admin/storage/findings/{id}/accept`
+- `POST /api/admin/storage/integrity/verify`
+- `POST /api/admin/storage/migrations`
+- `POST /api/admin/storage/migrations/{id}/retire`
+- `POST /api/admin/storage/orphans/delete`
+- `POST /api/admin/storage/orphans/dry-run`
+- `POST /api/admin/storage/quarantine/{kind}/{id}/delete`
+- `POST /api/admin/storage/quarantine/{kind}/{id}/rescan`
 
 ### `audit:read`
 

@@ -226,7 +226,9 @@ async function main() {
     workspace: { id: workspace.id, name: workspace.name },
     totp,
     fakes: { ollama: ollama.url, mcp: mcp.url, acme: acme.directory },
-    users: ['root', 'root2', 'ops', 'mladmin', 'member', 'enrol']
+    users: ['root', 'root2', 'ops', 'mladmin', 'member', 'enrol'],
+    // 1.6.0 (B-4204): the Storage spec leaves an old object here for the integrity check to find as an orphan.
+    blobDir: cfg.BLOB_DIR
   };
   mkdirSync(path.dirname(opt.state!), { recursive: true });
   writeFileSync(opt.state!, JSON.stringify(state, null, 2));

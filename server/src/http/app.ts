@@ -35,6 +35,8 @@ import { connectionAdminRoutes } from '../routes/admin/connections.js';
 import { trainingRoutes } from '../routes/training.js';
 import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
+import { platformSettingsRoutes } from '../routes/admin/platform-settings.js';
+import { storageAdminRoutes } from '../routes/admin/storage.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
@@ -240,6 +242,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(trainingRoutes(s));
   api.use('/admin', zoneAdminRoutes(s));
   api.use('/admin', platformAdminRoutes(s));
+  api.use('/admin', platformSettingsRoutes(s)); // 1.6.0, Sprint 35c (B-4205): Configuration
+  api.use('/admin', storageAdminRoutes(s)); // 1.6.0, Sprint 35c (B-4204): Storage
   api.use('/admin', federationAdminRoutes(s));
   // Sprint 13: integrations.
   api.use(sharingRoutes(s));

@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.6.0 (in progress)
+
+### Storage and Configuration live (Sprint 35c, B-4204, B-4205, with B-4207)
+
+- **Storage** (B-4204) is a live admin screen (`platform:manage`) with Stores, Usage, Quarantine, Integrity and Purges.
+  Stores: the blob store (health from `/readyz`, size and objects from the last verification, capacity from `statfs`),
+  the database (its own size and connections), the vector store, backups, the media work directory, training datasets
+  and model files, with daily growth samples (`ops.storage.sample`). Usage: bytes by workspace (files, versions,
+  trash, media, knowledge uploads, attachments) against the file quota (which counts files, versions and trash), by
+  user and by kind; quotas are set from the screen. Quarantine: what waits for its scan or was refused in the last 24
+  hours, the ClamAV scanner (`PING`, `VERSION`, counts today), Rescan (`503` while ClamAV does not answer) and Delete,
+  audited `file.quarantine.rescanned` and `file.quarantine.deleted`.
+- The integrity check `ops.blobs.verify` (every `BLOBS_VERIFY_MINUTES`, or from the screen, optionally comparing
+  checksums) lists the store and walks every row: **missing** objects a row names, **orphans** older than
+  `BLOBS_ORPHAN_GRACE_HOURS` that nothing references (never backups or mirror files), and **mismatches** (an object
+  whose SHA-256 changed without the server writing it). It never changes the store. Orphans are deleted after a dry
+  run that walks the references again, by one admin with a reason (decision Q10), within `BLOBS_DRY_RUN_MINUTES`;
+  audited `platform.blobs.orphans.dry-run` and `platform.blobs.orphans.deleted` with the list of objects. An expected
+  checksum change is accepted with a reason (`platform.blobs.checksum.accepted`).
+- Blob store migration (decision Q16) as a copy-then-switch job `ops.blobs.migrate`, started with a recent sign-in and
+  a reason: every instance also writes to the target while every object is copied and its SHA-256 checked, the target
+  is verified, then reads and writes switch, with reads of anything missed falling back to the old store until it is
+  retired. A failure puts every instance back on the old store. The store any process uses is now a switchable store
+  (`platform/blob-switch.ts`) that follows the shared mode.
+- **Configuration** (B-4205) is a live admin screen: every setting this build reads, from a descriptor generated from
+  `server/src/config/index.ts` (`npm run gen:settings -w server`; section, type, constraint, default, secret, hot or
+  restart, description), what each instance reads and where it came from (env, file, default or override), and
+  whether instances differ. Every instance reports under `INSTANCE_NAME` every `PLATFORM_INSTANCE_REPORT_SECONDS`;
+  secrets are reported as set or unset, their length, file and mode and a keyed fingerprint, never their value.
+  Export as `.env` (secrets masked, audited `platform.settings.exported`) and Diff against defaults.
+- Database overrides for every overridable setting under dual control (decision Q2): one platform admin proposes a
+  value with a reason, another approves (never the proposer). The value is checked against the field and the
+  configuration's cross-field rules. A hot setting applies on every instance at once; a restart setting at each
+  instance's next start (applied before the services are built), and the screen names the instances still waiting.
+  Secrets and the settings needed to reach the database are not overridable; `PLATFORM_SETTINGS_OVERRIDES=false` keeps
+  every setting in the environment. Audited `platform.setting.proposed`, `.approved`, `.rejected`, `.withdrawn`.
+- New routes under `/api/admin/storage/` and `/api/admin/platform/settings` (`docs/api.md`, `docs/openapi.json`,
+  `docs/permissions.md`); migration `037c_platform_storage`; new settings `PLATFORM_SETTINGS_OVERRIDES`,
+  `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`, `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`,
+  `BLOBS_DRY_RUN_MINUTES`. The boards (B-4201) follow what the server does: the migration and the verification are no
+  longer proposals, a checksum mismatch is accepted rather than re-sealed, the purge table lists the jobs the server
+  schedules, and Mark restarted became Check again (the banner clears itself as instances report).
+- Accessibility and reflow (B-4207, this part): both screens in the Playwright sweeps and in
+  `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
+  and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
+
 ## 1.5.0
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)

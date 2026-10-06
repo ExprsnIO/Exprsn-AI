@@ -10,6 +10,7 @@ import { createServices, startSchedules } from './services.js';
 import { bootstrap } from './bootstrap.js';
 import { schemaStatus } from './db/schema.js';
 import { startOpsWatch } from './ops/watch.js';
+import { applyStoredOverrides } from './config/settings.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -27,8 +28,16 @@ async function main(): Promise<void> {
     throw new Error('Database has pending migrations; run `exprsn-ai migrate` or set DB_MIGRATE_ON_START=true');
   }
 
+  // 1.6.0 (B-4205): approved setting overrides from the database, before anything reads the configuration.
+  const overrides = await applyStoredOverrides(cfg, db, log);
+  if (overrides.applied.length) {
+    log.level = cfg.LOG_LEVEL;
+    log.info({ settings: overrides.applied }, 'setting overrides applied');
+  }
+
   const services = createServices(cfg, db, log);
   await bootstrap(services);
+  await services.storage.syncStore(); // 1.6.0 (B-4204): a blob store migration in progress or finished
 
   const state: AppState = { shuttingDown: false };
   const app = createApp(services, state);
@@ -47,6 +56,8 @@ async function main(): Promise<void> {
   }
   services.gateway.start();
   const stopWatch = startOpsWatch(services); // Sprint 22: schema handshake, Redis probe, NTP measurement
+  services.storage.start(); // 1.6.0 (B-4204): follows the blob store mode
+  services.settings.start(); // 1.6.0 (B-4205): reports what this instance reads; applies hot overrides
 
   const housekeeping = setInterval(() => {
     void Promise.all([services.sessions.purge(), services.throttle.purge(), services.account.purge()]).catch((err) => log.warn({ err }, 'housekeeping failed'));

@@ -293,6 +293,8 @@ async function main(): Promise<void> {
       return;
     }
     s = createServices(cfg, db, log);
+    // 1.6.0 (B-4204): after a blob store migration the commands use the store the server uses.
+    await s.storage.syncStore().catch(() => undefined);
     // A restore runs before the first-start seeding, so a fresh database stays empty until the backup fills it.
     if (cmd === 'backup:restore') {
       await restore(s, rest);

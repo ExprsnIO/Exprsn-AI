@@ -13,6 +13,8 @@ export type ByteSource = AsyncIterable<Buffer | Uint8Array>;
 export interface BlobObject {
   key: string;
   size: number;
+  /** When the object was last written (ms), where the store says (1.6.0, B-4204: the orphan grace period). */
+  modified?: number;
 }
 
 /** Object storage for exports, attachments and audit checkpoints. Keys are `/`-separated relative paths. */
@@ -125,7 +127,7 @@ export class FsBlobStore implements BlobStore {
         if (e.isDirectory()) yield* walk(full, root);
         else if (e.isFile() && !e.name.endsWith('.tmp')) {
           const st = await stat(full).catch(() => null);
-          if (st) yield { key: path.relative(root, full).split(path.sep).join('/'), size: st.size };
+          if (st) yield { key: path.relative(root, full).split(path.sep).join('/'), size: st.size, modified: Math.round(st.mtimeMs) };
         }
       }
     };
@@ -334,7 +336,8 @@ export class S3BlobStore implements BlobStore {
       for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
         const key = /<Key>([^<]+)<\/Key>/.exec(m[1]!)?.[1]?.replace(/&amp;/g, '&');
         const size = Number(/<Size>(\d+)<\/Size>/.exec(m[1]!)?.[1] ?? 0);
-        if (key && key.startsWith(base)) yield { key: key.slice(base.length), size };
+        const at = Date.parse(/<LastModified>([^<]+)<\/LastModified>/.exec(m[1]!)?.[1] ?? '');
+        if (key && key.startsWith(base)) yield { key: key.slice(base.length), size, ...(Number.isFinite(at) ? { modified: at } : {}) };
       }
       token = /<IsTruncated>true<\/IsTruncated>/.test(xml) ? /<NextContinuationToken>([^<]+)</.exec(xml)?.[1] : undefined;
     } while (token);
