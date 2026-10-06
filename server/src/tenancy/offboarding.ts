@@ -16,9 +16,11 @@ const CHANNEL_TABLES = ['channel_bounces', 'channel_outbox', 'channel_threads', 
 const SOCIAL_TABLES = ['dm_terms', 'dm_reactions', 'dm_messages', 'dm_members', 'dm_conversations', 'social_list_members', 'social_lists', 'social_settings', 'social_follows', 'social_mutes', 'social_blocks'] as const;
 // Sprint 28c: the workspace feed (posts, comments and digest summaries are sealed with the tenant key).
 const FEED_TABLES = ['feed_settings', 'feed_digests', 'feed_trending', 'feed_hashtags', 'feed_bookmarks', 'feed_reactions', 'feed_comments', 'feed_post_media', 'feed_posts'] as const;
-// 1.5.0, Sprint 30 (B-31, B-32): DAV app passwords, personal calendars and address books (sealed), and properties.
-const DAV_TABLES = ['dav_properties', 'dav_tombstones', 'dav_objects', 'dav_collections', 'dav_app_passwords'] as const;
-const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...CHANNEL_TABLES, ...SOCIAL_TABLES, ...FEED_TABLES, ...DAV_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
+// 1.5.0, Sprint 30 (B-31, B-32): DAV app passwords, personal calendars and address books (sealed), properties and (B-32) locks.
+const DAV_TABLES = ['dav_locks', 'dav_properties', 'dav_tombstones', 'dav_objects', 'dav_collections', 'dav_app_passwords'] as const;
+// 1.5.0, Sprint 34c (B-5801, B-5802): profiles, chosen presence statuses and live connection rows.
+const PROFILE_TABLES = ['presence_connections', 'user_presence', 'user_profiles'] as const;
+const DERIVED_TABLES = [...KNOWLEDGE_TABLES, ...FILE_TABLES, ...GROUP_TABLES, ...CHANNEL_TABLES, ...SOCIAL_TABLES, ...FEED_TABLES, ...DAV_TABLES, ...PROFILE_TABLES, 'messages', 'attachments', 'conversations', 'exports', 'notifications'] as const;
 const BLOB_PREFIXES = ['exports', 'attachments', 'quarantine', 'knowledge', 'knowledge-quarantine', 'memory-exports', 'files'] as const;
 
 /**

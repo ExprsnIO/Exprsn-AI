@@ -112,6 +112,20 @@ const base = z.object({
     /** Workflows: HTTP steps only call internal (private) addresses; this comma list narrows the hosts further. */
     WORKFLOW_HTTP_HOSTS: z.string().default(''),
     WORKFLOW_HTTP_ALLOW_LOOPBACK: bool.default(false),
+    /**
+     * Sprint 32 (B-4101): the chain context. Every invocation (chat turn, agent run, workflow run, tool call, skill load,
+     * plugin action, app trigger) is a node in its root's chain; a chain is at most CHAIN_MAX_DEPTH deep across kinds,
+     * with WORKFLOW_MAX_DEPTH nested workflow runs and AGENT_MAX_DEPTH nested agent runs as per-kind caps (the plugin
+     * and app trigger depths stay as they are). A root without budgets of its own (a chat turn, a plugin action, an app
+     * trigger) gets CHAIN_MAX_TOKENS, CHAIN_MAX_STEPS, CHAIN_MAX_WALL_SECONDS and CHAIN_MAX_GPU_SECONDS (the cost meter).
+     */
+    CHAIN_MAX_DEPTH: z.coerce.number().int().min(2).max(32).default(8),
+    WORKFLOW_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    AGENT_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    CHAIN_MAX_TOKENS: z.coerce.number().int().min(1000).max(10_000_000).default(200_000),
+    CHAIN_MAX_STEPS: z.coerce.number().int().min(10).max(100_000).default(400),
+    CHAIN_MAX_WALL_SECONDS: z.coerce.number().int().min(10).max(7 * 86_400).default(7200),
+    CHAIN_MAX_GPU_SECONDS: z.coerce.number().int().min(1).max(10_000_000).default(3600),
 
     /** Media: ffmpeg and ffprobe binaries, encoder choice, caps, and whisper.cpp for transcripts. */
     MEDIA_FFMPEG: z.string().default('ffmpeg'),
@@ -626,6 +640,15 @@ const base = z.object({
     APPS_BULK_MAX: z.coerce.number().int().min(1).max(1000).default(500),
     APPS_TRIGGER_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
     APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /**
+     * Sprint 32b (B-3903): workflows started by their own triggers. An event trigger fires at most
+     * WORKFLOW_EVENT_RATE_PER_MINUTE times a minute (in the shared counter store), and an event caused by a chain of
+     * WORKFLOW_EVENT_MAX_DEPTH workflows is dropped (the cap B-4101's chain context keeps for this kind). Schedule
+     * triggers are checked every WORKFLOW_SCHEDULE_TICK_SECONDS (0 turns them off).
+     */
+    WORKFLOW_EVENT_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(60),
+    WORKFLOW_EVENT_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    WORKFLOW_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
     /**
      * Sprint 27c (B-2501, B-2504): groups and events. Invitations expire after GROUP_INVITE_DAYS and join requests after
      * GROUP_REQUEST_DAYS. Signed calendar feeds are rate-limited per address (CALENDAR_FEED_PER_MINUTE) and show

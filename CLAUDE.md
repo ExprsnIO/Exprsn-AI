@@ -164,7 +164,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs
   with lanes, approvals, budgets, checkpoints and replay), **`scripts/`** (`ScriptRunner`: docker or podman sandbox).
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
-  step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
+  step; since Sprint 32 `steps/`: the Workflows 2 kinds, `kinds.ts` their publish-time definitions registered in
+  `STEP_KINDS`, `registry.ts` their runners in `STEP_RUNNERS`, `host.ts` what a runner gets from the service), **`chain/`**
+  (`context.ts`: the chain context, B-4101, `s.chains`; since Sprint 34a `refs.ts`, the reference graph checked at
+  publish and "used by", `s.chainRefs`, B-4105, and `view.ts`, the chain tree, held calls and replay from a node behind
+  `routes/chains.ts`, B-4106, B-4107; delegation to agents is `AgentService.runAsTool`, B-4102, and a skill's closure
+  `registry/skills.ts`, B-4103), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
   URLs on `MEDIA_ORIGIN`), **`images/`** (`ImageBackend` for ComfyUI and diffusers, safety classifier, signed
   provenance in the PNG).
 - **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a
@@ -213,6 +218,17 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `catalog.ts` the snapshot with facets and live search, `fetcher.ts` the allow-listed import egress, `formats.ts`
   format, pickle and licence checks, `service.ts` model import jobs, licence exceptions and bundle mode, `adapters/`
   one per repository type); its fakes are `server/test/sprint30-imports-fakes.ts`.
+- 1.5.0 Sprint 32b additions to **`workflows/`**: `trigger-config.ts` (the trigger step's `event` and `schedule` +
+  `cron` sources and their publish checks), `triggers.ts` (event fan-out with the workspace, label, rate and loop
+  rules, the cron tick claimed once across instances, `workflowCause` the chain of workflows), `retry.ts` (per-step
+  retry policies and `branch: failure` edges), `dead-letters.ts` (failed runs and their redrive), `bundles.ts` (signed
+  `exprsn-workflow/1` export and import with re-bound references), hooked into `service.ts` through `useLifecycle`;
+  routes in `routes/workflow-operations.ts`.
+- 1.5.0 Sprint 34c: **`profiles/`** (`service.ts` `s.people`: pronouns and bio through the `user-input` guardrail, the
+  avatar as a file-store upload served only once its pinned version passed the scan, visibility by workspace and
+  clearance; `presence.ts` `s.presence`: chosen or derived status, connection rows per instance with a heartbeat, one
+  publish per change on `TOPICS.presence`), with `routes/people.ts` (`/api/people`, `/api/presence`) and
+  `realtime/presence.ts` (`presence.watch`, `presence.idle`, `presence.changed` on the console's socket).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -262,7 +278,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) or of axe-core (`e2e/tests/support/axe.ts`, Standard
   and Enhanced, light and dark), and on sideways scrolling at 320 and 640 px, for screens and, through
   `e2e/tests/y-reflow-overlays.spec.ts`, their dialogs and drawers.
-- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`).
+- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`); `person.js` (1.5.0) is the
+  Profile page (`#/person?user=<id>`), not in the sidebar, opened from people's names and swept like Settings.
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
   streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.

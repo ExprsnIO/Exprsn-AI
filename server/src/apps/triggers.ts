@@ -10,6 +10,7 @@ import type { Services } from '../services.js';
 import { describeCron, nextCron, parseCron } from '../training/calendar.js';
 import type { RecordStep, RecordStepRunner } from '../workflows/service.js';
 import type { Actor, AppRow, AppService, EntityRow, RecordEvent, RecordRow } from './service.js';
+import { ChainLimit, chainRefOf, type ChainRef } from '../chain/context.js';
 
 /*
  * Triggers (B-2206). A record trigger starts a published workflow when a record of its entity is created, updated,
@@ -184,7 +185,7 @@ export class AppTriggers implements RecordStepRunner {
       await this.s().jobs.enqueue({
         tenantId: app.tenant_id,
         type: 'apps.trigger',
-        payload: { triggerId: t.id, recordId: r.id, label: r.label, state: r.state, event, depth: depth + 1, ...(event === 'updated' ? { fields: ((extra.fields as string[] | undefined) ?? []).slice(0, 100) } : {}), ...(event === 'transitioned' ? { from: extra.from ?? null, to: extra.to ?? null } : {}) },
+        payload: { triggerId: t.id, recordId: r.id, label: r.label, state: r.state, event, depth: depth + 1, ...(actor.chain ? { chain: actor.chain } : {}), ...(event === 'updated' ? { fields: ((extra.fields as string[] | undefined) ?? []).slice(0, 100) } : {}), ...(event === 'transitioned' ? { from: extra.from ?? null, to: extra.to ?? null } : {}) },
         createdBy: t.owner_id,
         maxAttempts: 3
       });
@@ -213,7 +214,7 @@ export class AppTriggers implements RecordStepRunner {
     return p;
   }
 
-  private async start(t: TriggerRow, p: Principal, input: Record<string, unknown>, label: Label, trigger: 'record' | 'schedule', target: Record<string, unknown>): Promise<unknown> {
+  private async start(t: TriggerRow, p: Principal, input: Record<string, unknown>, label: Label, trigger: 'record' | 'schedule', target: Record<string, unknown>, parent: ChainRef | null = null): Promise<unknown> {
     const s = this.s();
     let w;
     try {
@@ -223,12 +224,19 @@ export class AppTriggers implements RecordStepRunner {
     }
     if (labelRank(label) > labelRank(w.label)) return this.skip(t, `the record is ${label}; ${w.name} handles data up to ${w.label}`, label, target);
     try {
-      const run = await s.workflows.start(p, w.id, { input, dry: false, trigger });
+      // B-4101: the trigger is a node of the chain the run joins: the chain of the run whose record step fired it, or a new one.
+      // A trigger owned by someone else than the chain's principal acts as its owner, so it starts a chain of its own.
+      const begin = (from: ChainRef | null) => s.workflows.start(p, w.id, { input, dry: false, trigger, chain: { parent: from, via: { kind: 'app-trigger', callee: t.id } } });
+      const run = await begin(parent).catch((err: unknown) => {
+        if (err instanceof ChainLimit && err.code === 'principal') return begin(null);
+        throw err;
+      });
       await this.db('app_triggers').where({ id: t.id }).update({ last_run_at: Date.now(), last_run_id: run.id, last_result: 'started' });
       await s.audit.append({ tenantId: t.tenant_id, action: 'app.trigger.fired', kind: 'system', actor: { service: 'apps.triggers', user: t.owner_id }, target: { trigger: t.id, workflow: w.id, run: run.id, ...target }, label: highest(label, run.label), detail: { kind: t.kind } });
       return { run: run.id };
     } catch (err) {
       if (err instanceof HttpProblem && err.status < 500) return this.skip(t, err.detail ?? err.title, label, target);
+      if (err instanceof ChainLimit) return this.skip(t, err.message, label, target);
       throw err;
     }
   }
@@ -264,7 +272,7 @@ export class AppTriggers implements RecordStepRunner {
       ...(event === 'transitioned' ? { from: payload.from ?? null, to: payload.to ?? null } : {}),
       trigger: { id: t.id, depth: Number(payload.depth ?? 1) }
     };
-    return this.start(t, p, input, label, 'record', target);
+    return this.start(t, p, input, label, 'record', target, chainRefOf(payload.chain));
   }
 
   /** Due schedule triggers; each due time is claimed with one conditional update, so one instance fires it. */
@@ -300,11 +308,11 @@ export class AppTriggers implements RecordStepRunner {
    * Creates, updates or moves a record as the run's owner. The data the run carries is `label`: a new record is at
    * least that, and an existing record below it is refused (writing it there would lower the data's label).
    */
-  async runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number }): Promise<{ output: Record<string, unknown>; label: Label }> {
+  async runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number; chain?: ChainRef | null }): Promise<{ output: Record<string, unknown>; label: Label }> {
     if (!authorize(p, 'records:write').allow) throw new HttpProblem(403, 'Forbidden', 'The run owner may not write records.');
     const app = await this.apps.app(p, step.app);
     const entity = await this.apps.entityOf(app, step.entity);
-    const actor: Actor = { principal: p, source: 'workflow', depth: ctx.depth, causedBy: ctx.workflowId, service: 'workflows' };
+    const actor: Actor = { principal: p, source: 'workflow', depth: ctx.depth, causedBy: ctx.workflowId, service: 'workflows', chain: ctx.chain ?? null };
     if (step.action === 'create') {
       const label = highest(entity.label, ctx.label);
       const rec = await this.apps.createRecord(actor, app, entity, { values: step.values, label });

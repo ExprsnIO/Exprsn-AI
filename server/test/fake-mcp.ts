@@ -26,6 +26,10 @@ export class FakeMcp {
   pageSize = 0;
   down = false;
   calls: { name: string; arguments: Record<string, unknown>; auth: string | null }[] = [];
+  /** Sprint 32: a delay before every tools/call answer, and the most calls that were in flight at once. */
+  callDelayMs = 0;
+  inFlight = 0;
+  peak = 0;
   requests: { method: string; session: string | null; protocol: string | null }[] = [];
   private sessions = new Set<string>();
   server: Server;
@@ -107,12 +111,22 @@ export class FakeMcp {
         this.calls.push({ name, arguments: args, auth });
         const t = this.tools.find((x) => x.name === name);
         if (!t) return this.send(res, 200, { jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: `Unknown tool ${name}` } });
-        try {
-          const out = t.run ? t.run(args, auth) : { ok: true };
-          return reply({ content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out });
-        } catch (err) {
-          return reply({ content: [{ type: 'text', text: (err as Error).message }], isError: true });
-        }
+        const answer = () => {
+          try {
+            const out = t.run ? t.run(args, auth) : { ok: true };
+            return reply({ content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out });
+          } catch (err) {
+            return reply({ content: [{ type: 'text', text: (err as Error).message }], isError: true });
+          }
+        };
+        if (!this.callDelayMs) return answer();
+        this.inFlight++;
+        this.peak = Math.max(this.peak, this.inFlight);
+        setTimeout(() => {
+          this.inFlight--;
+          answer();
+        }, this.callDelayMs);
+        return;
       }
       default:
         return this.send(res, 200, { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });

@@ -18,7 +18,9 @@ const filters = z.object({
   from: z.coerce.number().int().min(0).optional(),
   to: z.coerce.number().int().min(0).optional(),
   label: z.enum(LABELS).optional(),
-  actor: z.string().max(190).optional()
+  actor: z.string().max(190).optional(),
+  /** Sprint 34 (B-4107): events whose target names this id (the chain view links each run's entries). */
+  target: z.string().max(120).regex(/^[A-Za-z0-9._:@-]+$/).optional()
 });
 
 export const exportView = (x: ExportRow) => ({ id: x.id, kind: x.kind, file: x.file, scope: x.scope, maxLabel: x.max_label, state: x.state, rows: x.rows, omitted: x.omitted, jobId: x.job_id, createdBy: x.created_by, createdAt: x.created_at });

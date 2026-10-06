@@ -16,8 +16,15 @@ const schemaObj = z.record(z.string(), z.unknown());
 const budgets = z.object({ steps: z.number().int().min(1).max(MAX_BUDGETS.steps), tokens: z.number().int().min(100).max(MAX_BUDGETS.tokens), wallSeconds: z.number().int().min(5).max(MAX_BUDGETS.wallSeconds), toolCalls: z.number().int().min(0).max(MAX_BUDGETS.toolCalls) });
 /** An agent's memory policy (Sprint 12): whether its runs may propose memories, of which types, and how many per run. */
 const memoryPolicy = z.object({ write: z.enum(['off', 'propose']).default('off'), types: z.array(z.enum(AGENT_TYPES)).min(1).max(AGENT_TYPES.length).default([...AGENT_TYPES]), maxPerRun: z.number().int().min(1).max(20).default(3) }).strict();
-const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), budgets, memory: memoryPolicy.optional() });
-const skillDef = z.object({ instructions: z.string().max(100_000), tools: z.array(entryName).max(32).default([]) });
+/** An agent's name as it is referenced (agent names may hold spaces). */
+const agentRef = z.string().trim().min(1).max(120);
+/**
+ * B-4102, B-4104: `agents` the agent may delegate to (offered as `agent:<name>` tools) and `workflows` (by name, in the
+ * run's workspace) it may start and await (offered as `workflow:<name>`), without publishing them as tools.
+ */
+const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), agents: z.array(agentRef).max(16).default([]), workflows: z.array(z.string().trim().min(1).max(120)).max(16).default([]), budgets, memory: memoryPolicy.optional() });
+/** B-4103: a skill lists the `skills` it builds on as well as the `tools` it needs. */
+const skillDef = z.object({ instructions: z.string().max(100_000), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]) });
 const scriptDef = z.object({ scriptId: z.string().length(26) });
 
 /** Tool and skill entries are a tool admin's; agent entries an agent admin's. */
@@ -61,7 +68,8 @@ export function registryAdminRoutes(s: Services): Router {
     const e = await load(req);
     const versions = await reg.versions(e);
     const names = await reviewerNames([e, ...versions]);
-    const referencedBy = e.kind === 'tool' && e.tenant_id ? await reg.referencedBy(p.tenantId, e.name) : [];
+    // B-4105: what references the entry (the "used by" view); each item says whether the referrer may run now.
+    const referencedBy = e.tenant_id ? await reg.referencedBy(p.tenantId, e.name, e.kind) : [];
     const profiles = e.kind === 'tool' ? (await s.gateway.repo.profiles(p.tenantId)).filter((x) => x.tools.includes(e.name)).map((x) => x.name) : [];
     const workspaces = e.publish_workspaces.length ? ((await s.db('workspaces').whereIn('id', e.publish_workspaces).select('id', 'name')) as { id: string; name: string }[]) : [];
     res.json({ ...entryView(e, names), versions: versions.map((v) => ({ id: v.id, version: v.version, status: v.status, createdAt: v.created_at })), referencedBy, profiles, workspaces });
@@ -70,7 +78,7 @@ export function registryAdminRoutes(s: Services): Router {
   const createBody = z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('tool'), name: entryName, version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), sideEffect: z.enum(SIDE_EFFECTS), confirm: z.enum(['always', 'never']).optional(), ratePerHour: z.number().int().min(1).max(100_000).nullable().default(null), label: z.enum(LABELS).default('internal'), inputSchema: schemaObj, outputSchema: schemaObj.nullable().default(null), definition: scriptDef }),
     z.object({ kind: z.literal('skill'), name: entryName, version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), definition: skillDef }),
-    z.object({ kind: z.literal('agent'), name: z.string().trim().min(1).max(120), version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), definition: agentDef })
+    z.object({ kind: z.literal('agent'), name: z.string().trim().min(1).max(120), version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), inputSchema: schemaObj.nullable().default(null), outputSchema: schemaObj.nullable().default(null), definition: agentDef })
   ]);
 
   /** A new draft. Tools submitted here are script-backed; MCP tools come from the MCP servers screen. */
@@ -86,7 +94,7 @@ export function registryAdminRoutes(s: Services): Router {
       e = await reg.create(p, { kind: 'skill', name: b.name, version: b.version, description: b.description, impl: 'archive', sideEffect: null, label: b.label, inputSchema: null, outputSchema: null, definition: b.definition });
     } else {
       if (!(await s.gateway.repo.profileByName(p.tenantId, b.definition.profile))) throw notFound(`Profile ${b.definition.profile}`);
-      e = await reg.create(p, { kind: 'agent', name: b.name, version: b.version, description: b.description, impl: 'agent', sideEffect: null, label: b.label, inputSchema: null, outputSchema: null, definition: b.definition });
+      e = await reg.create(p, { kind: 'agent', name: b.name, version: b.version, description: b.description, impl: 'agent', sideEffect: null, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: b.definition });
     }
     await audit(req, 'registry.created', e, { impl: e.impl, checksPassed: e.checks.every((c) => c.ok) });
     res.status(201).json(await view(e));
@@ -138,10 +146,24 @@ export function registryAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const e = await load(req);
     const b = parseBody(z.object({ to: z.enum(['deprecated', 'retired', 'published']), replacement: z.string().trim().max(200).nullable().default(null) }), req.body);
-    const referencedBy = b.to === 'retired' && e.kind === 'tool' ? await reg.referencedBy(p.tenantId, e.name) : [];
     const next = await reg.lifecycle(e, b.to, { replacement: b.replacement });
-    await audit(req, b.to === 'published' ? 'registry.restored' : `registry.${b.to}`, e, { from: e.status, replacement: b.replacement, referencedBy: referencedBy.map((x) => `${x.name} ${x.version}`) });
+    // What still references it (a deprecation warns; retiring what something published uses was refused above).
+    const referencedBy = b.to !== 'published' && e.tenant_id ? await reg.referencedBy(p.tenantId, e.name, e.kind) : [];
+    await audit(req, b.to === 'published' ? 'registry.restored' : `registry.${b.to}`, e, { from: e.status, replacement: b.replacement, referencedBy: referencedBy.map((x) => `${x.kind} ${x.name}${x.version ? ` ${x.version}` : ''}`) });
     res.json({ ...(await view(next)), referencedBy });
+  });
+
+  /**
+   * B-4105: the "used by" view before deprecating or retiring an entry: agents, skills, workflow tools and workflows
+   * (draft or published) that reference its name, and whether retiring it now would be refused.
+   */
+  r.get('/registry/:id/used-by', forKind(entryKind), async (req, res) => {
+    const p = principalOf(req);
+    const e = await load(req);
+    const usedBy = e.tenant_id ? await reg.referencedBy(p.tenantId, e.name, e.kind) : [];
+    const others = (await reg.versions(e)).filter((v) => v.id !== e.id && (v.status === 'published' || v.status === 'deprecated'));
+    const live = usedBy.filter((u) => u.live);
+    res.json({ id: e.id, kind: e.kind, name: e.name, version: e.version, status: e.status, usedBy, otherVersions: others.map((v) => ({ id: v.id, version: v.version, status: v.status })), retireBlocked: !others.length && live.length > 0 && e.tenant_id !== null });
   });
 
   r.post('/registry/:id/versions', forKind(entryKind), async (req, res) => {
@@ -169,7 +191,8 @@ export function registryAdminRoutes(s: Services): Router {
       return res.status(202).json({ runId: run.id });
     }
     const tool = s.tools.toResolved(e);
-    const sandboxed = e.impl === 'builtin' || e.impl === 'script';
+    // B-3904: a domain built-in that writes (posts, messages, file versions) acts on live data: the harness holds it.
+    const sandboxed = (e.impl === 'builtin' && (e.side_effect ?? 'read') === 'read') || e.impl === 'script';
     const outcome = await s.tools.call({ principal: p, label: b.label ?? e.label, source: { kind: 'registry-test', id: e.id }, approved: sandboxed }, tool, b.arguments);
     await audit(req, 'registry.tested', e, { ok: outcome.ok, denied: !!outcome.denied, needsApproval: !!outcome.needsApproval, valid: outcome.valid ?? null });
     res.json({ ...outcome, label: e.label, sandboxed, note: outcome.needsApproval ? `${e.name} is a ${tool.sideEffect} tool; the harness does not run it against a live system.` : null });

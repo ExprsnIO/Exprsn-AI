@@ -86,7 +86,7 @@ export const test = base.extend<Fixtures>({
  * An API client signed in as `user` (its session cookie), sending the session's CSRF token on unsafe requests.
  * For seeding what a test needs before its own steps; the steps under test go through the console.
  */
-export async function apiAs(user: User): Promise<{ ctx: APIRequestContext; get: (u: string) => Promise<any>; post: (u: string, body?: object) => Promise<any>; patch: (u: string, body?: object) => Promise<any>; close: () => Promise<void> }> {
+export async function apiAs(user: User): Promise<{ ctx: APIRequestContext; get: (u: string) => Promise<any>; post: (u: string, body?: object) => Promise<any>; patch: (u: string, body?: object) => Promise<any>; put: (u: string, body?: object) => Promise<any>; del: (u: string) => Promise<any>; close: () => Promise<void> }> {
   const ctx = await pwRequest.newContext({ baseURL: serverState().url, storageState: authFile(user) });
   const session = await (await ctx.get('/api/auth/session')).json();
   const headers = { 'x-csrf-token': session.csrf as string, origin: serverState().url };
@@ -99,6 +99,8 @@ export async function apiAs(user: User): Promise<{ ctx: APIRequestContext; get: 
     get: async (u) => check(await ctx.get(u)),
     post: async (u, body = {}) => check(await ctx.post(u, { data: body, headers })),
     patch: async (u, body = {}) => check(await ctx.patch(u, { data: body, headers })),
+    put: async (u, body = {}) => check(await ctx.put(u, { data: body, headers })),
+    del: async (u) => check(await ctx.delete(u, { headers })),
     close: () => ctx.dispose()
   };
 }

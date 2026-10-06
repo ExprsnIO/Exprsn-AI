@@ -61,7 +61,16 @@ async function main() {
   // ---- fakes that the configuration has to name ----
   const ollama = await new FakeOllama().start();
   ollama.chatDelayMs = 15;
-  ollama.reply = (messages) => ({ thinking: 'Reading the question first. ', content: `Fake answer to: ${messages[messages.length - 1]?.content ?? ''}` });
+  // An agent whose system prompt holds "E2E-CALL <function> [json arguments]" makes that tool call first (the runs
+  // chain spec builds a three-level chain of delegating agents this way), then answers with what the tool returned.
+  ollama.reply = (messages) => {
+    const system = messages[0]?.role === 'system' ? messages[0].content : '';
+    const call = /E2E-CALL (\S+)(?: (\{.*\}))?/.exec(system);
+    const last = messages[messages.length - 1];
+    if (call && last?.role !== 'tool') return { content: '', toolCall: { name: call[1]!, arguments: call[2] ? (JSON.parse(call[2]) as Record<string, unknown>) : { task: 'Carry on with the September close.' } } };
+    if (call && last?.role === 'tool') return { content: `Done: ${String(last.content).slice(0, 160)}` };
+    return { thinking: 'Reading the question first. ', content: `Fake answer to: ${last?.content ?? ''}` };
+  };
   const mcp = await new FakeMcp().start();
   mcp.tools = [
     { name: 'lookup_invoice', description: 'Looks up an invoice by number.', inputSchema: { type: 'object', properties: { number: { type: 'string' } }, required: ['number'] }, annotations: { readOnlyHint: true }, run: (a) => ({ invoice: a.number, total: 1200 }) },

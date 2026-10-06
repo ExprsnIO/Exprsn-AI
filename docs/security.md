@@ -119,6 +119,58 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
+  answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
+  CardDAV-only password gets `403` there. A PUT waits for its scan (run in the request on the database queue, up to 30
+  seconds for a BullMQ worker); a scan that does not finish in time leaves the file unreadable until it does, and the
+  client sees a success without an ETag. Finder's AppleDouble and `.DS_Store` files are accepted and discarded rather
+  than stored. Locks are advisory to the API: the console and `/api/files` do not check WebDAV locks. Range requests
+  are not supported (whole files only). MOVE across workspaces is refused. Real client traffic (Finder, Windows,
+  DAVx5) is not yet replayed in CI; litmus is.
+
+- Profiles and presence (1.5.0, Sprint 34c, B-5801, B-5802). A profile is known only to people who share a workspace
+  with its owner; pronouns, bio and avatar further need the viewer's clearance to reach the profile's label and, when
+  the owner narrowed it, a shared workspace among those named. Two people in a block see each other's name only, the
+  same view a narrowed profile gives, and no presence. Pronouns and bio pass the `user-input` guardrail. An avatar is a
+  file-store upload and goes through its quarantine; only a ready image version that is not in the trash and whose
+  label the viewer clears is served, with the sandbox CSP and `nosniff`. Presence is decided by the server: a socket
+  asks to watch people and joins only the presence rooms of those it may see; each change is published with everyone
+  in a block with the person left out, so every instance relays the same filtered event, and a new block takes each
+  person out of the other's room at once. Gaps: presence visibility follows shared workspaces only (not the profile's
+  label or narrowed workspaces), so someone who sees a name-only profile still sees the status; idle is what the
+  console reports (a client could keep reporting active); the bio is stored as written (after the guardrail), not
+  sealed, like the display name; a chosen status has no expiry; the avatar's file stays in the uploader's workspace
+  file tree, where workspace members can see it as a file like any other upload.
+- The chain context and Workflows 2's sub-workflow, agent, map and loop steps (1.5.0, Sprint 32, B-4101, B-3901,
+  B-3902, B-3905). The chain covers what runs on this server; what leaves it (a webhook receiver or an MCP server that
+  calls the API back) starts a new chain, bounded only by its own rate limits. A chat turn is a chain node only when its
+  answer calls a registry tool, and the chat model's own tokens are metered per conversation, not charged to the chain.
+  Plugin event fan-out still carries its own chain of plugins (`PLUGIN_MAX_DEPTH`); only a plugin action that starts a
+  workflow is a chain node (the root of a new chain), so an agent → event → plugin → workflow path is two chains. An app
+  trigger owned by someone else than the chain's principal starts a chain of its own (it acts as its owner). "Cost" is
+  metered as GPU time; chains are not priced against the price books. Wall time is charged for leaf work only, so time a
+  run spends waiting on an approval is not counted, and a child executed inside its parent's step counts its own steps;
+  budgets are checked before each step, so the step that crosses a budget completes. A pending workflow tool's call node
+  stays `waiting` until the awaiting agent picks its result up. Skills on a model step: at most six rounds of tool
+  calls. Map items never pause one by one; a write tool in a map or loop needs an Approval step before it. A child
+  workflow runs inside its parent's step while it can, so a long child counts against the parent's step timeout.
+- Chaining across kinds (1.5.0, Sprint 34a, B-4102 to B-4107). Cross-kind cycles are now checked at publish (B-4105),
+  but only a cycle made entirely of steps that always run (sub-workflows, map and loop workflows, agent steps, skill
+  loads, a workflow tool's workflow) is refused; a cycle through a model's choice (an agent's delegates, listed
+  workflows or tools, which includes an agent delegating to itself) is published with a warning and bounded at run time
+  by `CHAIN_MAX_DEPTH`, `AGENT_MAX_DEPTH` and the root's budgets. Branches are not followed, so a sub-workflow cycle
+  behind a branch that would end is refused too. The graph is built from what is published now and checked when
+  something is published, from it: a later change elsewhere that closes a cycle is caught when that change is
+  published. References resolve tenant-wide (a workflow in the entry's own workspace); an entry published only to
+  other workspaces passes the check and is hidden at run time. A delegate's budgets are clamped to what the delegating
+  run has left when it starts, and its tokens are added to the delegating run's afterwards; its steps and wall time
+  count only at the root. A held call is decided where it waits with that place's rules; the chain view itself is for
+  the chain's principal and agent, tool and workflow admins, so another approver decides from the place, or through
+  `POST /api/chains/:id/held/:node/decision`, which answers `404` unless they may decide the call. A model step's held
+  call keeps the conversation so far sealed in the step until it is decided; the approved call passes the `tool-call`
+  checkpoint again when it runs. The audit `target` filter is a `LIKE` over the target JSON within the tenant (no index
+  of its own). The chain view lists at most 50 guardrail decisions and 20 audit entries per run. A replay from a node
+  is a new chain, not a branch of the old one.
 - Feed generators and relay commit verification (1.5.0, Sprint 31, B-3001 to B-3003, B-3604). Relay commits are
   verified one at a time in the consumer's order: each repo DID new to the cache costs a DID resolution (up to five
   seconds), so a subscription to the whole network over subscribeRepos falls behind where a Jetstream would not; use
@@ -571,8 +623,12 @@ filter, private `/tmp`, only the state directory writable.
   AsyncLocalStorage: work an action's callee defers to its own timers or connections opened during the action would
   carry it too, which only ever suppresses deliveries. A script handler holds its invocation's token (shown to it
   once, stored hashed, revoked when it ends); with the default sandbox it cannot use it except over its own stdin and
-  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. The
-  `records`, `files`, `groups` and `posts` calls answer `501` until their domains ship. The test suite runs handlers
+  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. Since 1.5.0
+  (B-3904) the `records`, `files`, `groups` and `posts` calls are live and act as the installing user (still active,
+  holding the domain permission, clearance capped at the plugin's max label), so a plugin reaches what its installer
+  can reach, not what the plugin needs: a narrower plugin needs a narrower installer (a service account), and a
+  plugin installed from the command line cannot make them. `read:files` returns contents (up to 256 kB a call), not
+  just metadata, and is still a low-risk capability, granted with the manifest. The test suite runs handlers
   as local processes (`server/test/sprint25d-fakes.ts`); the container path is the scripts' and is not exercised in CI.
   Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
   retention yet).
@@ -718,7 +774,9 @@ filter, private `/tmp`, only the state directory writable.
   receiving mail server does not enforce SPF/DKIM/DMARC; an attacker who knows a customer's address and one of the
   thread's Message-IDs could add a message to that session (they still never see the replies, which go to the real
   address). IMAP polls read the mailbox read-only and never mark or move messages; messages over 10 MB are skipped.
-  The imapflow adapter itself is exercised only against a fake fetcher in the unit tests, not a real IMAP server.
+  Since Sprint 34 (B-3605) the imapflow adapter also runs in CI against GreenMail over implicit TLS with the
+  certificate verified against the host name (`server/test/integration/imap.test.ts`); the STARTTLS path (port 143)
+  is exercised only through imapflow's own handling, not against a server.
   Mailgun inbound is form-encoded only (routes that forward attachments post multipart, which is refused with `415`);
   Postmark, SendGrid and others use the generic shape through a relay. Bounces from IMAP are read from RFC 3464
   delivery reports only (not from free-text bounce mails). Held replies use the flag queue: a reviewer who can see the
@@ -824,3 +882,37 @@ filter, private `/tmp`, only the state directory writable.
   tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
   receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and
   queues them itself. The `/v1` API, agent runs and workflows still lease a separate slot for each call they make.
+- Workflow triggers, retries and bundles (1.5.0, Sprint 32b, B-3903, B-3906, B-3909): a workflow's own event and
+  schedule triggers start runs as the person who published the version, with what they hold when the trigger fires;
+  re-publishing makes the publisher the owner, so whoever publishes takes the runs on. The loop rule for event triggers
+  covers only workflows: an event caused by a chain of workflow runs is not delivered to a workflow in the chain, and
+  is dropped at `WORKFLOW_EVENT_MAX_DEPTH`, but the chain is not shared with plugins, app record triggers, sub-workflows
+  or agents until B-4101's chain context replaces it (a plugin that starts a workflow whose events start that plugin
+  again stops only at each kind's own limit and at the rate limits). The chain is carried in-process while a run
+  executes and on the firing row; an effect that leaves through another job (a file version a step writes, whose
+  `file.uploaded` comes from the scan job) is not traced, and `WORKFLOW_EVENT_RATE_PER_MINUTE` bounds it. Workspace
+  scoping relies on the event naming its workspace (`data.workspace`, or the audit target's `workspace`): audit
+  actions mostly name none, so only tenant-level workflows receive them. An event trigger's run input holds the event
+  envelope, sealed like any run input; the firing row keeps it sealed too. A retry of a step that writes (an HTTP
+  `POST` or `PUT`, a record step) may send it again (validation warns); retries are not idempotent beyond what the
+  remote side ensures. A redriven dead letter replays the failed run from its failed step as the admin who redrives it,
+  not as the run's original owner. Workflow bundles are signed with an HMAC key in the KMS
+  (`<OPENBAO_KEY_PREFIX>workflow-bundles`), so, like app bundles, they verify only on installations that share that
+  key; the signature proves where a bundle came from, not that its graph is safe, so an import is a draft that the
+  importer reviews and publishes, and publishing validates every re-bound reference again.
+- Workflows 2 steps (1.5.0, Sprint 32c). Domain built-ins (B-3904: `messages.send`, `feed.post`,
+  `files.write_version`, `groups.create_event`, `channels.answer`) are platform registry entries that every tenant
+  sees; a tenant cannot unpublish them, only keep them out of its agents and steps (and a write always needs an
+  approval or a confirmed call). They act as the caller, so an agent or workflow can do whatever its owner can do in
+  those domains once the call is approved; the label check stops data going somewhere labelled lower, but nothing
+  stops a write at or above the data's label. Only feed posts record their source (`workflow-run`, `agent-run`…);
+  messages, file versions, events and channel answers show the owner as the author, with the source only in the
+  workflow's own run and audit entries. Approval-form answers are validated like a submission but not written
+  anywhere, and are kept in full in the `workflow.approval.approved` audit entry at the run's label (as the run's
+  outputs are), so a field that must not reach the audit chain must not be on such a form. Notify steps tell cleared,
+  active users only, but resolve usernames in the whole tenant and skip unknown ones silently (counted, not named). A
+  webhook step's endpoint is checked against the operator's and the tenant's host rules at save and at run time; the
+  managed webhook it creates is visible on the Webhooks screen and removed with the workflow, but not when the step
+  is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
+  step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
+  confidential data from reaching it).

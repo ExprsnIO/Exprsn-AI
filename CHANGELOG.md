@@ -2,6 +2,26 @@
 
 ## 1.5.0 (in progress)
 
+### The IMAP channel adapter against a real IMAP server (Sprint 34b, B-3605)
+
+- `server/test/integration/imap.test.ts` (gated on `TEST_IMAP_URL` and `TEST_IMAP_SMTP_URL`): mail delivered by SMTP
+  to a GreenMail mailbox becomes a channel thread through the `channels.imap-poll` job and imapflow, is answered
+  through the outbox, a reply in the thread joins the session, nothing is marked seen, and a wrong password is
+  recorded on the cursor and audited once. `server/test/integration/greenmail.sh` starts GreenMail 2.1.5 (pinned by
+  digest) with a throwaway CA; the CI integration job runs it.
+- CI: the MongoDB service's health command no longer has a `: ` in a plain YAML scalar.
+
+### WebDAV for the file store (Sprint 34b, B-3201 to B-3203)
+
+- Migration `036c_dav_files` (WebDAV locks). Described in `docs/dav.md`.
+- B-24 workspaces, folders and files as WebDAV collections under `/dav/files/` (and `~shared` for files shared with
+  the caller): PUT through quarantine, the type check and ClamAV, scanned before it answers and unreadable until it
+  passes; every PUT a new version; DELETE to the trash; Finder's AppleDouble files dropped (B-3201).
+- COPY and MOVE for files and folders (MOVE keeps ids, so versions and shares stay; COPY scans again), LOCK and UNLOCK
+  (class 2, exclusive and shared, depth 0 and infinity, lock-null resources, the If header with lock tokens) (B-3202).
+- Quota properties (RFC 4331) and 507 over a limit; the `litmus` suite (basic, copymove, props, locks, http) in CI,
+  all passing (B-3203). `JobQueue.runNow` and `FileService.scanNow` run a version's scan job before answering.
+
 ### Custom feed generators, relay commit verification and the RSVP race (Sprint 31b, B-3001 to B-3003, B-3604, B-3603)
 
 - Feed generators (B-3001): a tenant's feeds are served by its own AT-Protocol identity, whose DID document gains a

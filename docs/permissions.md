@@ -36,7 +36,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 22 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
@@ -44,10 +44,10 @@ An admin permission is any permission outside the member baseline: a custom role
 | `models:manage` | yes | 5 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 17 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `profiles:manage` | yes | 20 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `tools:manage` | yes | 15 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `agents:manage` | yes | 19 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `workflows:manage` | yes | 7 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
+| `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -73,7 +73,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `plugins:manage` | yes | 15 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `labels:manage` | yes | 10 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `atproto:link` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `files:read` | no | 13 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `files:read` | no | 41 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `files:write` | no | 13 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `moderation:check` | yes | 3 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `moderation:report` | no | 2 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -86,13 +86,13 @@ An admin permission is any permission outside the member baseline: a custom role
 | `apps:design` | yes | 17 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
-| `groups:read` | no | 38 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `groups:read` | no | 42 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `groups:write` | no | 19 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `groups:manage` | yes | 0 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:manage` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |  |
-| `social:read` | no | 9 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `social:write` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `social:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `social:write` | no | 16 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `social:manage` | yes | 1 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -100,9 +100,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `feed:write` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:manage` | yes | 3 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `roles:manage` | yes | 16 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
-| `calendars:read` | no | 24 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `calendars:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `calendars:write` | no | 0 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `contacts:read` | no | 24 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `contacts:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `contacts:write` | no | 0 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `pds:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `imports:run` | yes | 15 | x | x |  | x |  |  | x | x |  |  |  |  |  |  |
@@ -217,15 +217,19 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 - `GET /api/agents`
 - `GET /api/workflow-tools`
+- `GET /api/workflow-callees`
 - `GET /api/workflows`
 - `GET /api/workflows/{id}`
+- `GET /api/workflows/{id}/callers`
 - `GET /api/workflows/{id}/runs`
+- `GET /api/workflows/{id}/triggers`
 - `POST /api/agent-schedules`
 - `POST /api/runs`
 - `POST /api/workflow-runs/{id}/cancel`
 - `POST /api/workflow-runs/{id}/replay`
 - `POST /api/workflows/{id}/runs`
 - `POST /api/workflows/{id}/validate`
+- `GET /api/workflows/{id}/used-by`
 - `DELETE /api/agent-schedules/{id}` (or another permission)
 - `GET /api/agent-schedules` (or another permission)
 - `GET /api/agent-schedules/{id}` (or another permission)
@@ -237,6 +241,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
 - `POST /api/runs/{id}/steps/{n}/decision` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
+- `POST /api/chains/{id}/nodes/{node}/replay` (or another permission)
 
 ### `scripts:run`
 
@@ -367,6 +374,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/registry/{id}/versions` (or another permission)
 - `POST /api/runs/{id}/steps/{n}/decision` (or another permission)
 - `POST /api/scripts/{id}/promote` (or another permission)
+- `GET /api/admin/registry/{id}/used-by` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
 
 ### `agents:manage`
 
@@ -389,6 +399,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/cancel` (or another permission)
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
+- `GET /api/admin/registry/{id}/used-by` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
+- `POST /api/chains/{id}/nodes/{node}/replay` (or another permission)
 
 ### `mcp:manage`
 
@@ -407,12 +421,20 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 ### `workflows:manage`
 
 - `DELETE /api/workflows/{id}`
+- `GET /api/workflow-dead-letters`
+- `GET /api/workflows/{id}/bundle`
+- `PATCH /api/workflows/{id}/triggers`
+- `POST /api/workflow-dead-letters/{id}/redrive`
 - `POST /api/workflows`
+- `POST /api/workflows/import`
 - `POST /api/workflows/{id}/dry-run`
 - `POST /api/workflows/{id}/publish`
 - `POST /api/workflows/{id}/tool`
 - `PUT /api/workflows/{id}/draft`
+- `GET /api/events/catalogue` (or another permission)
 - `POST /api/scripts/{id}/promote` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
 
 ### `guardrails:manage`
 
@@ -924,6 +946,34 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/files/usage`
 - `POST /api/file-links/download`
 - `POST /api/file-links/open`
+- `COPY /dav` (or another permission)
+- `COPY /dav/{path}` (or another permission)
+- `DELETE /dav` (or another permission)
+- `DELETE /dav/{path}` (or another permission)
+- `GET /dav` (or another permission)
+- `GET /dav/{path}` (or another permission)
+- `HEAD /dav` (or another permission)
+- `HEAD /dav/{path}` (or another permission)
+- `MKCALENDAR /dav` (or another permission)
+- `MKCALENDAR /dav/{path}` (or another permission)
+- `MKCOL /dav` (or another permission)
+- `MKCOL /dav/{path}` (or another permission)
+- `MOVE /dav` (or another permission)
+- `MOVE /dav/{path}` (or another permission)
+- `OPTIONS /dav` (or another permission)
+- `OPTIONS /dav/{path}` (or another permission)
+- `PROPFIND /dav` (or another permission)
+- `PROPFIND /dav/{path}` (or another permission)
+- `PROPPATCH /dav` (or another permission)
+- `PROPPATCH /dav/{path}` (or another permission)
+- `PUT /dav` (or another permission)
+- `PUT /dav/{path}` (or another permission)
+- `REPORT /dav` (or another permission)
+- `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `files:write`
 
@@ -1100,6 +1150,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /dav/{path}` (or another permission)
 - `REPORT /dav` (or another permission)
 - `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `groups:write`
 
@@ -1155,6 +1209,11 @@ No route requires it directly; handlers and services check it.
 
 ### `social:read`
 
+- `GET /api/people/me`
+- `GET /api/people/{id}`
+- `GET /api/people/{id}/avatar`
+- `GET /api/presence`
+- `GET /api/presence/me`
 - `GET /api/social/blocks`
 - `GET /api/social/followers`
 - `GET /api/social/following`
@@ -1167,17 +1226,21 @@ No route requires it directly; handlers and services check it.
 
 ### `social:write`
 
+- `DELETE /api/people/me/avatar`
 - `DELETE /api/social/blocks/{id}`
 - `DELETE /api/social/following/{id}`
 - `DELETE /api/social/lists/{id}`
 - `DELETE /api/social/lists/{id}/members/{userId}`
 - `DELETE /api/social/mutes/{id}`
+- `PATCH /api/people/me`
 - `PATCH /api/social/lists/{id}`
 - `POST /api/social/blocks`
 - `POST /api/social/following`
 - `POST /api/social/lists`
 - `POST /api/social/lists/{id}/members`
 - `POST /api/social/mutes`
+- `PUT /api/people/me/avatar`
+- `PUT /api/presence/me`
 - `PUT /api/social/settings`
 
 ### `social:manage`
@@ -1296,6 +1359,10 @@ No route requires it directly; handlers and services check it.
 - `PUT /dav/{path}` (or another permission)
 - `REPORT /dav` (or another permission)
 - `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `calendars:write`
 
@@ -1327,6 +1394,10 @@ No route requires it directly; handlers and services check it.
 - `PUT /dav/{path}` (or another permission)
 - `REPORT /dav` (or another permission)
 - `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `contacts:write`
 
@@ -1440,6 +1511,7 @@ These need a signed-in session or credential and no particular permission; the h
 - `PUT /api/me/workspace`
 - `DELETE /api/me/app-passwords/{id}`
 - `GET /api/me/app-passwords`
+- `GET /api/me/dav`
 - `POST /api/me/app-passwords`
 
 ## Public routes

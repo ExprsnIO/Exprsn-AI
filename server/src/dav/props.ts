@@ -1,9 +1,10 @@
 import { MAX_OBJECT_BYTES } from './ics.js';
+import { MAX_LOCK_SECONDS, type LockRow } from './locks.js';
 import { BASE, can, hrefFor, type DavCtx, type Node } from './tree.js';
 import { el, escText, href, NS } from './xml.js';
 
 /*
- * Live properties (RFC 4918 15, RFC 3744 for the privilege set, RFC 6578 sync tokens, RFC 4791 and
+ * Live properties (RFC 4918 15, RFC 3744 for the privilege set, RFC 4331 quotas (B-32), RFC 6578 sync tokens, RFC 4791 and
  * RFC 6352 for calendars and address books, and the calendarserver.org and Apple extensions clients ask for).
  */
 
@@ -25,8 +26,10 @@ export const PROTECTED = new Set([
 /** Live properties that PROPPATCH changes on a personal calendar or address book. */
 export const COLLECTION_SETTABLE = new Set([D('displayname'), C('calendar-description'), R('addressbook-description'), IC('calendar-color'), C('calendar-timezone')]);
 
+const FILE_KINDS = new Set(['files', 'workspace', 'folder', 'file', 'shared']);
 const SYNC_KINDS = new Set(['calendar', 'group-calendar', 'book', 'directory']);
 
+export const isFileNode = (n: Node): boolean => FILE_KINDS.has(n.kind) && n.kind !== 'files';
 export const supportsSync = (n: Node): boolean => SYNC_KINDS.has(n.kind);
 
 export function reportsFor(n: Node): string[] {
@@ -40,10 +43,27 @@ export function reportsFor(n: Node): string[] {
 const principalHref = (ctx: DavCtx) => hrefFor(['principals', ctx.p.userId], true);
 const httpDate = (ms: number) => new Date(ms).toUTCString();
 
+export function activeLock(l: LockRow, pathHref: string): string {
+  const secs = Math.max(0, Math.round((l.expires_at - Date.now()) / 1000));
+  return el(
+    D('activelock'),
+    el(D('locktype'), el(D('write'))) +
+      el(D('lockscope'), el(D(l.scope))) +
+      el(D('depth'), l.depth === 'infinity' ? 'infinity' : '0') +
+      (l.owner ? el(D('owner'), l.owner) : '') +
+      el(D('timeout'), `Second-${Math.min(secs, MAX_LOCK_SECONDS)}`) +
+      el(D('locktoken'), href(l.token)) +
+      el(D('lockroot'), href(pathHref))
+  );
+}
+
 export interface PropContext {
   ctx: DavCtx;
   /** Sync token for collections that keep one (computed once per collection). */
   syncToken?: (n: Node) => Promise<string | null>;
+  /** B-32: live locks on a file-store node, and its storage quota (RFC 4331). */
+  locks?: (n: Node) => Promise<LockRow[]>;
+  quota?: (n: Node) => Promise<{ used: number; available: number | null } | null>;
 }
 
 /** The names of the live properties a node has (for allprop and propname). */
@@ -55,6 +75,8 @@ export function liveNames(n: Node, o: { allprop?: boolean } = {}): string[] {
   if (n.created != null) out.push(D('creationdate'));
   if (!n.collection) out.push(D('getcontenttype'));
   if (!n.collection && n.length != null) out.push(D('getcontentlength'));
+  if (isFileNode(n) && n.kind !== 'shared') out.push(D('supportedlock'), D('lockdiscovery'));
+  if (n.kind === 'workspace' || n.kind === 'folder') out.push(D('quota-used-bytes'), D('quota-available-bytes'));
   if (n.kind === 'principal') out.push(D('principal-URL'), C('calendar-home-set'), R('addressbook-home-set'), C('calendar-user-address-set'), CS('email-address-set'), D('principal-collection-set'));
   if (n.kind === 'root') out.push(D('principal-collection-set'));
   if (n.kind === 'cal-home' || n.kind === 'book-home' || n.kind === 'calendar' || n.kind === 'book' || n.kind === 'principal') out.push(D('owner'));
@@ -62,7 +84,7 @@ export function liveNames(n: Node, o: { allprop?: boolean } = {}): string[] {
   if (n.kind === 'calendar' || n.kind === 'group-calendar') out.push(C('supported-calendar-component-set'), C('supported-calendar-data'), C('max-resource-size'), C('calendar-description'), IC('calendar-color'));
   if (n.kind === 'book' || n.kind === 'directory') out.push(R('supported-address-data'), R('max-resource-size'), R('addressbook-description'));
   // allprop leaves out what is expensive or only meaningful when asked for (RFC 4918 9.1).
-  if (o.allprop) return out.filter((x) => ![D('current-user-privilege-set'), D('supported-report-set'), C('calendar-description'), IC('calendar-color'), R('addressbook-description')].includes(x));
+  if (o.allprop) return out.filter((x) => ![D('current-user-privilege-set'), D('supported-report-set'), D('quota-used-bytes'), D('quota-available-bytes'), C('calendar-description'), IC('calendar-color'), R('addressbook-description')].includes(x));
   return out;
 }
 
@@ -94,13 +116,27 @@ export async function liveValue(pc: PropContext, n: Node, name: string): Promise
       return ['cal-home', 'book-home', 'calendar', 'book', 'principal'].includes(n.kind) ? href(principalHref(ctx)) : undefined;
     case D('current-user-privilege-set'): {
       const privs = ['read', 'read-current-user-privilege-set', ...(n.writable ? ['write', 'write-properties', 'write-content', 'bind', 'unbind'] : [])];
-      if (!n.writable && n.deadKey) privs.push('write-properties');
+      if (!n.writable && n.deadKey && n.kind !== 'file') privs.push('write-properties');
       return privs.map((p) => el(D('privilege'), el(D(p)))).join('');
     }
     case D('supported-report-set'):
       return reportsFor(n)
         .map((r) => el(D('supported-report'), el(D('report'), el(r))))
         .join('');
+    case D('supportedlock'):
+      return isFileNode(n) && n.kind !== 'shared' ? ['exclusive', 'shared'].map((s) => el(D('lockentry'), el(D('lockscope'), el(D(s))) + el(D('locktype'), el(D('write'))))).join('') : undefined;
+    case D('lockdiscovery'): {
+      if (!isFileNode(n) || n.kind === 'shared' || !pc.locks) return undefined;
+      return (await pc.locks(n)).map((l) => activeLock(l, hrefFor(l.root.slice(BASE.length + 1).split('/'), false))).join('');
+    }
+    case D('quota-used-bytes'):
+    case D('quota-available-bytes'): {
+      if ((n.kind !== 'workspace' && n.kind !== 'folder') || !pc.quota) return undefined;
+      const q = await pc.quota(n);
+      if (!q) return undefined;
+      if (name === D('quota-used-bytes')) return String(q.used);
+      return q.available == null ? undefined : String(Math.max(0, q.available));
+    }
     case D('sync-token'):
     case CS('getctag'): {
       if (!supportsSync(n) || !pc.syncToken) return undefined;

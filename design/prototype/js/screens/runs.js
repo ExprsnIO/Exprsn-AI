@@ -3,6 +3,9 @@
 
   const LANES = { think: 'Thinking', do: 'Doing', calc: 'Calculating' };
   const RUNS = [
+    { id: '8a12', agent: 'Close planner 1.0.0', started: '14:20:04', by: 'Mara Okafor', dur: 'waiting 7 min', status: 'waiting on approval', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2], map: 'planner', chain: 'n0', sum: { think: '1 step, 1,904 tokens', do: '1 call, 1 waiting', calc: 'none' }, budget: { steps: [2, 20], tokens: [1904, 20000] } },
+    { id: '8a13', agent: 'Close broker 1.0.0', started: '14:20:11', by: 'Mara Okafor', dur: 'waiting 7 min', status: 'waiting on approval', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2, 3, 4], map: 'broker', chain: 'n2', caller: '8a12', sum: { think: '2 steps, 2,210 tokens', do: '2 calls, 1 waiting', calc: 'none' }, budget: { steps: [4, 18], tokens: [2210, 18096] } },
+    { id: '8a14', agent: 'Clerk 1.0.0', started: '14:20:52', by: 'Mara Okafor', dur: 'waiting 7 min', status: 'waiting on approval', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2], map: 'clerk', chain: 'n6', caller: '8a13', sum: { think: '1 step, 1,118 tokens', do: '1 call, 1 waiting', calc: 'none' }, budget: { steps: [2, 14], tokens: [1118, 14706] } },
     { id: '7f3a', agent: 'Data analyst agent', started: '14:02:11', by: 'Mara Okafor', dur: 'finished in 14.6 s', status: 'failed step', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2, 3, 4, 5, 6, 7], sum: { think: '3 steps, 2,914 tokens', do: '2 calls, 1.9 s', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [7, 20], tokens: [2914, 10000] } },
     { id: '7e91', agent: 'Data analyst agent', started: '13:41:05', by: 'Mara Okafor', dur: 'finished in 9.8 s', status: 'succeeded', label: 'confidential', convo: 'c4', convoTitle: 'Reconcile card feed', steps: [1, 2, 3, 4, 5], sum: { think: '2 steps, 2,306 tokens', do: '1 call, 0.8 s', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [5, 20], tokens: [2306, 10000] } },
     { id: '7d40', agent: 'quarterly-variance v1', started: '13:12:48', by: 'Mara Okafor', dur: 'waiting 12 min', status: 'waiting on approval', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2, 3, 4, 5, 6], waiting: true, sum: { think: '2 steps, 2,306 tokens', do: '1 call, 1 waiting', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [6, 20], tokens: [2306, 10000] } },
@@ -24,37 +27,185 @@
     7: { n: 7, lane: 'think', title: 'Report failure', meta: 'low, 608 tok', body: 'proposal: tell the user the issue was not created',
       kv: [['Proposal', 'tell the user the issue was not created'], ['Thinking level', 'low, 608 tokens'], ['Profile', '<a href="#" data-goprofile="chat-default">chat-default</a> (cheaper profile for reporting)'], ['Input', 'the step 6 failure as a Context-tier segment'], ['Label', UI.label('confidential', { sm: true })]] }
   };
+  // Steps of the three runs of the close chain (Close planner delegates to Close broker, which starts a workflow and
+  // delegates to Clerk, whose write call is held three levels down).
+  const L = () => UI.label('confidential', { sm: true });
+  const CHAIN_STEPS = {
+    planner: {
+      1: { n: 1, lane: 'think', title: 'Plan', meta: 'medium, 1,904 tok', body: 'proposal: call agent:Close broker with the close notice task', kv: [['Proposal', '<span class="mono">agent:Close broker {"task": "Get the September close notice posted."}</span>'], ['Thinking level', 'medium, 1,904 tokens'], ['Profile', '<a href="#" data-goprofile="analyst">analyst</a>'], ['Delegates offered', 'agent:Close broker (from the definition\'s delegates)'], ['Label', L()]] },
+      2: { n: 2, lane: 'do', title: 'agent:Close broker', meta: 'delegate, waiting 7 min', body: 'waiting on run 8a13, Close broker 1.0.0, with 18 steps and 18,096 tokens left', waiting: true, awaiting: '8a13', kv: [['Tool', '<span class="mono">agent:Close broker</span> (delegate 1.0.0)'], ['Child run', '<a href="#" data-run="8a13" class="mono">8a13</a>, Close broker 1.0.0'], ['Budgets passed down', '18 steps, 18,096 tokens, 594 s, 6 tool calls: what this run had left'], ['Guardrail', 'tool-call checkpoint allowed'], ['Waiting on', 'the chain: feed.post is held in Clerk, two delegations down'], ['Label', L()]] }
+    },
+    broker: {
+      1: { n: 1, lane: 'think', title: 'Plan', meta: 'medium, 1,240 tok', body: 'proposal: call workflow:quarterly-variance for the figures', kv: [['Proposal', '<span class="mono">workflow:quarterly-variance {"period": "2026-09"}</span>'], ['Thinking level', 'medium, 1,240 tokens'], ['Workflows offered', 'workflow:quarterly-variance (listed in the definition, not published as a tool)'], ['Label', L()]] },
+      2: { n: 2, lane: 'do', title: 'workflow:quarterly-variance', meta: 'read, 38.4 s', body: '{run: wr_01J8M4R2, output: {variance: "51380.00"}}, typed by the trigger schema', kv: [['Tool', '<span class="mono">workflow:quarterly-variance</span> v1'], ['Workflow run', '<a href="#" data-gowfrun="wr_01J8M4R2" class="mono">wr_01J8M4R2</a>'], ['Result', '<span class="mono">{"variance": "51380.00"}</span>, valid against the output schema'], ['Duration', '38.4 s'], ['Label', L()]] },
+      3: { n: 3, lane: 'think', title: 'Delegate the post', meta: 'low, 970 tok', body: 'proposal: call agent:Clerk to post the notice', kv: [['Proposal', '<span class="mono">agent:Clerk {"task": "Post the September close notice."}</span>'], ['Thinking level', 'low, 970 tokens'], ['Label', L()]] },
+      4: { n: 4, lane: 'do', title: 'agent:Clerk', meta: 'delegate, waiting 7 min', body: 'waiting on run 8a14, Clerk 1.0.0', waiting: true, awaiting: '8a14', kv: [['Tool', '<span class="mono">agent:Clerk</span> (delegate 1.0.0)'], ['Child run', '<a href="#" data-run="8a14" class="mono">8a14</a>, Clerk 1.0.0'], ['Budgets passed down', '14 steps, 14,706 tokens, 545 s, 4 tool calls'], ['Waiting on', 'feed.post, held in Clerk'], ['Label', L()]] }
+    },
+    clerk: {
+      1: { n: 1, lane: 'think', title: 'Plan', meta: 'low, 1,118 tok', body: 'proposal: call feed.post with the notice; skills close-checklist and variance-analysis loaded', kv: [['Proposal', '<span class="mono">feed.post {"body": "September close is done: variance 51,380.00 EUR."}</span>'], ['Skills loaded', 'close-checklist 1.2.0, which builds on variance-analysis 3.0.0 (loaded first, once)'], ['Label', L()]] },
+      2: { n: 2, lane: 'do', title: 'feed.post', meta: 'write, waiting 7 min', body: 'held for approval; decided at the root run 8a12', waiting: true, held: true, kv: [['Tool', '<span class="mono">feed.post</span> 1.0.0'], ['Side effect class', UI.pill('write', 'warn')], ['Must approve', 'the run\'s owner or a tool admin'], ['Decided from', 'the root run <a href="#" data-run="8a12" class="mono">8a12</a>, where the path is shown'], ['Label', L()]] }
+    }
+  };
   const DIVIDERS = { 1: 'Policy allowed, tool ceiling confidential, confirmed by M. Okafor' };
+  const CHAIN_ID = 'ch_01J8M4QZ';
+  const KIND_TEXT = { 'agent-run': 'agent run', 'tool-call': 'tool call', 'workflow-run': 'workflow run', 'skill-load': 'skill', 'chat-turn': 'chat turn', 'plugin-action': 'plugin action', 'app-trigger': 'app trigger' };
+  const NODE_STATE = { running: 'info', succeeded: 'ok', failed: 'danger', refused: 'danger', waiting: 'info', cancelled: 'warn' };
+
+  /** The close chain as GET /api/chains/:id returns it, for the scenario in st (held, decided, or a child's budget stop). */
+  function chainTree(st) {
+    const fail = !!st.chainFail; const dec = st.chainDecided || null; const held = !fail && !dec;
+    const N = (id, depth, kind, name, o) => Object.assign({ id, depth, kind, name, ref: null, label: 'confidential', state: 'succeeded', error: null, errorType: null, decision: null, usage: { tokens: 0, steps: 0, wallMs: 0, gpuMs: 0 }, started: '14:20:04', dur: '', guardrails: [], replay: null, held: null, children: [] }, o);
+    const u = (tokens, steps, wallMs, gpuMs) => ({ tokens, steps, wallMs, gpuMs });
+    const run = held ? 'waiting' : 'succeeded';
+    const n9 = fail ? N('n9', 5, 'tool-call', 'ledger.query@1.1.2', { started: '14:20:58', dur: '0.8 s', decision: 'allow', usage: u(0, 0, 800, 0) })
+      : N('n9', 5, 'tool-call', 'feed.post@1.0.0', { started: '14:20:58', dur: held ? 'waiting 7 min' : '1.0 s', state: held ? 'waiting' : dec === 'reject' ? 'failed' : 'succeeded', errorType: dec === 'reject' ? 'rejected' : null, error: dec === 'reject' ? 'Rejected by Mara Okafor: not before the controller signs off. Nothing was run.' : null, decision: 'allow', usage: u(0, 0, held ? 0 : 1000, 0) });
+    const clerk = N('n6', 4, 'agent-run', 'Clerk', { ref: '8a14', started: '14:20:52', dur: held ? 'waiting 7 min' : fail ? '9.1 s' : '7.6 s', state: fail ? 'failed' : run, errorType: fail ? 'budget' : null, error: fail ? 'Clerk 1.0.0 stopped at its budget: 4 of 4 tool calls' : null, usage: u(held ? 1118 : 1498, held ? 2 : 3, held ? 5400 : 7600, held ? 3100 : 4200), guardrails: [['tool-call', 'allow', '14:20:58']], replay: { fromStep: [1, 2] }, held: held ? { tool: 'feed.post', side: 'write', since: '14:20:58', approvers: 'the run\'s owner or a tool admin', step: 2 } : null,
+      children: [N('n7', 5, 'skill-load', 'variance-analysis@3.0.0', { started: '14:20:52', dur: '4 ms', usage: u(0, 0, 4, 0) }), N('n8', 5, 'skill-load', 'close-checklist@1.2.0', { started: '14:20:52', dur: '3 ms', usage: u(0, 0, 3, 0) }), n9] });
+    const broker = N('n2', 2, 'agent-run', 'Close broker', { ref: '8a13', started: '14:20:11', dur: held ? 'waiting 7 min' : '52.0 s', state: run, usage: u(held ? 2210 : 2750, held ? 4 : 5, held ? 41000 : 43000, held ? 9800 : 11000), guardrails: [['tool-call', 'allow', '14:20:13'], ['tool-call', 'allow', '14:20:51']], replay: { fromStep: [1, 2, 3, 4] },
+      children: [
+        N('n3', 3, 'tool-call', 'workflow:quarterly-variance', { started: '14:20:13', dur: '38.4 s', decision: 'allow', usage: u(0, 0, 0, 0), children: [N('n4', 4, 'workflow-run', 'quarterly-variance', { ref: 'wr_01J8M4R2', started: '14:20:13', dur: '38.2 s', usage: u(1180, 4, 38200, 6100), guardrails: [['context', 'allow', '14:20:40']], replay: { fromNode: ['ledger', 'variance', 'narrative', 'approve', 'post'] } })] }),
+        N('n5', 3, 'tool-call', 'agent:Clerk', { started: '14:20:51', dur: held ? 'waiting 7 min' : '9.1 s', state: fail ? 'failed' : run, errorType: fail ? 'budget' : null, error: fail ? 'child_budget: Clerk 1.0.0 stopped at its budget: 4 of 4 tool calls' : null, decision: 'allow', children: [clerk] })
+      ] });
+    const rootNode = N('n0', 0, 'agent-run', 'Close planner', { ref: '8a12', dur: held ? 'waiting 7 min' : '1 m 4 s', state: run, usage: u(held ? 1904 : 2516, held ? 2 : 3, held ? 6100 : 8300, held ? 5200 : 6400), guardrails: [['tool-call', 'allow', '14:20:09']], replay: { fromStep: [1, 2] },
+      children: [N('n1', 1, 'tool-call', 'agent:Close broker', { started: '14:20:09', dur: held ? 'waiting 7 min' : '55.4 s', state: run, decision: 'allow', children: [broker] })] });
+    const sum = (n) => { const s = n.children.map(sum).reduce((a, k) => ({ tokens: a.tokens + k.tokens, steps: a.steps + k.steps, wallMs: a.wallMs + k.wallMs, gpuMs: a.gpuMs + k.gpuMs, nodes: a.nodes + k.nodes }), Object.assign({ nodes: 1 }, n.usage)); n.subtree = s; return s; };
+    const totals = sum(rootNode);
+    const flat = []; (function walk(n, parent) { n.parent = parent; flat.push(n); n.children.forEach((k) => walk(k, n)); })(rootNode, null);
+    const pathTo = (n) => { const out = []; for (let x = n; x; x = x.parent) out.unshift(x); return out; };
+    const heldList = flat.filter((n) => n.held).map((n) => ({ node: n, path: pathTo(n) }));
+    return { id: CHAIN_ID, state: held ? 'running' : 'done', label: 'confidential', principal: 'Mara Okafor', budgets: { tokens: 20000, steps: 40, wallMs: 600000, gpuMs: 120000 }, used: totals, totals, maxDepth: 5, limit: 8, root: rootNode, flat, held: heldList };
+  }
   const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
   const fmt = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const statusPill = (s) => UI.pill(s, s === 'succeeded' ? 'ok' : s === 'failed step' ? 'danger' : s === 'waiting on approval' ? 'info' : s === 'budget stop' ? 'warn' : s === 'running' ? 'info' : '');
 
+  const STYLE = '<style>'
+    + '.runs-list{display:flex;flex-direction:column;gap:2px}.runs-page > *{flex-shrink:0}'
+    + '.runs-tree{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;min-width:0}.runs-tree .runs-tree{padding-left:12px;margin-left:10px;border-left:1px solid var(--line)}'
+    + '.runs-node{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;width:100%;min-width:0;text-align:left;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--fg);font:inherit;font-size:13px;cursor:pointer}'
+    + '.runs-node:hover{background:var(--panel2)}.runs-node.selected{background:var(--accent-tint);border-color:var(--accent)}.runs-node.held{border-color:var(--info-fg);border-style:dashed}'
+    + '.runs-node .nk{font-size:11px;color:var(--fg2);border:1px solid var(--line);border-radius:4px;padding:0 5px;white-space:nowrap}.runs-node .nn{font-weight:600;overflow-wrap:anywhere;min-width:0}.runs-node .nm{font-size:12px;color:var(--muted);margin-left:auto;white-space:nowrap}'
+    + '.runs-path{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;font-size:12px}.runs-path .sep{color:var(--muted)}.runs-path b{font-weight:600;overflow-wrap:anywhere}'
+    + '</style>';
+
+  function leftPane(st, allRuns, activeId, statusOf) {
+    return '<div class="leftpane"><div class="hstack"><div class="eyebrow grow">Recent runs</div>' + UI.iconbtn('refresh', 'Refresh', { cls: 'sm ghost', attrs: 'data-refresh' }) + '</div>' + UI.search('Filter runs', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
+      + '<div class="runs-list">' + allRuns.filter((r) => !st.query || (r.id + ' ' + r.agent + ' ' + r.status + ' ' + r.by).toLowerCase().includes(st.query.toLowerCase())).map((r) => UI.listItem('<span class="mono">' + esc(r.id) + '</span>', esc(r.agent) + ' · ' + esc(r.started) + ', ' + esc(r.by), { active: r.id === activeId, attrs: 'data-run="' + esc(r.id) + '"', right: statusPill(statusOf(r)) })).join('') + '</div>'
+      + '<div class="muted" style="font-size:12px;margin-top:auto">Runs from agents, workflows and background jobs in Finance Ops. Cost and latency break down by worker class.</div></div>';
+  }
+
+  const nodeTitle = (n) => (n.kind === 'tool-call' || n.kind === 'skill-load' ? n.name : n.name + (n.ref ? ' ' + n.ref : ''));
+  const pathHtml = (path) => '<span class="runs-path">' + path.map((n, i) => (i ? '<span class="sep" aria-hidden="true">›</span>' : '') + '<span><span class="muted">' + esc(KIND_TEXT[n.kind]) + '</span> <b>' + esc(n.name) + '</b></span>').join('') + '</span>';
+
+  function heldNotice(h) {
+    const x = h.node.held;
+    return UI.notice('<b>Held down the chain, depth ' + h.node.depth + '.</b> <span class="mono">' + esc(x.tool) + '</span> (' + esc(x.side) + ') in ' + esc(h.node.name) + ', waiting since ' + esc(x.since) + ' on ' + esc(x.approvers) + '. The whole chain waits; decide it here, at the root.<div style="margin-top:6px">' + pathHtml(h.path) + '</div>', 'info', '<span class="hstack gap6">' + UI.btn('Reject', { size: 'sm', attrs: 'data-heldreject="' + esc(h.node.id) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-heldapprove="' + esc(h.node.id) + '"' }) + '</span>');
+  }
+
+  /** Approve and reject a call held in the chain, from the root (POST /api/chains/:id/held/:node/decision). */
+  function bindHeld(ctx, chain) {
+    const st = ctx.state;
+    const find = (id) => chain.held.find((h) => h.node.id === id);
+    ctx.on('click', '[data-heldapprove]', async (e, t) => {
+      const h = find(t.dataset.heldapprove); if (!h) return;
+      const ok = await ctx.confirm({ title: 'Approve ' + esc(h.node.held.tool) + ' from the root', tag: h.node.held.side, tone: 'primary', ok: 'Approve', body: '<div class="fg2">The call runs in ' + esc(h.node.name) + ', where it waits, as Mara Okafor. Every run above it continues when it returns. Written to the audit chain as chain.held.decided and agent.call.approved.</div>' + pathHtml(h.path), kv: [['Chain', '<span class="mono">' + CHAIN_ID + '</span>'], ['Depth', String(h.node.depth)], ['Arguments', '<span class="mono">{"body": "September close is done: variance 51,380.00 EUR."}</span>']] });
+      if (!ok) return;
+      st.chainDecided = 'approve'; ctx.rerender(); ctx.toast('Approved from the root. Clerk posted the notice and the chain resumed.', 'ok');
+    });
+    ctx.on('click', '[data-heldreject]', (e, t) => {
+      const h = find(t.dataset.heldreject); if (!h) return;
+      ctx.modal({ title: 'Reject ' + esc(h.node.held.tool), body: '<div class="fg2">Nothing is run. ' + esc(h.node.name) + ' is told who rejected it and why, and goes on.</div>' + pathHtml(h.path) + UI.field('Reason (given to the agent and the owner)', UI.textarea('Not before the controller signs off.', { rows: 2, attrs: 'data-note' })), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reject', { kind: 'danger', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { App.closeOverlay(); st.chainDecided = 'reject'; ctx.rerender(); ctx.toast('Rejected from the root. Clerk heard why and the chain went on.', 'warn'); }); } });
+    });
+  }
+
+  /** The chain tree (GET /api/chains/:id): the tree on the page, the selected node in the inspector. */
+  function renderChain(root, ctx, chain, allRuns, statusOf) {
+    const st = ctx.state;
+    const sel = chain.flat.find((n) => n.id === st.node) || chain.root;
+    const rootRun = allRuns.find((r) => r.id === chain.root.ref);
+    const row = (n) => '<li><button type="button" class="runs-node' + (n.id === sel.id ? ' selected' : '') + (n.held ? ' held' : '') + '" data-node="' + n.id + '" aria-current="' + (n.id === sel.id ? 'true' : 'false') + '"><span class="nk">' + esc(KIND_TEXT[n.kind]) + '</span><span class="nn">' + esc(nodeTitle(n)) + '</span>' + UI.pill(n.held ? 'held' : n.state, n.held ? 'info' : NODE_STATE[n.state] || '') + (n.errorType ? UI.pill(n.errorType, 'danger') : '') + '<span class="nm">' + (n.subtree.tokens ? fmt(n.subtree.tokens) + ' tok · ' : '') + esc(n.dur) + '</span></button>'
+      + (n.children.length ? '<ul class="runs-tree">' + n.children.map(row).join('') + '</ul>' : '') + '</li>';
+    const b = chain.budgets; const u = chain.used;
+    const secsOf = (ms) => (ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + ' s');
+    const page = '<div class="page runs-page">'
+      + UI.pagehead('Chain ' + CHAIN_ID.slice(-8), 'Started by ' + esc(chain.principal) + ' from run <a href="#" data-run="' + esc(chain.root.ref) + '" class="mono">' + esc(chain.root.ref) + '</a> · ' + UI.pill(chain.state === 'done' ? 'done' : 'running', chain.state === 'done' ? 'ok' : 'info') + ' · ' + UI.label(chain.label, { sm: true }) + ' high-water mark', UI.btn('Back to run ' + esc(chain.root.ref), { attrs: 'data-backrun' }) + UI.btn('Audit entries', { kind: 'ghost', attrs: 'data-chainaudit' }))
+      + chain.held.map((h) => heldNotice(h)).join('')
+      + (st.chainFail ? UI.notice('<b>Clerk stopped at its budget.</b> Its caller, Close broker, received <span class="mono">child_budget: Clerk 1.0.0 stopped at its budget: 4 of 4 tool calls</span> as a tool error and answered without the post. Replay Clerk from a step to try again as a new chain.', 'danger') : '')
+      + '<div class="stats">' + UI.stat(String(chain.totals.nodes), 'Nodes', 'depth ' + chain.maxDepth + ' of ' + chain.limit) + UI.stat(fmt(u.tokens), 'Tokens', 'of ' + fmt(b.tokens) + ' for the chain') + UI.stat(String(u.steps), 'Steps', 'of ' + b.steps) + UI.stat(secsOf(u.wallMs), 'Wall time', 'of ' + secsOf(b.wallMs)) + UI.stat(secsOf(u.gpuMs), 'GPU time', 'the cost meter') + '</div>'
+      + UI.panel('Invocations', '<ul class="runs-tree" aria-label="Chain tree">' + row(chain.root) + '</ul>', { actions: '<span class="muted" style="font-size:12px">Siblings in the order they began</span>' })
+      + '<div class="muted" style="font-size:12px">The tree\'s token total, ' + fmt(chain.totals.tokens) + ', equals what the chain metered (' + fmt(u.tokens) + '): every charge goes to its node and to the root in the same increment. The principal never changes and the label only rises along the chain.</div>'
+      + '</div>';
+    const g = sel.guardrails;
+    const runLink = sel.kind === 'agent-run' ? '<a href="#" data-run="' + esc(sel.ref) + '" class="mono">' + esc(sel.ref) + '</a>' : sel.kind === 'workflow-run' ? '<a href="#" data-gowfrun="' + esc(sel.ref) + '" class="mono">' + esc(sel.ref) + '</a>' : '<span class="muted">none, part of its parent run</span>';
+    const replayOpts = sel.replay ? (sel.replay.fromStep ? sel.replay.fromStep.map((n) => ({ value: String(n), label: 'Step ' + n })) : sel.replay.fromNode.map((n) => ({ value: n, label: n }))) : [];
+    const inspector = '<aside class="inspector w360"><div class="hstack"><div class="eyebrow grow">' + esc(KIND_TEXT[sel.kind]) + ', depth ' + sel.depth + '</div>' + UI.pill(sel.held ? 'held' : sel.state, sel.held ? 'info' : NODE_STATE[sel.state] || '') + '</div>'
+      + '<div class="mono" style="font-size:14px;overflow-wrap:anywhere">' + esc(nodeTitle(sel)) + '</div>'
+      + (sel.error ? UI.notice('<b>' + esc(sel.errorType || 'failed') + '.</b> ' + esc(sel.error), 'danger') : '')
+      + UI.kv([['Run', runLink], ['Label', UI.label(sel.label, { sm: true })], ['Guardrail decision', esc(sel.decision || (g.length ? g.map((x) => x[0] + ' ' + x[1]).join(', ') : 'none here'))], ['Tokens', fmt(sel.usage.tokens) + ' here, ' + fmt(sel.subtree.tokens) + ' with what it called'], ['Steps', sel.usage.steps + ' here, ' + sel.subtree.steps + ' in the subtree'], ['Wall time', secsOf(sel.usage.wallMs)], ['GPU time', secsOf(sel.usage.gpuMs)], ['Began', esc(sel.started)], ['Duration', esc(sel.dur)], ['Typed error', sel.errorType ? '<span class="mono">' + esc(sel.errorType) + '</span>' : 'none']], 1)
+      + (g.length ? '<div class="eyebrow">Guardrail decisions</div>' + UI.kv(g.map((x) => [esc(x[0]), UI.pill(x[1], x[1] === 'allow' ? 'ok' : 'danger') + ' <span class="muted">' + esc(x[2]) + '</span>']), 1) : '')
+      + (sel.held ? '<div class="eyebrow">Held here</div>' + UI.kv([['Call', '<span class="mono">' + esc(sel.held.tool) + '</span> ' + UI.pill(sel.held.side, 'warn')], ['Waiting since', esc(sel.held.since)], ['Who decides', esc(sel.held.approvers)]], 1) + '<div class="hstack gap6">' + UI.btn('Reject', { attrs: 'data-heldreject="' + sel.id + '"' }) + UI.btn('Approve', { kind: 'primary', attrs: 'data-heldapprove="' + sel.id + '"' }) + '</div>' : '')
+      + (sel.replay ? '<div class="eyebrow">Replay</div>' + UI.field(sel.replay.fromStep ? 'From step' : 'From workflow step', UI.select(replayOpts, replayOpts[0].value, 'data-replayfrom')) + '<div>' + UI.btn('Replay from this node', { icon: 'refresh', attrs: 'data-replaynode' }) + '</div><div class="muted" style="font-size:12px">Runs again as a new chain with the same principal and label; earlier steps are reused from the checkpoints.</div>' : '<div class="muted" style="font-size:12px">' + esc(KIND_TEXT[sel.kind]) + ' nodes do not replay on their own; replay the run above them.</div>')
+      + (sel.ref ? '<div>' + UI.btn('Audit entries for ' + esc(sel.ref), { kind: 'ghost', size: 'sm', attrs: 'data-nodeaudit' }) + '</div>' : '')
+      + '</aside>';
+    root.innerHTML = STYLE + leftPane(st, allRuns, rootRun ? rootRun.id : '', statusOf) + page + inspector;
+
+    ctx.on('click', '[data-node]', (e, t) => { st.node = t.dataset.node; ctx.rerender(); const b2 = ctx.$('[data-node="' + st.node + '"]'); if (b2) b2.focus(); });
+    ctx.on('click', '[data-run]', (e, t) => { e.preventDefault(); st.chain = null; st.run = t.dataset.run; st.sel = null; ctx.rerender(); });
+    ctx.on('click', '[data-backrun]', () => { st.chain = null; st.run = chain.root.ref; st.sel = null; ctx.rerender(); });
+    ctx.on('click', '[data-gowfrun]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { wf: 'quarterly-variance', run: t.dataset.gowfrun }); });
+    ctx.on('click', '[data-chainaudit], [data-nodeaudit]', () => ctx.navigate('usage-audit', { tab: 'audit' }));
+    ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
+    ctx.on('click', '[data-refresh]', () => ctx.toast('Chain refreshed.'));
+    ctx.on('click', '[data-replaynode]', async () => {
+      const from = ctx.$('[data-replayfrom]').value;
+      const ok = await ctx.confirm({ title: 'Replay ' + esc(nodeTitle(sel)), tone: 'primary', ok: 'Replay', body: '<div class="fg2">The ' + esc(KIND_TEXT[sel.kind]) + ' runs again from ' + (sel.replay.fromStep ? 'step ' : '') + esc(from) + ' as the root of a new chain, as Mara Okafor at ' + esc(sel.label) + '. Approvals are asked for again. Audited chain.node.replayed.</div>', kv: [['Chain', '<span class="mono">' + CHAIN_ID + '</span>'], ['Node', esc(sel.id) + ', depth ' + sel.depth]] });
+      if (!ok) return;
+      ctx.toast('Replay queued as a new chain from ' + (sel.replay.fromStep ? 'step ' : '') + esc(from) + '.', 'ok');
+    });
+    bindHeld(ctx, chain);
+  }
+
   App.register({
     id: 'runs', title: 'Runs', summary: 'Agent run timeline by worker class, step inspector, budget, replay',
-    crumb: (st, params) => ['Runs', (params && params.run) || st.run || '7f3a'],
+    crumb: (st, params) => (st.chain || (params && params.chain) ? ['Runs', 'Chain ' + CHAIN_ID.slice(-8)] : ['Runs', (params && params.run) || st.run || '7f3a']),
     label: (st, params) => (RUNS.find((r) => r.id === ((params && params.run) || st.run || '7f3a')) || RUNS[0]).label,
-    commands: [{ label: 'Replay a run from a step', sub: 'Runs', run(app) { app.stateFor('runs').openReplay = true; app.render(); } }],
+    commands: [{ label: 'Replay a run from a step', sub: 'Runs', run(app) { app.stateFor('runs').openReplay = true; app.render(); } }, { label: 'Open the chain tree of run 8a12', sub: 'Runs', run(app) { const st = app.stateFor('runs'); st.chain = CHAIN_ID; st.node = 'n0'; app.render(); } }],
     states: [
-      { title: 'Proposal denied', tone: 'danger', text: 'Cedar denied the tool call: the tool\'s egress ceiling is internal and the run is confidential. The thinking step receives the denial as data.', apply(ctx) { ctx.state.run = '7f3a'; ctx.state.denied = true; ctx.state.sel = 2; ctx.rerender(); } },
-      { title: 'Budget stop', tone: 'warn', text: 'The run stopped at 20 of 20 steps. The last checkpoint is kept and the owner can raise the limit and resume.', apply(ctx) { ctx.state.run = '7c22'; ctx.state.sel = 7; ctx.state.resumed = false; ctx.rerender(); } },
-      { title: 'Traceable figure', tone: 'ok', text: 'Selecting a number in the final answer highlights the calculating step that produced it.', apply(ctx) { ctx.state.run = '7f3a'; ctx.state.showAnswer = true; ctx.state.sel = 3; ctx.rerender(); setTimeout(() => { const a = ctx.$('#runs-answer'); if (a) a.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 30); } },
-      { title: 'Waiting on approval', tone: 'info', text: 'A doing step shows who must approve and how long it has waited.', apply(ctx) { ctx.state.run = '7d40'; ctx.state.sel = 6; ctx.state.decided = null; ctx.rerender(); } }
+      { title: 'Proposal denied', tone: 'danger', text: 'Cedar denied the tool call: the tool\'s egress ceiling is internal and the run is confidential. The thinking step receives the denial as data.', apply(ctx) { ctx.state.chain = null; ctx.state.run = '7f3a'; ctx.state.denied = true; ctx.state.sel = 2; ctx.rerender(); } },
+      { title: 'Budget stop', tone: 'warn', text: 'The run stopped at 20 of 20 steps. The last checkpoint is kept and the owner can raise the limit and resume.', apply(ctx) { ctx.state.chain = null; ctx.state.run = '7c22'; ctx.state.sel = 7; ctx.state.resumed = false; ctx.rerender(); } },
+      { title: 'Traceable figure', tone: 'ok', text: 'Selecting a number in the final answer highlights the calculating step that produced it.', apply(ctx) { ctx.state.chain = null; ctx.state.run = '7f3a'; ctx.state.showAnswer = true; ctx.state.sel = 3; ctx.rerender(); setTimeout(() => { const a = ctx.$('#runs-answer'); if (a) a.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 30); } },
+      { title: 'Waiting on approval', tone: 'info', text: 'A doing step shows who must approve and how long it has waited.', apply(ctx) { ctx.state.run = '7d40'; ctx.state.sel = 6; ctx.state.decided = null; ctx.state.chain = null; ctx.rerender(); } },
+      { title: 'Chain tree', tone: 'neutral', text: 'A run that delegated opens its chain as a tree: every agent run, tool call, skill load and workflow run under the root, with timing, tokens, labels and guardrail decisions. The tree\'s token total equals what the chain metered.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n0'; st.chainFail = false; st.chainDecided = null; ctx.rerender(); } },
+      { title: 'Held three levels down', tone: 'info', text: 'A write call held in a delegate\'s delegate pauses the whole chain. It is approved from the root run, with the path from the root to the call shown.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n6'; st.chainFail = false; st.chainDecided = null; ctx.rerender(); } },
+      { title: 'Child failed with a typed error', tone: 'danger', text: 'Clerk stopped at its budget. Close broker received the failure as a tool error starting child_budget and answered without the post; the node records errorType budget.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n5'; st.chainFail = true; st.chainDecided = null; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      if (ctx.params.run) { st.run = ctx.params.run; delete ctx.params.run; }
+      if (ctx.params.run) { st.run = ctx.params.run; st.chain = null; delete ctx.params.run; }
+      if (ctx.params.chain) { st.chain = CHAIN_ID; st.node = ctx.params.node || 'n0'; delete ctx.params.chain; delete ctx.params.node; }
       st.run = st.run || '7f3a'; st.query = st.query || ''; st.extra = st.extra || [];
       const allRuns = st.extra.concat(RUNS);
+      const chain = chainTree(st);
+      const nodeOf = (r) => (r.chain ? chain.flat.find((n) => n.id === r.chain) : null);
+      const chainStatus = (r) => { const n = nodeOf(r); return !n ? r.status : n.state === 'waiting' ? 'waiting on approval' : n.state === 'failed' ? 'failed step' : n.state === 'succeeded' ? 'succeeded' : n.state; };
+      if (st.chain) { renderChain(root, ctx, chain, allRuns, chainStatus); return; }
       const run = allRuns.find((r) => r.id === st.run) || RUNS[0];
       if (st.sel == null || !run.steps.includes(st.sel)) st.sel = run.id === '7f3a' ? 3 : run.steps[run.steps.length - 1];
       const denied = st.denied && run.id === '7f3a';
       const waiting = run.waiting && !st.decided;
       const budgetStop = run.budgetStop && !st.resumed;
-      const status = denied ? 'failed step' : run.waiting ? (st.decided === 'approve' ? 'succeeded' : st.decided === 'deny' ? 'failed step' : run.status) : run.budgetStop ? (st.resumed ? 'running' : run.status) : run.status;
+      const status = run.chain ? chainStatus(run) : denied ? 'failed step' : run.waiting ? (st.decided === 'approve' ? 'succeeded' : st.decided === 'deny' ? 'failed step' : run.status) : run.budgetStop ? (st.resumed ? 'running' : run.status) : run.status;
 
       // Steps for this run, with state overrides.
       const step = (n) => {
-        const s = Object.assign({}, STEPS[n]);
+        const s = Object.assign({}, run.map ? CHAIN_STEPS[run.map][n] : STEPS[n]);
+        const cn = nodeOf(run);
+        if (cn && s.waiting && cn.state !== 'waiting') {
+          s.waiting = false;
+          if (s.held) { s.failed = !!st.chainFail || st.chainDecided === 'reject'; s.meta = st.chainFail ? 'not reached' : st.chainDecided === 'reject' ? 'write, rejected' : 'write, 1.0 s'; s.body = st.chainFail ? 'not reached: the run stopped at its budget first' : st.chainDecided === 'reject' ? 'rejected at the root by Mara Okafor; nothing was posted' : 'posted to the Finance Ops feed as Mara Okafor, approved at the root'; }
+          else if (st.chainFail && run.map === 'broker') { s.failed = true; s.meta = 'delegate, failed'; s.body = 'child_budget: Clerk 1.0.0 stopped at its budget: 4 of 4 tool calls'; }
+          else { s.meta = 'delegate, done'; s.body = 'returned {run, agent, answer} from run ' + s.awaiting; }
+        }
         if (denied && n === 2) { s.meta = 'denied by Cedar'; s.body = 'not run: tool egress ceiling internal, run label confidential'; s.failed = true; s.kv = [['Tool', '<span class="mono">ledger.query</span>'], ['Decision', UI.pill('denied', 'danger')], ['Policy', '<span class="mono">tenant-egress v4</span>, evaluated in 3 ms'], ['Reason', 'the tool\'s egress ceiling is internal and the run is confidential'], ['Returned to', 'step 5 as a Context-tier segment labelled <span class="mono">policy.denial</span>'], ['Label', UI.label('confidential', { sm: true })]]; }
         if (run.waiting && n === 6) {
           if (waiting) { s.meta = 'write, waiting 12 min'; s.body = 'waiting on approval: Mara Okafor (tool admin), requested 13:12:56'; s.failed = false; s.waiting = true; s.kv = [['Tool', '<span class="mono">jira-internal.create_issue</span>'], ['Side effect class', UI.pill('write', 'warn')], ['Must approve', 'Mara Okafor, tool admin for jira-internal'], ['Requested', '13:12:56, from the run, not from chat'], ['Waited', '12 min of a 60 min window'], ['If nobody approves', 'the step fails and step 7 reports it'], ['Label', UI.label('confidential', { sm: true })]]; }
@@ -71,12 +222,14 @@
       const rows = steps.map((s) => {
         let h = '<div class="runs-row"><div class="runs-n num">' + s.n + '</div>' + ['think', 'do', 'calc'].map((l) => '<div>' + (s.lane === l ? card(s) : '') + '</div>').join('') + '</div>';
         if (DIVIDERS[s.n]) h += '<div class="runs-div"><div></div><div class="runs-divline' + (denied ? ' danger' : '') + '"><span class="rule"></span><span>' + (denied ? 'Policy denied: tool egress ceiling internal, run is confidential. The denial goes back to the thinking step as data.' : esc(DIVIDERS[s.n])) + '</span><span class="rule"></span></div></div>';
-        if (s.waiting) h += '<div class="runs-div"><div></div><div class="runs-divline info"><span class="rule"></span><span>Approval requested from Mara Okafor, 12 min ago. The run holds its checkpoint until a decision.</span><span class="rule"></span></div></div>';
+        if (s.waiting) h += '<div class="runs-div"><div></div><div class="runs-divline info"><span class="rule"></span><span>' + (s.awaiting ? 'Waiting on the child run ' + esc(s.awaiting) + '. This run holds its checkpoint and continues with the child\'s answer or its typed error.' : s.held ? 'Held for approval. The chain waits; the call is decided from the root run 8a12.' : 'Approval requested from Mara Okafor, 12 min ago. The run holds its checkpoint until a decision.') + '</span><span class="rule"></span></div></div>';
         return h;
       }).join('');
 
       const selStep = steps.find((s) => s.n === st.sel) || steps[0];
       const inspectorActions = selStep.lane === 'calc' ? UI.btn('Copy with provenance', { attrs: 'data-copyprov' })
+        : selStep.awaiting && selStep.waiting ? '<div class="hstack gap6 wrap">' + UI.btn('Open the child run', { attrs: 'data-run="' + selStep.awaiting + '"' }) + UI.btn('Open the chain tree', { kind: 'ghost', attrs: 'data-openchain' }) + '</div>'
+        : selStep.held && selStep.waiting ? UI.notice('Held for the chain rooted at run <span class="mono">8a12</span>. It is decided there, where the path from the root is shown.', 'info', UI.btn('Open the root run', { size: 'sm', attrs: 'data-run="8a12"' }))
         : selStep.waiting ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>'
         : selStep.failed ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + selStep.n + '"' })
         : selStep.n === 5 ? UI.btn(st.showAnswer ? 'Hide final answer' : 'Show final answer', { attrs: 'data-toggleanswer' })
@@ -88,7 +241,7 @@
       const budgetNotice = budgetStop ? UI.notice('<b>Budget stop.</b> The run stopped at 20 of 20 steps. The last checkpoint is kept; raise the limit to resume from step 21.', 'warn', UI.btn('Raise limit and resume', { size: 'sm', attrs: 'data-raise' })) : st.resumed && run.budgetStop ? UI.notice('Step limit raised to 40 by Mara Okafor. The run resumed from the kept checkpoint at step 21.', 'ok') : '';
       const stepsUsed = run.budget.steps[0], stepsMax = st.resumed && run.budgetStop ? 40 : run.budget.steps[1];
 
-      root.innerHTML = '<style>'
+      root.innerHTML = STYLE + '<style>'
         + '.runs-list{display:flex;flex-direction:column;gap:2px}.runs-page > *{flex-shrink:0}'
         + '.runs-lanes,.runs-row{display:grid;grid-template-columns:28px repeat(3,minmax(0,1fr));gap:10px;align-items:start}'
         + '.runs-lane{display:flex;justify-content:space-between;align-items:center;gap:4px 8px;flex-wrap:wrap;padding-bottom:6px;border-bottom:1px solid var(--line)}'
@@ -99,11 +252,11 @@
         + '.runs-fig{font:inherit;font-family:var(--sans);font-size:13px;font-weight:600;padding:0 5px;border:1px solid var(--line);border-radius:4px;background:var(--panel);cursor:pointer;color:var(--fg)}.runs-fig:hover,.runs-fig.on{border-color:var(--ok-fg);background:var(--ok-bg);color:var(--ok-fg)}'
         + '@media (max-width:900px){.runs-lanes{display:none}.runs-row{grid-template-columns:28px 1fr}.runs-row > div:empty{display:none}}'
         + '</style>'
-        + '<div class="leftpane"><div class="hstack"><div class="eyebrow grow">Recent runs</div>' + UI.iconbtn('refresh', 'Refresh', { cls: 'sm ghost', attrs: 'data-refresh' }) + '</div>' + UI.search('Filter runs', 'data-search', st.query).replace('class="search"', 'class="search" style="width:100%"')
-        + '<div class="runs-list">' + allRuns.filter((r) => !st.query || (r.id + ' ' + r.agent + ' ' + r.status + ' ' + r.by).toLowerCase().includes(st.query.toLowerCase())).map((r) => UI.listItem('<span class="mono">' + esc(r.id) + '</span>', esc(r.agent) + ' · ' + esc(r.started) + ', ' + esc(r.by), { active: r.id === run.id, attrs: 'data-run="' + esc(r.id) + '"', right: statusPill(r.id === run.id ? status : r.status) })).join('') + '</div>'
-        + '<div class="muted" style="font-size:12px;margin-top:auto">Runs from agents, workflows and background jobs in Finance Ops. Cost and latency break down by worker class.</div></div>'
+        + leftPane(st, allRuns, run.id, (r) => (r.id === run.id ? status : chainStatus(r)))
         + '<div class="page runs-page">'
-        + UI.pagehead('Run ' + run.id + ', ' + run.agent, 'Started ' + esc(run.started) + ' by ' + esc(run.by) + ', ' + esc(run.dur) + ' · ' + statusPill(status) + ' · from <a href="#" data-goconvo="' + esc(run.convo) + '">' + esc(run.convoTitle) + '</a>', UI.btn('Open trace', { attrs: 'data-opentrace' }) + UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find((s) => s.failed) || { n: 1 }).n + '"' }))
+        + UI.pagehead('Run ' + run.id + ', ' + run.agent, 'Started ' + esc(run.started) + ' by ' + esc(run.by) + ', ' + esc(run.dur) + ' · ' + statusPill(status) + (run.caller ? ' · delegated by run <a href="#" data-run="' + esc(run.caller) + '" class="mono">' + esc(run.caller) + '</a>' : ' · from <a href="#" data-goconvo="' + esc(run.convo) + '">' + esc(run.convoTitle) + '</a>'), (run.chain ? UI.btn('Chain tree', { icon: 'branch', attrs: 'data-openchain' }) : '') + UI.btn('Open trace', { attrs: 'data-opentrace' }) + UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find((s) => s.failed) || { n: 1 }).n + '"' }))
+        + (run.chain && !run.caller ? chain.held.map((h) => heldNotice(h)).join('') : '')
+        + (run.chain && !run.caller && !chain.held.length && chain.state === 'done' ? UI.notice('The chain finished: ' + chain.totals.nodes + ' nodes, ' + fmt(chain.totals.tokens) + ' tokens metered to this root.', 'ok', UI.btn('Chain tree', { size: 'sm', attrs: 'data-openchain' })) : '')
         + budgetNotice
         + '<div class="runs-lanes"><div></div>' + ['think', 'do', 'calc'].map((l) => '<div class="runs-lane"><span class="ln">' + UI.icon(l === 'think' ? 'brain' : l === 'do' ? 'play' : 'calc', 12) + esc(LANES[l]) + '</span><span class="ls">' + esc(laneSum[l]) + '</span></div>').join('') + '</div>'
         + rows
@@ -120,7 +273,10 @@
         + '<div class="muted" style="font-size:12px">Metered per class: tokens for thinking, calls and seconds for doing, CPU-seconds for calculating. Trace <span class="mono">' + TRACE.slice(0, 8) + '…</span></div>'
         + '</aside>';
 
-      ctx.on('click', '[data-run]', (e, t) => { st.run = t.dataset.run; st.sel = null; st.showAnswer = false; ctx.rerender(); });
+      ctx.on('click', '[data-run]', (e, t) => { e.preventDefault(); st.run = t.dataset.run; st.sel = null; st.showAnswer = false; ctx.rerender(); });
+      ctx.on('click', '[data-openchain]', () => { st.chain = CHAIN_ID; st.node = run.chain || 'n0'; ctx.rerender(); });
+      ctx.on('click', '[data-gowfrun]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { wf: 'quarterly-variance', run: t.dataset.gowfrun }); });
+      bindHeld(ctx, chain);
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-refresh]', () => ctx.toast('Run list refreshed over /ws.'));
       ctx.on('click', '.runs-card', (e, t) => { st.sel = +t.dataset.step; ctx.rerender(); });

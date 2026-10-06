@@ -23,8 +23,10 @@ import { guardrailRoutes } from '../routes/guardrails.js';
 import { registryAdminRoutes } from '../routes/admin/registry.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
+import { chainRoutes } from '../routes/chains.js';
 import { scriptRoutes } from '../routes/scripts.js';
 import { workflowRoutes } from '../routes/workflows.js';
+import { workflowOperationRoutes } from '../routes/workflow-operations.js';
 import { mediaRoutes } from '../routes/media.js';
 import { imageRoutes } from '../routes/images.js';
 import { knowledgeRoutes } from '../routes/knowledge.js';
@@ -58,6 +60,7 @@ import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
 import { socialRoutes } from '../routes/social.js';
+import { peopleRoutes } from '../routes/people.js';
 import { messagingRoutes } from '../routes/messaging.js';
 import { feedRoutes } from '../routes/feed.js';
 import type { Services } from '../services.js';
@@ -191,7 +194,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path)) ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path) || req.path === '/people/me/avatar') ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -225,7 +228,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', registryAdminRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
   api.use(agentRoutes(s));
+  api.use(chainRoutes(s));
   api.use(scriptRoutes(s));
+  api.use(workflowOperationRoutes(s)); // 1.5.0, Sprint 32b: triggers, dead letters, bundles (before :id routes)
   api.use(workflowRoutes(s));
   api.use(mediaRoutes(s));
   api.use(imageRoutes(s));
@@ -274,6 +279,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(channelRoutes(s));
   // Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules.
   api.use(socialRoutes(s));
+  // 1.5.0, Sprint 34c (B-5801, B-5802): profiles and presence.
+  api.use(peopleRoutes(s));
   // Sprint 28b (B-2601 to B-2605): person-to-person messaging.
   api.use(messagingRoutes(s));
   // Sprint 28c (B-2701 to B-2705): the workspace feed.
