@@ -269,7 +269,7 @@
 - A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
   replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
 - B-3104 stays partial: the fixtures were written from the clients' documented requests. Capturing real traffic
-  (B-3606) moved to 1.6.0: macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
+  (B-3606) was dropped by the owner on 2026-10-06 (not needed); it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
   needs a per-host certificate trust on the capturing Mac that was not approved.
 
 ### Import repositories and model import (Sprint 30, B-3801 to B-3803)

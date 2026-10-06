@@ -43,7 +43,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | **Done** |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | **Done** |
 | 33 | Moved to 1.7.0 on 2026-10-05 as Sprint 38 | — | Moved |
-| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Person (new); Runs, Registry, Settings, Messages and feed, Groups and events | **Done** (B-3606 moved to 1.6.0) |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Person (new); Runs, Registry, Settings, Messages and feed, Groups and events | **Done** (B-3606 dropped) |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | Next |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; real DAV client traffic (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
@@ -68,8 +68,7 @@ and a platform load test. The version is `1.5.0`: Sprints 29 to 34 delivered the
 Sprints 20 to 23 the [1.3.0 backlog](Backlog-1.3.0.md), Sprints 16 to 19 the [1.2.0 backlog](Backlog-1.2.0.md) and
 Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 35 to 37 are planned in the
 [1.6.0 backlog](Backlog-1.6.0.md): the platform administration screens, model servers beyond Ollama, groups depth,
-tenant templates, blob deduplication, vault extras, capability tokens and the real DAV client capture (B-3606, moved
-from 1.5.0); Sprint 38 in the [1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, and dataset import
+tenant templates, blob deduplication, vault extras, and capability tokens; Sprint 38 in the [1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, and dataset import
 (groomed 2026-10-05 with `design/grooming/groom.mjs`).
 
 ---
@@ -1164,8 +1163,8 @@ triggers; chaining agents, skills, tools and workflows with checks at publish, h
 chain view; profiles and presence with the Person page; and the IMAP adapter against GreenMail in CI. Sprint 33 (chat
 invocation and dataset import) moved to 1.7.0. Migrations `031_access` to `036c_dav_files`. The suite at release: 985
 passed and 1 skipped across 86 files; the PostgreSQL and MySQL integration suites, `litmus`, GreenMail and the PDS
-interop job in CI. B-3104 (the DAV conformance run) stays partial and B-3606 (capturing real DAV client traffic) moved
-to 1.6.0: macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host
+interop job in CI. B-3104 (the DAV conformance run) stays partial and B-3606 (capturing real DAV client traffic) was
+dropped by the owner (not needed); it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host
 certificate trust on the owner's Mac that was not approved. The known gaps of each sprint are in
 [docs/security.md](docs/security.md). Tagging `v1.5.0` and publishing the image and chart remain with the maintainers.
 

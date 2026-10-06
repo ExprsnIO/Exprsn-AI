@@ -13,5 +13,16 @@
     "@atproto/repo": "0.11.0",
     "@did-plc/lib": "0.0.4",
     "tsx": "4.23.15"
+  },
+  "overrides": {
+    "nodemailer": "^10.0.15",
+    "sharp": "^0.35.5",
+    "kysely": "^0.29.6",
+    "@connectrpc/connect-node": {
+      "undici": "^6.29.0"
+    },
+    "@opentelemetry/auto-instrumentations-node": "^0.81.0",
+    "@opentelemetry/instrumentation-pg": "^0.75.0",
+    "@opentelemetry/propagator-jaeger": "^2.12.0"
   }
 }
