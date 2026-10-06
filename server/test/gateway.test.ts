@@ -179,6 +179,26 @@ describe('Ollama gateway', () => {
     expect(Number(thrash.headers['retry-after'])).toBeGreaterThan(500); // until the oldest load leaves the ten-minute window
   });
 
+  it('sends each request with its placement\'s keep-alive, so serving a pinned model keeps it pinned', async () => {
+    const { pool, model } = await approvedModel();
+    const pl = (await a.agent.get('/api/admin/models').expect(200)).body.find((x: { id: string }) => x.id === model.id).pools[0];
+    await patch(a, `/api/admin/placements/${pl.placementId}`, { residency: 'pinned' }).expect(200);
+    const prof = (await post(a, '/api/admin/profiles', { name: 'pinned-8b', displayName: 'Pinned 8B', modelId: model.id, poolId: pool.id, label: 'internal' }).expect(201)).body;
+    await post(a, `/api/admin/profiles/${prof.id}/publish`).expect(200);
+    const chatOnce = async () => {
+      await h.s.gateway.pollAll();
+      const r = await h.s.gateway.resolve(h.tenantId, 'pinned-8b');
+      const lease = await h.s.gateway.acquire(r.profile, r.model, 'internal', { signal: new AbortController().signal });
+      for await (const _ of lease.client.chat({ model: r.model.name, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal)) void _;
+      lease.release();
+      return ollama.requests.filter((x) => x.path === '/api/chat').at(-1)!.body.keep_alive;
+    };
+    // Ollama resets a model's expiry on every request: without -1 here, the first answer would unpin the model
+    expect(await chatOnce()).toBe(-1);
+    await patch(a, `/api/admin/placements/${pl.placementId}`, { residency: 'warm' }).expect(200);
+    expect(await chatOnce()).toBe('30m');
+  });
+
   it('records models that disappear without being unloaded as evicted', async () => {
     const { inst } = await approvedModel();
     await post(a, `/api/admin/instances/${inst.id}/load`, { model: 'llama3.1:8b' }).expect(200);

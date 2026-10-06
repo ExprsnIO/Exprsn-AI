@@ -2,6 +2,14 @@
 
 ## 1.6.0 (in progress)
 
+### Pinned models stay pinned while they serve
+
+- Every chat and embedding request to an Ollama instance now carries its placement's keep-alive: `-1` for a pinned
+  model, the instance's keep-alive for a warm one, none for a cold one (Ollama's default). Before, only explicit
+  loads set it, and Ollama resets a model's expiry on every request, so the first answer a pinned model gave set its
+  expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
+  instance poll.
+
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
 
 - The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
