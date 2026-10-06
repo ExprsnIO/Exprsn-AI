@@ -2,9 +2,10 @@ import { ulid } from 'ulid';
 import { json, type Db } from '../db/knex.js';
 import { clears, labelRank, type Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
-import { conflict, forbidden, notFound } from '../http/problem.js';
+import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { runChecks, type CheckResult } from './checks.js';
 import { schemaHash, type JsonSchema } from './schema.js';
+import type { ChainRefs, UsedBy } from '../chain/refs.js';
 
 export const ENTRY_KINDS = ['tool', 'skill', 'agent'] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
@@ -32,6 +33,10 @@ export interface AgentDefinition {
   systemPrompt?: string | null;
   tools: string[];
   skills?: string[];
+  /** B-4102: agents this agent may delegate to, offered as `agent:<name>` tools. */
+  agents?: string[];
+  /** B-4104: workflows (by name, in the run's workspace) this agent may start and await, offered as `workflow:<name>`. */
+  workflows?: string[];
   budgets: AgentBudgets;
   /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
   memory?: AgentMemoryPolicy;
@@ -161,7 +166,14 @@ export const referencedTools = (e: Pick<EntryRow, 'kind' | 'definition'>): strin
  * published to everyone and read-only here.
  */
 export class RegistryService {
+  /** B-4105: the reference graph; unset, the chain checks and the "used by" guard are skipped. */
+  private refs: ChainRefs | null = null;
+
   constructor(private readonly db: Db) {}
+
+  useRefs(refs: ChainRefs): void {
+    this.refs = refs;
+  }
 
   async get(tenantId: string, id: string): Promise<EntryRow | undefined> {
     const r = await this.db('registry_entries').where({ id }).andWhere((q) => q.where({ tenant_id: tenantId }).orWhereNull('tenant_id')).first();
@@ -226,7 +238,7 @@ export class RegistryService {
 
   async checks(e: EntryRow): Promise<CheckResult[]> {
     const refs = referencedTools(e);
-    return runChecks({
+    const out = runChecks({
       kind: e.kind,
       name: e.name,
       version: e.version,
@@ -238,6 +250,12 @@ export class RegistryService {
       ...(e.kind !== 'tool' ? { references: await this.referenceStatus(e.tenant_id ?? '', refs) } : {}),
       ...(e.kind === 'agent' ? { maxBudgets: MAX_BUDGETS } : {})
     });
+    // B-4105: delegates, skills and workflows published, within the ceiling, and no cycle that cannot end.
+    if (this.refs && e.kind !== 'tool' && e.tenant_id) {
+      const c = await this.refs.checkEntry(e);
+      out.push({ name: c.name, ok: c.ok, detail: c.detail });
+    }
+    return out;
   }
 
   async create(p: Principal, input: EntryInput, ownerName?: string): Promise<EntryRow> {
@@ -373,10 +391,14 @@ export class RegistryService {
     return next;
   }
 
-  /** Agents (and skills) in the tenant that still reference a tool name, for the retire warning. */
-  async referencedBy(tenantId: string, name: string): Promise<{ id: string; kind: EntryKind; name: string; version: string }[]> {
+  /**
+   * What still references an entry's name in the tenant (B-4105): agents, skills, workflow tools and workflows, with
+   * whether each may run now. Without the reference graph, the agents and skills naming a tool.
+   */
+  async referencedBy(tenantId: string, name: string, kind: EntryKind = 'tool'): Promise<UsedBy[]> {
+    if (this.refs) return this.refs.usedBy(tenantId, { kind, name });
     const rows = (await this.db('registry_entries').where({ tenant_id: tenantId }).whereIn('kind', ['agent', 'skill']).whereNot({ status: 'retired' })).map(fromRow);
-    return rows.filter((r) => referencedTools(r).includes(name)).map((r) => ({ id: r.id, kind: r.kind, name: r.name, version: r.version }));
+    return rows.filter((r) => kind === 'tool' && referencedTools(r).includes(name)).map((r) => ({ id: r.id, kind: r.kind, name: r.name, version: r.version, status: r.status, via: 'tool' as const, live: r.status === 'published' || r.status === 'deprecated' }));
   }
 
   async lifecycle(e: EntryRow, to: 'deprecated' | 'retired' | 'published', opts: { replacement?: string | null } = {}): Promise<EntryRow> {
@@ -386,6 +408,15 @@ export class RegistryService {
     if (to === 'retired' && from !== 'deprecated' && from !== 'draft') throw conflict('Deprecate the entry before retiring it.');
     if (to === 'published' && from !== 'deprecated') throw conflict('Only deprecated entries can be restored.');
     if (to === 'published' && e.approved_hash !== e.schema_hash) throw conflict('The schema changed since approval; submit a new version.');
+    // B-4105: retiring the last callable version of a name that something published still uses is refused.
+    if (to === 'retired' && (from === 'deprecated' || from === 'published')) {
+      const others = (await this.versions(e)).filter((v) => v.id !== e.id && (v.status === 'published' || v.status === 'deprecated'));
+      const live = others.length ? [] : (await this.referencedBy(e.tenant_id, e.name, e.kind)).filter((u) => u.live);
+      if (live.length) {
+        const names = [...new Set(live.map((u) => `${u.kind} ${u.name}${u.version ? ` ${u.kind === 'workflow' ? 'v' : ''}${u.version}` : ''}`))];
+        throw new HttpProblem(409, 'Still in use', `${e.name} is used by ${names.join(', ')}; change ${live.length === 1 ? 'it' : 'them'} to stop using it before retiring the last version.`, { extensions: { usedBy: live } });
+      }
+    }
     const next: EntryRow = { ...e, status: to, ...(to === 'deprecated' ? { replacement: opts.replacement ?? null } : {}), ...(to === 'published' ? { replacement: null } : {}), updated_at: Date.now() };
     await this.save(next);
     return next;

@@ -30,8 +30,11 @@ export const retryPolicySchema = z
   .strict();
 export type RetryPolicy = z.infer<typeof retryPolicySchema>;
 
-/** What a step on a failure edge receives from the step that failed. */
-export const FAILURE_PORT: PortSchema = { type: 'object', properties: { error: { type: 'string' }, step: { type: 'string' } }, required: ['error', 'step'] };
+/**
+ * What a step on a failure edge receives from the step that failed; B-4106 adds the typed error `type` (`failed`,
+ * `budget`, `cancelled`, `rejected`, `chain_limit`, `output`, `label`, `timeout`).
+ */
+export const FAILURE_PORT: PortSchema = { type: 'object', properties: { error: { type: 'string' }, step: { type: 'string' }, type: { type: 'string' } }, required: ['error', 'step', 'type'] };
 
 export const isFailureEdge = (e: Pick<WfEdge, 'branch'>): boolean => e.branch === 'failure';
 

@@ -19,7 +19,7 @@ export interface StepEnv {
   skill(name: string): SkillRefInfo | Missing | undefined;
 }
 
-function refsOf(g: WfGraph): Required<StepRefs> & { skills: string[] } {
+export function refsOf(g: WfGraph): Required<StepRefs> & { skills: string[] } {
   const out = { workflows: [] as { ref: string; version?: number }[], agents: [] as string[], tools: [] as string[], skills: [] as string[] };
   for (const n of g.nodes) {
     if (n.kind === 'model' && Array.isArray(n.config.skills)) out.skills.push(...n.config.skills.map(String));
