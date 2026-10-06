@@ -8,14 +8,15 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 71 items, 387 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 count in 1.6.0): P0 134, P1 193, P2 60.
+**Size.** 70 items, 385 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 and B-3606 count in 1.6.0): P0 132, P1 193, P2 60.
 At about 78 points a sprint (roughly five engineers) that is Sprints 29 to 34. Groomed by the owner on 2026-10-05 with
 `design/grooming/groom.mjs` (state in `design/grooming/grooming.json`, summary in `design/grooming/GROOMING.md`):
 WebDAV (B-32) moved to Sprint 34, the import wizard split between Sprints 31 and 33, Sprint 31 accepted at 93 points,
 the platform administration live screens (B-4202 to B-4207) moved to 1.6.0, and four 1.4.0 gaps, MongoDB connections,
 user profiles and presence added (B-58). Model servers beyond Ollama (B-43, 34 points), approved after the grooming,
 went to 1.6.0's Sprint 35. Sprint 33 (chat invocation, B-40, and the import wizard's dataset half, B-3804 to
-B-3807) moved to 1.7.0 on 2026-10-05. With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
+B-3807) moved to 1.7.0 on 2026-10-05. Capturing real DAV client traffic (B-3606) moved to 1.6.0's Sprint 36 on
+2026-10-06 (the owner's default; see Progress). With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -32,7 +33,7 @@ the same policy pipeline.
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `033_pds`, `033b_feeds`, `033c_imports` | **Done** |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2`, `034b_workflow_triggers`, `034c_workflow_steps` | **Done** |
 | 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
-| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3606, B-3501 | 66 | `036_chains`, `036b_profiles` | Next |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3501 | 64 (B-3606 moved to 1.6.0) | `036_chains`, `036b_profiles`, `036c_dav_files` | **Done** |
 
 The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
 
@@ -47,7 +48,7 @@ Its six live screens (B-3402 to B-3404, B-3407, B-3408, B-3413) were built in Sp
 management (B-3701 to B-3703), MongoDB connections (B-3602), and eleven live screens with their accessibility and
 reflow checks (B-3405, B-3409 to B-3412, B-3414, and Sprint 29's six). Unit suite 851 passed, Playwright 96 passed.
 **B-3104 is partial**: the conformance fixtures were written from the clients' documented requests; B-3606 captures
-real traffic in Sprint 34. Built ahead and parked: WebDAV for the file store (B-32, Sprint 34).
+real traffic in Sprint 34 (moved to 1.6.0, see Sprint 34). Built ahead and parked: WebDAV for the file store (B-32, Sprint 34).
 
 **Sprint 31: done** (PR #47): the AT-Protocol PDS with a post written to it appearing in the reference AppView in
 CI (B-2901 to B-2906), feed generators and their published records (B-3001 to B-3004), relay commit signatures
@@ -56,7 +57,7 @@ verified (B-3604), the RSVP race closed on all three databases (B-3603), import 
 renamed `033c_imports` so it runs after the Sprint 30 migrations. Unit suite 935 passed, the PostgreSQL and MySQL
 integration suites passed, Playwright 99 passed.
 
-**Sprint 32: done** (this PR): the chain context with one `CHAIN_MAX_DEPTH` and root budgets across chat turns,
+**Sprint 32: done** (branch `sprint-32`, merged into `sprint-34`): the chain context with one `CHAIN_MAX_DEPTH` and root budgets across chat turns,
 agent runs, workflow runs, tool calls, skill loads, plugin actions and app triggers (B-4101); sub-workflow, agent,
 `map` and `loop` steps and skills on model steps (B-3901, B-3902, B-3905); event and schedule triggers on the workflow
 itself, per-step retry, the on-failure edge and dead letters with redrive, and signed `exprsn-workflow/1` bundles
@@ -66,6 +67,23 @@ and the live Workflows screen (B-3910). The migration was built as three: `034_w
 and `034c_workflow_steps`. Known gaps recorded in `docs/security.md`: cost is metered as GPU time, not priced; a chat
 turn's own tokens are not charged to its chain; only feed posts record the run as their source; a redrive runs as the
 admin who redrives it.
+
+**Sprint 34: done** (this PR), and with it the release (B-3501): chaining across kinds, with agents delegating to
+agents, skills composing, workflows an agent lists, chain checks at publish with "used by", held calls decided from
+the root with typed errors, and the chain view with replay from a node (B-4102 to B-4107, migration `036_chains`);
+WebDAV for the file store with COPY, MOVE, locks, quotas and `litmus` in CI (B-3201 to B-3203, `036c_dav_files`);
+profiles and presence, with the Profile page and Settings panels live (B-5801, B-5802, `036b_profiles`); the IMAP
+channel adapter against GreenMail in CI (B-3605); and the chain tree boards and live screens (B-4108, B-4109, built on
+`sprint-34d`). Unit suite 985 passed and 1 skipped across 86 files. Known gaps recorded in `docs/security.md`: only
+cycles made entirely of steps that always run are refused at publish, a cycle through a model's choice is published
+with a warning and bounded at run time, and a later change elsewhere that closes a cycle is caught only when it is
+published; a delegate's steps and wall time count only at the root; WebDAV locks are advisory to the console and
+`/api/files`, there are no range requests and MOVE across workspaces is refused; presence follows shared workspaces
+only (not the profile's label or narrowed workspaces), idle is what the console reports, a chosen status has no
+expiry, and the avatar's file stays in the uploader's workspace file tree. **B-3606 moved to 1.6.0** (Sprint 36, the
+owner's default on 2026-10-06): macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
+needs a per-host certificate trust on the owner's Mac that was not approved; the capture tool
+(`server/test/dav-capture/capture.ts`) is on branch `sprint-34e`, not merged. B-3104 stays partial.
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
@@ -119,7 +137,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3414 | Accessibility and reflow for every new screen; `docs/accessibility.md` updated | The e2e suite passes with no axe or reflow finding on any new screen | 5 |
 | B-3415 | Settings: app passwords for DAV clients (DAV-only scope, device names, last use, revoke; creating one needs a fresh MFA step-up, per the decision below) and the CalDAV, CardDAV and WebDAV discovery URLs; added 2026-10-05 from the roll-up (B-3101 has no console item) | A revoked app password is refused by the next DAV request | 2 |
 
-### B-36 Carried over from 1.4.0 (20 points)
+### B-36 Carried over from 1.4.0 (18 points in 1.5.0)
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
@@ -128,7 +146,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3603 | RSVP capacity race (B-2502 known gap): a conditional update or row lock on the remaining places (Sprint 31) | Fifty concurrent RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL | 2 |
 | B-3604 | Verify relay commit signatures on the firehose (B-1908 known gap) against the repo's DID key; bad commits dropped and audited, as inbound labels are (Sprint 31) | A commit with a bad signature is dropped and audited; a good one becomes a label as before | 5 |
 | B-3605 | The IMAP channel adapter (B-2303) against a containerised IMAP server in CI instead of a mocked fetcher (Sprint 34) | A message delivered to the test mailbox becomes a channel thread in CI | 3 |
-| B-3606 | Capture real DAV client traffic (B-3104 is partial): record Apple Calendar and Contacts, Thunderbird and DAVx5 against a test server and replace the written fixtures with the captured exchanges, replayed in CI (Sprint 34) | Every filter operator in the captured run returns the expected items | 2 |
+| B-3606 | **Moved to 1.6.0 (Sprint 36) on 2026-10-06** ([Backlog-1.6.0.md](Backlog-1.6.0.md)): capture real DAV client traffic (B-3104 is partial): record Apple Calendar and Contacts, Thunderbird and DAVx5 against a test server and replace the written fixtures with the captured exchanges, replayed in CI. macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host certificate trust that was not approved; the capture tool is on `sprint-34e` | Every filter operator in the captured run returns the expected items | 2 |
 
 ## P1
 
@@ -301,7 +319,7 @@ and a handle domain per tenant. New permission: `pds:manage`.
 
 | ID | Item | Pts |
 | --- | --- | --- |
-| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 34) | — |
+| B-3501 | Version `1.5.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 34; done) | — |
 
 ---
 
@@ -350,7 +368,8 @@ All six resolved by the owner on 2026-10-05.
 - [x] Model import screen (B-3803): none in 1.5.0; model import is reached through the API until the Import screen
   (B-3807) in 1.7.0 (decided 2026-10-05).
 - [x] DAV conformance (B-3104): partial, because the fixtures were written from the clients' documented requests;
-  real traffic from Apple Calendar and Contacts, Thunderbird and DAVx5 is captured later (B-3606, decided 2026-10-05).
+  real traffic from Apple Calendar and Contacts, Thunderbird and DAVx5 is captured later (B-3606, decided 2026-10-05;
+  moved to 1.6.0 on 2026-10-06).
 - [x] CardDAV directory (B-3103): people who share a workspace with the caller, within the caller's clearance, as
   messaging and groups scope people; a workspace open to the whole tenant includes everyone (decided 2026-10-05).
 ## Risks

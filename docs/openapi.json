@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Exprsn-AI",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Every route the server registers. Operations added in 1.4.0 are described in full (x-exprsn-since: 1.4.0); earlier ones carry the summary from docs/api.md, which remains the reference for their bodies. Errors are RFC 9457 problem details. server/test/openapi.test.ts fails when a registered route is missing here or an operation here is no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes as summaries."
   },
   "servers": [

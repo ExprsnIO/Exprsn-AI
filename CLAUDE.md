@@ -38,11 +38,15 @@ Sprints 24 to 28 (`Backlog-1.4.0.md`: exprsn-platform's server features: a certi
 ACME server, a secrets vault with leases, the event catalogue and plugins; AT-Protocol keys, DIDs, labeler, sign-in and
 firehose ingest; moderation actions and appeals, the file store, low-code data apps, groups and events,
 customer-service channels, messaging and the workspace feed, and a platform load test) made version `1.4.0`; they are
-server-only, and their console screens are planned in `Backlog-1.5.0.md`.
-Every console screen is live. Sprint 29 (B-3401, `Backlog-1.5.0.md`) added the prototype boards for the 1.4.0 domains
-(`files`, `apps`, `groups`, `messages`, `moderation`, `channels`, `roles`, `certificates`, `vault`, `plugins`, `atproto`,
-plus identity additions to `signin`, `settings` and `identity`); they exist only in `design/prototype/` until their sprint
-makes them live in `web/`. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
+server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1.4.0 domains, permission matrices,
+custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
+connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
+context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
+33 moved to 1.7.0 and B-3606 (capturing real DAV client traffic) to 1.6.0. Sprints 35 to 37 are planned in
+`Backlog-1.6.0.md`, Sprint 38 in `Backlog-1.7.0.md`.
+Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
+`design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
+gaps in `docs/security.md` before starting work.
 
 ## Commands
 
@@ -198,22 +202,23 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `migrate --check`); `platform/shamir.ts` and `platform/escrow.ts` (`kms:escrow`, `kms:recover`); `zones/kube.ts` and
   `zones/cluster.ts` (`ZONES_APPLY=kubernetes`); `knowledge/crawl.ts` (the internal web crawler). Prometheus rules and
   Grafana dashboards are in `deploy/observability/`.
-- 1.5.0 modules: **`dav/`** (CalDAV and CardDAV at `/dav`, `docs/dav.md`: `handler.ts` the router and methods,
+- 1.5.0 modules: **`dav/`** (CalDAV, CardDAV and WebDAV at `/dav`, `docs/dav.md`: `handler.ts` the router and methods,
   `auth.ts` app-password Basic auth, `tree.ts` the namespace, `caldav.ts`, `carddav.ts`, `filters.ts` the query
-  operators, `sync.ts`, `store.ts` personal collections and dead properties, `passwords.ts` and `routes.ts` for
-  `/api/me/app-passwords`; the conformance fixtures are in `server/test/fixtures/dav/`).
+  operators, `sync.ts`, `store.ts` personal collections and dead properties, `props.ts`, `xml.ts` (the strict parser),
+  `ics.ts` (iCalendar and vCard), `if.ts` (the If header), `service.ts` `s.dav`, `passwords.ts` and `routes.ts` for
+  `/api/me/app-passwords` and `GET /api/me/dav` (B-3415); since Sprint 34b `files.ts`, the file store under
+  `/dav/files/`, and `locks.ts`, class 2 locks (B-3201 to B-3203); the conformance fixtures are in
+  `server/test/fixtures/dav/`). **`registry/builtin/`** (Sprint 32c, B-3904: `catalog.ts` the domain built-in tools
+  seeded by `034c_workflow_steps`, `index.ts` `BuiltinTools`, which run them as the caller through the dispatcher).
   Sprint 31b added to `atproto/`: `commit.ts` (relay commit and Merkle search tree verification, B-3604),
   `service-jwt.ts` (inter-service JWTs) and `feeds.ts` (feed generators over the firehose, `s.feedGenerators`), with
   `routes/atproto-feeds.ts` and the public XRPC in `routes/atproto-feeds-public.ts`; the AT-Protocol interop vectors
   are in `server/test/fixtures/atproto/`, and `test/sprint31b-fakes.ts` has an MST writer and repos that sign commits.
-
-  `/api/me/app-passwords`; the conformance fixtures are in `server/test/fixtures/dav/`); **`atproto/pds/`** (the
-  AT-Protocol PDS, `docs/pds.md`: `service.ts` hosting, accounts, sessions and state, `repo-store.ts` commits and
-  reads, `mst.ts`, `car.ts`, `repo.ts`, `tid.ts` the repository format, `lexicon.ts` with `lexicon-docs.ts` and
+- 1.5.0 Sprint 31: **`atproto/pds/`** (the AT-Protocol PDS, `docs/pds.md`: `service.ts` hosting, accounts, sessions
+  and state, `repo-store.ts` commits and reads, `mst.ts`, `car.ts`, `repo.ts`, `tid.ts` the repository format, `lexicon.ts` with `lexicon-docs.ts` and
   `lexjson.ts`, `syntax.ts`, `blobs.ts`, `sequencer.ts` (subscribeRepos), `migration.ts`, `feeds.ts`, `tokens.ts`;
   routes in `routes/pds-xrpc.ts` at `/xrpc` and `routes/pds.ts` under `/api`; interop fixtures in
   `server/test/fixtures/atproto-interop/` and `atproto-ref/`; `interop/run.ts` runs it against the reference AppView).
-
 - 1.5.0 modules: **`imports/`** (Sprint 30: `repositories.ts` the dual-controlled repository registry and harvests,
   `catalog.ts` the snapshot with facets and live search, `fetcher.ts` the allow-listed import egress, `formats.ts`
   format, pickle and licence checks, `service.ts` model import jobs, licence exceptions and bundle mode, `adapters/`
