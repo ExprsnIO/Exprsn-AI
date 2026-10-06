@@ -48,6 +48,7 @@ import {
   type WfNode
 } from './graph.js';
 import { internalRequest } from './http.js';
+import { handlesFailure, isFailureEdge, nextRetryAt, retryable } from './retry.js';
 import type { AllowList } from '../mcp/hosts.js';
 
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'rejected' | 'cancelled';
@@ -173,6 +174,17 @@ export interface RecordStepRunner {
   runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number }): Promise<{ output: Record<string, unknown>; label: Label }>;
 }
 
+/**
+ * Sprint 32b: what the trigger, dead-letter and chain modules hook into (`useLifecycle`): a version was published (its
+ * trigger may start runs by itself, B-3903), a run failed for good (a dead letter, B-3906), and the scope a run
+ * executes in (the chain of workflows that caused it, so events its steps cause carry the chain).
+ */
+export interface WorkflowLifecycle {
+  published?(w: WorkflowRow, version: number, g: WfGraph, p: Principal): Promise<void>;
+  failed?(run: RunRow, error: string | null): Promise<void>;
+  scope?<T>(run: RunRow, fn: () => Promise<T>): Promise<T>;
+}
+
 const TERMINAL: RunState[] = ['succeeded', 'failed', 'rejected', 'cancelled'];
 const DONE: StepState[] = ['passed', 'failed', 'skipped', 'blocked'];
 const JOB = 'workflow.run';
@@ -247,6 +259,7 @@ function compare(op: string, left: unknown, right: unknown): boolean {
  */
 export class WorkflowService implements WorkflowToolRunner {
   private records: RecordStepRunner | null = null;
+  private lifecycle: WorkflowLifecycle = {};
 
   constructor(private readonly d: WorkflowDeps) {
     d.jobs.register(JOB, (p, ctx) => this.execute(String(p.runId), ctx), { timeoutMs: RUN_JOB_TIMEOUT });
@@ -256,6 +269,11 @@ export class WorkflowService implements WorkflowToolRunner {
   /** 1.4.0 (B-2206): record steps go to the low-code apps. */
   useRecords(r: RecordStepRunner): void {
     this.records = r;
+  }
+
+  /** Sprint 32b: triggers, dead letters and the run scope (see WorkflowLifecycle). */
+  useLifecycle(l: WorkflowLifecycle): void {
+    this.lifecycle = { ...this.lifecycle, ...l };
   }
 
   // ---------- sealing ----------
@@ -421,6 +439,7 @@ export class WorkflowService implements WorkflowToolRunner {
       await trx('workflow_versions').insert({ id: ulid(), workflow_id: w.id, tenant_id: w.tenant_id, version: next, graph: JSON.stringify(g), state: 'published', note, published_by: p.userId, published_at: Date.now() });
       await trx('workflows').where({ id: w.id }).update({ published_version: next, updated_at: Date.now(), updated_by: p.userId });
     });
+    await this.lifecycle.published?.(w, next, g, p);
     return { version: next, warnings: v.warnings };
   }
 
@@ -766,6 +785,7 @@ export class WorkflowService implements WorkflowToolRunner {
     if (TERMINAL.includes(state) && state !== 'succeeded' && state !== 'cancelled') {
       await this.d.audit.append({ tenantId: run.tenant_id, action: `workflow.run.${state}`, kind: 'system', actor: { service: 'workflows' }, target: { workflow: run.workflow_id, run: run.id }, label: run.label, detail: { error, mode: run.mode } });
     }
+    if (state === 'failed' && run.mode === 'run') await this.lifecycle.failed?.({ ...run, state, error }, error).catch((err: unknown) => this.d.log.warn({ run: run.id, err: (err as Error).message }, 'could not record a dead letter'));
     return { state };
   }
 
@@ -791,7 +811,7 @@ export class WorkflowService implements WorkflowToolRunner {
     }
     this.emitRun(run);
     try {
-      return await this.walk(run, ctx);
+      return await (this.lifecycle.scope ? this.lifecycle.scope(run, () => this.walk(run, ctx)) : this.walk(run, ctx));
     } catch (err) {
       const reason = String((ctx.signal.reason as Error | undefined)?.message ?? '');
       if (ctx.signal.aborted && /cancel/.test(reason)) return this.finishRun(run, 'cancelled', 'Cancelled');
@@ -816,7 +836,11 @@ export class WorkflowService implements WorkflowToolRunner {
     const steps = await this.stepRows(run.id);
     const input = await this.open<unknown>(run.tenant_id, `wfrun:${run.id}`, run.input, {});
     const outputs: Record<string, unknown> = {};
-    for (const s of steps.values()) if (s.state === 'passed') outputs[s.node_id] = await this.open(s.tenant_id, `wfstep:${s.id}`, s.output, null);
+    for (const s of steps.values()) {
+      if (s.state === 'passed') outputs[s.node_id] = await this.open(s.tenant_id, `wfstep:${s.id}`, s.output, null);
+      // B-3906: a failure a failure edge handles is what the steps on that edge read.
+      else if (s.state === 'failed' && handlesFailure(g, s.node_id)) outputs[s.node_id] = { error: s.error ?? '', step: s.node_id };
+    }
     const timeoutMs = g.limits.timeoutMs ?? LIMITS.maxRunTimeoutMs;
     const tokenBudget = g.limits.tokens ?? LIMITS.maxTokens;
     const scope: TemplateScope = { input, steps: outputs };
@@ -830,6 +854,8 @@ export class WorkflowService implements WorkflowToolRunner {
       if (preds.some((e) => !DONE.includes(steps.get(e.from)?.state as StepState))) continue; // upstream still waiting
       const live = preds.filter((e) => {
         const r = steps.get(e.from)!;
+        // B-3906: a failure edge is taken when its step failed for good (not when an approver rejected it).
+        if (isFailureEdge(e)) return r.state === 'failed' && !json<{ rejected?: boolean }>(r.detail, {}).rejected;
         if (r.state !== 'passed') return false;
         if (byId.get(e.from)!.kind !== 'branch') return true;
         return String((outputs[e.from] as { result?: unknown } | null)?.result === true) === e.branch;
@@ -843,7 +869,11 @@ export class WorkflowService implements WorkflowToolRunner {
       const label = highest(run.label, ...live.map((e) => steps.get(e.from)!.label), ...(n.raises ? [n.raises] : []));
       const merged = Object.assign({}, ...live.map((e) => (outputs[e.from] && typeof outputs[e.from] === 'object' ? outputs[e.from] : {}))) as Record<string, unknown>;
 
-      if (row?.state === 'waiting') {
+      const retryAt = row?.state === 'waiting' ? json<{ retryAt?: number }>(row.detail, {}).retryAt : undefined;
+      if (row?.state === 'waiting' && retryAt != null) {
+        // B-3906: a step waiting to be tried again runs once its time comes.
+        if ((row.resume_at ?? 0) > Date.now()) continue;
+      } else if (row?.state === 'waiting') {
         if (n.kind === 'wait' && row.resume_at != null && row.resume_at <= Date.now()) {
           const done = await this.finishStep(run, row, 'passed', { output: merged });
           steps.set(id, done);
@@ -855,7 +885,7 @@ export class WorkflowService implements WorkflowToolRunner {
 
       if (Date.now() - (run.started_at ?? Date.now()) > timeoutMs) return this.finishRun(run, 'failed', `The run went past its timeout of ${Math.round(timeoutMs / 60_000)} minutes.`);
 
-      let step = await this.upsertStep(run, id, { state: 'running', label, attempts: (row?.attempts ?? 0) + 1, started_at: Date.now(), error: null });
+      let step = await this.upsertStep(run, id, { state: 'running', label, attempts: (row?.attempts ?? 0) + 1, started_at: Date.now(), error: null, ...(retryAt != null ? { resume_at: null, detail: JSON.stringify({ ...json<Record<string, unknown>>(row!.detail, {}), retryAt: undefined }) } : {}) });
       steps.set(id, step);
       this.emitStep(run, step);
       const t0 = Date.now();
@@ -885,8 +915,20 @@ export class WorkflowService implements WorkflowToolRunner {
         const timedOut = e.name === 'TimeoutError' || /aborted due to timeout/i.test(e.message);
         const message = timedOut ? `${n.title} took longer than ${Math.round((n.timeoutMs ?? LIMITS.defaultStepTimeoutMs) / 1000)} s.` : err instanceof HttpProblem ? (err.detail ?? err.title) : e.message;
         const blocked = err instanceof StepBlocked;
+        // B-3906: a step with a retry policy waits and is tried again, durably, before it fails for good.
+        const again = !blocked && retryable(message) ? nextRetryAt(n, step.attempts) : null;
+        if (again != null) {
+          step = await this.retryLater(run, step, again, message);
+          steps.set(id, step);
+          continue;
+        }
         step = await this.finishStep(run, step, blocked ? 'blocked' : 'failed', { error: message, detail: { ms: Date.now() - t0 } });
         steps.set(id, step);
+        // B-3906: a failure edge takes the failure instead of the run.
+        if (!blocked && handlesFailure(g, id)) {
+          outputs[id] = { error: message, step: id };
+          continue;
+        }
         // A blocked step skips what depends on it and lets other branches finish; a failure stops the run.
         if (!blocked) return this.finishRun(run, 'failed', `${n.title}: ${message}`);
       }
@@ -902,9 +944,19 @@ export class WorkflowService implements WorkflowToolRunner {
       return { state: 'waiting', on: waitingOn.map((s) => s.node_id) };
     }
     if (all.some((s) => s.state === 'failed' && json<{ rejected?: boolean }>(s.detail, {}).rejected)) return this.finishRun(run, 'rejected', 'An approver rejected a step.');
-    const failed = all.find((s) => s.state === 'failed' || s.state === 'blocked');
+    const failed = all.find((s) => (s.state === 'failed' && !handlesFailure(g, s.node_id)) || s.state === 'blocked');
     if (failed) return this.finishRun(run, 'failed', `${byId.get(failed.node_id)?.title ?? failed.node_id}: ${failed.error ?? failed.state}`);
     return this.finishRun(run, 'succeeded');
+  }
+
+  /** B-3906: the step waits until `at` and is tried again (the run resumes then, on any instance). */
+  private async retryLater(run: RunRow, step: StepRow, at: number, message: string): Promise<StepRow> {
+    const detail = { ...json<Record<string, unknown>>(step.detail, {}), retryAt: at, retries: step.attempts, lastError: message.slice(0, 300) };
+    const patch: Partial<StepRow> = { state: 'waiting', resume_at: at, error: message.slice(0, 1000), detail: JSON.stringify(detail) };
+    await this.d.db('workflow_steps').where({ id: step.id }).update(patch);
+    const after = { ...step, ...patch };
+    this.emitStep(run, { ...after, detail });
+    return after;
   }
 
   private async runNode(run: RunRow, p: Principal, n: WfNode, step: StepRow, c: { scope: TemplateScope; merged: Record<string, unknown>; input: unknown; label: Label; signal: AbortSignal }): Promise<{ output: unknown; detail?: Record<string, unknown>; tokens?: number } | typeof WAIT> {

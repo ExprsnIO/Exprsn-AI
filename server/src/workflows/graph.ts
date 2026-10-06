@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { highest, labelRank, LABELS, type Label } from '../authz/labels.js';
 import { isRole } from '../authz/permissions.js';
 import { CHECKPOINTS } from '../guardrails/types.js';
+import { FAILURE_PORT, failureIssues, isFailureEdge, retryPolicySchema } from './retry.js';
+import { triggerConfigSchema, triggerIssues, type TriggerConfig } from './trigger-config.js';
 
 /*
  * Workflow graphs: typed nodes joined by edges, validated before publishing. A node's input is the merge of the
@@ -61,11 +63,14 @@ export const nodeSchema = z
     ceiling: z.enum(LABELS).optional(),
     /** The label of data this step brings in (an HTTP answer from a confidential system raises the run). */
     raises: z.enum(LABELS).optional(),
-    timeoutMs: z.number().int().min(1000).max(LIMITS.maxStepTimeoutMs).optional()
+    timeoutMs: z.number().int().min(1000).max(LIMITS.maxStepTimeoutMs).optional(),
+    /** Sprint 32b (B-3906): tries again after a failure, waiting durably between attempts (retry.ts). */
+    retry: retryPolicySchema.optional()
   })
   .strict();
 
-export const edgeSchema = z.object({ from: nodeId, to: nodeId, branch: z.enum(['true', 'false']).optional() }).strict();
+/** `failure` (Sprint 32b, B-3906): the edge taken when its step fails for good, instead of failing the run. */
+export const edgeSchema = z.object({ from: nodeId, to: nodeId, branch: z.enum(['true', 'false', 'failure']).optional() }).strict();
 
 export const graphSchema = z
   .object({
@@ -121,7 +126,8 @@ export function graphVaultRefs(g: { nodes: { kind: string; config: unknown }[] }
 
 export const CONFIGS = {
   // 1.4.0 (B-2206): `record` and `schedule` workflows are started by an app's triggers (the run input names the event).
-  trigger: z.object({ source: z.enum(['manual', 'api', 'record', 'schedule']).default('manual') }).strict(),
+  // Sprint 32b (B-3903): also `event`, and `schedule` with its own `cron` (trigger-config.ts).
+  trigger: triggerConfigSchema,
   model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text') }).strict(),
   transform: z.object({ fields: z.record(propName, template).refine((f) => Object.keys(f).length > 0 && Object.keys(f).length <= 50, 'Between 1 and 50 fields') }).strict(),
   branch: z.object({ left: template.min(1), op: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists']), right: z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]).optional() }).strict(),
@@ -567,6 +573,11 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
       if (!cfg.tool.trim()) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: choose a published tool.` });
       if (!isRole(cfg.approverRole)) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${cfg.approverRole}.` });
     }
+    if (n.kind === 'trigger') {
+      const t = triggerIssues(n, r.data as TriggerConfig);
+      errors.push(...t.errors);
+      warnings.push(...t.warnings);
+    }
     if (n.kind === 'approval' && !isRole(String(n.config.role))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.role)}.` });
     if (n.kind === 'guardrail' && !isRole(String((r.data as { approverRole: string }).approverRole))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.approverRole)}.` });
     if (n.kind === 'http') {
@@ -595,8 +606,15 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
   for (const e of g.edges) {
     const from = byId.get(e.from);
     if (!from) continue;
+    if (isFailureEdge(e)) continue; // any step but the trigger may have one (failureIssues)
     if (from.kind === 'branch' && !e.branch) errors.push({ code: 'structure', nodeId: e.from, edge: e, message: `The edge from ${from.title} to ${title(e.to)} needs a branch: true or false.` });
     if (from.kind !== 'branch' && e.branch) errors.push({ code: 'structure', nodeId: e.from, edge: e, message: `Only a branch step's edges take true or false.` });
+  }
+
+  {
+    const f = failureIssues(g);
+    errors.push(...f.errors);
+    warnings.push(...f.warnings);
   }
 
   // Template references: only the run input and steps upstream.
@@ -621,7 +639,7 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
     for (const id of order) {
       const n = byId.get(id)!;
       const preds = incoming(g, id);
-      const merged = mergeSchemas(preds.map((e) => outs.get(e.from) ?? { type: 'object' }));
+      const merged = mergeSchemas(preds.map((e) => (isFailureEdge(e) ? FAILURE_PORT : (outs.get(e.from) ?? { type: 'object' }))));
       if (n.input && preds.length) {
         const err = compatible(merged, n.input);
         if (err) {
