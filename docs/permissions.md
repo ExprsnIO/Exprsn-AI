@@ -73,7 +73,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `plugins:manage` | yes | 15 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `labels:manage` | yes | 10 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `atproto:link` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `files:read` | no | 13 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `files:read` | no | 41 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `files:write` | no | 13 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `moderation:check` | yes | 3 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `moderation:report` | no | 2 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -86,7 +86,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `apps:design` | yes | 17 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
-| `groups:read` | no | 38 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `groups:read` | no | 42 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `groups:write` | no | 19 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `groups:manage` | yes | 0 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:manage` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -100,9 +100,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `feed:write` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:manage` | yes | 3 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `roles:manage` | yes | 16 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
-| `calendars:read` | no | 24 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `calendars:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `calendars:write` | no | 0 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `contacts:read` | no | 24 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `contacts:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `contacts:write` | no | 0 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `pds:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `imports:run` | yes | 15 | x | x |  | x |  |  | x | x |  |  |  |  |  |  |
@@ -946,6 +946,34 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/files/usage`
 - `POST /api/file-links/download`
 - `POST /api/file-links/open`
+- `COPY /dav` (or another permission)
+- `COPY /dav/{path}` (or another permission)
+- `DELETE /dav` (or another permission)
+- `DELETE /dav/{path}` (or another permission)
+- `GET /dav` (or another permission)
+- `GET /dav/{path}` (or another permission)
+- `HEAD /dav` (or another permission)
+- `HEAD /dav/{path}` (or another permission)
+- `MKCALENDAR /dav` (or another permission)
+- `MKCALENDAR /dav/{path}` (or another permission)
+- `MKCOL /dav` (or another permission)
+- `MKCOL /dav/{path}` (or another permission)
+- `MOVE /dav` (or another permission)
+- `MOVE /dav/{path}` (or another permission)
+- `OPTIONS /dav` (or another permission)
+- `OPTIONS /dav/{path}` (or another permission)
+- `PROPFIND /dav` (or another permission)
+- `PROPFIND /dav/{path}` (or another permission)
+- `PROPPATCH /dav` (or another permission)
+- `PROPPATCH /dav/{path}` (or another permission)
+- `PUT /dav` (or another permission)
+- `PUT /dav/{path}` (or another permission)
+- `REPORT /dav` (or another permission)
+- `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `files:write`
 
@@ -1122,6 +1150,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /dav/{path}` (or another permission)
 - `REPORT /dav` (or another permission)
 - `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `groups:write`
 
@@ -1318,6 +1350,10 @@ No route requires it directly; handlers and services check it.
 - `PUT /dav/{path}` (or another permission)
 - `REPORT /dav` (or another permission)
 - `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `calendars:write`
 
@@ -1349,6 +1385,10 @@ No route requires it directly; handlers and services check it.
 - `PUT /dav/{path}` (or another permission)
 - `REPORT /dav` (or another permission)
 - `REPORT /dav/{path}` (or another permission)
+- `LOCK /dav` (or another permission)
+- `LOCK /dav/{path}` (or another permission)
+- `UNLOCK /dav` (or another permission)
+- `UNLOCK /dav/{path}` (or another permission)
 
 ### `contacts:write`
 

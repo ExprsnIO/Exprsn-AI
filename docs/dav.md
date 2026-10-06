@@ -11,6 +11,7 @@ and write goes through the services, policy pipeline and audit chain the API use
 | B-3102 | CalDAV (RFC 4791): personal calendars and the calendars of one's groups; `calendar-query`, `calendar-multiget`, `free-busy-query`; RSVPs written back |
 | B-3103 | CardDAV (RFC 6352): the directory as a read-only address book within one's clearance, and personal address books |
 | B-3104 | A recorded conformance run of Apple, Thunderbird and DAVx5 exchanges, replayed in CI |
+| B-3201 to B-3203 | The file store as WebDAV collections: PUT through quarantine, COPY, MOVE, LOCK and UNLOCK, quotas, shares, litmus in CI (Sprint 34; migration `036c_dav_files`) |
 
 ## Setting up a client
 
@@ -18,7 +19,7 @@ and write goes through the services, policy pipeline and audit chain the API use
    one needs a second factor confirmed within the step-up window (`STEPUP_WINDOW_SECONDS`): sign in with your factor,
    or confirm with a code or a passkey. A password confirmation does not count, and an account without a second
    factor sets one up first. Choose its scopes: `caldav` (calendars and group events), `carddav` (contacts) and
-   `webdav` (the file store, from B-32). The password is shown once; it can expire (30 to 365 days) or not.
+   `webdav` (the file store). The password is shown once; it can expire (30 to 365 days) or not.
 2. In the client, add an account with the server's address (`https://<your server>`), your **username** and the app
    password. Clients that discover the service find `/.well-known/caldav` and `/.well-known/carddav`, which redirect
    to `/dav/`; others take the URL `https://<your server>/dav/` directly.
@@ -28,7 +29,12 @@ and write goes through the services, policy pipeline and audit chain the API use
 | Apple Calendar, Reminders (macOS, iOS) | Other CalDAV account, manual | `https://<server>/dav/` (or the host name alone) |
 | Apple Contacts | Other CardDAV account, manual | `https://<server>/dav/` |
 | Thunderbird | New calendar, on the network, CalDAV; address book: CardDAV | `https://<server>/dav/calendars/<user id>/personal/`, or let it discover from `https://<server>/` |
+| Finder (macOS) | Go, Connect to Server | `https://<server>/dav/files/` |
+| Windows Explorer | Map network drive | `https://<server>/dav/files/<workspace>/` (WebClient needs HTTPS for Basic) |
 | DAVx5 (Android) | Log in with URL and user name | `https://<server>/` |
+
+Settings shows the WebDAV URL as `https://<server>/dav/files/` (`server.webdav` in `GET /api/me/dav`); a file client
+needs an app password with the WebDAV scope (a CalDAV- or CardDAV-only one gets `403` there).
 
 The settings list shows each app password's last use (time, address and client). Revoking one stops it at once: the
 next request with it is refused. App passwords authenticate `/dav` only: the API, `/v1` and the console never accept
@@ -46,6 +52,9 @@ them, as a bearer token or as HTTP Basic; and sessions and cookies never authent
 | `/dav/addressbooks/<user id>/` | Your address book home |
 | `/dav/addressbooks/<user id>/directory/<user id>.vcf` | A person in the directory (read-only) |
 | `/dav/addressbooks/<user id>/<name>/` | A personal address book (`contacts` is made on first use); an extended `MKCOL` makes more |
+| `/dav/files/` | The workspaces you may act in (by slug, else id), and `~shared` |
+| `/dav/files/<workspace>/<folder>/…/<file>` | The file store's folders and files |
+| `/dav/files/~shared/<file>` | Files shared with you (read-only) |
 
 Paths name your own homes only; another user's id answers 404, as a path that does not exist.
 
@@ -111,6 +120,31 @@ copied, moved and deleted, and property changes are in the audit chain (`dav.*`)
 actor's `via`. RSVPs and event changes are the groups service's own entries (`group.event.*`). Denials are audited as on
 the API.
 
+**The file store (B-32).** Workspaces, folders and files are collections and resources, through the file service:
+membership, clearance (a file above yours is not listed or served), workspace ceilings, quotas and audit (`file.*`)
+apply as on the API. A PUT goes through quarantine, the type check and ClamAV like any upload, and the scan job is run
+before the answer (on the database queue it runs in the request; with BullMQ the request waits up to 30 seconds for
+the worker), so a client can read back what it wrote; a version that has not passed its scan is never served (GET
+answers 409), a rejected upload answers 403 (malware, label) or 415 (type), and a full quota 507
+(`quota-not-exceeded`). A PUT on an existing file is a new version; old versions are kept and restorable from the
+console. New files are internal, or lower when your clearance or the workspace ceiling is. DELETE puts things in the
+trash. MOVE renames or moves within a workspace and keeps the file's or folder's id, so its versions and shares stay;
+a move to another workspace is refused (share the file instead), while COPY there makes new files, scanned again.
+Finder's AppleDouble (`._*`), `.DS_Store`, `Thumbs.db` and `desktop.ini` are accepted and dropped. Files shared with
+you are under `~shared`, read-only. `quota-used-bytes` and `quota-available-bytes` (RFC 4331) are on workspaces and
+folders: the workspace's use, and the room left under the tighter of the workspace's and the tenant's limits (none
+when neither is set). Dead properties on files and folders are kept sealed.
+
+**Locks (B-3202).** Class 2: exclusive and shared write locks, depth 0 or infinity, with a timeout of at most an hour
+(refreshed with an empty LOCK naming the token in the If header). A lock is on a path: a change to a locked path (or,
+for DELETE and MOVE of a folder, anything locked under it) needs the lock's token in the If header, and only the
+lock's owner may use the token or UNLOCK it. Locking an unmapped URL makes an empty file. Locks do not move with a
+resource; DELETE and MOVE drop the locks on the old path.
+
+**litmus (B-3203).** CI builds litmus 0.17 and runs its basic, copymove, props, locks and http groups against
+`/dav/files/<workspace>/` (`npx tsx server/test/dav-litmus.ts --litmus <path>`; without `--litmus` it serves and
+prints the credentials). Every test of the five groups passes (106 of 106, rerun on Sprint 34b).
+
 ## Conformance (B-3104)
 
 `server/test/fixtures/dav/` holds the exchanges of Apple Calendar and Contacts, Thunderbird and DAVx5: each request
@@ -131,4 +165,5 @@ operator has its own exchange here.
   range; clients expand recurrences themselves.
 - A TZID that is not an IANA zone name is read with the object's own VTIMEZONE's standard offset (no daylight rules).
 - `expand-property` answers the properties without expanding them; principal searches are not supported.
-- WebDAV for the file store, locks and quotas are B-32 (below, when present).
+- Range requests on files (GET always sends the whole file) and `Content-Range` on PUT.
+- Locks on calendars and address books (only the file store takes them).

@@ -22893,7 +22893,8 @@
                               "type": "string"
                             },
                             "webdav": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "The file store's WebDAV collection, /dav/files/ (B-32, Sprint 34)"
                             }
                           }
                         },
@@ -22997,7 +22998,8 @@
                         },
                         "webdav": {
                           "type": "string",
-                          "format": "uri"
+                          "format": "uri",
+                          "description": "The file store's WebDAV collection, /dav/files/ (B-32, Sprint 34)"
                         }
                       }
                     },
@@ -30752,7 +30754,7 @@
           "dav"
         ],
         "summary": "A calendar object or vCard (text/calendar, text/vcard) with its ETag; If-None-Match answers 304",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "security": [
           {
             "davBasic": []
@@ -30788,7 +30790,7 @@
           "dav"
         ],
         "summary": "Headers of GET",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "security": [
           {
             "davBasic": []
@@ -30809,7 +30811,7 @@
           "dav"
         ],
         "summary": "Stores a calendar object or contact, or answers a group event (PARTSTAT becomes the RSVP); a stale If-Match is 412",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "security": [
           {
             "davBasic": []
@@ -30850,7 +30852,7 @@
           "dav"
         ],
         "summary": "Deletes a personal object or collection; cancels a group event (moderators and owners)",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "security": [
           {
             "davBasic": []
@@ -30871,7 +30873,7 @@
           "dav"
         ],
         "summary": "DAV compliance classes and the methods allowed",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "security": [
           {
             "davBasic": []
@@ -30894,7 +30896,7 @@
           "dav"
         ],
         "summary": "A calendar object or vCard (text/calendar, text/vcard) with its ETag; If-None-Match answers 304",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "parameters": [
           {
             "name": "path",
@@ -30941,7 +30943,7 @@
           "dav"
         ],
         "summary": "Headers of GET",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "parameters": [
           {
             "name": "path",
@@ -30973,7 +30975,7 @@
           "dav"
         ],
         "summary": "Stores a calendar object or contact, or answers a group event (PARTSTAT becomes the RSVP); a stale If-Match is 412",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "parameters": [
           {
             "name": "path",
@@ -31025,7 +31027,7 @@
           "dav"
         ],
         "summary": "Deletes a personal object or collection; cancels a group event (moderators and owners)",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "parameters": [
           {
             "name": "path",
@@ -31057,7 +31059,7 @@
           "dav"
         ],
         "summary": "DAV compliance classes and the methods allowed",
-        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE) are described in docs/dav.md.",
+        "description": "Authenticated with HTTP Basic (username and an app password); WebDAV methods (PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, COPY, MOVE, LOCK, UNLOCK) are described in docs/dav.md. The file store answers under /dav/files/ (B-32, Sprint 34).",
         "parameters": [
           {
             "name": "path",

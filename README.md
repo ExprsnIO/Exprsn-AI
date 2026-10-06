@@ -85,6 +85,8 @@ npm run lint && npm run typecheck && npm test      # unit and API tests on in-me
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done
 TEST_PG_URL=postgres://… TEST_MYSQL_URL=mysql://… TEST_LDAP_URL=ldap://… TEST_LDAP_INSECURE=true TEST_LDAP_BIND_PW=… \
   npm run test:integration -w server              # user stores against real servers
+# B-3605: the email channel's IMAP adapter against GreenMail (prints NODE_EXTRA_CA_CERTS, TEST_IMAP_URL, TEST_IMAP_SMTP_URL)
+server/test/integration/greenmail.sh /tmp/greenmail
 ```
 
 CI runs all of these, builds the container image and checks that it answers `/readyz`.

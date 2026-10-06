@@ -18,7 +18,7 @@ import { DavError } from './xml.js';
  */
 
 /** Any one of these lets a caller into /dav; each request then needs the permission of what it touches. */
-export const DAV_PERMISSIONS: readonly Permission[] = ['calendars:read', 'contacts:read', 'groups:read'];
+export const DAV_PERMISSIONS: readonly Permission[] = ['calendars:read', 'contacts:read', 'files:read', 'groups:read'];
 
 export const REALM = 'Basic realm="Exprsn-AI DAV", charset="UTF-8"';
 

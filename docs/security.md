@@ -119,6 +119,15 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
+  answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
+  CardDAV-only password gets `403` there. A PUT waits for its scan (run in the request on the database queue, up to 30
+  seconds for a BullMQ worker); a scan that does not finish in time leaves the file unreadable until it does, and the
+  client sees a success without an ETag. Finder's AppleDouble and `.DS_Store` files are accepted and discarded rather
+  than stored. Locks are advisory to the API: the console and `/api/files` do not check WebDAV locks. Range requests
+  are not supported (whole files only). MOVE across workspaces is refused. Real client traffic (Finder, Windows,
+  DAVx5) is not yet replayed in CI; litmus is.
+
 - The chain context and Workflows 2's sub-workflow, agent, map and loop steps (1.5.0, Sprint 32, B-4101, B-3901,
   B-3902, B-3905). The chain covers what runs on this server; what leaves it (a webhook receiver or an MCP server that
   calls the API back) starts a new chain, bounded only by its own rate limits. A chat turn is a chain node only when its
@@ -752,7 +761,9 @@ filter, private `/tmp`, only the state directory writable.
   receiving mail server does not enforce SPF/DKIM/DMARC; an attacker who knows a customer's address and one of the
   thread's Message-IDs could add a message to that session (they still never see the replies, which go to the real
   address). IMAP polls read the mailbox read-only and never mark or move messages; messages over 10 MB are skipped.
-  The imapflow adapter itself is exercised only against a fake fetcher in the unit tests, not a real IMAP server.
+  Since Sprint 34 (B-3605) the imapflow adapter also runs in CI against GreenMail over implicit TLS with the
+  certificate verified against the host name (`server/test/integration/imap.test.ts`); the STARTTLS path (port 143)
+  is exercised only through imapflow's own handling, not against a server.
   Mailgun inbound is form-encoded only (routes that forward attachments post multipart, which is refused with `415`);
   Postmark, SendGrid and others use the generic shape through a relay. Bounces from IMAP are read from RFC 3464
   delivery reports only (not from free-text bounce mails). Held replies use the flag queue: a reviewer who can see the

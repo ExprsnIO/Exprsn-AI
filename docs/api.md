@@ -3427,7 +3427,7 @@ send a security notice and are audited (`dav.app_password.created`, `dav.app_pas
 | `GET /api/me/app-passwords` | The caller's app passwords: `[{id, name, prefix, scopes, state, createdAt, expiresAt, lastUsedAt, lastUsedIp, lastUsedAgent, revokedAt}]`; `state` is active, expired or revoked (kept listed 30 days) |
 | `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`, `webdav`). At most 50 active per user |
 | `DELETE /api/me/app-passwords/:id` | Revokes it: the next DAV request with it is refused (`204`) |
-| `GET /api/me/dav` | For Settings (Sprint 32, B-3415): `{username, usernameWithTenant, server: {url, caldav, carddav, webdav}, scopes: [{scope, available}], stepUp: {hasFactor, windowSeconds, freshUntil}}`. `available` is whether the caller's roles grant any permission of the scope now; `freshUntil` is when the session's second-factor confirmation stops counting for creating an app password (null when it already has). The WebDAV file store answers under the same `/dav/` from B-32 |
+| `GET /api/me/dav` | For Settings (Sprint 32, B-3415): `{username, usernameWithTenant, server: {url, caldav, carddav, webdav}, scopes: [{scope, available}], stepUp: {hasFactor, windowSeconds, freshUntil}}`. `available` is whether the caller's roles grant any permission of the scope now; `freshUntil` is when the session's second-factor confirmation stops counting for creating an app password (null when it already has). `server.webdav` is the file store's collection, `/dav/files/` (B-32, Sprint 34), which answers WebDAV with a `webdav`-scoped app password |
 
 ### DAV endpoints
 
@@ -4077,3 +4077,9 @@ atomic increments. `ChainNode` is:
 Siblings are in the order they began. Chat turns link to their chains with B-40 in 1.7.0; Runs (agent runs) and
 workflow runs carry `chain: {id, node}`, and their views list `children` (agent runs: `[{kind: agent-run, id, agent,
 node, state, label, error} | {kind: workflow-run, id, workflowId, node, state, label, error}]`).
+
+## Sprint 34b (1.5.0): WebDAV for the file store (B-3201 to B-3203)
+
+No new JSON routes. `/dav/files/` serves the file store to WebDAV clients (`docs/dav.md`), with the app passwords'
+`webdav` scope and `files:read` / `files:write`; `LOCK` and `UNLOCK` join the DAV methods (`DAV: 1, 2, 3, …`).
+Migration `036c_dav_files`.
