@@ -237,7 +237,7 @@
       const createdModal = () => ctx.modal({
         title: 'Fabrikam is ready',
         body: UI.kv([['Workspaces', 'Team, Projects'], ['Custom roles', 'Contributor'], ['Draft profiles', '<span class="mono">assistant</span>'], ['Zone', '<span class="mono">inference</span>, pinned (pool gpu-a)'], ['Issuer', 'issuing CA created under the Northwind platform root'], ['First admin', '<span class="mono">ada</span>, tenant-admin, cleared for internal']], 1)
-          + UI.notice('<b>Copy the enrolment link now; it is not shown again.</b> It works once, for 72 hours, and sets the password and the second factor together. Give it to ada over a trusted channel.', 'warn') + UI.code(ENROL_LINK),
+          + UI.notice('<b>Copy the enrolment link now; it is not shown again.</b> It works once, for 72 hours, and sets the password and the second factor together. Give it to ada over a trusted channel.', 'warn') + UI.code(ENROL_LINK).replace('class="codebox"', 'class="codebox wrap"'),
         actions: UI.btn('Copy link', { attrs: 'data-cplink' }) + UI.btn('Done', { kind: 'primary', attrs: 'data-close' }),
         onMount(m) { m.querySelector('[data-cplink]').addEventListener('click', () => { try { navigator.clipboard && navigator.clipboard.writeText(ENROL_LINK); } catch (err) { /* clipboard unavailable from file:// */ } ctx.toast('Enrolment link copied.'); }); }
       });

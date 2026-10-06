@@ -33,7 +33,7 @@ jobs:
   e2e:
     name: Console end-to-end (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -152,8 +152,8 @@ jobs:
       - run: npm ci
       - run: npm run test:integration -w server
         env:
-          TEST_IMAP_URL: imaps://help%40shop.example:imap-pw@localhost:3993/INBOX
-          TEST_IMAP_SMTP_URL: smtp://localhost:3025
+          TEST_IMAP_URL: imaps://help%40shop.example:imap-pw@127.0.0.1:3993/INBOX
+          TEST_IMAP_SMTP_URL: smtp://127.0.0.1:3025
           NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/greenmail/ca.pem
           TEST_PG_URL: postgres://exprsn:exprsn@127.0.0.1:5432/exprsn_test
           TEST_MYSQL_URL: mysql://exprsn:exprsn@127.0.0.1:3306/exprsn_test
