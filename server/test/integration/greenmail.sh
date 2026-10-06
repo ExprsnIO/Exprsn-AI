@@ -8,8 +8,8 @@
 # help@shop.example / imap-pw, waits until IMAPS answers, and prints the variables the test reads:
 #
 #   NODE_EXTRA_CA_CERTS=<dir>/ca.pem
-#   TEST_IMAP_URL=imaps://help%40shop.example:imap-pw@localhost:3993/INBOX
-#   TEST_IMAP_SMTP_URL=smtp://localhost:3025
+#   TEST_IMAP_URL=imaps://help%40shop.example:imap-pw@127.0.0.1:3993/INBOX
+#   TEST_IMAP_SMTP_URL=smtp://127.0.0.1:3025
 #
 # The channel's fetcher requires TLS and verifies the certificate against the host name, as in production; the CA is
 # trusted through NODE_EXTRA_CA_CERTS only in the test process. Stop it with `docker rm -f <name>`.
@@ -37,10 +37,10 @@ docker run -d --name "$name" -p "127.0.0.1:$imaps:3993" -p "127.0.0.1:$smtp:3025
 
 for _ in $(seq 1 60); do
   # Ready once IMAPS answers a login over a verified TLS connection (curl speaks IMAP).
-  if curl -fsS --max-time 5 --cacert ca.pem --user 'help@shop.example:imap-pw' "imaps://localhost:$imaps/" 2>/dev/null | grep -q INBOX; then
+  if curl -fsS --max-time 5 --cacert ca.pem --user 'help@shop.example:imap-pw' "imaps://127.0.0.1:$imaps/" 2>/dev/null | grep -q INBOX; then
     echo "NODE_EXTRA_CA_CERTS=$PWD/ca.pem"
-    echo "TEST_IMAP_URL=imaps://help%40shop.example:imap-pw@localhost:$imaps/INBOX"
-    echo "TEST_IMAP_SMTP_URL=smtp://localhost:$smtp"
+    echo "TEST_IMAP_URL=imaps://help%40shop.example:imap-pw@127.0.0.1:$imaps/INBOX"
+    echo "TEST_IMAP_SMTP_URL=smtp://127.0.0.1:$smtp"
     exit 0
   fi
   sleep 1

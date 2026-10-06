@@ -17,6 +17,8 @@ export const CONFIG_SOURCE = path.resolve(here, '../src/config/index.ts');
 export const SETTINGS_FILE = path.resolve(here, '../src/config/settings.generated.ts');
 /** The variables table in docs/deploy.md describes the settings whose source line has no comment above it. */
 const DEPLOY_DOC = path.resolve(here, '../../docs/deploy.md');
+/** Defaults computed from where the checkout is (WEB_ROOT) are written relative to it, so the file is the same everywhere. */
+const REPO_ROOT = path.resolve(here, '../..');
 
 /** Secrets: the `<NAME>_FILE` variables, and two that carry credentials without a file form. */
 const SECRETS = new Set<string>([...FILE_VARS, 'S3_ACCESS_KEY_ID', 'OTEL_EXPORTER_OTLP_HEADERS']);
@@ -101,6 +103,7 @@ function shape(name: string, field: Schema): { type: string; constraint: string;
     const d = s.def;
     if (d.type === 'default') {
       def = text(typeof d.defaultValue === 'function' ? (d.defaultValue as () => unknown)() : d.defaultValue);
+      if (def && def.startsWith(REPO_ROOT + path.sep)) def = path.relative(REPO_ROOT, def).split(path.sep).join('/');
       s = d.innerType!;
     } else if (d.type === 'optional') s = d.innerType!;
     else break;

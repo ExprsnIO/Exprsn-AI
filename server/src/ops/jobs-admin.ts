@@ -292,7 +292,7 @@ export class JobsAdmin {
 
   private async scheduleView(e: ScheduleEntry, paused: Map<string, { reason: string | null; paused_by: string | null; paused_at: number | string }>) {
     const s = this.s();
-    const runs = (await s.db('jobs').where({ type: e.type }).andWhere('dedupe_key', '>=', `${e.name}:`).andWhere('dedupe_key', '<', `${e.name}:￿`).orderBy('created_at', 'desc').limit(5).select('id', 'state', 'message', 'error', 'created_at', 'started_at', 'finished_at', 'dedupe_key')) as Record<string, unknown>[];
+    const runs = (await s.db('jobs').where({ type: e.type }).andWhereRaw('substr(dedupe_key, 1, ?) = ?', [e.name.length + 1, `${e.name}:`]).orderBy('created_at', 'desc').limit(5).select('id', 'state', 'message', 'error', 'created_at', 'started_at', 'finished_at', 'dedupe_key')) as Record<string, unknown>[];
     const targets: { tenantId: string; key?: string }[] = await e.targets().catch(() => []);
     const platform = targets.some((t) => t.key === 'platform' || t.key === 'all');
     const now = Date.now();
