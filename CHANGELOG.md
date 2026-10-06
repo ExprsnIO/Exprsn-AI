@@ -39,9 +39,22 @@
 
 ### The chain tree and registry fields in the console (Sprint 34d, B-4108, B-4109)
 
-- PLACEHOLDER (coordinator: fill in from sprint-34d once it is merged): the prototype boards for the chain tree in
-  Runs, the registry editor's delegates, skill dependencies and workflows fields and the "used by" view (B-4108), and
-  the live screens with their Playwright, axe-core and reflow checks (B-4109).
+- Prototype boards (B-4108): Runs gains the chain tree with a node inspector (usage and subtree, label, guardrail
+  decisions, typed error, audit link, replay from a node) and held calls decided from the root with their path;
+  the registry editor gains agent delegates, listed workflows, input and output schemas, skill dependencies with the
+  loaded closure, the Chain references check and a "used by" view before deprecating or retiring; Workflows gains
+  "used by" before deleting and a Chain tree button on runs. The smoke run is clean in light and dark.
+- Live screens (B-4109): the tree comes from `GET /api/chains/:id` and opens from a run, a workflow run or
+  `#/runs?chain=<id>&node=`; held calls are decided through `POST /api/chains/:id/held/:node/decision` and nodes
+  replayed through the chain replay route; Retire and Delete are disabled while an entry is still used.
+  `e2e/tests/runs-chain.spec.ts` opens a three-level chain (planner, broker, clerk) as a tree from its root run with
+  no axe-core, in-page checker or reflow finding, and approves a `feed.post` call held three levels down from the root.
+  The fake model in `e2e/server.ts` makes the tool call named on an `E2E-CALL` line of an agent's prompt; the reflow
+  check is shared from `e2e/tests/support/reflow.ts`.
+- Fixed on Runs: a run with its own error text no longer shows "The run could not be loaded", and route parameters
+  no longer cause a re-fetch loop.
+- Known limit: the registry editor cannot clear an agent's input schema once set (the PATCH schema does not take
+  `null`).
 
 ### Profiles and presence (Sprint 34c, B-5801, B-5802)
 

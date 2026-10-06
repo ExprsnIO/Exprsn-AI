@@ -57,7 +57,7 @@ verified (B-3604), the RSVP race closed on all three databases (B-3603), import 
 renamed `033c_imports` so it runs after the Sprint 30 migrations. Unit suite 935 passed, the PostgreSQL and MySQL
 integration suites passed, Playwright 99 passed.
 
-**Sprint 32: done** (branch `sprint-32`, merged into `sprint-34`): the chain context with one `CHAIN_MAX_DEPTH` and root budgets across chat turns,
+**Sprint 32: done** (PR #48, landed on `main` by #49): the chain context with one `CHAIN_MAX_DEPTH` and root budgets across chat turns,
 agent runs, workflow runs, tool calls, skill loads, plugin actions and app triggers (B-4101); sub-workflow, agent,
 `map` and `loop` steps and skills on model steps (B-3901, B-3902, B-3905); event and schedule triggers on the workflow
 itself, per-step retry, the on-failure edge and dead letters with redrive, and signed `exprsn-workflow/1` bundles
