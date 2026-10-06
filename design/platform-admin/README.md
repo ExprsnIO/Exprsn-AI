@@ -115,6 +115,12 @@ A dashboard, not a list: what needs attention now, and whether the instances are
   instances ready); **Tenant admin view** (neutral: without `platform:manage` the instances table and capacity panel
   are replaced by a notice "Instance health is visible to system admins"; counters and audit stay).
 
+- Live (1.6.0, Sprint 35b, B-4202): the instances are the server processes, each writing its own heartbeat row; the
+  signer and the training and image workers keep their health on their own screens. Capacity shows what the server
+  measures (database size and pool, vectors, blob store, cache and rate-limit stores), not the blob store's bytes or GPU
+  hours. The metrics URL is copied, not opened (a browser cannot send the bearer token). An instance that stopped
+  beating without a clean shutdown raises its own alert.
+
 ### Jobs and queues
 
 The platform had Bull queues per module and a prefetch cache; Exprsn-AI has one `JobQueue` (BullMQ on Redis, or
@@ -160,6 +166,13 @@ database polling), one `Scheduler`, and the tenant cache. Five tabs.
   trace id shown); **Instance behind claims no jobs** (info: notice on Queues that `api-2` claims none while behind the
   schema, link to Overview); **Dead letter redriven** (ok: the moderation item moved to Jobs, toast); **Database
   polling backend** (neutral: backend pill "database polling", cache store "memory", the per-instance notice).
+
+- Live (1.6.0, Sprint 35b, B-4203): one `JOB_CONCURRENCY` per instance, so there is no per-type concurrency column;
+  the trace id is copied for the collector (the server has no trace viewer to link to). Dead letters are the domains
+  that keep a dead-letter queue: moderation jobs and workflow runs, redriven through their own services (audited
+  `moderation.job.redriven`, `workflow.dead_letter.redriven`); webhook breakers, plugin runs, the firehose and email
+  bounces stay on their screens. The cache lists the namespaces the server reads (`plugins`, `sanctions`,
+  `workflow-triggers`), with counters of the answering instance since it started. System admins get a tenant filter.
 
 ### Storage
 

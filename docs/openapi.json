@@ -10923,6 +10923,45 @@
         }
       }
     },
+    "/api/admin/cache": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The tenant cache (B-2102, Q1): the store (memory per instance, or Redis shared), the TTL of each tier, the instances, and per namespace its tier, reads and hits and invalidations (local and from the bus) on the answering instance since it started, and the tenant's live entries (memory store only)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/cache/{ns}/invalidate": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Drops every entry of a namespace for the caller's tenant here and, over the bus, on every instance. 404 for a namespace the server does not use. Audited jobs.cache.invalidated. Answers the cache",
+        "parameters": [
+          {
+            "name": "ns",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/classifiers": {
       "get": {
         "tags": [
@@ -11323,6 +11362,109 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/dead-letters": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The caller's tenant's open dead letters: moderation jobs (with moderation:manage) and workflow runs of the current workspace within clearance (with workflows:manage); source, item, reason, attempts, when, what a redrive queues, and where the domain shows it",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/dead-letters/{source}/{id}/discard": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage, and the domain's permission. Drops a dead letter for good with a reason; for a moderation item the flag stays open for a reviewer. 409 when already redriven or discarded. Audited jobs.deadletter.discarded. Answers the dead letters",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(moderation|workflow)$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/dead-letters/{source}/{id}/redrive": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage, and the domain's permission. Redrives a dead letter: a new job with the original payload (moderation, audited moderation.job.redriven) or a replay of the run from the failed step (workflow, audited workflow.dead_letter.redriven). 201",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(moderation|workflow)$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
             }
           }
         ],
@@ -12896,6 +13038,229 @@
         }
       }
     },
+    "/api/admin/jobs": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Jobs, newest first: id, type, domain, tenant and workspace, state, progress, attempts, created, started, finished, duration, node (the instance's worker id), message, error, payload keys (never values), trace id, who started it; and the queued, running and failed counts. A tenant admin sees their tenant's jobs, a system admin every tenant's (Q9)",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "preempted"
+              ]
+            },
+            "description": "One state"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            },
+            "description": "One job type"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ]
+            },
+            "description": "Created within"
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            },
+            "description": "System admins only: one tenant's jobs (default every tenant). Another tenant's id from a tenant admin is 403"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{1,32}$"
+            },
+            "description": "A job id or a trace id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "description": "Default 200"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/retry-failed": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Queues again every failed job in the scope (of one type, when given) created in the window, at most 500, each with its payload and a fresh attempt count. Audited jobs.retried with the count",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+                  },
+                  "window": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "24h",
+                      "7d"
+                    ]
+                  },
+                  "tenant": {
+                    "type": "string",
+                    "pattern": "^[0-9A-Za-z]{26}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. One job in scope, with a timeline built from its timestamps (queued, claimed, progress, retry, finished). 404 outside the scope",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{id}/cancel": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Cancels a queued job at once or a running one at its next step. 409 for any other state. Audited jobs.cancelled with the reason",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{id}/retry": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Queues a failed, cancelled or preempted job again with its payload and a fresh attempt count (the row keeps its id). 409 for any other state. Audited jobs.retried",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/label-names": {
       "get": {
         "tags": [
@@ -13450,6 +13815,101 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/overview": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The Overview (B-4202): scope (platform for a system admin, else tenant), open alerts not acknowledged in the tenant (key, kind schema|instance|rpo|drift|certs|pki|ratelimit, tone, title, text, since, open), counters for the window (jobs across every tenant for a system admin; flags, held replies, sign-ins and sign-ins refused by sanction in the tenant; sockets), the next six schedules, the last eight audit events redacted above the reader's clearance (null without audit:read), and for system admins the instances (their /readyz checks, schema, jobs claimed, sockets, runtime, drain) and capacity (database size and pool, vectors, blob store, rate-limit and cache stores) with the metrics URL",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ]
+            },
+            "description": "Counters' window (default 24h)"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/overview/alerts/acknowledge": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Acknowledges open alerts for every administrator of the tenant (Q15); the condition is unchanged and a new occurrence (a new key) shows again. 409 when none of the keys is open. Audited platform.alert.acknowledged. Answers the alerts still open",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "keys": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                },
+                "required": [
+                  "keys"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/overview/instances/{id}/drain": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage, a browser session and a recent sign-in (401 step_up otherwise). Drains a server instance (Q14): it stops claiming jobs and answers /readyz with 503, checks.shutdown draining, and finishes what it has; it takes the drain from the bus at once or from its row at its next heartbeat. 404 unknown, 409 already draining or not answering. Audited platform.instance.drained",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The instance id (host:pid), URL-encoded"
           }
         ],
         "responses": {
@@ -16391,6 +16851,99 @@
         }
       }
     },
+    "/api/admin/queues": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. One row per job type (registered on this instance, queued, or paused): domain, description, queued, running, oldest queued, failed and succeeded in 24 h, p50 and p95 durations, eight 3-hour buckets of jobs queued, timeout, paused and by whom; the backend (db or bullmq), JOB_CONCURRENCY, and which instances claim nothing (draining, behind the schema). Counts cover the scope (Q9)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            },
+            "description": "System admins only: one tenant's jobs (default every tenant). Another tenant's id from a tenant admin is 403"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/queues/{type}/pause": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Pauses a job type on every instance: jobs keep being queued and none is claimed until it is resumed; every instance reads the pause at its next poll. 404 for a type not registered here, 409 when paused. Audited jobs.type.paused. Answers the queues",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/queues/{type}/resume": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Resumes a paused job type; claiming starts at the next poll. 409 when not paused. Audited jobs.type.resumed. Answers the queues",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/quotas": {
       "get": {
         "tags": [
@@ -16737,6 +17290,112 @@
           "admin/roles"
         ],
         "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The schedules registered on the answering instance: name, job type, period and the setting that sets it, targets (platform or a count of tenants), next bucket, paused, and the last five runs (scheduled or run now) with their result and duration",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules/{name}/pause": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Pauses a schedule: no bucket is queued until it is resumed and missed buckets are not caught up. 409 when paused. Audited jobs.schedule.paused",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules/{name}/resume": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Resumes a paused schedule at its next bucket. 409 when not paused. Audited jobs.schedule.resumed",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules/{name}/run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Queues one run of a schedule now for each of its targets, outside its bucket; the next bucket is unchanged. 404 unknown. Audited jobs.schedule.run. 202 with the jobs queued",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"

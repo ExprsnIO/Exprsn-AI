@@ -100,7 +100,8 @@ const fromRow = (r: Record<string, unknown>): JobRow => ({
 export class JobQueue {
   private readonly handlers = new Map<string, Registration>();
   private readonly running = new Map<string, AbortController>();
-  private readonly workerId = `${hostname()}:${process.pid}`;
+  /** This worker, as recorded on the jobs it claims (`jobs.worker`). */
+  readonly workerId = `${hostname()}:${process.pid}`;
   private timer: NodeJS.Timeout | null = null;
   private stopped = true;
   private queue: Queue | null = null;
@@ -117,6 +118,12 @@ export class JobQueue {
    * this instance takes no jobs. The jobs stay queued for an up-to-date instance.
    */
   gate: (() => string | null) | null = null;
+  /**
+   * 1.6.0 (B-4203): job types no instance claims (they keep being queued). Read again by every poll through
+   * `pausesLoader`, so a pause made on any instance holds everywhere within one poll.
+   */
+  private paused = new Set<string>();
+  pausesLoader: (() => Promise<string[]>) | null = null;
 
   constructor(
     private readonly db: Db,
@@ -133,6 +140,42 @@ export class JobQueue {
 
   register(type: string, handler: JobHandler, opts: { timeoutMs?: number } = {}): void {
     this.handlers.set(type, { handler, timeoutMs: opts.timeoutMs ?? 10 * 60_000 });
+  }
+
+  /** 1.6.0 (B-4203): the job types registered here, with their timeouts. */
+  types(): { type: string; timeoutMs: number }[] {
+    return [...this.handlers].map(([type, r]) => ({ type, timeoutMs: r.timeoutMs })).sort((a, b) => a.type.localeCompare(b.type));
+  }
+
+  get concurrency(): number {
+    return this.opts.concurrency;
+  }
+
+  /** Jobs this instance is running now. */
+  get runningCount(): number {
+    return this.running.size;
+  }
+
+  /** Replaces the set of paused types (the loader's answer, or a pause just made on this instance). */
+  setPaused(types: Iterable<string>): void {
+    this.paused = new Set(types);
+  }
+
+  isPaused(type: string): boolean {
+    return this.paused.has(type);
+  }
+
+  private async refreshPauses(): Promise<void> {
+    if (!this.pausesLoader) return;
+    try {
+      this.setPaused(await this.pausesLoader());
+    } catch (err) {
+      this.log.warn({ err }, 'reading paused job types failed; keeping the last answer');
+    }
+  }
+
+  private claimable(): string[] {
+    return [...this.handlers.keys()].filter((t) => !this.paused.has(t));
   }
 
   async enqueue(input: EnqueueInput): Promise<JobRow> {
@@ -195,6 +238,25 @@ export class JobQueue {
     return after;
   }
 
+  /**
+   * 1.6.0 (B-4203): queues a failed, cancelled or preempted job again with its payload and a fresh attempt count. The
+   * row keeps its id (and its last error until the next attempt); the audit chain keeps who did it. Undefined when
+   * the job is not in one of those states.
+   */
+  async requeue(tenantId: string, id: string, message: string): Promise<JobRow | undefined> {
+    const t = Date.now();
+    const n = await this.db('jobs')
+      .where({ tenant_id: tenantId, id })
+      .whereIn('state', ['failed', 'cancelled', 'preempted'])
+      .update({ state: 'queued', attempts: 0, run_at: t, worker: null, started_at: null, finished_at: null, locked_until: null, progress: 0, message: message.slice(0, 300) });
+    if (n !== 1) return undefined;
+    await this.dispatch(id, t);
+    const after = (await this.get(tenantId, id))!;
+    this.emit(after);
+    if (this.opts.mode === 'db' && !this.stopped) void this.fill();
+    return after;
+  }
+
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
@@ -208,6 +270,7 @@ export class JobQueue {
       if (this.stopped) return;
       try {
         await this.recoverStale();
+        await this.refreshPauses();
         // In BullMQ mode the (slower) poll only catches jobs whose dispatch was lost, for example when Redis restarted.
         if (this.opts.mode === 'db') await this.fill();
         else await this.pollOnce();
@@ -254,7 +317,8 @@ export class JobQueue {
   private async pollOnce(limit = this.opts.concurrency - this.running.size): Promise<number> {
     if (limit <= 0) return 0;
     if (this.gate?.()) return 0;
-    const types = [...this.handlers.keys()];
+    await this.refreshPauses();
+    const types = this.claimable();
     if (!types.length) return 0;
     const due = await this.db('jobs').where({ state: 'queued' }).whereIn('type', types).andWhere('run_at', '<=', Date.now()).orderBy('run_at').limit(limit).select('id');
     let ran = 0;
@@ -282,7 +346,7 @@ export class JobQueue {
         this.refill = false;
         const limit = this.opts.concurrency - this.inflight;
         if (this.stopped || limit <= 0 || this.gate?.()) return;
-        const types = [...this.handlers.keys()];
+        const types = this.claimable();
         if (!types.length) return;
         const due = (await this.db('jobs').where({ state: 'queued' }).whereIn('type', types).andWhere('run_at', '<=', Date.now()).orderBy('run_at').limit(limit).select('id')) as { id: string }[];
         for (const d of due) {
@@ -326,7 +390,7 @@ export class JobQueue {
     const row = await this.db('jobs').where({ id }).first();
     if (!row) return false;
     const reg = this.handlers.get(String(row.type));
-    if (!reg) return false;
+    if (!reg || this.paused.has(String(row.type))) return false;
     const t = Date.now();
     const claimed = await this.db('jobs')
       .where({ id, state: 'queued' })
@@ -402,8 +466,20 @@ export class JobQueue {
  * Enqueues recurring jobs. Each tick uses a dedupe key per time bucket, so however many instances run the
  * scheduler, each bucket's job is enqueued once.
  */
+export interface ScheduleEntry {
+  name: string;
+  type: string;
+  everyMs: number;
+  targets: () => Promise<{ tenantId: string; payload?: Record<string, unknown>; key?: string }[]>;
+  /** When this instance registered it. */
+  since: number;
+}
+
 export class Scheduler {
   private readonly timers: NodeJS.Timeout[] = [];
+  private readonly entries = new Map<string, ScheduleEntry>();
+  /** 1.6.0 (B-4203): asked before each tick; a paused schedule queues nothing (missed buckets are not caught up). */
+  isPaused: ((name: string) => Promise<boolean>) | null = null;
 
   constructor(
     private readonly jobs: JobQueue,
@@ -412,8 +488,10 @@ export class Scheduler {
 
   every(name: string, everyMs: number, targets: () => Promise<{ tenantId: string; payload?: Record<string, unknown>; key?: string }[]>, type = name): void {
     if (everyMs <= 0) return;
+    this.entries.set(name, { name, type, everyMs, targets, since: Date.now() });
     const tick = async () => {
       try {
+        if (await this.isPaused?.(name)) return;
         const bucket = Math.floor(Date.now() / everyMs);
         for (const t of await targets()) {
           await this.jobs.enqueue({ tenantId: t.tenantId, type, payload: t.payload ?? {}, dedupeKey: `${name}:${t.key ?? t.tenantId}:${bucket}`, maxAttempts: 1 });
@@ -426,6 +504,28 @@ export class Scheduler {
     timer.unref();
     this.timers.push(timer);
     void tick();
+  }
+
+  /** 1.6.0 (B-4203): the schedules registered on this instance, by name. */
+  list(): ScheduleEntry[] {
+    return [...this.entries.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  get(name: string): ScheduleEntry | undefined {
+    return this.entries.get(name);
+  }
+
+  /**
+   * Queues one run of a schedule now, outside its bucket, for each of its targets. The dedupe key starts with the
+   * schedule's name like a bucket's, so the run is listed with the schedule's last runs; the next bucket is unchanged.
+   */
+  async runNow(name: string, createdBy: string | null): Promise<JobRow[]> {
+    const e = this.entries.get(name);
+    if (!e) return [];
+    const out: JobRow[] = [];
+    const at = Date.now();
+    for (const t of await e.targets()) out.push(await this.jobs.enqueue({ tenantId: t.tenantId, type: e.type, payload: t.payload ?? {}, createdBy, dedupeKey: `${name}:${t.key ?? t.tenantId}:now:${at}`, maxAttempts: 1 }));
+    return out;
   }
 
   stop(): void {

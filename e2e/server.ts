@@ -26,6 +26,7 @@ import { createLogger, Metrics } from '../server/src/observability/index.js';
 import { createServices } from '../server/src/services.js';
 import { bootstrap } from '../server/src/bootstrap.js';
 import { attachRealtime } from '../server/src/realtime/socket.js';
+import { InstanceRegistry } from '../server/src/ops/instances.js';
 import { hashPassword } from '../server/src/identity/passwords.js';
 import type { Label } from '../server/src/authz/labels.js';
 import type { ProfileRow } from '../server/src/gateway/repo.js';
@@ -222,6 +223,11 @@ async function main() {
   const realtime = attachRealtime(server, s);
   s.jobs.start();
   s.gateway.start();
+  // 1.6.0 (B-4202): this server's heartbeat for the Overview, and a second instance beside it (a registry of its own
+  // in this process, with its own row), so the Overview spec can drain an instance without stopping this one's jobs.
+  s.instances.start();
+  const peer = new InstanceRegistry(() => s, s.bus, { heartbeatMs: 30_000, id: 'e2e-peer:2' });
+  peer.start();
   await new Promise<void>((r) => server.listen(port, '127.0.0.1', r));
   baseUrl = url;
 
@@ -247,6 +253,7 @@ async function main() {
     try {
       server.closeAllConnections();
       await realtime.close();
+      await peer.stop();
       await s.close();
       await db.destroy();
       await ollama.stop();

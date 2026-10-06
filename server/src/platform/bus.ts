@@ -111,7 +111,9 @@ export const TOPICS = {
    */
   rolesChanged: 'authz.roles',
   /** 1.6.0 (B-4206): close every socket of a user on every instance (Social and messaging › Realtime): `{ tenantId, userId }`. */
-  roomsClose: 'rooms.close'
+  roomsClose: 'rooms.close',
+  /** 1.6.0 (B-4202): an administrator drained a server instance: `{ id }`. Only that instance acts on it. */
+  instanceDrain: 'platform.instance.drain'
 } as const;
 
 /** 1.5.0: see `TOPICS.rolesChanged`. */
