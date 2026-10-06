@@ -119,6 +119,22 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- The chain context and Workflows 2's sub-workflow, agent, map and loop steps (1.5.0, Sprint 32, B-4101, B-3901,
+  B-3902, B-3905). The chain covers what runs on this server; what leaves it (a webhook receiver or an MCP server that
+  calls the API back) starts a new chain, bounded only by its own rate limits. A chat turn is a chain node only when its
+  answer calls a registry tool, and the chat model's own tokens are metered per conversation, not charged to the chain.
+  Plugin event fan-out still carries its own chain of plugins (`PLUGIN_MAX_DEPTH`); only a plugin action that starts a
+  workflow is a chain node (the root of a new chain), so an agent → event → plugin → workflow path is two chains. An app
+  trigger owned by someone else than the chain's principal starts a chain of its own (it acts as its owner). "Cost" is
+  metered as GPU time; chains are not priced against the price books. Wall time is charged for leaf work only, so time a
+  run spends waiting on an approval is not counted, and a child executed inside its parent's step counts its own steps;
+  budgets are checked before each step, so the step that crosses a budget completes. A pending workflow tool's call node
+  stays `waiting` until the awaiting agent picks its result up. Cycles across kinds (A → B → A) are bounded by depth at
+  run time only; the publish-time reference graph is B-4105. Skills on a model step: write and destructive tools run
+  only behind an Approval step on every path (a held call is reported to the model, not paused for), and at most six
+  rounds of tool calls. Map items never pause one by one; a write tool in a map or loop needs an Approval step before
+  it. A child workflow runs inside its parent's step while it can, so a long child counts against the parent's step
+  timeout; a budget-stopped agent run fails its workflow step even if its owner resumes it later.
 - Feed generators and relay commit verification (1.5.0, Sprint 31, B-3001 to B-3003, B-3604). Relay commits are
   verified one at a time in the consumer's order: each repo DID new to the cache costs a DID resolution (up to five
   seconds), so a subscription to the whole network over subscribeRepos falls behind where a Jetstream would not; use
