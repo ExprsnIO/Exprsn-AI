@@ -103,6 +103,8 @@ export const TOPICS = {
   pluginChanged: 'plugin.changed',
   /** 1.4.0 (B-2606, B-2702): a block, mute or follow between two users changed: `SocialRelationEvent` (social/service.ts). */
   socialRelation: 'social.relation',
+  /** 1.5.0 (B-5802): someone's effective presence status changed: `PresenceEvent` (profiles/presence.ts). */
+  presence: 'presence.changed',
   /**
    * 1.5.0 (B-3302, B-3305): a tenant's custom role definitions changed (`definitions`), or grants of some users were
    * removed (`userIds`): `RolesChangedEvent`. Every instance reloads the definitions and re-decides socket rooms.

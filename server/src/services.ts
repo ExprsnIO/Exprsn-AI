@@ -115,6 +115,8 @@ import { ChannelService } from './channels/service.js';
 import type { ChannelIo, ChannelMailer } from './channels/mail.js';
 import nodemailer from 'nodemailer';
 import { SocialService } from './social/service.js';
+import { PresenceService } from './profiles/presence.js';
+import { ProfileService } from './profiles/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
@@ -267,6 +269,10 @@ export interface Services {
   channels: ChannelService;
   /** 1.4.0, Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules, shared by messaging and the feed. */
   social: SocialService;
+  /** 1.5.0, Sprint 34c (B-5801): profiles: pronouns, bio and an avatar from the file store, visible by workspace and clearance. */
+  people: ProfileService;
+  /** 1.5.0, Sprint 34c (B-5802): presence status, chosen or derived from connections and idle time. */
+  presence: PresenceService;
   /** 1.4.0, Sprint 28b (B-2601 to B-2604): direct and group conversations, sealed messages, receipts, presence, mutes. */
   messaging: MessagingService;
   /** 1.4.0, Sprint 28b (B-2605): keyword and semantic search, thread summaries and catch-up digests. */
@@ -557,6 +563,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     }),
     // 1.4.0, Sprint 28b: social relations.
     social: new SocialService(() => s),
+    // 1.5.0, Sprint 34c: profiles and presence.
+    people: new ProfileService(() => s),
+    presence: new PresenceService(() => s, { heartbeatMs: 30_000, leaseMs: 90_000 }),
     messaging: new MessagingService(() => s, { maxMembers: cfg.MESSAGING_MAX_MEMBERS, embedModel: cfg.MESSAGING_EMBED_MODEL || null }),
     messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
     // 1.4.0, Sprint 28c: the workspace feed.

@@ -48,6 +48,244 @@
       }
     },
     "schemas": {
+      "PresenceMine": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "available",
+              "away",
+              "busy",
+              "offline"
+            ]
+          },
+          "effective": {
+            "type": "string",
+            "enum": [
+              "available",
+              "away",
+              "busy",
+              "offline"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "effective"
+        ]
+      },
+      "OwnProfile": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "pronouns": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bio": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "workspaces": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "avatar": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "quarantined",
+                  "scanning",
+                  "ready",
+                  "rejected",
+                  "gone",
+                  "not an image"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "presence": {
+            "$ref": "#/components/schemas/PresenceMine"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "displayName",
+          "pronouns",
+          "bio",
+          "label",
+          "workspaces",
+          "avatar",
+          "presence"
+        ]
+      },
+      "PersonProfile": {
+        "type": "object",
+        "description": "What a viewer may know of someone they share a workspace with. limited: clearance (the profile's label is above the viewer's clearance) or hidden (narrowed to other workspaces, or a block either way) leaves out pronouns, bio, label and avatar.",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "self": {
+            "type": "boolean"
+          },
+          "limited": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "clearance",
+              "hidden",
+              null
+            ]
+          },
+          "pronouns": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bio": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "avatar": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          "presence": {
+            "description": "For someone else: {status} or null (nothing for someone in a block). For oneself: the chosen and effective status."
+          },
+          "sharedWorkspaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ]
+            }
+          },
+          "relation": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "userId": {
+                "type": "string"
+              },
+              "blocking": {
+                "type": "boolean"
+              },
+              "muting": {
+                "type": "boolean"
+              },
+              "following": {
+                "type": "boolean"
+              },
+              "followedBy": {
+                "type": "boolean"
+              },
+              "canMessage": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "displayName",
+          "self",
+          "limited",
+          "avatar",
+          "presence",
+          "sharedWorkspaces"
+        ]
+      },
       "MemorySettings": {
         "type": "object",
         "required": [
@@ -38439,6 +38677,391 @@
                     "userId",
                     "muted"
                   ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/people/me": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:read. The caller's own profile: pronouns, bio, label, the workspaces it is shown in, the avatar and its scan state, and the chosen and effective presence status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:write. Changes pronouns (40 characters) and bio (500), screened at user-input (a block or hold is 422 step guardrails, a redaction is stored), the label (at most the caller's clearance, else 403) and the workspaces it is shown in (null for all; one the caller is not in is 422). Audited profile.updated with the fields, not the text",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pronouns": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 40
+                  },
+                  "bio": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "workspaces": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/people/me/avatar": {
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:write and files:write. The raw image (PNG, JPEG, WebP or GIF, at most 2 MiB; another type is 415) goes into the file store of the current workspace and through its quarantine; 202 with the avatar quarantined. It is shown only once that version is ready. Audited profile.avatar.set",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/gif": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:write. Stops using the avatar (the image stays in the file store). Audited profile.avatar.removed",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/people/{id}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:read. Someone's profile, for a viewer who shares a workspace with them (else 404): name, shared workspaces and relation always; pronouns, bio and avatar when the viewer clears the profile's label and shares one of its workspaces; presence unless the two are in a block",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/people/{id}/avatar": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:read. The avatar image, only when its pinned version passed the scan, is an image, is not in the trash and the viewer may see the profile and clears the version's label; 404 otherwise",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/presence": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:read. The effective statuses of up to 200 people (ids comma-separated); people the caller shares no workspace with or is in a block with are left out entirely",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statuses": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                          "available",
+                          "away",
+                          "busy",
+                          "offline"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "statuses"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/presence/me": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:read. The caller's chosen status (auto, available, away, busy, offline) and the effective one",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresenceMine"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "social"
+        ],
+        "summary": "social:write. Chooses a status: auto (derived from connections and idle time), available, away, busy or offline (appear offline). Published at once to the people watching over the socket. Audited presence.status.updated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "available",
+                      "away",
+                      "busy",
+                      "offline"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresenceMine"
                 }
               }
             }

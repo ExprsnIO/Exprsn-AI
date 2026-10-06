@@ -68,7 +68,7 @@
   };
 
   App.register({
-    id: 'settings', title: 'Settings', summary: 'Profile, appearance, security (email, factors, trusted devices), app passwords for DAV clients, API keys, connected applications, sessions, AT-Protocol account', crumb: ['Settings'], live: true,
+    id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, security (email, factors, trusted devices), app passwords for DAV clients, API keys, connected applications, sessions, AT-Protocol account', crumb: ['Settings'], live: true,
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     // B-3413: the account's own verification, trusted devices, email codes and DID. States open what the user would see
     // (a dialog or a notice); none of them changes anything.
@@ -80,7 +80,12 @@
       // B-3415: app passwords for DAV clients.
       { title: 'App password shown once', tone: 'warn', text: 'A new app password is shown once with the username and the server address to type into the client. Afterwards only its name, prefix, scopes and dates remain.', apply(ctx) { ctx.state.openDavForm = true; ctx.rerender(); } },
       { title: 'Step-up for an app password', tone: 'info', text: 'Creating an app password asks for an authenticator code or a passkey when the second factor was confirmed longer ago than the step-up window; the password alone does not count.', apply(ctx) { ctx.state.openDavStepUp = true; ctx.rerender(); } },
-      { title: 'Revoked app password refused', tone: 'danger', text: 'Revoking stops the password at once: the next DAV request from that device gets 401 with a Basic challenge, and the device asks for a new password.', apply(ctx) { ctx.state.davRefusedNote = true; ctx.rerender(); } }
+      { title: 'Revoked app password refused', tone: 'danger', text: 'Revoking stops the password at once: the next DAV request from that device gets 401 with a Basic challenge, and the device asks for a new password.', apply(ctx) { ctx.state.davRefusedNote = true; ctx.rerender(); } },
+      // B-5801, B-5802: the public profile and the status. States explain; none of them changes anything.
+      { title: 'Picture in quarantine', tone: 'info', text: 'A new picture is stored in the file store of your current workspace and scanned like any upload. Until the scan passes, others see your initials.', apply(ctx) { ctx.state.avatarNote = 'quarantine'; ctx.rerender(); } },
+      { title: 'Picture refused by the scan', tone: 'danger', text: 'A picture that fails the scan (malware, or bytes that are not an image) is never shown; upload another one.', apply(ctx) { ctx.state.avatarNote = 'rejected'; ctx.rerender(); } },
+      { title: 'Bio blocked by a guardrail', tone: 'danger', text: 'Pronouns and the bio are screened at user-input like a post. A blocking rule refuses the change with 422 and the old text stays.', apply(ctx) { ctx.state.bioNote = true; ctx.rerender(); } },
+      { title: 'Status set to busy', tone: 'ok', text: 'A chosen status is published at once over the socket: people who share a workspace with you see it within five seconds, people in a block with you never do.', apply(ctx) { ctx.state.statusNote = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -103,6 +108,41 @@
 
       const profile = UI.panel('Profile', UI.kv([['Name', esc(me.user.displayName)], ['Account', '<span class="mono">' + esc(me.user.username) + '</span>'], ['Tenant', esc(me.tenant ? me.tenant.name : '')], ['Clearance', UI.label(me.user.clearance, { sm: true })], ['Roles', esc(me.roles.map((r) => r.name).join(', ') || 'none')], ['Signed in with', me.credential === 'api_key' ? 'API key' : 'browser session']], 2)
         + '<div class="muted" style="font-size:12px">Name, account, clearance and roles come from your user store and its group mappings. Ask an identity admin to change them.</div>');
+
+      // B-5801, B-5802: the public profile and the status (/api/people/me), loaded on their own.
+      const social = App.can('social:read'); const socialW = App.can('social:write');
+      if (social && !st.person && !st.personLoading && !st.personError) {
+        st.personLoading = true;
+        App.get('/api/people/me').then((p) => { st.person = p; }).catch((err) => { st.personError = err; }).finally(() => { st.personLoading = false; if (App.state.route === 'settings') ctx.rerender(); });
+      }
+      const pr = st.person;
+      const PSTATUS = { available: 'ok', away: 'warn', busy: 'danger', offline: 'outline' };
+      let publicPanel = ''; let statusPanel = '';
+      if (social) {
+        const myWs = me.workspaces || [];
+        const av = pr && pr.avatar;
+        const pic = av && av.state === 'ready' && av.url ? '<img class="settings-avatar" src="' + esc(av.url) + '" alt="Your profile picture" width="56" height="56">' : '<span class="settings-avatar" aria-hidden="true">' + esc(String(me.user.displayName || me.user.username || '?').split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase()) + '</span>';
+        const avNote = st.avatarNote === 'quarantine' ? UI.notice('<b>New pictures are scanned first.</b> A picture goes into the file store of your current workspace and through its quarantine (type from the bytes, the text classifier, ClamAV when configured). Until it passes, others see your initials.', 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-avnoteok' }))
+          : st.avatarNote === 'rejected' ? UI.notice('<b>A picture that fails the scan is never shown.</b> Malware, or bytes that are not an image, leave the picture rejected in the file store; upload another one.', 'danger', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-avnoteok' }))
+          : av && (av.state === 'quarantined' || av.state === 'scanning') ? UI.notice('<b>Scanning your new picture.</b> Others see your initials until it passes.', 'info', UI.btn('Check again', { kind: 'ghost', size: 'sm', attrs: 'data-avrefresh' }))
+          : av && (av.state === 'rejected' || av.state === 'not an image') ? UI.notice('<b>Picture refused by the scan.</b> It is never shown; upload another picture.', 'danger')
+          : av && av.state === 'gone' ? UI.notice('<b>Your picture is not shown.</b> Its file is in the trash.', 'warn') : '';
+        const shownIn = pr && pr.workspaces && pr.workspaces.length ? pr.workspaces[0] : 'all';
+        publicPanel = UI.panel('Public profile', st.personError ? UI.problem('Profile not loaded', st.personError.message, st.personError.problem && st.personError.problem.trace_id) : !pr ? UI.notice('Loading…', 'info')
+          : '<div class="hstack" style="gap:12px;align-items:center">' + pic + '<div class="vstack" style="gap:6px;min-width:0">' + (socialW && App.can('files:write') ? '<div class="hstack wrap gap6">' + UI.btn(av ? 'Change picture' : 'Upload a picture', { size: 'sm', icon: 'upload', attrs: 'data-avpick' }) + (av ? UI.btn('Remove', { size: 'sm', kind: 'ghost', attrs: 'data-avremove' }) : '') + '<input type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" data-avfile aria-label="Profile picture"></div>' : '') + '<span class="muted" style="font-size:12px">PNG, JPEG, WebP or GIF, at most 2 MiB. Kept in the file store and scanned before anyone sees it.</span></div></div>'
+            + avNote
+            + '<div class="formgrid" style="--cols:2">' + UI.field('Pronouns', UI.input(pr.pronouns || '', { attrs: 'data-pron maxlength="40"' + (socialW ? '' : ' disabled'), placeholder: 'she/her' })) + UI.field('Label', UI.select(['public', 'internal', 'confidential', 'restricted'].filter((l) => ({ public: 1, internal: 2, confidential: 3, restricted: 4 })[l] <= ({ public: 1, internal: 2, confidential: 3, restricted: 4 })[me.user.clearance]), pr.label, 'data-plabel' + (socialW ? '' : ' disabled')), 'People below it see your name only.') + '</div>'
+            + UI.field('Bio', UI.textarea(pr.bio || '', { attrs: 'data-bio maxlength="500"' + (socialW ? '' : ' disabled'), rows: 3 }), 'Up to 500 characters. Pronouns and the bio are screened at user-input like a post.')
+            + (st.bioNote ? UI.notice('<b>A guardrail can refuse a bio.</b> A blocking or holding rule at user-input refuses the change with 422 (step guardrails) and your previous text stays; a redacting rule saves the redacted text.', 'danger', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-bionoteok' })) : '')
+            + (st.bioProblem ? UI.problem('Profile not saved', st.bioProblem.message, st.bioProblem.problem && st.bioProblem.problem.trace_id) : '')
+            + UI.field('Shown in', UI.select([{ value: 'all', label: 'Every workspace I share with them' }].concat(myWs.map((w) => ({ value: w.id, label: w.name + ' only' }))), shownIn, 'data-pws' + (socialW ? '' : ' disabled')), 'Outside it, people who share a workspace with you see your name only.')
+            + '<div class="hstack">' + (socialW ? UI.btn('Save profile', { kind: 'primary', size: 'sm', attrs: 'data-saveprofile' }) : '') + '<span class="grow"></span>' + '<a href="#/person?user=me" class="btn ghost sm">See how others see you</a></div>');
+        const chosen = pr && pr.presence ? pr.presence.status : 'auto'; const eff = pr && pr.presence ? pr.presence.effective : 'offline';
+        statusPanel = UI.panel('Status', !pr ? UI.notice('Loading…', 'info') : UI.seg([{ id: 'auto', label: 'Automatic' }, { id: 'available', label: 'Available' }, { id: 'away', label: 'Away' }, { id: 'busy', label: 'Busy' }, { id: 'offline', label: 'Appear offline' }], chosen, 'data-pstatus aria-label="Status"')
+          + '<div class="hstack gap6" style="margin-top:4px">Others see ' + UI.pill(eff, PSTATUS[eff]) + '</div>'
+          + (st.statusNote ? UI.notice('<b>Statuses are published at once.</b> People who share a workspace with you see a change within five seconds over the socket; people in a block with you never see your status.', 'ok', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-statusnoteok' })) : '')
+          + '<span class="muted" style="font-size:12px">Automatic is available while you are connected, away after five minutes without input or while the console is hidden, offline when you close it. People in a block with you never see your status.</span>');
+      }
 
       const a11y = App.state.a11y || 'system';
       const eff = App.a11yMode();
@@ -195,7 +235,8 @@
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(me.user.displayName))
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + appearance + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
+        + '<style>#main .settings-avatar{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:18px;font-weight:700;flex-shrink:0;object-fit:cover}</style>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       if (ctx.$('[data-pwnew]')) App.passwordMeter.attach(ctx.$('[data-pwnew]'), ctx.$('[data-pwmeter]'));
@@ -210,6 +251,40 @@
       const act = async (fn, okMsg) => { try { await fn(); if (okMsg) ctx.toast(okMsg, 'ok'); reload(); } catch (err) { if (!err.cancelled) App.fail(err); } };
       const guarded = (fn) => withStepUp(ctx, fn);
 
+      // B-5801, B-5802: the public profile and the status.
+      const personReload = () => { st.person = null; st.personError = null; ctx.rerender(); };
+      ctx.on('click', '[data-avnoteok]', () => { st.avatarNote = null; ctx.rerender(); });
+      ctx.on('click', '[data-bionoteok]', () => { st.bioNote = false; ctx.rerender(); });
+      ctx.on('click', '[data-statusnoteok]', () => { st.statusNote = false; ctx.rerender(); });
+      ctx.on('click', '[data-avrefresh]', personReload);
+      ctx.on('click', '[data-avpick]', () => { const f = ctx.$('[data-avfile]'); if (f) f.click(); });
+      ctx.on('change', '[data-avfile]', async (e, t) => {
+        const file = t.files && t.files[0]; if (!file) return;
+        let res;
+        try { res = await fetch('/api/people/me/avatar', { method: 'PUT', body: file, credentials: 'same-origin', headers: { 'X-CSRF-Token': App.state.csrf || '', 'Content-Type': file.type || 'application/octet-stream', Accept: 'application/json' } }); }
+        catch (err) { App.fail(new App.ApiError({ status: 0, title: 'Network error', detail: 'The server could not be reached.' }), 'Picture not uploaded'); return; }
+        const data = /json/.test(res.headers.get('content-type') || '') ? await res.json() : null;
+        if (!res.ok) { App.fail(new App.ApiError(data || { status: res.status, title: res.statusText }), 'Picture not uploaded'); return; }
+        st.person = data; ctx.toast('Picture uploaded to Files (202). It is shown once the scan passes.', 'ok'); ctx.rerender();
+        // The scan is a job: look again shortly.
+        setTimeout(() => { if (App.state.route === 'settings' && st.person && st.person.avatar && st.person.avatar.state !== 'ready' && !document.getElementById('overlay')) personReload(); }, 2500);
+      });
+      ctx.on('click', '[data-avremove]', async () => {
+        const ok = await ctx.confirm({ title: 'Remove your picture', body: '<p class="fg2" style="margin:0">People see your initials again. The image stays in Files, where you can trash it.</p>', ok: 'Remove' });
+        if (!ok) return;
+        App.del('/api/people/me/avatar').then((p) => { st.person = p; ctx.toast('Picture removed. Audited profile.avatar.removed.', 'ok'); ctx.rerender(); }).catch((err) => App.fail(err, 'Not removed'));
+      });
+      ctx.on('click', '[data-saveprofile]', () => {
+        const ws = ctx.$('[data-pws]').value;
+        const body = { pronouns: ctx.$('[data-pron]').value.trim() || null, bio: ctx.$('[data-bio]').value.trim() || null, label: ctx.$('[data-plabel]').value, workspaces: ws === 'all' ? null : [ws] };
+        App.patch('/api/people/me', body).then((p) => { st.person = p; st.bioProblem = null; ctx.toast('Profile saved. Audited profile.updated (the fields, not the text).', 'ok'); ctx.rerender(); })
+          .catch((err) => { if (err.status === 422 || err.status === 403) { st.bioProblem = err; ctx.rerender(); } else App.fail(err, 'Profile not saved'); });
+      });
+      ctx.on('click', '[data-pstatus] [data-seg]', (e, t) => {
+        if (!socialW) { ctx.toast('Changing your status needs social:write.', 'warn'); return; }
+        const v = t.dataset.seg; if (st.person && st.person.presence && st.person.presence.status === v) return;
+        App.api('PUT', '/api/presence/me', { status: v }).then((r) => { if (st.person) st.person.presence = r; ctx.toast('Status: ' + esc(t.textContent) + '. Others see ' + esc(r.effective) + '.', 'ok'); ctx.rerender(); }).catch((err) => App.fail(err, 'Status not changed'));
+      });
       ctx.on('change', '[data-theme]', (e, t) => { App.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '.'); });
       ctx.on('change', '[data-a11y-mode]', (e, t) => {
         const v = t.value; App.setA11y(v === 'system' ? null : v); ctx.rerender();

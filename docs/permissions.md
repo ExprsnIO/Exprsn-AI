@@ -91,8 +91,8 @@ An admin permission is any permission outside the member baseline: a custom role
 | `groups:manage` | yes | 0 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:manage` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |  |
-| `social:read` | no | 9 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `social:write` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `social:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `social:write` | no | 16 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `social:manage` | yes | 1 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -1164,6 +1164,11 @@ No route requires it directly; handlers and services check it.
 
 ### `social:read`
 
+- `GET /api/people/me`
+- `GET /api/people/{id}`
+- `GET /api/people/{id}/avatar`
+- `GET /api/presence`
+- `GET /api/presence/me`
 - `GET /api/social/blocks`
 - `GET /api/social/followers`
 - `GET /api/social/following`
@@ -1176,17 +1181,21 @@ No route requires it directly; handlers and services check it.
 
 ### `social:write`
 
+- `DELETE /api/people/me/avatar`
 - `DELETE /api/social/blocks/{id}`
 - `DELETE /api/social/following/{id}`
 - `DELETE /api/social/lists/{id}`
 - `DELETE /api/social/lists/{id}/members/{userId}`
 - `DELETE /api/social/mutes/{id}`
+- `PATCH /api/people/me`
 - `PATCH /api/social/lists/{id}`
 - `POST /api/social/blocks`
 - `POST /api/social/following`
 - `POST /api/social/lists`
 - `POST /api/social/lists/{id}/members`
 - `POST /api/social/mutes`
+- `PUT /api/people/me/avatar`
+- `PUT /api/presence/me`
 - `PUT /api/social/settings`
 
 ### `social:manage`

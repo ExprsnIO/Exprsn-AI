@@ -598,6 +598,31 @@ export class FileService {
     return { file, version, stream: await this.plain(version), via };
   }
 
+  /**
+   * 1.5.0 (B-5801): the state of one version of a file, for a caller that pins a version (a profile's avatar) and
+   * decides who may see it itself. `gone` when the file or version no longer exists or the file is in the trash
+   * (deleted by its owner or taken down by moderation).
+   */
+  async pinnedVersion(tenantId: string, fileId: string, number: number): Promise<{ state: VersionState | 'gone'; type: string | null; label: Label | null; size: number }> {
+    const file = await this.fileRow(tenantId, fileId);
+    if (!file || file.trashed_at != null) return { state: 'gone', type: null, label: null, size: 0 };
+    const r = await this.db('file_versions').where({ file_id: file.id, number }).first();
+    if (!r) return { state: 'gone', type: null, label: null, size: 0 };
+    const v = versionFrom(r);
+    return { state: v.state, type: v.type, label: v.label, size: v.size };
+  }
+
+  /** The content of a pinned version that passed its scan (B-5801), or null for anything else. */
+  async pinnedContent(tenantId: string, fileId: string, number: number): Promise<{ type: string | null; label: Label; size: number; stream: AsyncIterable<Buffer> } | null> {
+    const file = await this.fileRow(tenantId, fileId);
+    if (!file || file.trashed_at != null) return null;
+    const r = await this.db('file_versions').where({ file_id: file.id, number }).first();
+    if (!r) return null;
+    const v = versionFrom(r);
+    if (v.state !== 'ready') return null;
+    return { type: v.type, label: v.label, size: v.size, stream: await this.plain(v) };
+  }
+
   // ---------- the quarantine scan ----------
 
   private async scan(versionId: string): Promise<unknown> {

@@ -221,6 +221,11 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   retry policies and `branch: failure` edges), `dead-letters.ts` (failed runs and their redrive), `bundles.ts` (signed
   `exprsn-workflow/1` export and import with re-bound references), hooked into `service.ts` through `useLifecycle`;
   routes in `routes/workflow-operations.ts`.
+- 1.5.0 Sprint 34c: **`profiles/`** (`service.ts` `s.people`: pronouns and bio through the `user-input` guardrail, the
+  avatar as a file-store upload served only once its pinned version passed the scan, visibility by workspace and
+  clearance; `presence.ts` `s.presence`: chosen or derived status, connection rows per instance with a heartbeat, one
+  publish per change on `TOPICS.presence`), with `routes/people.ts` (`/api/people`, `/api/presence`) and
+  `realtime/presence.ts` (`presence.watch`, `presence.idle`, `presence.changed` on the console's socket).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -270,7 +275,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) or of axe-core (`e2e/tests/support/axe.ts`, Standard
   and Enhanced, light and dark), and on sideways scrolling at 320 and 640 px, for screens and, through
   `e2e/tests/y-reflow-overlays.spec.ts`, their dialogs and drawers.
-- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`).
+- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`); `person.js` (1.5.0) is the
+  Profile page (`#/person?user=<id>`), not in the sidebar, opened from people's names and swept like Settings.
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
   streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.

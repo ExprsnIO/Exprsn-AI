@@ -787,7 +787,7 @@ table.dt .actions{white-space:nowrap}
   };
 
   App.register({
-    id: 'settings', title: 'Settings', summary: 'Profile, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
+    id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     states: [
       { title: 'Key revealed once', tone: 'warn', text: 'The new key is shown once with a copy action. Afterwards only its name, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); if (!st.keys.some((k) => k.id === 'k3')) st.keys.unshift({ id: 'k3', name: 'notebook-desk', scopes: 'inference:invoke chat:read', models: 'analyst', expires: '19 Mar 2027', last: 'never', state: 'active', prefix: 'exai_k3_4d2e' }); st.revealed = { name: 'notebook-desk', key: 'exai_k3_4d2e9b1f7c0a5e83d6f2b4a19c7e0d5f' }; ctx.rerender(); } },
@@ -800,6 +800,11 @@ table.dt .actions{white-space:nowrap}
       { title: 'App password shown once', tone: 'warn', text: 'A new app password is shown once with the username and the server address to type into the client. Afterwards only its name, prefix, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.apppw = st.apppw || APPPW0.map((a) => Object.assign({}, a)); if (!st.apppw.some((a) => a.id === 'a4')) st.apppw.unshift({ id: 'a4', name: 'iPad', scopes: ['caldav', 'carddav'], created: 'just now', last: 'never', lastFrom: '', expires: 'never', state: 'active', prefix: 'exai_d1_5b7e21c90f4d' }); st.davRevealed = { name: 'iPad', password: 'exai_d1_5b7e21c90f4d_q8Zr2VbX0kLm4TnYw6PcJh1sGd9FeA3uRoK7iE5xNtM' }; ctx.rerender(); } },
       { title: 'Step-up for an app password', tone: 'info', text: 'The second factor was confirmed more than 5 minutes ago. Creating an app password asks for an authenticator code or a passkey first; the password alone does not count (the owner decision of 5 October).', apply(ctx) { ctx.state.davFresh = false; ctx.state.openDavStepUp = true; ctx.rerender(); } },
       { title: 'Revoked app password refused', tone: 'danger', text: 'Revoking stops the password at once: the next DAV request from that device gets 401 with a Basic challenge, and the device asks for a new password.', apply(ctx) { const st = ctx.state; st.apppw = st.apppw || APPPW0.map((a) => Object.assign({}, a)); const w = st.apppw.find((a) => a.id === 'a2'); w.state = 'revoked'; w.revokedOn = 'just now'; st.davRefused = w.name; ctx.rerender(); } },
+      // Sprint 34 (B-5801, B-5802): the public profile and the status.
+      { title: 'Picture in quarantine', tone: 'info', text: 'A new picture is stored in the file store of your current workspace and scanned like any upload. Until the scan passes, everyone still sees the previous picture or your initials.', apply(ctx) { ctx.state.avatar = 'quarantined'; ctx.rerender(); } },
+      { title: 'Picture refused by the scan', tone: 'danger', text: 'The picture failed the scan (malware, or bytes that are not an image). It is never shown; upload another one.', apply(ctx) { ctx.state.avatar = 'rejected'; ctx.rerender(); } },
+      { title: 'Bio blocked by a guardrail', tone: 'danger', text: 'Pronouns and the bio are screened at user-input like a post. A blocking rule refuses the change with 422 and the old text stays.', apply(ctx) { ctx.state.bioProblem = true; ctx.rerender(); } },
+      { title: 'Status set to busy', tone: 'ok', text: 'Busy is published at once over the socket: people who share a workspace with you see it within five seconds, people in a block with you never do.', apply(ctx) { ctx.state.status = 'busy'; ctx.rerender(); ctx.toast('Status: busy. Audited presence.status.updated.', 'ok'); } },
       { title: 'AAA mode', tone: 'info', text: 'Switching to AAA previews the change immediately and persists per user.', apply(ctx) { ctx.state.contrast = 'AAA'; applyContrast('AAA'); ctx.rerender(); ctx.toast('AAA contrast on. Saved to your profile.', 'ok'); } }
     ],
     render(root, ctx) {
@@ -819,6 +824,25 @@ table.dt .actions{white-space:nowrap}
 
       const profile = UI.panel('Profile', UI.kv([['Name', esc(u.name)], ['Directory account', '<span class="mono">' + esc(u.username) + '</span>'], ['Clearance', UI.label(u.clearance, { sm: true })], ['Roles', esc(u.roles.map((r) => r.toLowerCase()).join(', '))]], 2)
         + '<div class="muted" style="font-size:12px">Name, account, clearance and roles come from OpenLDAP group mappings and cannot be edited here. Ask an identity admin to change them.</div>', { actions: UI.btn('Identity', { kind: 'ghost', size: 'sm', attrs: 'data-goidentity' }) });
+
+      // B-5801: what others see of you, beyond what the user store gives.
+      st.pronouns = st.pronouns == null ? 'she/her' : st.pronouns; st.bio = st.bio == null ? 'Finance Ops lead. Board pack, close calendar, and the Q3 flash.' : st.bio;
+      st.plabel = st.plabel || 'internal'; st.pws = st.pws || 'all'; st.avatar = st.avatar || 'ready'; st.status = st.status || 'auto';
+      const pic = st.avatar === 'ready' ? '<span class="settings-avatar pic" role="img" aria-label="Your profile picture">' + UI.icon('images', 22) + '</span>' : '<span class="settings-avatar" aria-hidden="true">' + esc(u.initials || 'MO') + '</span>';
+      const picState = st.avatar === 'quarantined' ? UI.notice('<b>Scanning your new picture.</b> profile-picture.png is in the file store of Finance Ops and goes through its quarantine (type from the bytes, ClamAV). Until it passes, people see your initials.', 'info')
+        : st.avatar === 'rejected' ? UI.notice('<b>Picture refused by the scan.</b> Malware detected: Eicar-Test-Signature. It is never shown; upload another picture.', 'danger', UI.btn('Upload another', { size: 'sm', attrs: 'data-upavatar' })) : '';
+      const publicProfile = UI.panel('Public profile', '<div class="hstack" style="gap:12px;align-items:center">' + pic + '<div class="vstack" style="gap:6px">' + '<div class="hstack wrap gap6">' + UI.btn(st.avatar === 'none' ? 'Upload a picture' : 'Change picture', { size: 'sm', icon: 'upload', attrs: 'data-upavatar' }) + (st.avatar !== 'none' ? UI.btn('Remove', { size: 'sm', kind: 'ghost', attrs: 'data-rmavatar' }) : '') + '</div><span class="muted" style="font-size:12px">PNG, JPEG, WebP or GIF, at most 2 MiB. Kept in the file store and scanned before anyone sees it.</span></div></div>'
+        + picState
+        + '<div class="formgrid" style="--cols:2">' + UI.field('Pronouns', UI.input(st.pronouns, { attrs: 'data-pron maxlength="40"', placeholder: 'she/her' })) + UI.field('Label', UI.select(['public', 'internal', 'confidential'], st.plabel, 'data-plabel'), 'People below it see your name only.') + '</div>'
+        + UI.field('Bio', UI.textarea(st.bio, { attrs: 'data-bio maxlength="500"', rows: 3 }), 'Up to 500 characters. Pronouns and the bio are screened at user-input like a post.')
+        + (st.bioProblem ? UI.problem('Bio not saved (422, step guardrails)', 'The rule "Payment requests" blocked the text. Your previous bio is unchanged.', '5c1e9a2f7b3d4e6a8c0f1b2d3e4f5a6b') : '')
+        + UI.field('Shown in', UI.select([{ value: 'all', label: 'Every workspace I share with them' }, { value: 'Finance Ops', label: 'Finance Ops only' }, { value: 'People Ops', label: 'People Ops only' }], st.pws, 'data-pws'), 'Outside these, people who share a workspace with you see your name only.')
+        + '<div class="hstack">' + UI.btn('Save profile', { kind: 'primary', size: 'sm', attrs: 'data-saveprofile' }) + '<span class="grow"></span>' + UI.btn('See how others see you', { kind: 'ghost', size: 'sm', attrs: 'data-goperson' }) + '</div>');
+
+      // B-5802: the status.
+      const statusPanel = UI.panel('Status', UI.seg([{ id: 'auto', label: 'Automatic' }, { id: 'available', label: 'Available' }, { id: 'away', label: 'Away' }, { id: 'busy', label: 'Busy' }, { id: 'offline', label: 'Appear offline' }], st.status, 'data-status aria-label="Status"')
+        + '<div class="hstack gap6" style="margin-top:4px">Others see ' + UI.pill(st.status === 'auto' ? 'available' : st.status, { available: 'ok', away: 'warn', busy: 'danger', offline: 'outline', auto: 'ok' }[st.status]) + '</div>'
+        + '<span class="muted" style="font-size:12px">Automatic is available while you are connected, away after five minutes without input or while the console is hidden, offline when you close it. People in a block with you never see your status.</span>');
 
       const appearance = UI.panel('Appearance', '<div class="formgrid" style="--cols:3">' + UI.field('Theme', UI.select(['Follow system', 'Light', 'Dark'], theme, 'data-theme')) + UI.field('Contrast', UI.select(['AA (default)', 'AAA'], st.contrast === 'AAA' ? 'AAA' : 'AA (default)', 'data-contrast')) + UI.field('Language', UI.select(['English (UK)', 'English (US)', 'Deutsch', 'Français'], st.language, 'data-language')) + '</div>'
         + '<span class="muted" style="font-size:12px">AAA mode raises contrast and removes glass surfaces.</span>'
@@ -884,12 +908,18 @@ table.dt .actions{white-space:nowrap}
           + '<span class="muted" style="font-size:12px">A bound DID signs in as you through the tenant\'s <span class="mono">atproto</span> store. The handle counts only while its DID document names it back.</span>'));
 
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(u.name) + ' in ' + esc(DATA.tenant.workspace))
-        + '<div class="grid2"><div class="vstack gap12" style="gap:14px">' + profile + appearance + notifs + '</div><div class="vstack" style="gap:14px">' + security + davPanel + accounts + keys + atproto + '</div></div>'
+        + '<style>#main .settings-avatar{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:18px;font-weight:700;flex-shrink:0}#main .settings-avatar.pic{background:var(--accent-tint);color:var(--accent)}</style>'
+        + '<div class="grid2"><div class="vstack gap12" style="gap:14px">' + profile + publicProfile + statusPanel + appearance + notifs + '</div><div class="vstack" style="gap:14px">' + security + davPanel + accounts + keys + atproto + '</div></div>'
         + sessions
         + '</div>';
 
       // ---- events ----
       ctx.on('click', '[data-goidentity]', () => ctx.navigate('identity'));
+      ctx.on('click', '[data-goperson]', () => ctx.navigate('person', { user: 'me' }));
+      ctx.on('click', '[data-upavatar]', () => { st.avatar = 'quarantined'; ctx.rerender(); ctx.toast('Uploaded to Files in Finance Ops (202). Shown once the scan passes.', 'ok'); setTimeout(() => { if (st.avatar === 'quarantined') { st.avatar = 'ready'; if (App.state.route === 'settings') ctx.rerender(); } }, 2500); });
+      ctx.on('click', '[data-rmavatar]', async () => { const ok = await ctx.confirm({ title: 'Remove your picture', body: '<p class="fg2" style="margin:0">People see your initials again. The image stays in Files, where you can trash it.</p>', ok: 'Remove' }); if (!ok) return; st.avatar = 'none'; ctx.rerender(); ctx.toast('Picture removed. Audited profile.avatar.removed.', 'ok'); });
+      ctx.on('click', '[data-saveprofile]', () => { st.pronouns = ctx.$('[data-pron]').value; st.bio = ctx.$('[data-bio]').value; st.plabel = ctx.$('[data-plabel]').value; st.pws = ctx.$('[data-pws]').value; st.bioProblem = false; ctx.rerender(); ctx.toast('Profile saved. Audited profile.updated (the fields, not the text).', 'ok'); });
+      ctx.on('click', '[data-status] [data-seg]', (e, t) => { st.status = t.dataset.seg; ctx.rerender(); ctx.toast('Status: ' + esc(t.textContent) + '. Published at once to people who share a workspace with you.', 'ok'); });
       ctx.on('change', '[data-theme]', (e, t) => { ctx.app.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '. Saved to your profile.'); });
       ctx.on('change', '[data-contrast]', (e, t) => { st.contrast = t.value === 'AAA' ? 'AAA' : 'AA'; applyContrast(st.contrast); ctx.rerender(); ctx.toast(st.contrast === 'AAA' ? 'AAA contrast on. Saved to your profile.' : 'Back to AA contrast.', 'ok'); });
       ctx.on('change', '[data-language]', (e, t) => { st.language = t.value; ctx.toast('Language set to ' + esc(t.value) + '. Model answers follow the prompt language, not this setting.'); });

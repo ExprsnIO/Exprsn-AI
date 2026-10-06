@@ -3933,3 +3933,52 @@ callers, dead letters and bundles of Sprint 32b. Two server changes back it:
 | --- | --- |
 | `GET /api/workflows/:id/callers` | `agents:run`. What else starts the workflow, for the Triggers and callers tab: `{workflowId, appTriggers: [{id, kind: record \| schedule, app, appName, appTitle, entity, entityTitle, events, cron, ownerId, ownerName, enabled, nextRunAt, lastRunAt, lastRunId, lastResult}] (apps the caller is cleared for), workflows: [{workflowId, workflow, label, publishedVersion, step, stepTitle, kind: sub \| map \| loop, version, in: draft \| published \| published and draft}] (other workflows of the workspace that run it), tools: [{id, name, version, status, sideEffect, label, workflowVersion}], plugins: [{id, key, name, version, state, maxLabel, installedBy, installedByName}] (granted call:workflow), lastRuns: {<kind>: {runId, at, state, trigger, count}}}`. `lastRuns` counts the last 500 runs (not dry runs) by kind of start (`manual`, `api`, `record`, `schedule`, `event`, `plugin`, `workflow`, `tool`, `replay`), the caller's own unless they hold `workflows:manage`. The workflow's own event or schedule trigger is `GET /workflows/:id/triggers` |
 | `GET /api/events/catalogue` | Also readable with `workflows:manage` (besides `webhooks:manage` and `plugins:manage`): the editor picks an event trigger's type from it |
+
+## Sprint 34c (1.5.0): profiles and presence (B-5801, B-5802)
+
+People write a profile beyond the name their user store gives them, and say whether they are available. Reading needs
+`social:read`, changing one's own `social:write` (held by members and tenant admins); an avatar also needs
+`files:write`, because it is stored in the file store. Every route answers `Cache-Control: no-store`.
+
+- **Who sees a profile.** Someone is known to people who share a workspace with them (anyone else gets `404`, as for
+  the person picker). Of those, a viewer sees the pronouns, bio and avatar only when their clearance reaches the
+  profile's `label` (`limited: clearance` otherwise) and, when the owner named `workspaces`, they share one of those
+  (`limited: hidden` otherwise). Two people in a block (either way) see each other's name only, with `limited: hidden`
+  too, so the view does not tell a blocked person they are blocked; they also see no presence.
+- **Pronouns and bio** pass the `user-input` guardrail like a post (`source {kind: profile, id: <user id>}`): a block
+  or a hold is `422` with `step: guardrails, field`; a redaction is what is stored.
+- **The avatar** is an image (PNG, JPEG, WebP or GIF, at most 2 MiB) uploaded into the file store of the caller's
+  current workspace as `Profile picture <time>.<ext>` with the profile's label, so it goes through the file store's
+  quarantine (type from the bytes, text classifier, ClamAV when configured). The profile pins that version. It is
+  served only when the version is `ready`, is an image, the file is not in the trash (deleted, or taken down by
+  moderation) and the viewer clears the version's label; a version that fails its scan is never served.
+- **Presence**: `available`, `away`, `busy` or `offline`. A person chooses one or `auto`. Chosen `offline` (appear
+  offline) always reads offline; without a connected socket a person reads offline; otherwise a chosen status stands,
+  and `auto` reads `away` while every socket they hold reports idle and `available` otherwise. Presence is visible to
+  people who share a workspace with the person and nothing at all is told to someone in a block with them.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/people/me` | `{userId, username, displayName, pronouns, bio, label, workspaces: [id] \| null, avatar: {fileId, version, state: quarantined \| scanning \| ready \| rejected \| gone \| not an image, url} \| null, presence: {status, effective}, updatedAt}` |
+| `PATCH /api/people/me` `{pronouns?, bio?, label?, workspaces?}` | Pronouns up to 40 characters, bio up to 500 (`null` or empty clears), screened at `user-input`. `label` at most the caller's clearance (else `403 step clearance`); `workspaces` the caller's own (else `422 step workspace`; `null` or `[]` for all shared ones). Audited `profile.updated {fields, label, workspaces, redacted?}`, never the text |
+| `PUT /api/people/me/avatar` (raw image body) | `202` with the profile, its `avatar.state` quarantined. Another type is `415`, more than 2 MiB `413`, no workspace `409`, no `files:write` `403`. Audited `file.upload.received` (with `via: profile`) and `profile.avatar.set {file, version, workspace, replaced?}`; the scan's `file.version.ready` or `file.version.rejected` follows |
+| `DELETE /api/people/me/avatar` | Stops using it (the image stays in the file store). Audited `profile.avatar.removed` |
+| `GET /api/people/:id` | `{userId, username, displayName, self, limited: null \| clearance \| hidden, pronouns?, bio?, label?, avatar: {url} \| null, presence: {status} \| null, sharedWorkspaces: [{id, name}], relation}` (`relation` as `GET /api/social/users/:id`). For oneself, the `GET /api/people/me` fields with `self: true` |
+| `GET /api/people/:id/avatar?v=` | The image (`Content-Disposition: inline`, the sandbox CSP and `nosniff`), or `404` when the viewer may not see it or it is not a ready image |
+| `GET /api/presence?ids=a,b` | `{statuses: {<userId>: status}}` for up to 200 people; those the caller shares no workspace with or is in a block with are left out entirely |
+| `GET /api/presence/me` | `{status: auto \| available \| away \| busy \| offline, effective}` |
+| `PUT /api/presence/me` `{status}` | Chooses a status; the change is published at once. Audited `presence.status.updated {before, after}` |
+
+Over the console's socket (the same connection as the B-2603 rooms):
+
+| Event | Direction | What it carries |
+| --- | --- | --- |
+| `presence.watch {userIds}` | client to server | The people to hear about (replaces the previous set, at most 200). The server keeps those the caller may see, joins their presence rooms and answers `{ok, statuses: {<userId>: status}}` |
+| `presence.unwatch` | client to server | Stops every watch |
+| `presence.idle {idle}` | client to server | The person went idle (the console sends it after five minutes without input or while the page is hidden) or came back |
+| `presence.changed {userId, status, at}` | server to client | Someone watched (or the person themselves) changed status. Published once (`TOPICS.presence`) and relayed by every instance without the sockets of people in a block with them; a block made later takes each out of the other's presence room at once |
+
+Every socket counts as a connection of its person while it is open; connections are kept per instance in
+`presence_connections` with a 30-second heartbeat, and the rows of an instance that stopped refreshing them for 90
+seconds are swept (its people read offline unless connected elsewhere). `server/src/profiles/` has `s.people`
+(`ProfileService`) and `s.presence` (`PresenceService`: `statuses`, `visibleAmong`, `effective`).
