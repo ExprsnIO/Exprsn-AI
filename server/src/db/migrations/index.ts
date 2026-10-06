@@ -49,6 +49,7 @@ import * as m033 from './033_pds.js';
 import * as m033b from './033b_feeds.js';
 import * as m033c from './033c_imports.js';
 import * as m034b from './034b_workflow_triggers.js';
+import * as m034c from './034c_workflow_steps.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -106,7 +107,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '033_pds': m033,
   '033b_feeds': m033b,
   '033c_imports': m033c,
-  '034b_workflow_triggers': m034b
+  '034b_workflow_triggers': m034b,
+  '034c_workflow_steps': m034c
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {
