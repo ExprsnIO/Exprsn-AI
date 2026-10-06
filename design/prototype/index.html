@@ -6415,7 +6415,7 @@ table.dt .actions{white-space:nowrap}
       // ---- app passwords for DAV clients (B-3415) ----
       const davCreateForm = () => ctx.modal({ title: 'Create an app password',
         body: UI.field('Device name', UI.input('', { placeholder: 'for example iPad', attrs: 'data-davname maxlength="100"' }), 'Shown in this list, in the security notice and in the audit log.')
-          + '<div class="field"><span class="fl">What it can reach</span><div class="vstack gap6">' + DAV_SCOPES.map((d) => UI.check(d[1] + ' <span class="muted">(' + esc(d[2]) + ')</span>', d[0] !== 'webdav', 'data-davscope="' + d[0] + '"')).join('') + '</div></div>'
+          + '<div class="field"><span class="fl">What it can reach</span><div class="hstack wrap gap6" style="row-gap:6px">' + DAV_SCOPES.map((d) => UI.check(d[1] + ' (' + d[2] + ')', d[0] !== 'webdav', 'data-davscope="' + d[0] + '"')).join('') + '</div></div>'
           + UI.field('Expires', UI.select(['Never', '30 days', '90 days', '180 days', '1 year'], 'Never', 'data-davexp'))
           + UI.notice('Within your roles: if they change, the device can do only what you can. It never signs in to the console or the API.', 'info'),
         actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create', { kind: 'primary', attrs: 'data-davgo' }),
