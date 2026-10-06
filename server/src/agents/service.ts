@@ -1,7 +1,8 @@
 import { ulid } from 'ulid';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
-import { clears, labelRank, type Label } from '../authz/labels.js';
+import { clears, highest, labelRank, type Label } from '../authz/labels.js';
+import type { ChainRef, ChainService } from '../chain/context.js';
 import { authorize, effectivePermissions, type Principal } from '../authz/policy.js';
 import { actorFrom, type AuditLog } from '../audit/chain.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
@@ -49,11 +50,19 @@ interface RunRow {
   replay_from: number | null;
   /** Sprint 21: the schedule that started the run (B-1306). */
   schedule_id?: string | null;
+  /** Sprint 32 (B-4101): the run's node in its chain; (B-3902) the workflow step that awaits it. */
+  chain_id?: string | null;
+  chain_node?: string | null;
+  caller_kind?: string | null;
+  caller_id?: string | null;
+  caller_node?: string | null;
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
   updated_at: number;
 }
+
+const chainRefOfRun = (r: Pick<RunRow, 'chain_id' | 'chain_node'>): ChainRef | null => (r.chain_id && r.chain_node ? { chain: r.chain_id, node: r.chain_node } : null);
 
 interface StepRow {
   id: string;
@@ -132,6 +141,10 @@ export class AgentService {
   proposeMemory: ProposeMemory | null = null;
   /** Extracts memory proposals from a succeeded run whose policy allows them (B-3701); unset, nothing is extracted. */
   memoryExtract: RunFinishedForMemory | null = null;
+  /** B-4101: the chain context; unset, runs keep only their own budgets. */
+  chains: ChainService | null = null;
+  /** B-3902: a run a workflow step awaits ended (or stopped at its budget); the workflow run is resumed. */
+  onCallerDone: ((tenantId: string, kind: string, id: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly db: Db,
@@ -216,6 +229,8 @@ export class AgentService {
       replayOf: r.replay_of,
       replayFrom: r.replay_from,
       scheduleId: r.schedule_id ?? null,
+      chain: r.chain_id ? { id: r.chain_id, node: r.chain_node ?? null } : null,
+      caller: r.caller_kind && r.caller_id ? { kind: r.caller_kind, id: r.caller_id, node: r.caller_node ?? null } : null,
       createdAt: Number(r.created_at),
       startedAt: r.started_at == null ? null : Number(r.started_at),
       finishedAt: r.finished_at == null ? null : Number(r.finished_at)
@@ -302,17 +317,47 @@ export class AgentService {
     return { agent: e.name, version: e.version, label };
   }
 
-  async start(p: Principal, input: { agent: string; input: string; label?: Label; budgets?: Partial<AgentBudgets> }, opts: { scheduleId?: string } = {}) {
-    const { e, def, label, ws } = await this.prepare(p, input);
+  /**
+   * Starts a run. B-4101: the run is a node of a chain: the chain of `opts.chain` (a workflow step's run) or a new one
+   * whose root budgets are the run's. Within a chain the run's label is at least the chain's high-water mark, so the
+   * agent's ceiling and the caller's clearance are checked against that.
+   */
+  async start(p: Principal, input: { agent: string; input: string; label?: Label; budgets?: Partial<AgentBudgets> }, opts: { scheduleId?: string; chain?: ChainRef | null; caller?: { kind: string; id: string; node: string } } = {}) {
+    const mark = opts.chain && this.chains ? await this.chains.label(opts.chain) : null;
+    const { e, def, label: asked, ws } = await this.prepare(p, { ...input, ...(mark ? { label: highest(input.label ?? 'internal', mark) } : {}) });
     await this.quotas.admit(p.tenantId, p.workspaceId ?? null, { ...(ws ? { workspaceName: ws.name } : {}) });
     const budgets = this.budgets(def.budgets, input.budgets);
     const id = ulid();
+    const node = this.chains ? await this.chains.begin(p.tenantId, { kind: 'agent-run', ref: id, callee: e.name, principal: p.userId, label: asked, parent: opts.chain ?? null, budgets: { tokens: budgets.tokens, steps: budgets.steps, wallMs: budgets.wallSeconds * 1000 } }) : null;
+    const label = node?.label ?? asked;
     const t = Date.now();
-    const row: RunRow = { id, tenant_id: p.tenantId, workspace_id: p.workspaceId ?? null, user_id: p.userId, agent_id: e.id, agent_name: e.name, agent_version: e.version, profile: def.profile, state: 'queued', label, input: await this.seal(p.tenantId, `agent-run-input:${id}`, input.input), output: null, error: null, budgets: JSON.stringify(budgets), usage: JSON.stringify(EMPTY_USAGE), job_id: null, replay_of: null, replay_from: null, created_at: t, started_at: null, finished_at: null, updated_at: t };
+    const row: RunRow = { id, tenant_id: p.tenantId, workspace_id: p.workspaceId ?? null, user_id: p.userId, agent_id: e.id, agent_name: e.name, agent_version: e.version, profile: def.profile, state: 'queued', label, input: await this.seal(p.tenantId, `agent-run-input:${id}`, input.input), output: null, error: null, budgets: JSON.stringify(budgets), usage: JSON.stringify(EMPTY_USAGE), job_id: null, replay_of: null, replay_from: null, created_at: t, started_at: null, finished_at: null, updated_at: t, chain_id: node?.chain ?? null, chain_node: node?.node ?? null, caller_kind: opts.caller?.kind ?? null, caller_id: opts.caller?.id ?? null, caller_node: opts.caller?.node ?? null };
     await this.db('agent_runs').insert({ ...row, ...(opts.scheduleId ? { schedule_id: opts.scheduleId } : {}) });
-    await this.checkpoint(row, 0, { messages: await this.initialMessages(p, e, label, input.input), pending: [] }, EMPTY_USAGE);
+    await this.checkpoint(row, 0, { messages: await this.initialMessages(p, e, label, input.input, chainRefOfRun(row)), pending: [] }, EMPTY_USAGE);
     await this.enqueue(row);
     return this.summary(row, p.displayName);
+  }
+
+  // ---------- B-3902: runs a workflow step awaits ----------
+
+  async startForStep(p: Principal, input: { agent: string; input: string; label: Label; budgets?: Partial<AgentBudgets> }, caller: { runId: string; node: string; chain: ChainRef | null }): Promise<{ id: string; label: Label }> {
+    const r = await this.start(p, input, { chain: caller.chain, caller: { kind: 'workflow-run', id: caller.runId, node: caller.node } });
+    await this.audit.append({ tenantId: p.tenantId, action: 'agent.run.started', kind: 'system', actor: { service: 'workflows', user: p.userId }, target: { run: r.id, agent: r.agent, version: r.agentVersion }, label: r.label, detail: { workflowRun: caller.runId, step: caller.node } });
+    return { id: r.id, label: r.label };
+  }
+
+  async stateForStep(tenantId: string, runId: string): Promise<{ state: string; output: string | null; error: string | null; label: Label; tokens: number } | null> {
+    const r = (await this.db('agent_runs').where({ tenant_id: tenantId, id: runId }).first()) as RunRow | undefined;
+    if (!r) return null;
+    return { state: r.state, output: r.state === 'succeeded' ? await this.open<string | null>(r.tenant_id, `agent-run-output:${r.id}`, r.output, null) : null, error: r.error, label: r.label, tokens: json<RunUsage>(r.usage, EMPTY_USAGE).tokens };
+  }
+
+  /** A workflow run that awaited this run was cancelled: the run stops too. */
+  async cancelForStep(tenantId: string, runId: string, reason: string): Promise<void> {
+    const r = (await this.db('agent_runs').where({ tenant_id: tenantId, id: runId }).first()) as RunRow | undefined;
+    if (!r || TERMINAL.includes(r.state)) return;
+    await this.finish({ ...r, caller_kind: null }, 'cancelled', { error: reason });
+    if (r.job_id) await this.jobs.cancel(r.tenant_id, r.job_id);
   }
 
   private budgets(base: Partial<AgentBudgets> | undefined, raise?: Partial<AgentBudgets>): AgentBudgets {
@@ -324,13 +369,16 @@ export class AgentService {
    * The system prompt with the instructions of the agent's published skills and the agent's accepted memories (at or
    * below the run's label, through the memory checkpoint), then the user's request.
    */
-  private async initialMessages(p: Principal, e: EntryRow, label: Label, input: string): Promise<ChatMessage[]> {
+  private async initialMessages(p: Principal, e: EntryRow, label: Label, input: string, chain: ChainRef | null = null): Promise<ChatMessage[]> {
     const def = e.definition as unknown as AgentDefinition;
     const parts: string[] = [];
     if (def.systemPrompt) parts.push(def.systemPrompt);
     for (const name of def.skills ?? []) {
       const skill = await this.registry.resolve(p, name, 'skill');
-      if (skill) parts.push(`Skill ${skill.name} ${skill.version}:\n${String(skill.definition.instructions ?? '')}`);
+      if (!skill) continue;
+      // B-4101: a skill load is an invocation of the run's chain.
+      if (chain && this.chains) await this.chains.finish(await this.chains.begin(p.tenantId, { kind: 'skill-load', callee: `${skill.name}@${skill.version}`, principal: p.userId, label, parent: chain }), 'succeeded');
+      parts.push(`Skill ${skill.name} ${skill.version}:\n${String(skill.definition.instructions ?? '')}`);
     }
     const memories = this.memories ? await this.memories(p, e.name, label) : [];
     if (memories.length) parts.push(`What you remember from earlier runs (accepted by a curator):\n${memories.map((m) => `- ${m.text.replace(/\s+/g, ' ')}`).join('\n')}`);
@@ -362,6 +410,8 @@ export class AgentService {
     const usage = json<RunUsage>(r.usage, EMPTY_USAGE);
     if (usage.steps >= budgets.steps || usage.tokens >= budgets.tokens || usage.wallMs >= budgets.wallSeconds * 1000 || usage.toolCalls >= budgets.toolCalls) throw conflict('Raise the limit that stopped the run above what it has used.');
     await this.db('agent_runs').where({ id: r.id }).update({ budgets: JSON.stringify(budgets), error: null, updated_at: Date.now() });
+    const ref = chainRefOfRun(r);
+    if (ref && this.chains) await this.chains.rebudget(ref, { tokens: budgets.tokens, steps: budgets.steps, wallMs: budgets.wallSeconds * 1000 });
     await this.enqueue({ ...r, budgets: JSON.stringify(budgets) });
     return { before, budgets };
   }
@@ -428,7 +478,14 @@ export class AgentService {
     const usage = { ...json<RunUsage>(cpRow.usage, EMPTY_USAGE) };
     const t = Date.now();
     const nid = ulid();
-    const row: RunRow = { ...src, id: nid, user_id: p.userId, workspace_id: p.workspaceId ?? src.workspace_id, state: 'queued', input: await this.seal(src.tenant_id, `agent-run-input:${nid}`, await this.open<string>(src.tenant_id, `agent-run-input:${src.id}`, src.input, '')), output: null, error: null, usage: JSON.stringify(usage), job_id: null, replay_of: src.id, replay_from: from, created_at: t, started_at: null, finished_at: null, updated_at: t };
+    const row: RunRow = { ...src, id: nid, user_id: p.userId, workspace_id: p.workspaceId ?? src.workspace_id, state: 'queued', input: await this.seal(src.tenant_id, `agent-run-input:${nid}`, await this.open<string>(src.tenant_id, `agent-run-input:${src.id}`, src.input, '')), output: null, error: null, usage: JSON.stringify(usage), job_id: null, replay_of: src.id, replay_from: from, created_at: t, started_at: null, finished_at: null, updated_at: t, chain_id: null, chain_node: null, caller_kind: null, caller_id: null, caller_node: null };
+    // A replay is a new invocation: the root of a chain of its own, with the run's budgets.
+    if (this.chains) {
+      const b = json<AgentBudgets>(src.budgets, MAX_BUDGETS);
+      const node = await this.chains.begin(src.tenant_id, { kind: 'agent-run', ref: nid, callee: src.agent_name, principal: p.userId, label: src.label, budgets: { tokens: b.tokens, steps: b.steps, wallMs: b.wallSeconds * 1000 } });
+      row.chain_id = node.chain;
+      row.chain_node = node.node;
+    }
     await this.db('agent_runs').insert(row);
     for (const s of (await this.db('agent_steps').where({ run_id: src.id }).andWhere('n', '<', from).orderBy('n')) as StepRow[]) {
       const sid = ulid();
@@ -479,6 +536,10 @@ export class AgentService {
     if (state !== 'cancelled') q.whereNot({ state: 'cancelled' });
     await q.update(upd);
     this.emit(r, 'run.state', { runId: r.id, state, error: upd.error ?? null });
+    const ref = chainRefOfRun(r);
+    if (ref && this.chains) await this.chains.finish(ref, state === 'budget' ? 'failed' : state === 'queued' ? 'running' : state, (upd.error as string | null | undefined) ?? null);
+    // B-3902: the workflow step awaiting this run picks up its end (a budget stop ends it for the step too).
+    if (r.caller_kind === 'workflow-run' && r.caller_id && (TERMINAL.includes(state) || state === 'budget')) await this.onCallerDone?.(r.tenant_id, r.caller_kind, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the workflow run awaiting an agent run'));
     if (state === 'failed' || state === 'succeeded') await this.audit.append({ tenantId: r.tenant_id, action: `agent.run.${state}`, kind: 'system', actor: { service: 'agents', user: r.user_id }, target: { run: r.id, agent: r.agent_name, version: r.agent_version }, label: r.label, detail: { error: upd.error ?? null, usage: extra.usage ?? null } });
   }
 
@@ -513,6 +574,13 @@ export class AgentService {
     try {
       const p = await this.principalFor(run.tenant_id, run.user_id, run.workspace_id);
       if (!p) throw new Error('The run\'s owner is disabled.');
+      // B-4101: the run's node in its chain, carried on the row across instances and retries.
+      const chain = this.chains ? chainRefOfRun(run) : null;
+      if (chain) await this.chains!.finish(chain, 'running');
+      // What the run uses is charged to its chain's root; a used-up root stops the run before its next step.
+      const charge = async (u: { tokens?: number; steps?: number; wallMs?: number; gpuMs?: number }) => {
+        if (chain) await this.chains!.charge(chain, u);
+      };
       const perm = authorize(p, 'agents:run', { tenantId: run.tenant_id, label: run.label });
       if (!perm.allow) throw new Error(`The owner can no longer run agents: ${perm.reason}.`);
       const agent = await this.registry.get(run.tenant_id, run.agent_id);
@@ -567,6 +635,7 @@ export class AgentService {
             tick();
             await this.checkpoint(run, n, { messages, pending }, usage);
             await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
+            await charge({ steps: 1 });
             continue;
           }
           const tool = tools.find((t) => t.fn === call.name);
@@ -577,10 +646,10 @@ export class AgentService {
           if (isNew && tool && usage.toolCalls >= budgets.toolCalls) await budgetStop(`Stopped at ${usage.toolCalls} of ${budgets.toolCalls} tool calls.`);
           const awaited = !!call.awaiting;
           let outcome: ToolOutcome;
-          if (tool && call.awaiting) outcome = await this.tools.awaitResult({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal }, tool, call.arguments, call.awaiting);
+          if (tool && call.awaiting) outcome = await this.tools.awaitResult({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, chain }, tool, call.arguments, call.awaiting);
           else if (!tool) outcome = { name: call.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `tool_unavailable: ${call.name} is not one of this agent's tools${hidden.length ? ` (hidden: ${hidden.map((h) => `${h.name}, ${h.reason}`).join('; ')})` : ''}.` };
           else if (call.decision === 'rejected') outcome = { name: tool.entry.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `Rejected by ${call.decidedBy ?? 'the approver'}${call.note ? `: ${call.note}` : ''}. Nothing was run.` };
-          else outcome = await this.tools.call({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, approved: call.decision === 'approved' }, tool, call.arguments);
+          else outcome = await this.tools.call({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, approved: call.decision === 'approved', chain }, tool, call.arguments);
 
           if (outcome.pending) {
             // B-1006: the call is running elsewhere (a workflow paused on an approval). Keep the step waiting and
@@ -625,6 +694,8 @@ export class AgentService {
           tick();
           await this.checkpoint(run, n, { messages, pending }, usage);
           await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
+          // A workflow tool's run charges its own steps and time to the chain; other calls are this run's.
+          await charge({ steps: isNew ? 1 : 0, wallMs: tool && tool.entry.impl !== 'workflow' && !awaited ? outcome.durationMs : 0 });
         }
 
         // Thinking: one model call.
@@ -633,6 +704,10 @@ export class AgentService {
         tick();
         const left = budgets.wallSeconds * 1000 - usage.wallMs;
         if (left <= 0) await budgetStop(`Stopped at the ${budgets.wallSeconds} s wall-time limit.`);
+        if (chain) {
+          const over = await this.chains!.check(chain);
+          if (over) await budgetStop(over);
+        }
         await this.quotas.admit(run.tenant_id, run.workspace_id);
         const wall = AbortSignal.timeout(left);
         const stepSignal = AbortSignal.any([signal, wall]);
@@ -688,6 +763,7 @@ export class AgentService {
         tick();
         await this.checkpoint(run, n, { messages, pending }, usage);
         await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
+        await charge({ tokens, steps: 1, wallMs: Date.now() - started, gpuMs: gpuNs / 1e6 });
         if (!pending.length) {
           await this.finish(run, 'succeeded', { output: content, usage, error: null });
           if (policy && this.memoryExtract) this.memoryExtract({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, runId: run.id, agent: run.agent_name, label: run.label, types: policy.types, remaining: policy.maxPerRun - proposals });

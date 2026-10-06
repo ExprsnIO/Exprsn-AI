@@ -1376,7 +1376,7 @@ export class ChatService {
           let tool: NonNullable<Chunk['tool']>;
           const ext = extra.find((t) => t.fn === call.function.name);
           if (ext) {
-            const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
+            const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal, chainRoot: { kind: 'chat-turn', ref: m.id } }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
             tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
           } else if (call.function.name !== 'calculate' || !r.profile.tools.includes('calculate')) tool = { name: call.function.name, expression, error: 'Unknown tool' };
           else {

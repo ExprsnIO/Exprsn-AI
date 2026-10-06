@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import type { ChainRef } from '../chain/context.js';
 import { ulid } from 'ulid';
 import { actorFrom, isUniqueViolation, type AuditActor } from '../audit/chain.js';
 import { clears, highest, LABELS, labelRank, type Label } from '../authz/labels.js';
@@ -111,6 +112,8 @@ export interface Actor {
   depth?: number;
   /** The workflow whose step made the change: its own triggers do not fire again. */
   causedBy?: string | null;
+  /** B-4101: the chain node of the workflow run whose record step made the change; triggers it fires join that chain. */
+  chain?: ChainRef | null;
 }
 
 export interface AppsOptions {

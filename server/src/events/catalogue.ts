@@ -46,6 +46,8 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
   { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
+  // 1.5.0, Sprint 32 (B-4101)
+  { pattern: 'chain.*', description: 'The chain context: invocations the chain rules refused (chain.refused: depth, per-kind depth, principal, budget) and chains stopped at their root\'s budget (chain.stopped) (audit actions)' },
   { pattern: 'user.*', description: 'Accounts created, synced and disabled (audit actions)' },
   { pattern: 'auth.*', description: 'Sign-ins and second factors (audit actions)' },
   { pattern: 'authz.*', description: 'Authorisation denials; since 1.5.0 also custom roles created, proposed, approved, rejected, withdrawn, updated and retired (authz.role.*) and access reviews created, opened, confirmed, revoked, escalated, closed and cancelled (authz.review.*) (audit actions)' },
