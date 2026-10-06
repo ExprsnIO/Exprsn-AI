@@ -8780,6 +8780,411 @@
           }
         },
         "additionalProperties": true
+      },
+      "WorkflowTrigger": {
+        "type": "object",
+        "required": [
+          "id",
+          "workflowId",
+          "version",
+          "kind",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "event",
+              "schedule"
+            ]
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "nextRunAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastFiredAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastRunId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastResult": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "WorkflowTriggerFiring": {
+        "type": "object",
+        "required": [
+          "id",
+          "event",
+          "eventId",
+          "label",
+          "chain",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "chain": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "starting",
+              "started",
+              "skipped"
+            ]
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WorkflowDeadLetter": {
+        "type": "object",
+        "required": [
+          "id",
+          "workflowId",
+          "runId",
+          "label",
+          "state",
+          "failedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "workflow": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "nodeId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "redriven"
+            ]
+          },
+          "failedAt": {
+            "type": "integer"
+          },
+          "redrivenBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redrivenAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redriveRunId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WorkflowBundle": {
+        "type": "object",
+        "required": [
+          "format",
+          "exportedAt",
+          "workflow",
+          "version",
+          "graph",
+          "references",
+          "key",
+          "signature"
+        ],
+        "properties": {
+          "format": {
+            "const": "exprsn-workflow/1"
+          },
+          "exportedAt": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "label": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "internal",
+                  "confidential",
+                  "restricted"
+                ]
+              }
+            }
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "graph": {
+            "type": "object",
+            "description": "The workflow graph (docs/api.md, Workflows)"
+          },
+          "references": {
+            "type": "object",
+            "properties": {
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "profiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "apps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "vault": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "trigger": {
+                "type": "object"
+              }
+            }
+          },
+          "key": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        }
       }
     },
     "responses": {
@@ -27629,6 +28034,116 @@
         }
       }
     },
+    "/api/workflow-dead-letters": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflow-dead-letters"
+        ],
+        "summary": "workflows:manage. Dead letters of the current workspace's workflows within the caller's clearance",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "redriven"
+              ]
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "description": "A workflow id or name",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WorkflowDeadLetter"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/workflow-dead-letters/{id}/redrive": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflow-dead-letters"
+        ],
+        "summary": "workflows:manage. Replays the failed run from the step that failed; 409 when it was redriven already",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dead letter id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDeadLetter"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/workflow-runs/{id}": {
       "get": {
         "tags": [
@@ -27735,6 +28250,133 @@
         }
       }
     },
+    "/api/workflows/import": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "workflows:manage. Imports a signed exprsn-workflow/1 bundle as a draft with its references re-bound; a bundle changed after signing is 422 Bundle refused",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "bundle"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "bundle": {
+                    "$ref": "#/components/schemas/WorkflowBundle"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "bindings": {
+                    "type": "object",
+                    "properties": {
+                      "tools": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "profiles": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "apps": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "vault": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "workflow",
+                    "bindings"
+                  ],
+                  "properties": {
+                    "workflow": {
+                      "type": "object",
+                      "description": "The workflow as GET /api/workflows/{id} answers"
+                    },
+                    "bindings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "tool",
+                              "profile",
+                              "app",
+                              "vault",
+                              "trigger"
+                            ]
+                          },
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "bound",
+                              "missing",
+                              "on publish"
+                            ]
+                          },
+                          "detail": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/workflows/{id}": {
       "delete": {
         "tags": [
@@ -27773,6 +28415,41 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/bundle": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "workflows:manage. The signed exprsn-workflow/1 bundle of the published version (the draft when nothing is published)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workflow id or name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowBundle"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -27909,6 +28586,128 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/triggers": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "agents:run. The event or schedule trigger of the published version and its recent firings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workflow id or name",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "workflowId",
+                    "trigger",
+                    "firings"
+                  ],
+                  "properties": {
+                    "workflowId": {
+                      "type": "string"
+                    },
+                    "trigger": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/WorkflowTrigger"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "firings": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WorkflowTriggerFiring"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "workflows:manage. Turns the trigger off or on again",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workflow id or name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "enabled"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTrigger"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }

@@ -446,13 +446,13 @@ started a dry run), with clearance for the run's label.
 | `GET /workflow-approvals` | Approvals waiting on the caller: `[{id, runId, nodeId, role, state, shown, dueAt, canDecide, workflow, step, label, mode}]` |
 | `POST /workflow-approvals/:id` `{decision: approve\|reject, reason?}` | Decides; the run resumes (approve) or ends `rejected`. Undecided approvals expire at `dueAt` and the run fails |
 
-A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?}], edges: [{from, to,
-branch?: true|false}], limits: {timeoutMs?, tokens?}}`. `input` and `output` are port schemas
+A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?, retry?}], edges: [{from,
+to, branch?: true|false|failure}], limits: {timeoutMs?, tokens?}}` (`retry` and `failure`: Sprint 32b, below). `input` and `output` are port schemas
 `{type: string|number|integer|boolean|array|object|any, properties?, required?, items?}`. Step kinds:
 
 | Kind | Config | Output |
 | --- | --- | --- |
-| `trigger` | `{source: manual\|api}` | the run input (checked against `output`) |
+| `trigger` | `{source: manual\|api\|record\|schedule\|event, event?, cron?}` (`event` and `cron`: Sprint 32b, below) | the run input (checked against `output`) |
 | `model` | `{profile, prompt, think?, format: text\|json}` | `{text}`, or the parsed JSON (checked against `output`) |
 | `transform` | `{fields: {name: template}}` | the fields |
 | `branch` | `{left, op: eq\|ne\|gt\|gte\|lt\|lte\|contains\|truthy\|exists, right?}` | input plus `{result}`; outgoing edges carry `branch` |
@@ -3715,3 +3715,56 @@ signed platform bundle under `imports/<import id>/` (the `models` mirror; Ollama
 promoted, `imports.bundle-match` (every `IMPORT_BUNDLE_POLL_MINUTES`) continues each request from the bundle's files with
 the same checks; a pin recorded at request time must still match. A `bundle` repository browses and imports promoted
 bundle files directly.
+
+## Sprint 32b (1.5.0): workflow triggers, failure handling and bundles (B-3903, B-3906, B-3909)
+
+**Triggers on the workflow itself (B-3903).** The trigger step takes two more sources: `{source: event, event}` (a
+catalogue event type such as `file.uploaded`, or a group such as `file.*`; not `*`) and `{source: schedule, cron}` (five
+fields, UTC; a `schedule` trigger without `cron` is still started by an app's schedule trigger). Publishing checks the
+event against the catalogue (`config`; a reserved type is a warning) and the cron expression, and writes the version's
+trigger; republishing with another source removes it. Runs start as the person who published the version (the
+trigger's owner), with the roles, clearance and memberships they hold at that moment: an owner who is disabled, lost
+`agents:run`, left the workflow's workspace or is not cleared for the event gets a skip (`workflow.trigger.skipped`
+with the reason) instead of a run, as does an event for a version that is no longer the published one. An event run's
+input is `{event: {id, type, tenant, label, createdAt, data}, trigger: {id, kind: event, depth}}` and its trigger
+`event:<firing id>`; a schedule run's input is `{event: schedule, dueAt, trigger: {id, kind: schedule, depth: 1}}` and its
+trigger `schedule:<firing id>`.
+
+Event fan-out follows the plugin rules: a workflow in a workspace receives only events that name that workspace
+(`data.workspace` or the audit target's `workspace`), a tenant-level workflow the tenant's events; an event above the
+workflow's label is not delivered; each trigger fires at most `WORKFLOW_EVENT_RATE_PER_MINUTE` times a minute (dropped
+events are counted in `exprsn_workflow_trigger_dropped_total{reason}` and audited once a window as
+`workflow.trigger.throttled`); an event caused by a chain of workflows is never delivered to a workflow in that chain,
+events about a workflow's own runs never start it, and an event whose chain is `WORKFLOW_EVENT_MAX_DEPTH` long is
+dropped. Each delivery is a firing, unique per trigger and event id, and a `workflow.trigger` job. Schedule triggers are
+checked every `WORKFLOW_SCHEDULE_TICK_SECONDS`; each due time is claimed once across instances. Audited:
+`workflow.trigger.set`, `workflow.trigger.removed`, `workflow.trigger.updated`, `workflow.trigger.fired`,
+`workflow.trigger.skipped`, `workflow.trigger.throttled`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/triggers?limit` | `agents:run`. The trigger of the published version and its recent firings within the caller's clearance: `{workflowId, trigger: {id, workflowId, version, kind: event \| schedule, event, cron, schedule, ownerId, enabled, nextRunAt, lastFiredAt, lastRunId, lastResult, createdAt, updatedAt} \| null, firings: [{id, event, eventId, label, chain, state: queued \| starting \| started \| skipped, runId, reason, createdAt, finishedAt}]}` |
+| `PATCH /api/workflows/:id/triggers` `{enabled}` | `workflows:manage`. Turns the trigger off or on again (a schedule's next due time is recomputed); `404` without one |
+
+**Failure handling (B-3906).** A step may carry `retry: {max: 1-5, delayMs: 1000-3600000 (5000), backoff: fixed |
+exponential (exponential)}` (not on trigger, approval, wait or branch steps; a warning on writes): a step that fails is
+tried again up to `max` more times, waiting durably between attempts (the step is `waiting` with `resumeAt` and
+`detail: {retryAt, retries, lastError}`; the run is `waiting`). Label-ceiling and guardrail blocks and rejections are
+not retried. An edge with `branch: failure` (from any step but the trigger) is taken when its step fails for good: the
+steps on it receive `{error, step}` (also readable as `{{steps.<id>.error}}`), its other edges are skipped, and the run
+does not fail for it. A run (not a dry run) that fails for good is a dead letter, audited `workflow.run.dead_lettered`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-dead-letters?state&workflow&limit` | `workflows:manage`. Dead letters of the current workspace's workflows within the caller's clearance: `{items: [{id, workflowId, workflow, runId, nodeId, label, error, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveRunId}]}` |
+| `POST /api/workflow-dead-letters/:id/redrive` | `workflows:manage`. Replays the run from the step that failed (steps before it keep their checkpoints): `201` the dead letter, `redriven` with `redriveRunId`; `409` when it was redriven already. Audited `workflow.dead_letter.redriven` |
+
+**Bundles (B-3909).** `exprsn-workflow/1`: `{format, exportedAt, workflow: {name, description, label}, version (null for
+the draft), graph, references: {tools: [{name, version}], profiles, apps, vault, trigger}, key, signature}`, signed with
+the KMS HMAC key `<OPENBAO_KEY_PREFIX>workflow-bundles` over the canonical JSON of everything but the signature. Runs,
+versions, the registry tool a workflow is published as and app triggers are not part of it.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/bundle` | `workflows:manage`. The signed bundle of the published version (the draft when nothing is published), as an attachment. Audited `workflow.exported` |
+| `POST /api/workflows/import` `{bundle, name?, bindings?: {tools, profiles, apps, vault}}` | `workflows:manage`. Verifies the signature before reading anything else (changed after signing, another key or no signature: `422 Bundle refused`, audited `workflow.import.refused`), re-binds each reference (`bindings` maps a name to another; otherwise it keeps its name) and creates the workflow as a draft in the current workspace: `201 {workflow, bindings: [{kind: tool \| profile \| app \| vault \| trigger, from, to, status: bound \| missing \| on publish, detail}]}`. A taken name is `409`; a vault reference the importer cannot read is `409` (bind it). The trigger starts nothing until the importer publishes the workflow. Audited `workflow.imported` |

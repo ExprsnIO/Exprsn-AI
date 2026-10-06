@@ -824,3 +824,21 @@ filter, private `/tmp`, only the state directory writable.
   tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
   receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and
   queues them itself. The `/v1` API, agent runs and workflows still lease a separate slot for each call they make.
+- Workflow triggers, retries and bundles (1.5.0, Sprint 32b, B-3903, B-3906, B-3909): a workflow's own event and
+  schedule triggers start runs as the person who published the version, with what they hold when the trigger fires;
+  re-publishing makes the publisher the owner, so whoever publishes takes the runs on. The loop rule for event triggers
+  covers only workflows: an event caused by a chain of workflow runs is not delivered to a workflow in the chain, and
+  is dropped at `WORKFLOW_EVENT_MAX_DEPTH`, but the chain is not shared with plugins, app record triggers, sub-workflows
+  or agents until B-4101's chain context replaces it (a plugin that starts a workflow whose events start that plugin
+  again stops only at each kind's own limit and at the rate limits). The chain is carried in-process while a run
+  executes and on the firing row; an effect that leaves through another job (a file version a step writes, whose
+  `file.uploaded` comes from the scan job) is not traced, and `WORKFLOW_EVENT_RATE_PER_MINUTE` bounds it. Workspace
+  scoping relies on the event naming its workspace (`data.workspace`, or the audit target's `workspace`): audit
+  actions mostly name none, so only tenant-level workflows receive them. An event trigger's run input holds the event
+  envelope, sealed like any run input; the firing row keeps it sealed too. A retry of a step that writes (an HTTP
+  `POST` or `PUT`, a record step) may send it again (validation warns); retries are not idempotent beyond what the
+  remote side ensures. A redriven dead letter replays the failed run from its failed step as the admin who redrives it,
+  not as the run's original owner. Workflow bundles are signed with an HMAC key in the KMS
+  (`<OPENBAO_KEY_PREFIX>workflow-bundles`), so, like app bundles, they verify only on installations that share that
+  key; the signature proves where a bundle came from, not that its graph is safe, so an import is a draft that the
+  importer reviews and publishes, and publishing validates every re-bound reference again.
