@@ -123,7 +123,7 @@ jobs:
         image: mongo:8
         env: { MONGO_INITDB_ROOT_USERNAME: root, MONGO_INITDB_ROOT_PASSWORD: root }
         ports: ["27017:27017"]
-        options: --health-cmd "mongosh --quiet -u root -p root --eval 'db.runCommand({ ping: 1 }).ok'" --health-interval 3s --health-timeout 5s --health-retries 30
+        options: --health-cmd "mongosh --quiet -u root -p root --eval 'db.runCommand({ping:1}).ok'" --health-interval 3s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -145,9 +145,16 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           for i in $(seq 1 40); do docker exec ${{ job.services.postgres.id }} pg_isready -U exprsn >/dev/null 2>&1 && exit 0; sleep 1; done
           exit 1
+      # B-3605: GreenMail as the email channel's IMAP server, with a throwaway CA and a certificate for localhost
+      # (the adapter requires TLS and verifies the host name); mail is delivered to it by SMTP during the test.
+      - name: Start GreenMail (IMAP) with a test certificate
+        run: server/test/integration/greenmail.sh "$RUNNER_TEMP/greenmail" greenmail
       - run: npm ci
       - run: npm run test:integration -w server
         env:
+          TEST_IMAP_URL: imaps://help%40shop.example:imap-pw@localhost:3993/INBOX
+          TEST_IMAP_SMTP_URL: smtp://localhost:3025
+          NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/greenmail/ca.pem
           TEST_PG_URL: postgres://exprsn:exprsn@127.0.0.1:5432/exprsn_test
           TEST_MYSQL_URL: mysql://exprsn:exprsn@127.0.0.1:3306/exprsn_test
           TEST_MYSQL_ADMIN_URL: mysql://root:root@127.0.0.1:3306/exprsn_test

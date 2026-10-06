@@ -2,6 +2,15 @@
 
 ## 1.5.0 (in progress)
 
+### The IMAP channel adapter against a real IMAP server (Sprint 34b, B-3605)
+
+- `server/test/integration/imap.test.ts` (gated on `TEST_IMAP_URL` and `TEST_IMAP_SMTP_URL`): mail delivered by SMTP
+  to a GreenMail mailbox becomes a channel thread through the `channels.imap-poll` job and imapflow, is answered
+  through the outbox, a reply in the thread joins the session, nothing is marked seen, and a wrong password is
+  recorded on the cursor and audited once. `server/test/integration/greenmail.sh` starts GreenMail 2.1.5 (pinned by
+  digest) with a throwaway CA; the CI integration job runs it.
+- CI: the MongoDB service's health command no longer has a `: ` in a plain YAML scalar.
+
 ### WebDAV for the file store (Sprint 34b, B-3201 to B-3203)
 
 - Migration `036c_dav_files` (WebDAV locks). Described in `docs/dav.md`.

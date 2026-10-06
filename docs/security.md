@@ -747,7 +747,9 @@ filter, private `/tmp`, only the state directory writable.
   receiving mail server does not enforce SPF/DKIM/DMARC; an attacker who knows a customer's address and one of the
   thread's Message-IDs could add a message to that session (they still never see the replies, which go to the real
   address). IMAP polls read the mailbox read-only and never mark or move messages; messages over 10 MB are skipped.
-  The imapflow adapter itself is exercised only against a fake fetcher in the unit tests, not a real IMAP server.
+  Since Sprint 34 (B-3605) the imapflow adapter also runs in CI against GreenMail over implicit TLS with the
+  certificate verified against the host name (`server/test/integration/imap.test.ts`); the STARTTLS path (port 143)
+  is exercised only through imapflow's own handling, not against a server.
   Mailgun inbound is form-encoded only (routes that forward attachments post multipart, which is refused with `415`);
   Postmark, SendGrid and others use the generic shape through a relay. Bounces from IMAP are read from RFC 3464
   delivery reports only (not from free-text bounce mails). Held replies use the flag queue: a reviewer who can see the
