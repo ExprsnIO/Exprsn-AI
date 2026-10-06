@@ -98,7 +98,7 @@ export interface RecordRow {
   updated_at: number;
 }
 
-export type RecordSource = 'api' | 'form' | 'import' | 'workflow';
+export type RecordSource = 'api' | 'form' | 'import' | 'workflow' | 'plugin';
 
 /** Who writes: a person (or a run as its owner), or nobody (a public form). */
 export interface Actor {

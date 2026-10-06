@@ -848,9 +848,10 @@ export class WebhookService {
    * with the published JWKS, so no secret is handed out), and is checked against the operator's and the tenant's
    * outbound host rules here and again at every attempt. Its deliveries, retries and breaker are the webhook path's.
    */
-  async managed(tenantId: string, pluginKey: string, url: string, maxLabel: Label): Promise<WebhookRow> {
+  async managed(tenantId: string, pluginKey: string, url: string, maxLabel: Label, hookName?: string): Promise<WebhookRow> {
     await this.checkEndpoint(tenantId, url);
-    const name = WebhookService.pluginHookName(pluginKey, url);
+    // B-3908: a workflow's webhook step passes its own name (`workflow:<id>:<hash>`).
+    const name = hookName ?? WebhookService.pluginHookName(pluginKey, url);
     const s = this.s();
     const existing = await s.db('webhooks').where({ tenant_id: tenantId, name }).first();
     if (existing) {

@@ -10,7 +10,7 @@ import type { Issue, PortSchema, ValidationEnv, WfEdge, WfGraph, WfNode } from '
  *
  * Registering a kind (the hook for other parts of Sprint 32): add a `StepKindDef` to `STEP_KINDS` below with its zod
  * config, the templates it reads, its output port and any publish checks; `NODE_KINDS`, `CONFIGS`, `outputSchemaOf`
- * and `validateGraph` pick it up. Then give it a runner in `steps/index.ts` (`STEP_RUNNERS`), which `runNode`
+ * and `validateGraph` pick it up. Then give it a runner in `steps/registry.ts` (`STEP_RUNNERS`), which `runNode`
  * dispatches to for every kind it does not handle itself.
  */
 
@@ -277,7 +277,7 @@ const loop: StepKindDef = {
   refs: (cfg) => actionRefs(cfg as Action)
 };
 
-/** The Workflows 2 kinds, by name. Add a kind here (and its runner in `steps/index.ts`). */
+/** The Workflows 2 kinds, by name. Add a kind here (and its runner in `steps/registry.ts`). */
 export const STEP_KINDS = { sub, agent, map, loop } satisfies Record<string, StepKindDef>;
 export const STEP_KIND_NAMES = ['sub', 'agent', 'map', 'loop'] as const;
 export type StepKindName = (typeof STEP_KIND_NAMES)[number];

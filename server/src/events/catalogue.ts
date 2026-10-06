@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 8;
+export const CATALOGUE_VERSION = 9;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -44,7 +44,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
   { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached, reopened' },
   { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
-  { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
+  { pattern: 'workflow.*', description: 'Workflow runs and approvals; since 1.5.0 also triggers set, removed, updated, fired, skipped and throttled (workflow.trigger.*), runs dead-lettered and redriven, and bundles exported, imported and refused (audit actions)' },
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
   // 1.5.0, Sprint 32 (B-4101)
   { pattern: 'chain.*', description: 'The chain context: invocations the chain rules refused (chain.refused: depth, per-kind depth, principal, budget) and chains stopped at their root\'s budget (chain.stopped) (audit actions)' },

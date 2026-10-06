@@ -446,13 +446,13 @@ started a dry run), with clearance for the run's label.
 | `GET /workflow-approvals` | Approvals waiting on the caller: `[{id, runId, nodeId, role, state, shown, dueAt, canDecide, workflow, step, label, mode}]` |
 | `POST /workflow-approvals/:id` `{decision: approve\|reject, reason?}` | Decides; the run resumes (approve) or ends `rejected`. Undecided approvals expire at `dueAt` and the run fails |
 
-A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?}], edges: [{from, to,
-branch?: true|false}], limits: {timeoutMs?, tokens?}}`. `input` and `output` are port schemas
+A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?, retry?}], edges: [{from,
+to, branch?: true|false|failure}], limits: {timeoutMs?, tokens?}}` (`retry` and `failure`: Sprint 32b, below). `input` and `output` are port schemas
 `{type: string|number|integer|boolean|array|object|any, properties?, required?, items?}`. Step kinds:
 
 | Kind | Config | Output |
 | --- | --- | --- |
-| `trigger` | `{source: manual\|api}` | the run input (checked against `output`) |
+| `trigger` | `{source: manual\|api\|record\|schedule\|event, event?, cron?}` (`event` and `cron`: Sprint 32b, below) | the run input (checked against `output`) |
 | `model` | `{profile, prompt, think?, format: text\|json}` | `{text}`, or the parsed JSON (checked against `output`) |
 | `transform` | `{fields: {name: template}}` | the fields |
 | `branch` | `{left, op: eq\|ne\|gt\|gte\|lt\|lte\|contains\|truthy\|exists, right?}` | input plus `{result}`; outgoing edges carry `branch` |
@@ -2067,12 +2067,13 @@ grants at that moment, allows `PLUGIN_MAX_CALLS` calls and is revoked when the h
 against the token's grants and the plugin's grants now: an ungranted call answers `403` (the handler sees an error
 with `status` 403) and is audited `plugin.call.refused`. Calls: `log`, `audit`, `notify`, `flag`, `webhook`
 (`args.data` as the body), `workflow` (as the actions above), and `records.read`, `records.write`, `files.read`,
-`groups.read`, `posts.write` (`501` until their domains ship). The handler's output and return value go to the
+`groups.read`, `posts.write` (live since 1.5.0, B-3904: they act as the user who installed the plugin; see Sprint 32c
+below). The handler's output and return value go to the
 plugin's log.
 
 | Route | Notes |
 | --- | --- |
-| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `501` |
+| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `400` (a domain call's arguments) |
 
 ### Plugins from signed import bundles (B-2005)
 
@@ -3797,3 +3798,125 @@ An action (map item or loop iteration) is a model prompt (`profile`, `prompt`, `
 | Method and path | What it does |
 | --- | --- |
 | `GET /api/workflow-callees` | `agents:run`. What the new steps may call from the current workspace, within the caller's clearance: `{workflows: [{id, name, label, version, input}], agents: [{name, version, description, label, budgets}], skills: [{name, version, description, label, tools}], limits: {chainMaxDepth, workflowMaxDepth, maxItems, maxParallel}}` |
+## Sprint 32b (1.5.0): workflow triggers, failure handling and bundles (B-3903, B-3906, B-3909)
+
+**Triggers on the workflow itself (B-3903).** The trigger step takes two more sources: `{source: event, event}` (a
+catalogue event type such as `file.uploaded`, or a group such as `file.*`; not `*`) and `{source: schedule, cron}` (five
+fields, UTC; a `schedule` trigger without `cron` is still started by an app's schedule trigger). Publishing checks the
+event against the catalogue (`config`; a reserved type is a warning) and the cron expression, and writes the version's
+trigger; republishing with another source removes it. Runs start as the person who published the version (the
+trigger's owner), with the roles, clearance and memberships they hold at that moment: an owner who is disabled, lost
+`agents:run`, left the workflow's workspace or is not cleared for the event gets a skip (`workflow.trigger.skipped`
+with the reason) instead of a run, as does an event for a version that is no longer the published one. An event run's
+input is `{event: {id, type, tenant, label, createdAt, data}, trigger: {id, kind: event, depth}}` and its trigger
+`event:<firing id>`; a schedule run's input is `{event: schedule, dueAt, trigger: {id, kind: schedule, depth: 1}}` and its
+trigger `schedule:<firing id>`.
+
+Event fan-out follows the plugin rules: a workflow in a workspace receives only events that name that workspace
+(`data.workspace` or the audit target's `workspace`), a tenant-level workflow the tenant's events; an event above the
+workflow's label is not delivered; each trigger fires at most `WORKFLOW_EVENT_RATE_PER_MINUTE` times a minute (dropped
+events are counted in `exprsn_workflow_trigger_dropped_total{reason}` and audited once a window as
+`workflow.trigger.throttled`); an event caused by a chain of workflows is never delivered to a workflow in that chain,
+events about a workflow's own runs never start it, and an event whose chain is `WORKFLOW_EVENT_MAX_DEPTH` long is
+dropped. Each delivery is a firing, unique per trigger and event id, and a `workflow.trigger` job. Schedule triggers are
+checked every `WORKFLOW_SCHEDULE_TICK_SECONDS`; each due time is claimed once across instances. Audited:
+`workflow.trigger.set`, `workflow.trigger.removed`, `workflow.trigger.updated`, `workflow.trigger.fired`,
+`workflow.trigger.skipped`, `workflow.trigger.throttled`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/triggers?limit` | `agents:run`. The trigger of the published version and its recent firings within the caller's clearance: `{workflowId, trigger: {id, workflowId, version, kind: event \| schedule, event, cron, schedule, ownerId, enabled, nextRunAt, lastFiredAt, lastRunId, lastResult, createdAt, updatedAt} \| null, firings: [{id, event, eventId, label, chain, state: queued \| starting \| started \| skipped, runId, reason, createdAt, finishedAt}]}` |
+| `PATCH /api/workflows/:id/triggers` `{enabled}` | `workflows:manage`. Turns the trigger off or on again (a schedule's next due time is recomputed); `404` without one |
+
+**Failure handling (B-3906).** A step may carry `retry: {max: 1-5, delayMs: 1000-3600000 (5000), backoff: fixed |
+exponential (exponential)}` (not on trigger, approval, wait or branch steps; a warning on writes): a step that fails is
+tried again up to `max` more times, waiting durably between attempts (the step is `waiting` with `resumeAt` and
+`detail: {retryAt, retries, lastError}`; the run is `waiting`). Label-ceiling and guardrail blocks and rejections are
+not retried. An edge with `branch: failure` (from any step but the trigger) is taken when its step fails for good: the
+steps on it receive `{error, step}` (also readable as `{{steps.<id>.error}}`), its other edges are skipped, and the run
+does not fail for it. A run (not a dry run) that fails for good is a dead letter, audited `workflow.run.dead_lettered`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-dead-letters?state&workflow&limit` | `workflows:manage`. Dead letters of the current workspace's workflows within the caller's clearance: `{items: [{id, workflowId, workflow, runId, nodeId, label, error, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveRunId}]}` |
+| `POST /api/workflow-dead-letters/:id/redrive` | `workflows:manage`. Replays the run from the step that failed (steps before it keep their checkpoints): `201` the dead letter, `redriven` with `redriveRunId`; `409` when it was redriven already. Audited `workflow.dead_letter.redriven` |
+
+**Bundles (B-3909).** `exprsn-workflow/1`: `{format, exportedAt, workflow: {name, description, label}, version (null for
+the draft), graph, references: {tools: [{name, version}], profiles, apps, vault, trigger}, key, signature}`, signed with
+the KMS HMAC key `<OPENBAO_KEY_PREFIX>workflow-bundles` over the canonical JSON of everything but the signature. Runs,
+versions, the registry tool a workflow is published as and app triggers are not part of it.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/bundle` | `workflows:manage`. The signed bundle of the published version (the draft when nothing is published), as an attachment. Audited `workflow.exported` |
+| `POST /api/workflows/import` `{bundle, name?, bindings?: {tools, profiles, apps, vault}}` | `workflows:manage`. Verifies the signature before reading anything else (changed after signing, another key or no signature: `422 Bundle refused`, audited `workflow.import.refused`), re-binds each reference (`bindings` maps a name to another; otherwise it keeps its name) and creates the workflow as a draft in the current workspace: `201 {workflow, bindings: [{kind: tool \| profile \| app \| vault \| trigger, from, to, status: bound \| missing \| on publish, detail}]}`. A taken name is `409`; a vault reference the importer cannot read is `409` (bind it). The trigger starts nothing until the importer publishes the workflow. Audited `workflow.imported` |
+
+## Sprint 32c (1.5.0): domain built-in tools, approval forms, notify and webhook steps (B-3904, B-3907, B-3908)
+
+### Domain built-ins (B-3904)
+
+Five platform registry tools with `impl: builtin` (published to every tenant, like `calculate`), seeded by migration
+`034c_workflow_steps`. They go through the one dispatcher, so chat, agent runs, workflow tool steps and the registry
+harness call them the same way: the input schema, the tool's ceiling, the `tool-call` checkpoint and the approval rule
+for writes (all five are `write`; a workflow tool step pauses for its approver role unless an Approval step comes
+before it on every path). Each acts as the caller through the domain service: the permission the domain's route needs,
+membership and rights, clearance and label ceilings, guardrails, the audit entry and the catalogue event. Data is never
+sent somewhere labelled below it: a call made with confidential data into an internal conversation, group or session
+fails with `Blocked by label ceiling: …`. The registry harness (`POST /admin/registry/:id/test`) holds writing
+built-ins (`needsApproval`, `sandboxed: false`) instead of acting on live data.
+
+| Tool | Arguments | Result | Needs |
+| --- | --- | --- | --- |
+| `messages.send` | `{conversation \| user, body, thread?}` (`user` opens or reuses the direct conversation) | `{conversation, message, label}` | `messages:write` |
+| `feed.post` | `{workspace?, group?, body}` (the caller's current workspace by default) | `{post, state, label, workspace}`; the post is at least the call's label and records its source | `feed:write` |
+| `files.write_version` | `{file, content, encoding?: utf8 \| base64, type?}` (up to 1 MB) | `{file, version, state, size}`; the version goes through quarantine and the scan, at least the call's label | `files:write` |
+| `groups.create_event` | `{group, title, start, end? \| durationMinutes?, timeZone, description?, location?, reminders?}` | `{event, group, startsAt, label}` | `groups:write` and the group's `events` right |
+| `channels.answer` | `{channel, session, text}` | `{message, seq}` | `channels:review` |
+
+A post made by a built-in or a plugin carries `source: {kind, id}` in its view (`GET /feed/posts/:id` and every feed
+page): `workflow-run` (a workflow tool step; the run's id), `agent-run`, `message` (chat), `api-request`, `plugin`.
+`feed.post.created` audits it in `detail.source`.
+
+**Plugin broker calls.** `records.read` `{app, entity, id? | filter?, q?, limit?}`, `records.write` `{app, entity,
+action?: create | update | transition, id?, values, to?, version?}`, `files.read` `{file, version?}` (`text` for text
+types, `base64` otherwise, at most 256 kB with `truncated`), `groups.read` `{group, events?}` (the group and its events
+for the next 90 days) and `posts.write` `{workspace?, group?, body}` answer `200` with the result. They need the
+capability (`read:records`, `write:records`, `read:files`, `read:groups`, `write:posts`) and act as the user who
+installed the plugin: that user must still be active and hold `records:read`, `records:write`, `files:read`,
+`groups:read` or `feed:write`, their clearance is capped at the plugin's max label, and a write carries at least the
+event's label (records are written with `source: plugin`, posts with `source: {kind: plugin, id}`). Bad arguments are
+`400`; a plugin installed from the command line, or whose installer is gone, is `403`.
+
+### Approval forms (B-3907)
+
+An `approval` step takes `form: {app, form}` (names or ids): the approver fills in that app form, and the answers
+become the step's output (`{…input, approved, by, answers}`; the port schema adds `answers: object`). The form must
+exist and be openable by whoever saves the graph (`422`, code `reference`, at save). When the step opens, the form is
+resolved as the run's owner and kept with the approval.
+
+| Method and path | Change |
+| --- | --- |
+| `GET /workflow-approvals`, `GET /workflow-runs/:id` | Each approval adds `form: {app, form, title, submitLabel, fields: [{name, label, help, type, required, options?, visibleIf…}]}` (null without one) and `answers` (once decided, within the caller's clearance) |
+| `POST /workflow-approvals/:id` `{decision, reason?, answers?}` | Approving a step with a form needs `answers`, validated like a submission of that form: only the visible fields are kept (the rest dropped), required ones (including those a condition shows) present, text through the `user-input` checkpoint, then the entity's types, options and links. `400` with `problems` when they do not pass (the approval stays pending); answers on an approval without a form are `400`. Nothing is written to the app. The answers are sealed with the approval, returned as `answers`, and audited in `workflow.approval.approved` `detail.answers` (at the run's label) |
+
+### Notify and webhook steps (B-3908)
+
+Two new step kinds, both writes (a workflow offered as a tool with one is at least `write`); a dry run mocks them.
+
+- `notify` `{users?: [template], roles?: [role], title, body?, email?: false, route?}`, output `{notified, skipped}`.
+  `users` render to user ids or usernames. Only active users of the tenant cleared for the step's label are told, and
+  for a workflow in a members-only workspace only its members; the rest (and unknown names) are skipped and counted.
+  The notice carries the step's label and opens `route` (`workflows?run=<id>` by default); `email: true` also mails
+  it. Audited `workflow.step.notified` `{notified, skipped, email, roles}`.
+- `webhook` `{url, event?: workflow.<name> (workflow.webhook), body?: {field: template} | template}`, output
+  `{webhook, delivery, event}`. The URL is fixed (no templates). It is checked against the operator's and the tenant's
+  outbound host rules when the graph is saved (`POST /workflows`, `PUT /workflows/:id/draft`, publish): an endpoint
+  outside them is refused with `422 Workflow invalid` and `errors: [{code: config, nodeId, message: "<step>: the
+  endpoint is refused by the outbound host rules: …"}]`, and nothing is saved. At run time the step queues one delivery
+  through the tenant's webhook path, on a webhook managed for the workflow and endpoint (`workflow:<id>:<hash>`, no
+  subscriptions, removed with the workflow): the body is `{id, type: event, tenant, label, createdAt, data: {workflow,
+  run, step, data}}` (`data` the step's input or its `body`), signed with the tenant's Ed25519 webhook key
+  (`X-Exprsn-Key-Id`, `X-Exprsn-Timestamp`, `X-Exprsn-Signature-Ed25519`; JWKS at `/webhooks/keys/<tenant slug>`), with
+  the webhook path's retries and breaker. One delivery per run and step (a retried job does not send twice; a replay is
+  a new run and sends again). Audited `workflow.step.webhook` `{host, event, delivery}`.
+

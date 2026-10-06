@@ -64,6 +64,11 @@ export interface WorkflowToolRunner {
   toolResult(ctx: ToolCallContext, entry: EntryRow, runId: string): Promise<{ state: 'pending' } | { state: 'done'; result: unknown } | { state: 'failed'; error: string }>;
 }
 
+/** B-3904: the domain built-ins (`registry/builtin`), installed once the services exist. */
+export interface BuiltinRunner {
+  run(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown>;
+}
+
 /** A pending tool result (B-1006): the call started something that finishes later, which the caller can await. */
 export interface PendingResult {
   kind: 'workflow-run';
@@ -112,6 +117,7 @@ export class ToolDispatcher {
   private readonly limiters = new Map<number, RateLimiterMemory>();
   private workflows: WorkflowToolRunner | null = null;
   private chains: ChainService | null = null;
+  private builtins: BuiltinRunner | null = null;
 
   constructor(
     private readonly registry: RegistryService,
@@ -138,6 +144,11 @@ export class ToolDispatcher {
     let parent: ChainRef | null = ctx.chain ?? chainScope.getStore() ?? null;
     if (!parent && ctx.chainRoot) parent = await this.chains.begin(p.tenantId, { kind: ctx.chainRoot.kind, ref: ctx.chainRoot.ref, principal: p.userId, label: ctx.label });
     return this.chains.begin(p.tenantId, { kind: 'tool-call', callee: `${tool.entry.name}@${tool.entry.version}`, principal: p.userId, label: ctx.label, parent });
+  }
+
+  /** B-3904: the domain built-ins run through this runner. */
+  useBuiltins(runner: BuiltinRunner): void {
+    this.builtins = runner;
   }
 
   /** Resolves tool names for a principal and a data label; tools that cannot be offered come back with a reason. */
@@ -308,6 +319,7 @@ export class ToolDispatcher {
     switch (entry.impl) {
       case 'builtin':
         if (entry.definition.builtin === 'calculate') return this.calc.evaluate(String(args.expression ?? ''));
+        if (this.builtins) return this.builtins.run(ctx, entry, args);
         throw new Error(`Unknown built-in ${String(entry.definition.builtin)}.`);
       case 'mcp': {
         const r = await this.mcp.call(ctx.principal, String(entry.definition.serverId), String(entry.definition.tool), args, ctx.signal);

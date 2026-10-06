@@ -48,10 +48,12 @@ import {
   type WfNode
 } from './graph.js';
 import { internalRequest } from './http.js';
+import { handlesFailure, isFailureEdge, nextRetryAt, retryable } from './retry.js';
+import type { StoredForm, WorkflowStepKit } from './steps/index.js';
 import type { AllowList } from '../mcp/hosts.js';
-import { ChainLimit, type ChainCtx, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
+import { ChainLimit, chainScope, type ChainCtx, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
 import type { ToolDef } from '../registry/dispatch.js';
-import { RESUMES, STEP_RUNNERS, StepBlocked, StepFailed, WAIT, isStepKind, type AgentStepRunner, type ChildResult, type ChildSpec, type StepCall, type StepHost, type StepResult } from './steps/index.js';
+import { RESUMES, STEP_RUNNERS, StepBlocked, StepFailed, WAIT, isStepKind, type AgentStepRunner, type ChildResult, type ChildSpec, type StepCall, type StepHost, type StepResult } from './steps/registry.js';
 import { stepEnv } from './steps/env.js';
 import { modelWithSkills, type ChatTurn } from './steps/skills.js';
 
@@ -135,6 +137,9 @@ interface ApprovalRow {
   due_at: number;
   created_at: number;
   decided_at: number | null;
+  /** B-3907: the app form the approver fills in (JSON StoredForm) and their answers (sealed). */
+  form?: string | null;
+  answers?: string | null;
 }
 
 export interface WorkflowDeps {
@@ -190,6 +195,17 @@ export interface RecordStep {
 /** 1.4.0 (B-2206): what runs a record step (the low-code apps), installed with `useRecords`. */
 export interface RecordStepRunner {
   runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number; chain?: ChainRef | null }): Promise<{ output: Record<string, unknown>; label: Label }>;
+}
+
+/**
+ * Sprint 32b: what the trigger, dead-letter and chain modules hook into (`useLifecycle`): a version was published (its
+ * trigger may start runs by itself, B-3903), a run failed for good (a dead letter, B-3906), and the scope a run
+ * executes in (the chain of workflows that caused it, so events its steps cause carry the chain).
+ */
+export interface WorkflowLifecycle {
+  published?(w: WorkflowRow, version: number, g: WfGraph, p: Principal): Promise<void>;
+  failed?(run: RunRow, error: string | null): Promise<void>;
+  scope?<T>(run: RunRow, fn: () => Promise<T>): Promise<T>;
 }
 
 const TERMINAL: RunState[] = ['succeeded', 'failed', 'rejected', 'cancelled'];
@@ -266,6 +282,9 @@ export class WorkflowService implements WorkflowToolRunner {
   private records: RecordStepRunner | null = null;
   /** Child runs a parent step is executing in this process (their end needs no resume of the parent). */
   private readonly inline = new Set<string>();
+  private lifecycle: WorkflowLifecycle = {};
+  /** Sprint 32c (B-3907, B-3908): notify and webhook steps and approval forms. */
+  private kit: WorkflowStepKit | null = null;
 
   constructor(private readonly d: WorkflowDeps) {
     d.jobs.register(JOB, (p, ctx) => this.execute(String(p.runId), ctx), { timeoutMs: RUN_JOB_TIMEOUT });
@@ -275,6 +294,16 @@ export class WorkflowService implements WorkflowToolRunner {
   /** 1.4.0 (B-2206): record steps go to the low-code apps. */
   useRecords(r: RecordStepRunner): void {
     this.records = r;
+  }
+
+  /** Sprint 32b: triggers, dead letters and the run scope (see WorkflowLifecycle). */
+  useLifecycle(l: WorkflowLifecycle): void {
+    this.lifecycle = { ...this.lifecycle, ...l };
+  }
+
+  /** Sprint 32c: the notify and webhook steps and approval forms. */
+  useStepKit(kit: WorkflowStepKit): void {
+    this.kit = kit;
   }
 
   // ---------- sealing ----------
@@ -400,6 +429,8 @@ export class WorkflowService implements WorkflowToolRunner {
     const refs = graphVaultRefs(g);
     if (refs.length && !this.d.vault) throw badRequest('Vault references cannot be resolved on this server.');
     if (refs.length) await this.d.vault!.check(p, refs);
+    // Sprint 32c (B-3908, B-3907): webhook endpoints on the outbound host rules, approval forms that exist.
+    if (this.kit) await this.kit.checkSave(p, g);
   }
 
   private async checkWorkspace(p: Principal, label: Label): Promise<void> {
@@ -445,6 +476,7 @@ export class WorkflowService implements WorkflowToolRunner {
       await trx('workflow_versions').insert({ id: ulid(), workflow_id: w.id, tenant_id: w.tenant_id, version: next, graph: JSON.stringify(g), state: 'published', note, published_by: p.userId, published_at: Date.now() });
       await trx('workflows').where({ id: w.id }).update({ published_version: next, updated_at: Date.now(), updated_by: p.userId });
     });
+    await this.lifecycle.published?.(w, next, g, p);
     return { version: next, warnings: v.warnings };
   }
 
@@ -453,6 +485,7 @@ export class WorkflowService implements WorkflowToolRunner {
     const active = await this.d.db('workflow_runs').where({ workflow_id: w.id }).whereIn('state', ['queued', 'running', 'waiting']).first('id');
     if (active) throw conflict('Runs of this workflow are still in progress or waiting; cancel them first.');
     await this.d.db('workflows').where({ id: w.id }).delete();
+    await this.kit?.removed(w.tenant_id, w.id);
     return w;
   }
 
@@ -702,6 +735,9 @@ export class WorkflowService implements WorkflowToolRunner {
       decidedBy: a.decided_by,
       decidedByName: a.decided_by ? (names.get(a.decided_by) ?? null) : null,
       reason: a.reason ? await this.open(a.tenant_id, `wfreason:${a.id}`, a.reason, null) : null,
+      // B-3907: the form the approver fills in, and the answers once given.
+      form: a.form && this.kit ? await this.kit.describeForm(a.tenant_id, json<StoredForm>(a.form, {} as StoredForm)) : null,
+      answers: a.answers && clears(p.clearance, run.label) ? await this.open(a.tenant_id, `wfanswers:${a.id}`, a.answers, null) : null,
       dueAt: a.due_at,
       createdAt: a.created_at,
       decidedAt: a.decided_at,
@@ -730,7 +766,7 @@ export class WorkflowService implements WorkflowToolRunner {
     return out;
   }
 
-  async decide(p: Principal, approvalId: string, input: { decision: 'approve' | 'reject'; reason?: string | null }) {
+  async decide(p: Principal, approvalId: string, input: { decision: 'approve' | 'reject'; reason?: string | null; answers?: Record<string, unknown> | undefined }, ip: string | null = null) {
     const a = (await this.d.db('workflow_approvals').where({ tenant_id: p.tenantId, id: approvalId }).first()) as ApprovalRow | undefined;
     if (!a) throw notFound('Approval');
     const run = (await this.runRow(a.run_id))!;
@@ -738,7 +774,13 @@ export class WorkflowService implements WorkflowToolRunner {
     if (!this.mayDecide(p, a, run)) throw forbidden(`This step waits on the ${a.role} role.`, { step: 'role' });
     if (a.state !== 'pending') throw conflict(`This approval is already ${a.state}.`);
     const approved = input.decision === 'approve';
-    const n = await this.d.db('workflow_approvals').where({ id: a.id, state: 'pending' }).update({ state: approved ? 'approved' : 'rejected', decided_by: p.userId, decided_at: Date.now(), reason: input.reason ? await this.seal(a.tenant_id, `wfreason:${a.id}`, input.reason) : null });
+    // B-3907: approving a step with a form takes the approver's answers, validated like a submission.
+    let answers: Record<string, unknown> | null = null;
+    if (approved && a.form) {
+      if (!this.kit) throw conflict('Approval forms cannot be read on this server.');
+      answers = (await this.kit.answers(p, a.tenant_id, json<StoredForm>(a.form, {} as StoredForm), input.answers ?? {}, ip)).values;
+    } else if (input.answers && !a.form) throw badRequest('This approval has no form; send the decision without answers.');
+    const n = await this.d.db('workflow_approvals').where({ id: a.id, state: 'pending' }).update({ state: approved ? 'approved' : 'rejected', decided_by: p.userId, decided_at: Date.now(), reason: input.reason ? await this.seal(a.tenant_id, `wfreason:${a.id}`, input.reason) : null, ...(answers ? { answers: await this.seal(a.tenant_id, `wfanswers:${a.id}`, answers) } : {}) });
     if (n !== 1) throw conflict('Someone decided this approval a moment ago.');
     const step = stepFrom(await this.d.db('workflow_steps').where({ run_id: run.id, node_id: a.node_id }).first());
     const pending = await this.open<Record<string, unknown>>(step.tenant_id, `wfstep:${step.id}`, step.output, {});
@@ -747,7 +789,7 @@ export class WorkflowService implements WorkflowToolRunner {
       // The call has not happened yet: the step stays waiting and runs again, approved, when the run resumes.
       await this.d.db('workflow_steps').where({ id: step.id }).update({ detail: JSON.stringify({ ...json<Record<string, unknown>>(step.detail, {}), approvedBy: p.userId }) });
     } else if (approved) {
-      await this.finishStep(run, step, 'passed', { output: { ...pending, approved: true, by: p.displayName }, detail: { approvedBy: p.userId } });
+      await this.finishStep(run, step, 'passed', { output: { ...pending, approved: true, by: p.displayName, ...(answers ? { answers } : {}) }, detail: { approvedBy: p.userId, ...(answers ? { answered: Object.keys(answers) } : {}) } });
     } else {
       await this.finishStep(run, step, 'failed', { error: `Rejected by ${p.displayName}${input.reason ? `: ${input.reason}` : ''}`.slice(0, 1000), detail: { rejected: true, rejectedBy: p.userId } });
     }
@@ -757,7 +799,7 @@ export class WorkflowService implements WorkflowToolRunner {
       const w = await this.workflowById(run.workflow_id);
       await this.d.notifications.notify({ tenantId: run.tenant_id, userIds: [run.created_by], kind: 'workflow', title: `${w?.name ?? 'Workflow'}: ${approved ? 'approved' : 'rejected'}`, body: `${p.displayName} ${approved ? 'approved' : 'rejected'} a step of run ${run.id.slice(-6)}.`, route: 'workflows', label: run.label });
     }
-    return { approval: a.id, state: approved ? 'approved' : 'rejected', run: run.id, workflowId: run.workflow_id, label: run.label };
+    return { approval: a.id, state: approved ? 'approved' : 'rejected', run: run.id, workflowId: run.workflow_id, label: run.label, ...(answers ? { answers } : {}) };
   }
 
   private async expireApproval(approvalId: string) {
@@ -858,6 +900,7 @@ export class WorkflowService implements WorkflowToolRunner {
     if (TERMINAL.includes(state) && state !== 'succeeded' && state !== 'cancelled') {
       await this.d.audit.append({ tenantId: run.tenant_id, action: `workflow.run.${state}`, kind: 'system', actor: { service: 'workflows' }, target: { workflow: run.workflow_id, run: run.id }, label: run.label, detail: { error, mode: run.mode } });
     }
+    if (state === 'failed' && run.mode === 'run') await this.lifecycle.failed?.({ ...run, state, error }, error).catch((err: unknown) => this.d.log.warn({ run: run.id, err: (err as Error).message }, 'could not record a dead letter'));
     return { state };
   }
 
@@ -884,7 +927,11 @@ export class WorkflowService implements WorkflowToolRunner {
     this.emitRun(run);
     await this.chainFinish(run, 'running');
     try {
-      return await this.walk(run, ctx);
+      // B-4101: the run's chain node is the in-process scope of what it causes (events, tool calls), inside the
+      // lifecycle's scope (32b's chain of workflows for the event loop rule).
+      const ref = this.chainOf(run);
+      const walk = () => (ref ? chainScope.run(ref, () => this.walk(run, ctx)) : this.walk(run, ctx));
+      return await (this.lifecycle.scope ? this.lifecycle.scope(run, walk) : walk());
     } catch (err) {
       const reason = String((ctx.signal.reason as Error | undefined)?.message ?? '');
       if (ctx.signal.aborted && /cancel/.test(reason)) return this.finishRun(run, 'cancelled', 'Cancelled');
@@ -909,7 +956,11 @@ export class WorkflowService implements WorkflowToolRunner {
     const steps = await this.stepRows(run.id);
     const input = await this.open<unknown>(run.tenant_id, `wfrun:${run.id}`, run.input, {});
     const outputs: Record<string, unknown> = {};
-    for (const s of steps.values()) if (s.state === 'passed') outputs[s.node_id] = await this.open(s.tenant_id, `wfstep:${s.id}`, s.output, null);
+    for (const s of steps.values()) {
+      if (s.state === 'passed') outputs[s.node_id] = await this.open(s.tenant_id, `wfstep:${s.id}`, s.output, null);
+      // B-3906: a failure a failure edge handles is what the steps on that edge read.
+      else if (s.state === 'failed' && handlesFailure(g, s.node_id)) outputs[s.node_id] = { error: s.error ?? '', step: s.node_id };
+    }
     const timeoutMs = g.limits.timeoutMs ?? LIMITS.maxRunTimeoutMs;
     const tokenBudget = g.limits.tokens ?? LIMITS.maxTokens;
     const scope: TemplateScope = { input, steps: outputs };
@@ -923,6 +974,8 @@ export class WorkflowService implements WorkflowToolRunner {
       if (preds.some((e) => !DONE.includes(steps.get(e.from)?.state as StepState))) continue; // upstream still waiting
       const live = preds.filter((e) => {
         const r = steps.get(e.from)!;
+        // B-3906: a failure edge is taken when its step failed for good (not when an approver rejected it).
+        if (isFailureEdge(e)) return r.state === 'failed' && !json<{ rejected?: boolean }>(r.detail, {}).rejected;
         if (r.state !== 'passed') return false;
         if (byId.get(e.from)!.kind !== 'branch') return true;
         return String((outputs[e.from] as { result?: unknown } | null)?.result === true) === e.branch;
@@ -936,7 +989,11 @@ export class WorkflowService implements WorkflowToolRunner {
       const label = highest(run.label, ...live.map((e) => steps.get(e.from)!.label), ...(n.raises ? [n.raises] : []));
       const merged = Object.assign({}, ...live.map((e) => (outputs[e.from] && typeof outputs[e.from] === 'object' ? outputs[e.from] : {}))) as Record<string, unknown>;
 
-      if (row?.state === 'waiting') {
+      const retryAt = row?.state === 'waiting' ? json<{ retryAt?: number }>(row.detail, {}).retryAt : undefined;
+      if (row?.state === 'waiting' && retryAt != null) {
+        // B-3906: a step waiting to be tried again runs once its time comes.
+        if ((row.resume_at ?? 0) > Date.now()) continue;
+      } else if (row?.state === 'waiting') {
         if (n.kind === 'wait' && row.resume_at != null && row.resume_at <= Date.now()) {
           const done = await this.finishStep(run, row, 'passed', { output: merged });
           steps.set(id, done);
@@ -954,8 +1011,8 @@ export class WorkflowService implements WorkflowToolRunner {
 
       if (Date.now() - (run.started_at ?? Date.now()) > timeoutMs) return this.finishRun(run, 'failed', `The run went past its timeout of ${Math.round(timeoutMs / 60_000)} minutes.`);
 
-      const again = row?.state === 'waiting' && RESUMES.has(n.kind);
-      let step = await this.upsertStep(run, id, { state: 'running', label, attempts: again ? row!.attempts : (row?.attempts ?? 0) + 1, ...(again ? {} : { started_at: Date.now() }), error: null });
+      const again = row?.state === 'waiting' && RESUMES.has(n.kind) && retryAt == null;
+      let step = await this.upsertStep(run, id, { state: 'running', label, attempts: again ? row!.attempts : (row?.attempts ?? 0) + 1, ...(again ? {} : { started_at: Date.now() }), error: null, ...(retryAt != null ? { resume_at: null, detail: JSON.stringify({ ...json<Record<string, unknown>>(row!.detail, {}), retryAt: undefined }) } : {}) });
       steps.set(id, step);
       this.emitStep(run, step);
       const t0 = Date.now();
@@ -991,9 +1048,21 @@ export class WorkflowService implements WorkflowToolRunner {
         const timedOut = e.name === 'TimeoutError' || /aborted due to timeout/i.test(e.message);
         const message = timedOut ? `${n.title} took longer than ${Math.round((n.timeoutMs ?? LIMITS.defaultStepTimeoutMs) / 1000)} s.` : err instanceof HttpProblem ? (err.detail ?? err.title) : e.message;
         const blocked = err instanceof StepBlocked;
+        // B-3906: a step with a retry policy waits and is tried again, durably, before it fails for good.
+        const again = !blocked && retryable(message) ? nextRetryAt(n, step.attempts) : null;
+        if (again != null) {
+          step = await this.retryLater(run, step, again, message);
+          steps.set(id, step);
+          continue;
+        }
         step = await this.finishStep(run, step, blocked ? 'blocked' : 'failed', { error: message, detail: { ms: Date.now() - t0 } });
         steps.set(id, step);
         if (chain) await this.d.chains!.charge(chain, { steps: 1, wallMs: delegates(n) ? 0 : Date.now() - t0 });
+        // B-3906: a failure edge takes the failure instead of the run.
+        if (!blocked && handlesFailure(g, id)) {
+          outputs[id] = { error: message, step: id };
+          continue;
+        }
         // A blocked step skips what depends on it and lets other branches finish; a failure stops the run.
         if (!blocked) return this.finishRun(run, 'failed', `${n.title}: ${message}`);
       }
@@ -1010,9 +1079,19 @@ export class WorkflowService implements WorkflowToolRunner {
       return { state: 'waiting', on: waitingOn.map((s) => s.node_id) };
     }
     if (all.some((s) => s.state === 'failed' && json<{ rejected?: boolean }>(s.detail, {}).rejected)) return this.finishRun(run, 'rejected', 'An approver rejected a step.');
-    const failed = all.find((s) => s.state === 'failed' || s.state === 'blocked');
+    const failed = all.find((s) => (s.state === 'failed' && !handlesFailure(g, s.node_id)) || s.state === 'blocked');
     if (failed) return this.finishRun(run, 'failed', `${byId.get(failed.node_id)?.title ?? failed.node_id}: ${failed.error ?? failed.state}`);
     return this.finishRun(run, 'succeeded');
+  }
+
+  /** B-3906: the step waits until `at` and is tried again (the run resumes then, on any instance). */
+  private async retryLater(run: RunRow, step: StepRow, at: number, message: string): Promise<StepRow> {
+    const detail = { ...json<Record<string, unknown>>(step.detail, {}), retryAt: at, retries: step.attempts, lastError: message.slice(0, 300) };
+    const patch: Partial<StepRow> = { state: 'waiting', resume_at: at, error: message.slice(0, 1000), detail: JSON.stringify(detail) };
+    await this.d.db('workflow_steps').where({ id: step.id }).update(patch);
+    const after = { ...step, ...patch };
+    this.emitStep(run, { ...after, detail });
+    return after;
   }
 
   private async runNode(run: RunRow, p: Principal, n: WfNode, step: StepRow, c: { scope: TemplateScope; merged: Record<string, unknown>; input: unknown; label: Label; signal: AbortSignal }): Promise<StepResult | typeof WAIT> {
@@ -1045,7 +1124,10 @@ export class WorkflowService implements WorkflowToolRunner {
       case 'approval': {
         const cfg = configOf(n as WfNode & { kind: 'approval' });
         const shown = cfg.show ? render(cfg.show, c.scope) : c.merged;
-        return this.pauseForApproval(run, n, step, cfg.role, cfg.timeoutMs, c.merged, shown);
+        // B-3907: the form is resolved as the run's owner when the approval opens.
+        if (cfg.form && !this.kit) throw new StepFailed('Approval forms are not available on this server.');
+        const form = cfg.form ? await this.kit!.resolveForm(p, cfg.form) : undefined;
+        return this.pauseForApproval(run, n, step, cfg.role, cfg.timeoutMs, c.merged, shown, form);
       }
       case 'http': {
         const cfg = configOf(n as WfNode & { kind: 'http' });
@@ -1101,8 +1183,15 @@ export class WorkflowService implements WorkflowToolRunner {
           throw err;
         }
       }
+      case 'notify':
+      case 'webhook': {
+        // Sprint 32c (B-3908): a dry run sends nothing.
+        if (dry) return { output: n.kind === 'notify' ? { notified: 0, skipped: 0 } : { webhook: 'mock', delivery: null, event: String(n.config.event ?? 'workflow.webhook') }, detail: { mocked: true } };
+        if (!this.kit) throw new StepFailed(`${n.kind} steps are not available on this server.`);
+        return this.kit[n.kind]({ run, node: n, principal: p, label: c.label, scope: c.scope, merged: c.merged });
+      }
       default:
-        // Sprint 32: the Workflows 2 kinds (sub, agent, map, loop) run in steps/; see steps/index.ts.
+        // Sprint 32: the Workflows 2 kinds (sub, agent, map, loop) run in steps/; see steps/registry.ts.
         if (isStepKind(n.kind)) return STEP_RUNNERS[n.kind]({ run, p, n, step, ...c }, this.host);
         throw new StepBlocked(`${n.title}: steps of kind ${String(n.kind)} are not available on this server.`);
     }
@@ -1172,10 +1261,10 @@ export class WorkflowService implements WorkflowToolRunner {
     };
   }
 
-  private async pauseForApproval(run: RunRow, n: WfNode, step: StepRow, role: string, timeoutMs: number, pending: unknown, shown: unknown): Promise<typeof WAIT> {
+  private async pauseForApproval(run: RunRow, n: WfNode, step: StepRow, role: string, timeoutMs: number, pending: unknown, shown: unknown, form?: StoredForm): Promise<typeof WAIT> {
     const id = ulid();
     const due = Date.now() + timeoutMs;
-    await this.d.db('workflow_approvals').insert({ id, tenant_id: run.tenant_id, run_id: run.id, node_id: n.id, role, state: 'pending', shown: await this.seal(run.tenant_id, `wfapproval:${id}`, shown), decided_by: null, reason: null, due_at: due, created_at: Date.now(), decided_at: null });
+    await this.d.db('workflow_approvals').insert({ id, tenant_id: run.tenant_id, run_id: run.id, node_id: n.id, role, state: 'pending', shown: await this.seal(run.tenant_id, `wfapproval:${id}`, shown), decided_by: null, reason: null, due_at: due, created_at: Date.now(), decided_at: null, ...(form ? { form: JSON.stringify(form) } : {}) });
     await this.d.db('workflow_steps').where({ id: step.id }).update({ state: 'waiting', output: await this.seal(step.tenant_id, `wfstep:${step.id}`, pending) });
     this.emitStep(run, { ...step, state: 'waiting', detail: { approval: id, role, dueAt: due } });
     this.toApprovers(run, 'workflow.approval', { approvalId: id, runId: run.id, workflowId: run.workflow_id, nodeId: n.id, role, state: 'pending', dueAt: due });
@@ -1427,6 +1516,7 @@ export class WorkflowService implements WorkflowToolRunner {
     for (const n of g.nodes) {
       let se: SideEffect = 'read';
       if (n.kind === 'http' && String(n.config.method ?? 'GET') !== 'GET') se = 'write';
+      if (n.kind === 'notify' || n.kind === 'webhook') se = 'write';
       if (n.kind === 'tool') {
         const t = await this.toolInfo(scopeOf(w), String(n.config.tool ?? '').trim());
         if (!('missing' in t)) se = t.sideEffect;
