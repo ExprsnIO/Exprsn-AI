@@ -9,7 +9,7 @@ extras, capability tokens, quote posts) and closes two 1.4.0 known gaps. Rules a
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 27 items, 137 points (1 point ≈ half a day for one engineer, tests included): P1 95, P2 42. At about 78
+**Size.** 32 items, 158 points (1 point ≈ half a day for one engineer, tests included): P1 116, P2 42. At about 78
 points a sprint that is under two sprints of work spread over three, leaving room for what 1.5.0 carries over (Sprint
 31 was accepted at 93 points) and for new requests.
 
@@ -22,7 +22,7 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
-| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies | B-4401–B-4405, B-4601, B-4701, B-4803 | 40 | Next |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | Next |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release | B-4901, B-5001, B-4801, B-4802, B-5101 | 21 | Planned |
 
 ### Progress
@@ -109,6 +109,23 @@ workspace.
 | B-4403 | Optional location on groups and events (PostGIS on PostgreSQL, a bounding box elsewhere) with distance filters | A distance filter returns the same groups on the three databases | 5 |
 | B-4404 | Trending groups by job, like trending hashtags (B-2705) | A group with a burst of joins appears in trending within one job run | 3 |
 | B-4405 | Group categories: a tenant-managed category list, managed from Social and messaging, filterable on Groups and discovery (decision Q6) | Removing a category leaves its groups uncategorised, not hidden | 3 |
+
+### B-88 Image classification in Knowledge (21 points)
+
+Added 2026-10-06 at the owner's request; placed in Sprint 36, which had room. Knowledge bases take text, Markdown,
+HTML, CSV, JSON, PDF and Word documents today and no images, and classifiers have no engine that reads one (they are
+`deterministic`, `linear`, `guard` and `llm`, all over text). The vision profile (`see`, Gemma 4 12B on :8091) and the
+image safety check (`server/src/images/safety.ts`) exist. This epic lets a knowledge base hold images, describes and
+classifies each one with a vision model, and searches and filters by those labels, under the same label, quarantine,
+guardrail and evaluation rules as everything else.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8801 | Images as knowledge documents: PNG, JPEG, WebP, GIF and HEIC uploads, and the images inside PDF and Word documents, go through the attachment quarantine and the image safety check; a vision profile named by the knowledge base writes a caption and the OCR text, which become the document's indexed text with the image as its source; a document's images are kept as its parts | An uploaded screenshot is found by a phrase from its OCR text, and an image the safety check flags never reaches the index | 5 |
+| B-8802 | A `vision` classifier engine: labels with thresholds like `llm`, scored by a vision profile from the image (with optional instructions), JSON answers validated against the labels; the knowledge base names its image classifiers, the labels are stored on the document as tags with their scores and the classifier's version, and a new classifier version re-classifies in the background | Publishing a new classifier version re-labels the knowledge base's images without re-uploading them | 5 |
+| B-8803 | Search and filters: `knowledge_search` and the search route take label filters (`labels.any`, `labels.all`, minimum score); image hits return the caption, the OCR excerpt, the labels and a thumbnail URL readable at the caller's clearance; the agent and workflow knowledge steps can filter by label | A search filtered to one label returns only images carrying it at or above the score | 5 |
+| B-8804 | Console: the Knowledge screen shows image documents with their thumbnail, caption, labels and scores, label filter chips, re-classify, and the classifier setting on a knowledge base; the Classifiers screen offers the `vision` engine; prototype boards first, axe-core and reflow checks in their own specs | An image document opens with its labels, and every control on it is backed by the server | 3 |
+| B-8805 | Evaluation and docs: the `vision` engine follows the classifier publish rule (an evaluation with at least 200 labelled samples per label), with image datasets in the eval-set format; `docs/api.md`, `docs/openapi.json`, `docs/security.md` (what a caption or OCR text may leak, labels as metadata at the image's label) and `docs/accessibility.md` | A vision classifier with an evaluation below the minimum per label cannot publish | 3 |
 
 ## P2
 
