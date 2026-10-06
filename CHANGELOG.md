@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.6.0 (in progress)
+
+### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
+
+- The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
+  `models`, `loaded`, `show`, `load`, `unload`, `pull`, `delete`, `chat` and `embed`; `OllamaClient` implements it
+  unchanged and no gateway test changed. What a server cannot do throws `Unsupported`, which the gateway, placements
+  and the catalogue skip: nothing resident is reported, loads and unloads are recorded as `unsupported` instance
+  events, pulls onto a mixed pool and rolling upgrades skip the server.
+- `kind: openai` instances (B-4302): migration `037_model_servers` (`instances.kind` defaulting to `ollama`,
+  `socket_path`, `token_ref`, `token_tenant`, `token_owner`). A Chat Completions server on a URL (the egress check and
+  mutual TLS as for Ollama) or a Unix socket (`fm serve --socket`), with an optional bearer token stored in the
+  caller's vault (`model-servers/<id>#token`) or given as a vault reference, resolved as the person who saved it.
+  Health from `/health` or `/v1/models`; models from `/v1/models` (Apple's `pcc` listed but unavailable is not
+  offered); llama.cpp's `/props` context length. The new `instance.probe` job (`POST /api/admin/instances/:id/probe`,
+  run at registration) records whether tool calls and JSON schema output work; what the server reported is in
+  `settings.reported`. `GET /api/admin/model-servers` (`models:manage`) is the import picker's list. Audited
+  `instance.created {kind, socket, token}`, `instance.probe.started`.
+- Chat Completions mapped onto the gateway's chat (B-4303, `server/src/gateway/openai-server.ts`): messages, the
+  system prompt, tools and tool calls (ids kept, results paired with their calls), streamed deltas and reasoning,
+  `response_format` from a JSON schema (`format` on the gateway's chat request, also passed to Ollama), stop,
+  temperature, max tokens and usage (estimated when the server reports none). Ollama-only options are dropped and
+  noted once as a `dropped` instance event. The tool loop, guardrails, labels and metering are unchanged.
+  `server/test/fake-openai-server.ts` stands in for `fm serve`, `mlx_lm.server` and `llama-server` (TCP or socket).
+- Catalogue entries without a pull (B-4304): `POST /api/admin/models {serverInstanceId, serverModel}` registers a
+  listed model with `format: server`, no expected digest, `source: server:<instance>/<id>` (`models.server_instance_id`,
+  `server_model`), placed warm on the instance's pool. Licence, conformance (run on that instance; the tool-calling
+  test always runs and grants `tools`), label and dual-control approval apply; placements on a pool with such a
+  server are warm only; retiring deletes nothing on the server.
+- Embeddings and guard models (B-4305): a server that answers `/v1/embeddings` serves embedding models; one that
+  refuses is remembered and the request goes to another instance with the model, such as an Ollama pool, with no
+  change to the knowledge or guardrail code.
+- Docs (B-4306): `docs/deploy.md` on `fm serve --socket` under launchd beside Ollama on a `metal` pool, with
+  `mlx_lm.server` and `llama-server` as alternatives; `docs/security.md` on what the digest check cannot cover for
+  server-held models; `docs/api.md` and `docs/openapi.json`.
+- Console (B-4307): the Models screen gets Model servers (a drawer of the registered servers with what they report,
+  Register model server with the kind, the socket path or URL and the token, and Probe again), Request import gets
+  "Held by a model server" (the import picker of server-held models, unavailable ones disabled with the reason), and
+  a held model's inspector, approval and card say "held by the server, no digest" with the capabilities the server
+  reported. The prototype board first, then the live screen; `e2e/tests/models.spec.ts` registers an `fm serve`
+  socket (the e2e server starts the fake on one) and approves its model with axe-core and 320 px reflow checks. The
+  Pools screen's Load model offers Ollama instances only.
+
 ## 1.5.0
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)
