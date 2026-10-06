@@ -276,7 +276,8 @@ table.dt .actions{white-space:nowrap}
 .problem{display:flex;flex-direction:column;gap:6px;padding:14px;background:var(--panel);border:1px solid var(--danger-fg);border-radius:6px}
 .problem .ptitle{font-size:14px;font-weight:600;color:var(--danger-fg)}
 .problem .ptext{color:var(--fg2)}
-.problem .trace{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.problem .trace{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.problem .trace .mono{min-width:0;overflow-wrap:anywhere}
 .ctxblock{display:flex;flex-direction:column;gap:6px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:6px}
 .ctxblock .chead{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:var(--fg2)}
 .ctxblock .chead .eyebrow{font-size:10px;margin-right:6px}

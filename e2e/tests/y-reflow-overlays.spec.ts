@@ -109,9 +109,12 @@ async function clickCandidate(page: Page, i: number): Promise<boolean> {
 
 /**
  * Screens whose dialogs and drawers the sweep reaches with the suite's data. If it stopped opening them, the check
- * would pass vacuously; every other screen is measured whenever it opens one.
+ * would pass vacuously; every other screen is measured whenever it opens one. Overview, Jobs and queues and
+ * Configuration open their dialogs only on state the sweep does not create (an instance to drain, a type to pause, a
+ * setting to override); their own specs (overview.spec.ts, jobs.spec.ts, storage-configuration.spec.ts) open each
+ * dialog and run this reflow check on it (B-4207).
  */
-const MODALS = SCREENS.filter((r) => !['memory', 'flags'].includes(r)).concat('settings').filter((r) => SWEEP.includes(r));
+const MODALS = SCREENS.filter((r) => !['memory', 'flags', 'overview', 'jobs', 'configuration'].includes(r)).concat('settings').filter((r) => SWEEP.includes(r));
 const DRAWERS = ['knowledge', 'memory', 'scripts', 'media', 'models', 'pools', 'training'].filter((r) => SWEEP.includes(r));
 
 for (const width of [320, 640]) {

@@ -9,6 +9,9 @@ export default defineConfig({
     pool: 'forks',
     // The files share one database per engine and each runs the migrations: one file at a time.
     fileParallelism: false,
-    testTimeout: 30000
+    testTimeout: 30000,
+    // A file's beforeAll may roll the schema back and run every migration (stores.test.ts): on a CI runner that took
+    // over the 10 s default and left the migration lock held for the files after it.
+    hookTimeout: 120000
   }
 });
