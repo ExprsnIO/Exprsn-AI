@@ -571,8 +571,12 @@ filter, private `/tmp`, only the state directory writable.
   AsyncLocalStorage: work an action's callee defers to its own timers or connections opened during the action would
   carry it too, which only ever suppresses deliveries. A script handler holds its invocation's token (shown to it
   once, stored hashed, revoked when it ends); with the default sandbox it cannot use it except over its own stdin and
-  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. The
-  `records`, `files`, `groups` and `posts` calls answer `501` until their domains ship. The test suite runs handlers
+  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. Since 1.5.0
+  (B-3904) the `records`, `files`, `groups` and `posts` calls are live and act as the installing user (still active,
+  holding the domain permission, clearance capped at the plugin's max label), so a plugin reaches what its installer
+  can reach, not what the plugin needs: a narrower plugin needs a narrower installer (a service account), and a
+  plugin installed from the command line cannot make them. `read:files` returns contents (up to 256 kB a call), not
+  just metadata, and is still a low-risk capability, granted with the manifest. The test suite runs handlers
   as local processes (`server/test/sprint25d-fakes.ts`); the container path is the scripts' and is not exercised in CI.
   Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
   retention yet).
@@ -824,3 +828,19 @@ filter, private `/tmp`, only the state directory writable.
   tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
   receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and
   queues them itself. The `/v1` API, agent runs and workflows still lease a separate slot for each call they make.
+- Workflows 2 steps (1.5.0, Sprint 32c). Domain built-ins (B-3904: `messages.send`, `feed.post`,
+  `files.write_version`, `groups.create_event`, `channels.answer`) are platform registry entries that every tenant
+  sees; a tenant cannot unpublish them, only keep them out of its agents and steps (and a write always needs an
+  approval or a confirmed call). They act as the caller, so an agent or workflow can do whatever its owner can do in
+  those domains once the call is approved; the label check stops data going somewhere labelled lower, but nothing
+  stops a write at or above the data's label. Only feed posts record their source (`workflow-run`, `agent-run`…);
+  messages, file versions, events and channel answers show the owner as the author, with the source only in the
+  workflow's own run and audit entries. Approval-form answers are validated like a submission but not written
+  anywhere, and are kept in full in the `workflow.approval.approved` audit entry at the run's label (as the run's
+  outputs are), so a field that must not reach the audit chain must not be on such a form. Notify steps tell cleared,
+  active users only, but resolve usernames in the whole tenant and skip unknown ones silently (counted, not named). A
+  webhook step's endpoint is checked against the operator's and the tenant's host rules at save and at run time; the
+  managed webhook it creates is visible on the Webhooks screen and removed with the workflow, but not when the step
+  is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
+  step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
+  confidential data from reaching it).

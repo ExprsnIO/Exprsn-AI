@@ -27598,7 +27598,7 @@
         "tags": [
           "workflow-approvals"
         ],
-        "summary": "Approvals waiting on the caller: [{id, runId, nodeId, role, state, shown, dueAt, canDecide, workflow, step, label, mode}]",
+        "summary": "Approvals waiting on the caller: [{id, runId, nodeId, role, state, shown, form, answers, dueAt, canDecide, workflow, step, label, mode}]; form (B-3907) describes the app form the approver fills in, or is null",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -27611,7 +27611,7 @@
         "tags": [
           "workflow-approvals"
         ],
-        "summary": "reject, reason?} | Decides; the run resumes (approve) or ends rejected. Undecided approvals expire at dueAt and the run fails",
+        "summary": "Decides an approval {decision: approve | reject, reason?, answers?}; the run resumes (approve) or ends rejected. Undecided approvals expire at dueAt and the run fails. B-3907 (1.5.0): an approval step with a form needs answers to approve, validated like a submission of that app form (400 with problems otherwise); they become the step's output and are audited with the decision",
         "parameters": [
           {
             "name": "id",
@@ -27625,6 +27625,41 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "decision"
+                ],
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 1000
+                  },
+                  "answers": {
+                    "type": "object",
+                    "description": "B-3907: the answers to the approval's app form (field name to value)",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -29404,7 +29439,7 @@
         "tags": [
           "plugin-broker"
         ],
-        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS; 501 for a domain not shipped",
+        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
         "security": [
           {
             "pluginToken": []
@@ -29438,7 +29473,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "description": "The call's arguments (as the declarative action's with; webhook also takes data)"
+                "description": "The call's arguments (as the declarative action's with; webhook also takes data; the domain calls as in docs/api.md, Sprint 32c)"
               }
             }
           }
