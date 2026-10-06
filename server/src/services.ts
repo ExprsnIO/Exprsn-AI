@@ -657,6 +657,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
     s.connections.vaultResolver = vaultRead;
     s.mcp.vaultResolver = vaultRead;
+    // 1.6.0, Sprint 35a (B-4302): a Chat Completions instance's bearer token, read as the administrator who saved it.
+    s.gateway.tokenResolver = vaultRead;
   }
   s.pds.registerJobs(); // 1.5.0, Sprint 31 (B-2904, B-2905): requestCrawl, the event and blob trim, repos as moderation objects
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed

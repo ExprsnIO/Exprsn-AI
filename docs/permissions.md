@@ -41,8 +41,8 @@ An admin permission is any permission outside the member baseline: a custom role
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
-| `models:manage` | yes | 5 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `pools:manage` | yes | 17 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `models:manage` | yes | 6 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `profiles:manage` | yes | 20 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
@@ -308,6 +308,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `models:manage`
 
+- `GET /api/admin/model-servers`
 - `PATCH /api/admin/models/{id}`
 - `POST /api/admin/models`
 - `POST /api/admin/models/{id}/evaluate`
@@ -327,6 +328,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PATCH /api/admin/pools/{id}`
 - `POST /api/admin/instances/{id}/drain`
 - `POST /api/admin/instances/{id}/load`
+- `POST /api/admin/instances/{id}/probe`
 - `POST /api/admin/instances/{id}/undrain`
 - `POST /api/admin/instances/{id}/unload`
 - `POST /api/admin/placements`

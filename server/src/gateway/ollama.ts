@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fetch, type Dispatcher } from 'undici';
 import { errorKind, runInSpan, SpanKind, startChild, withSpan } from '../observability/tracing.js';
 import { literalProblem, serviceAgent, servicePolicy, type ServicePolicy } from '../platform/egress.js';
+import type { ModelServer, PullProgress, ServerOp } from './server.js';
 
 export interface InstanceTls {
   caFile?: string;
@@ -40,7 +41,8 @@ export interface ChatMessage {
   content: string;
   thinking?: string;
   images?: string[];
-  tool_calls?: { function: { name: string; arguments: Record<string, unknown> } }[];
+  /** `id` is set by Chat Completions servers (B-4303), which pair each tool result with its call; Ollama has none. */
+  tool_calls?: { id?: string; function: { name: string; arguments: Record<string, unknown> } }[];
   tool_name?: string;
 }
 
@@ -51,6 +53,8 @@ export interface ChatRequest {
   tools?: unknown[];
   options?: Record<string, unknown>;
   keep_alive?: string | number;
+  /** Structured output: `json`, or a JSON schema (Ollama's `format`; `response_format` on Chat Completions). */
+  format?: 'json' | Record<string, unknown>;
 }
 
 export interface ChatChunk {
@@ -104,7 +108,8 @@ export async function* ndjson<T>(body: AsyncIterable<Uint8Array>): AsyncGenerato
  * A client for one Ollama endpoint. Only the gateway talks to Ollama, over the internal network, optionally with
  * mutual TLS (the instance's CA, client certificate and key are file paths on this server).
  */
-export class OllamaClient {
+export class OllamaClient implements ModelServer {
+  readonly kind = 'ollama' as const;
   private readonly dispatcher: Dispatcher | undefined;
   private readonly base: string;
   /** Set when the instance's mTLS files cannot be read: every request fails with it, so only this instance is affected. */
@@ -189,6 +194,19 @@ export class OllamaClient {
     return res;
   }
 
+  /** Ollama does everything the interface asks for. */
+  supports(_op: ServerOp): boolean {
+    return true;
+  }
+
+  models(): Promise<TagModel[]> {
+    return this.tags();
+  }
+
+  loaded(): Promise<PsModel[]> {
+    return this.ps();
+  }
+
   async version(): Promise<string> {
     return ((await (await this.req('GET', '/api/version')).json()) as { version: string }).version;
   }
@@ -218,7 +236,7 @@ export class OllamaClient {
     await (await this.req('DELETE', '/api/delete', { model })).text();
   }
 
-  async *pull(model: string, signal?: AbortSignal): AsyncGenerator<{ status: string; digest?: string; total?: number; completed?: number; error?: string }> {
+  async *pull(model: string, signal?: AbortSignal): AsyncGenerator<PullProgress> {
     const res = await this.req('POST', '/api/pull', { model, stream: true }, { timeoutMs: null, ...(signal ? { signal } : {}) });
     if (!res.body) return;
     yield* ndjson(res.body);
