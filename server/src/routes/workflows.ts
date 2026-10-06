@@ -147,9 +147,10 @@ export function workflowRoutes(s: Services): Router {
   });
 
   r.post('/workflow-approvals/:id', async (req, res) => {
-    const body = parseBody(z.object({ decision: z.enum(['approve', 'reject']), reason: z.string().trim().max(1000).nullable().default(null) }).strict(), req.body);
-    const out = await wf.decide(principalOf(req), String(req.params.id), body);
-    await audit(req, out.state === 'approved' ? 'workflow.approval.approved' : 'workflow.approval.rejected', { workflow: out.workflowId, run: out.run, approval: out.approval }, out.label, { reason: body.reason ? 'given' : null });
+    // B-3907: an approval with a form takes the approver's answers (validated like a submission of that form).
+    const body = parseBody(z.object({ decision: z.enum(['approve', 'reject']), reason: z.string().trim().max(1000).nullable().default(null), answers: z.record(z.string().max(63), z.unknown()).optional() }).strict(), req.body);
+    const out = await wf.decide(principalOf(req), String(req.params.id), body, ip(req));
+    await audit(req, out.state === 'approved' ? 'workflow.approval.approved' : 'workflow.approval.rejected', { workflow: out.workflowId, run: out.run, approval: out.approval }, out.label, { reason: body.reason ? 'given' : null, ...(out.answers ? { answers: out.answers } : {}) });
     res.json(out);
   });
 

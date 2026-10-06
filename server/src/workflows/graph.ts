@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { highest, labelRank, LABELS, type Label } from '../authz/labels.js';
 import { isRole } from '../authz/permissions.js';
 import { CHECKPOINTS } from '../guardrails/types.js';
+import { approvalFormSchema, endpointProblem, notifyConfig, webhookConfig } from './steps/configs.js';
 
 /*
  * Workflow graphs: typed nodes joined by edges, validated before publishing. A node's input is the merge of the
@@ -9,7 +10,7 @@ import { CHECKPOINTS } from '../guardrails/types.js';
  * step. Validation reports every problem with the node (and edge) it belongs to, so the editor can point at it.
  */
 
-export const NODE_KINDS = ['trigger', 'model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool', 'record'] as const;
+export const NODE_KINDS = ['trigger', 'model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool', 'record', 'notify', 'webhook'] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 
 /** Limits a published workflow must stay within (the board's "40 steps, 200k tokens, 2 h"). */
@@ -126,7 +127,7 @@ export const CONFIGS = {
   transform: z.object({ fields: z.record(propName, template).refine((f) => Object.keys(f).length > 0 && Object.keys(f).length <= 50, 'Between 1 and 50 fields') }).strict(),
   branch: z.object({ left: template.min(1), op: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists']), right: z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]).optional() }).strict(),
   guardrail: z.object({ checkpoint: z.enum(CHECKPOINTS).default('context'), text: template.min(1), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict(),
-  approval: z.object({ role: z.string().min(1).max(63), timeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000), show: template.default('') }).strict(),
+  approval: z.object({ role: z.string().min(1).max(63), timeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000), show: template.default(''), form: approvalFormSchema.optional() }).strict(),
   http: z
     .object({
       method: z.enum(METHODS).default('GET'),
@@ -158,7 +159,10 @@ export const CONFIGS = {
     })
     .strict()
     .refine((c) => c.action === 'create' || !!c.record, 'An update or transition names the record (a template such as {{input.record.id}})')
-    .refine((c) => c.action !== 'transition' || !!c.to, 'A transition names the state to move to')
+    .refine((c) => c.action !== 'transition' || !!c.to, 'A transition names the state to move to'),
+  // 1.5.0 (B-3908): notices to cleared recipients, and signed webhooks to the tenant's allowed hosts.
+  notify: notifyConfig,
+  webhook: webhookConfig
 } satisfies Record<NodeKind, z.ZodType>;
 
 export type NodeConfig<K extends NodeKind> = z.infer<(typeof CONFIGS)[K]>;
@@ -239,7 +243,8 @@ export function outputSchemaOf(n: WfNode, incoming: PortSchema, tool?: ToolInfo)
       case 'guardrail':
         return obj({ text: { type: 'string' }, action: { type: 'string' } });
       case 'approval':
-        return obj({ approved: { type: 'boolean' }, by: { type: 'string' } });
+        // B-3907: an approval with a form passes the approver's answers on.
+        return n.config.form ? obj({ approved: { type: 'boolean' }, by: { type: 'string' }, answers: { type: 'object' } }) : obj({ approved: { type: 'boolean' }, by: { type: 'string' } });
       case 'http':
         return obj({ status: { type: 'integer' }, body: ANY });
       case 'calc':
@@ -250,6 +255,10 @@ export function outputSchemaOf(n: WfNode, incoming: PortSchema, tool?: ToolInfo)
         return n.output ?? (tool ? toolOutputPort(tool) : { type: 'object' });
       case 'record':
         return obj({ id: { type: 'string' }, state: ANY, label: { type: 'string' }, values: { type: 'object' } });
+      case 'notify':
+        return obj({ notified: { type: 'integer' }, skipped: { type: 'integer' } });
+      case 'webhook':
+        return obj({ webhook: { type: 'string' }, delivery: ANY, event: { type: 'string' } });
     }
   };
   return PASS_THROUGH.includes(n.kind) ? mergeSchemas([incoming, own()]) : own();
@@ -393,8 +402,8 @@ export function references(tpl: string): { steps: string[]; bad: string[] } {
 function templatesOf(n: WfNode): string[] {
   const c = n.config as Record<string, unknown>;
   const out: string[] = [];
-  for (const k of ['prompt', 'text', 'show', 'left', 'url', 'body', 'expression', 'args', 'record']) if (typeof c[k] === 'string') out.push(c[k] as string);
-  for (const k of ['fields', 'args', 'values']) if (c[k] && typeof c[k] === 'object') for (const v of Object.values(c[k] as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
+  for (const k of ['prompt', 'text', 'show', 'left', 'url', 'body', 'expression', 'args', 'record', 'title']) if (typeof c[k] === 'string') out.push(c[k] as string);
+  for (const k of ['fields', 'args', 'values', 'users', 'body']) if (c[k] && typeof c[k] === 'object') for (const v of Object.values(c[k] as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
   if (c.headers && typeof c.headers === 'object') for (const v of Object.values(c.headers as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
   return out;
 }
@@ -569,6 +578,12 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
     }
     if (n.kind === 'approval' && !isRole(String(n.config.role))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.role)}.` });
     if (n.kind === 'guardrail' && !isRole(String((r.data as { approverRole: string }).approverRole))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.approverRole)}.` });
+    if (n.kind === 'notify') for (const role of (r.data as { roles: string[] }).roles) if (!isRole(role)) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${role}.` });
+    if (n.kind === 'webhook') {
+      const problem = endpointProblem(String(n.config.url));
+      if (problem) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: ${problem}` });
+      warnings.push({ code: 'config', nodeId: n.id, message: `${n.title} sends to another system; a replay sends it again.` });
+    }
     if (n.kind === 'http') {
       const u = String(n.config.url);
       let parsed: URL | null = null;

@@ -115,6 +115,7 @@ import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
 import { BuiltinTools } from './registry/builtin/index.js';
+import { WorkflowStepKit } from './workflows/steps/index.js';
 import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
@@ -642,6 +643,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // records as moderation objects (a takedown hides the record from every list and read; an upheld appeal shows it).
   s.apps.registerJobs();
   s.workflows.useRecords(s.apps.triggers);
+  s.workflows.useStepKit(new WorkflowStepKit(() => s)); // Sprint 32c (B-3907, B-3908): notify and webhook steps, approval forms
   if (!s.moderation.registry.get('record')) {
     s.moderation.registry.register({
       type: 'record',

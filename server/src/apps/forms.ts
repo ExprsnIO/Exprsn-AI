@@ -237,15 +237,7 @@ export class AppForms {
    */
   private async submit(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor): Promise<{ id: string; dropped: string[] }> {
     const s = this.s();
-    const { values, dropped, visible } = pickFormValues(form.definition, input);
-    const required = form.definition.fields.filter((f) => f.required && visible.includes(f.field) && (values[f.field] == null || values[f.field] === ''));
-    if (required.length) throw new HttpProblem(400, 'Invalid record', `${required.map((f) => f.field).join(', ')} ${required.length === 1 ? 'is' : 'are'} required.`, { extensions: { problems: required.map((f) => ({ field: f.field, message: 'is required' })) } });
-    for (const [k, v] of Object.entries(values)) {
-      if (typeof v !== 'string' || !v) continue;
-      const d = await s.guardrails.check({ tenantId: app.tenant_id, workspaceId: app.workspace_id, checkpoint: 'user-input', text: v, label: entity.label, ...(actor.principal ? { principal: actor.principal } : {}), source: { kind: 'app-form', id: form.id }, meta: { app: app.id, entity: entity.name, field: k, public: !actor.principal } });
-      if (d.action === 'block' || d.action === 'require-approval') throw new HttpProblem(422, 'Submission refused', `The submission was refused by the content rules${d.reason ? `: ${d.reason}` : '.'}`, { extensions: { field: k } });
-      if (d.action === 'redact') values[k] = d.text;
-    }
+    const { values, dropped } = await this.screen(app, entity, form, input, actor);
     const rec = await this.apps.createRecord(actor, app, entity, { values });
     await s.audit.append({
       tenantId: app.tenant_id,
@@ -258,6 +250,42 @@ export class AppForms {
       traceId: actor.traceId ?? null
     });
     return { id: rec.id, dropped };
+  }
+
+  /**
+   * B-3907: answers to a form that writes nothing (a workflow approval's form): the same checks as a submission
+   * (visible fields only, required ones, the `user-input` checkpoint, then the entity's own validation and links), and
+   * the validated values back.
+   */
+  async validateAnswers(actor: Actor & { principal: Principal }, app: AppRow, entity: EntityRow, form: FormRow, input: Values): Promise<{ values: Values; dropped: string[] }> {
+    const { values, dropped } = await this.screen(app, entity, form, input, actor);
+    const prep = await this.apps.prepare(actor, app, entity, ulid(), values, null);
+    return { values: prep.values, dropped };
+  }
+
+  /** B-3907: a form by id within its tenant (an approval stores the ids of the form it asks for). */
+  async byId(tenantId: string, formId: string): Promise<{ app: AppRow; entity: EntityRow; form: FormRow } | null> {
+    const r = await this.db('app_forms').where({ tenant_id: tenantId, id: formId }).first();
+    if (!r) return null;
+    const form = formFrom(r);
+    const app = await this.apps.appById(tenantId, form.app_id);
+    const entity = await this.apps.entityById(tenantId, form.entity_id);
+    return app && entity ? { app, entity, form } : null;
+  }
+
+  /** What a submission may write: the visible fields, required ones present, text screened at `user-input`. */
+  private async screen(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor): Promise<{ values: Values; dropped: string[] }> {
+    const s = this.s();
+    const { values, dropped, visible } = pickFormValues(form.definition, input);
+    const required = form.definition.fields.filter((f) => f.required && visible.includes(f.field) && (values[f.field] == null || values[f.field] === ''));
+    if (required.length) throw new HttpProblem(400, 'Invalid record', `${required.map((f) => f.field).join(', ')} ${required.length === 1 ? 'is' : 'are'} required.`, { extensions: { problems: required.map((f) => ({ field: f.field, message: 'is required' })) } });
+    for (const [k, v] of Object.entries(values)) {
+      if (typeof v !== 'string' || !v) continue;
+      const d = await s.guardrails.check({ tenantId: app.tenant_id, workspaceId: app.workspace_id, checkpoint: 'user-input', text: v, label: entity.label, ...(actor.principal ? { principal: actor.principal } : {}), source: { kind: 'app-form', id: form.id }, meta: { app: app.id, entity: entity.name, field: k, public: !actor.principal } });
+      if (d.action === 'block' || d.action === 'require-approval') throw new HttpProblem(422, 'Submission refused', `The submission was refused by the content rules${d.reason ? `: ${d.reason}` : '.'}`, { extensions: { field: k } });
+      if (d.action === 'redact') values[k] = d.text;
+    }
+    return { values, dropped };
   }
 
   async submitSignedIn(actor: Actor & { principal: Principal }, appRef: string, formRef: string, input: Values) {
