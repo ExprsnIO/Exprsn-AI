@@ -1446,6 +1446,7 @@ These need a signed-in session or credential and no particular permission; the h
 - `PUT /api/me/workspace`
 - `DELETE /api/me/app-passwords/{id}`
 - `GET /api/me/app-passwords`
+- `GET /api/me/dav`
 - `POST /api/me/app-passwords`
 
 ## Public routes
