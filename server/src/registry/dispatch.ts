@@ -5,6 +5,7 @@ import type { GuardAction, Guardrails } from '../guardrails/types.js';
 import type { CalcWorker } from '../chat/calc.js';
 import type { McpService } from '../mcp/service.js';
 import type { ScriptService } from '../scripts/service.js';
+import { ChainLimit, chainScope, type ChainCtx, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
 import { functionName, validateAgainst } from './schema.js';
 import type { EntryRow, RegistryService, SideEffect } from './service.js';
 
@@ -45,6 +46,13 @@ export interface ToolCallContext {
   signal?: AbortSignal;
   /** The call was approved (agent runs) or confirmed; write and destructive calls need this. */
   approved?: boolean;
+  /**
+   * B-4101: the chain node the call is made from (an agent run's, a workflow run's). The call becomes its child; a
+   * call with none joins the node active in process (`chainScope`), else starts a chain at `chainRoot` (a chat turn)
+   * or as a root of its own.
+   */
+  chain?: ChainRef | null;
+  chainRoot?: { kind: ChainKind; ref: string };
 }
 
 /** Runs a workflow published as a tool (`impl: 'workflow'`): the workflow service, installed after it is built. */
@@ -108,6 +116,7 @@ export interface ToolOutcome {
 export class ToolDispatcher {
   private readonly limiters = new Map<number, RateLimiterMemory>();
   private workflows: WorkflowToolRunner | null = null;
+  private chains: ChainService | null = null;
   private builtins: BuiltinRunner | null = null;
 
   constructor(
@@ -121,6 +130,20 @@ export class ToolDispatcher {
   /** Workflows published as tools run through this runner. */
   useWorkflows(runner: WorkflowToolRunner): void {
     this.workflows = runner;
+  }
+
+  /** B-4101: every call that runs is recorded as a `tool-call` node of its chain. */
+  useChains(chains: ChainService): void {
+    this.chains = chains;
+  }
+
+  /** Begins the call's node: a child of the caller's node, of the chat turn, or a new chain. */
+  private async chainNode(ctx: ToolCallContext, tool: ResolvedTool): Promise<ChainCtx | null> {
+    if (!this.chains) return null;
+    const p = ctx.principal;
+    let parent: ChainRef | null = ctx.chain ?? chainScope.getStore() ?? null;
+    if (!parent && ctx.chainRoot) parent = await this.chains.begin(p.tenantId, { kind: ctx.chainRoot.kind, ref: ctx.chainRoot.ref, principal: p.userId, label: ctx.label });
+    return this.chains.begin(p.tenantId, { kind: 'tool-call', callee: `${tool.entry.name}@${tool.entry.version}`, principal: p.userId, label: ctx.label, parent });
   }
 
   /** B-3904: the domain built-ins run through this runner. */
@@ -214,11 +237,36 @@ export class ToolDispatcher {
     }
     if (await this.limited(tool.entry, p.userId)) return out({ decision: d.action, denied: true, error: `Rate limit: ${tool.entry.name} allows ${tool.entry.rate_per_hour} calls per user per hour.` });
 
+    let node: ChainCtx | null;
     try {
-      const result = await this.execute(ctx, tool.entry, args);
-      return await this.finishResult(ctx, tool, result, out, d.action);
+      node = await this.chainNode(ctx, tool);
     } catch (err) {
-      if (err instanceof ToolPending) return out({ decision: d.action, pending: err.pending, error: err.message });
+      if (err instanceof ChainLimit) {
+        // The refused call is recorded under its would-be parent, so the chain shows where it stopped.
+        const parent = ctx.chain ?? chainScope.getStore() ?? null;
+        if (parent) await this.chains!.refused(p.tenantId, { kind: 'tool-call', callee: `${tool.entry.name}@${tool.entry.version}`, principal: p.userId, label: ctx.label, parent }, err.message).catch(() => undefined);
+        return out({ decision: d.action, denied: true, error: `chain_limit: ${err.message}` });
+      }
+      throw err;
+    }
+    // The label only rises along a chain: the call runs at the chain's high-water mark, within the tool's ceiling.
+    if (node && labelRank(node.label) > labelRank(tool.entry.label)) {
+      await this.chains!.finish(node, 'refused', 'above the ceiling');
+      return out({ decision: d.action, denied: true, error: `tool_unavailable: ${tool.entry.name}: its ceiling is ${tool.entry.label}; the chain carries ${node.label} data.` });
+    }
+    const cctx: ToolCallContext = node ? { ...ctx, label: node.label, chain: { chain: node.chain, node: node.node } } : ctx;
+    const run = () => this.execute(cctx, tool.entry, args);
+    try {
+      const result = node ? await chainScope.run({ chain: node.chain, node: node.node }, run) : await run();
+      const o = await this.finishResult(cctx, tool, result, out, d.action);
+      if (node) await this.chains!.finish(node, o.ok ? 'succeeded' : 'failed', o.ok ? null : (o.error ?? null));
+      return o;
+    } catch (err) {
+      if (err instanceof ToolPending) {
+        if (node) await this.chains!.finish(node, 'waiting');
+        return out({ decision: d.action, pending: err.pending, error: err.message });
+      }
+      if (node) await this.chains!.finish(node, 'failed', (err as Error).message);
       if (ctx.signal?.aborted) throw err;
       return out({ decision: d.action, error: (err as Error).message.slice(0, 1000) });
     }
@@ -234,6 +282,9 @@ export class ToolDispatcher {
     if (pending.kind !== 'workflow-run' || !this.workflows) return out({ error: 'The pending result can no longer be read on this instance.' });
     const r = await this.workflows.toolResult(ctx, tool.entry, pending.id);
     if (r.state === 'pending') return out({ pending, error: `${tool.entry.name} is still waiting.` });
+    // The call's node (the parent of the workflow run's) ends with the run.
+    const runNode = this.chains ? await this.chains.find('workflow-run', pending.id) : undefined;
+    if (runNode?.parent) await this.chains!.finish({ chain: runNode.chain, node: runNode.parent }, r.state === 'done' ? 'succeeded' : 'failed', r.state === 'failed' ? r.error : null);
     if (r.state === 'failed') return out({ error: r.error.slice(0, 1000) });
     return this.finishResult(ctx, tool, r.result, out, null);
   }

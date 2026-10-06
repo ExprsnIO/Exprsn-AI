@@ -16,6 +16,7 @@ import { auditData, matchesEvent } from '../webhooks/service.js';
 import { configOf, type WfGraph, type WfNode } from './graph.js';
 import type { RunRow, WorkflowRow } from './service.js';
 import { selfTrigger } from './trigger-config.js';
+import { ChainLimit, chainRefOf, chainScope, type ChainRef } from '../chain/context.js';
 
 /*
  * Triggers on the workflow itself (Sprint 32b, B-3903). The trigger step of a workflow's published version can start
@@ -42,9 +43,10 @@ import { selfTrigger } from './trigger-config.js';
  * app triggers and scheduled agents: a disabled owner, one who lost `agents:run`, left the workflow's workspace or
  * whose clearance no longer covers the event gets a skip, recorded on the firing and audited, instead of a run.
  *
- * TODO(B-4101): the chain context (Sprint 32a) replaces the workflow-only chain here with the one chain across kinds
- * (plugins, app triggers, sub-workflows, agents) and one CHAIN_MAX_DEPTH; WORKFLOW_EVENT_MAX_DEPTH stays as this
- * kind's cap. The seams are `causeChain` (what an offered event was caused by) and `scope` (what a run executes in).
+ * B-4101: a run an event starts also joins the chain context of the work that caused the event (the chain node
+ * active in process, or the node of the workflow run the event is about), carried in the firing job's payload, so
+ * CHAIN_MAX_DEPTH and the root's budgets bound it across kinds; WORKFLOW_EVENT_MAX_DEPTH and the loop rule above stay
+ * as this kind's cap. A trigger owned by someone else than the chain's principal starts a chain of its own.
  */
 
 /** The workflows (ids, oldest first) the work in progress was caused by. */
@@ -173,7 +175,7 @@ export class WorkflowTriggers {
 
   registerJobs(): void {
     const jobs = this.s().jobs;
-    jobs.register('workflow.trigger', (p) => this.fire(String(p.firingId)), { timeoutMs: 5 * 60_000 });
+    jobs.register('workflow.trigger', (p) => this.fire(String(p.firingId), chainRefOf(p.cause)), { timeoutMs: 5 * 60_000 });
     jobs.register('workflow.schedules', async () => this.tick(), { timeoutMs: 10 * 60_000 });
   }
 
@@ -273,7 +275,6 @@ export class WorkflowTriggers {
   /**
    * The chain of workflows an offered event was caused by: the run executing now (in-process), or, for an event about
    * a workflow run (its audit actions, its approvals, its job), that run's chain.
-   * TODO(B-4101): read the chain context instead.
    */
   private async causeChain(tenantId: string, type: string, data: Record<string, unknown>): Promise<string[]> {
     const cause = workflowCause.getStore();
@@ -284,6 +285,18 @@ export class WorkflowTriggers {
     if (!runId) return [];
     const run = (await this.db('workflow_runs').where({ tenant_id: tenantId, id: runId }).first('id', 'workflow_id', 'trigger')) as Pick<RunRow, 'id' | 'workflow_id' | 'trigger'> | undefined;
     return run ? [...(await this.chainOfRun(run)), run.workflow_id] : [];
+  }
+
+  /** B-4101: the chain node behind an offered event: the one active in process, or that of the run the event is about. */
+  private async causeRef(tenantId: string, type: string, data: Record<string, unknown>): Promise<ChainRef | null> {
+    const active = chainScope.getStore();
+    if (active) return active;
+    const target = plain(data.target) ? data.target : null;
+    let runId = typeof target?.run === 'string' ? target.run : typeof data.run === 'string' && data.kind === 'workflow' ? data.run : null;
+    if (!runId && type.startsWith('job.') && data.type === 'workflow.run' && typeof data.id === 'string') runId = ((await this.db('workflow_runs').where({ tenant_id: tenantId, job_id: data.id }).first('id')) as { id: string } | undefined)?.id ?? null;
+    if (!runId) return null;
+    const run = (await this.db('workflow_runs').where({ tenant_id: tenantId, id: runId }).first('chain_id', 'chain_node')) as { chain_id: string | null; chain_node: string | null } | undefined;
+    return run?.chain_id && run.chain_node ? { chain: run.chain_id, node: run.chain_node } : null;
   }
 
   /** The chain a run was started with: its firing's (its trigger is `event:<firing>` or `schedule:<firing>`). */
@@ -320,6 +333,7 @@ export class WorkflowTriggers {
       this.dropped.inc({ reason: 'depth' }, want.length);
       return 0;
     }
+    const cause = await this.causeRef(tenantId, type, data);
     const envelope: TriggerEvent = { id: eventId, type, tenant: tenantId, label, createdAt: new Date().toISOString(), data };
     let n = 0;
     for (const t of want) {
@@ -336,12 +350,12 @@ export class WorkflowTriggers {
         }
         continue;
       }
-      if (await this.enqueue(t, envelope, chain)) n++;
+      if (await this.enqueue(t, envelope, chain, cause)) n++;
     }
     return n;
   }
 
-  private async enqueue(t: TriggerRow, e: TriggerEvent, chain: string[]): Promise<boolean> {
+  private async enqueue(t: TriggerRow, e: TriggerEvent, chain: string[], cause: ChainRef | null = null): Promise<boolean> {
     const s = this.s();
     const id = ulid();
     try {
@@ -350,7 +364,7 @@ export class WorkflowTriggers {
       if (isUniqueViolation(err)) return false; // already offered to this trigger (another instance saw it too)
       throw err;
     }
-    const job = await s.jobs.enqueue({ tenantId: t.tenant_id, type: 'workflow.trigger', payload: { firingId: id }, createdBy: t.owner_id, maxAttempts: 3 });
+    const job = await s.jobs.enqueue({ tenantId: t.tenant_id, type: 'workflow.trigger', payload: { firingId: id, ...(cause ? { cause } : {}) }, createdBy: t.owner_id, maxAttempts: 3 });
     await this.db('workflow_trigger_firings').where({ id }).update({ job_id: job.id });
     return true;
   }
@@ -385,7 +399,7 @@ export class WorkflowTriggers {
   }
 
   /** Starts the run of one firing as the trigger's owner, or records why it cannot. */
-  private async start(t: TriggerRow, f: FiringRow, input: Record<string, unknown>): Promise<{ run: string } | { skipped: string }> {
+  private async start(t: TriggerRow, f: FiringRow, input: Record<string, unknown>, cause: ChainRef | null = null): Promise<{ run: string } | { skipped: string }> {
     const s = this.s();
     const p = await this.owner(t);
     if (typeof p === 'string') return this.finish(f, t.kind, { reason: p });
@@ -400,16 +414,22 @@ export class WorkflowTriggers {
     if (labelRank(f.label) > labelRank(w.label)) return this.finish(f, t.kind, { reason: `the event is ${f.label}; ${w.name} handles data up to ${w.label}` });
     try {
       // The run's trigger names the firing, so the run's scope finds its chain on any instance.
-      const run = await workflowCause.run({ chain: [...f.chain, w.id] }, () => s.workflows.start(p, w.id, { input, dry: false, trigger: `${t.kind}:${f.id}` }));
+      // B-4101: the run joins the chain of what caused the event (a new chain when the owner is someone else).
+      const begin = (parent: ChainRef | null) => workflowCause.run({ chain: [...f.chain, w.id] }, () => s.workflows.start(p, w.id, { input, dry: false, trigger: `${t.kind}:${f.id}`, ...(parent ? { chain: { parent } } : {}) }));
+      const run = await begin(cause).catch((err: unknown) => {
+        if (err instanceof ChainLimit && err.code === 'principal') return begin(null);
+        throw err;
+      });
       return await this.finish(f, t.kind, { runId: run.id });
     } catch (err) {
+      if (err instanceof ChainLimit) return this.finish(f, t.kind, { reason: err.message });
       if (err instanceof HttpProblem && err.status < 500) return this.finish(f, t.kind, { reason: err.detail ?? err.title });
       throw err;
     }
   }
 
   /** The job of an event firing: claimed once, then started. */
-  async fire(firingId: string): Promise<unknown> {
+  async fire(firingId: string, cause: ChainRef | null = null): Promise<unknown> {
     const raw = await this.db('workflow_trigger_firings').where({ id: firingId }).first();
     if (!raw) return { skipped: 'firing gone' };
     const claimed = await this.db('workflow_trigger_firings').where({ id: firingId, state: 'queued' }).update({ state: 'starting' });
@@ -422,7 +442,7 @@ export class WorkflowTriggers {
       if (!t.enabled) return await this.finish(f, t.kind, { reason: 'the trigger is disabled' });
       const event = f.event_sealed ? json<TriggerEvent>(await this.s().keys.open(f.tenant_id, f.event_sealed, `wf-firing:${f.id}`), null as unknown as TriggerEvent) : null;
       if (!event) return await this.finish(f, t.kind, { reason: 'the event could not be read' });
-      return await this.start(t, f, { event, trigger: { id: t.id, kind: 'event', depth: f.chain.length + 1 } });
+      return await this.start(t, f, { event, trigger: { id: t.id, kind: 'event', depth: f.chain.length + 1 } }, cause);
     } catch (err) {
       // Given back for the job's retry; a run that started is recorded on the firing and is not started twice.
       await this.db('workflow_trigger_firings').where({ id: firingId, state: 'starting' }).whereNull('run_id').update({ state: 'queued' });

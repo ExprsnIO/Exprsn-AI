@@ -28376,6 +28376,20 @@
         }
       }
     },
+    "/api/workflow-callees": {
+      "get": {
+        "tags": [
+          "workflow-callees"
+        ],
+        "summary": "What the sub, agent and model (skills) steps may call from the current workspace: published workflows with their input schema, published agents and skills, within the caller's clearance (Sprint 32, B-3901, B-3902)",
+        "x-exprsn-since": "1.5.0",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/workflows": {
       "get": {
         "tags": [

@@ -51,6 +51,11 @@ import { internalRequest } from './http.js';
 import { handlesFailure, isFailureEdge, nextRetryAt, retryable } from './retry.js';
 import type { StoredForm, WorkflowStepKit } from './steps/index.js';
 import type { AllowList } from '../mcp/hosts.js';
+import { ChainLimit, chainScope, type ChainCtx, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
+import type { ToolDef } from '../registry/dispatch.js';
+import { RESUMES, STEP_RUNNERS, StepBlocked, StepFailed, WAIT, isStepKind, type AgentStepRunner, type ChildResult, type ChildSpec, type StepCall, type StepHost, type StepResult } from './steps/registry.js';
+import { stepEnv } from './steps/env.js';
+import { modelWithSkills, type ChatTurn } from './steps/skills.js';
 
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'rejected' | 'cancelled';
 export type StepState = 'running' | 'passed' | 'failed' | 'skipped' | 'waiting' | 'blocked';
@@ -97,6 +102,10 @@ export interface RunRow {
   /** B-1006: who awaits this run's result (an agent run that called the workflow as a tool). */
   caller_kind?: string | null;
   caller_id?: string | null;
+  /** Sprint 32: the run's node in its chain (B-4101) and the parent step it reports to (B-3901). */
+  caller_node?: string | null;
+  chain_id?: string | null;
+  chain_node?: string | null;
 }
 
 interface StepRow {
@@ -161,6 +170,16 @@ export interface WorkflowDeps {
    * principal could not read; `read` resolves one, at use, as the run's principal.
    */
   vault?: { check(p: Principal, refs: string[]): Promise<void>; read(p: Principal, ref: string, via: string): Promise<string> };
+  /** Sprint 32 (B-4101): the chain context; unset, runs keep only their own limits. */
+  chains?: ChainService;
+  /** Sprint 32 (B-3902): agent steps start and await agent runs here (read at use, so it may be installed later). */
+  agents?: () => AgentStepRunner | null;
+}
+
+/** Sprint 32 (B-4101): where a new run sits in a chain: under `parent`, behind a `via` node (a plugin action, an app trigger). */
+export interface RunChain {
+  parent?: ChainRef | null;
+  via?: { kind: ChainKind; ref?: string; callee?: string | null };
 }
 
 /** 1.4.0 (B-2206): a record step with its templates rendered. */
@@ -175,7 +194,7 @@ export interface RecordStep {
 
 /** 1.4.0 (B-2206): what runs a record step (the low-code apps), installed with `useRecords`. */
 export interface RecordStepRunner {
-  runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number }): Promise<{ output: Record<string, unknown>; label: Label }>;
+  runStep(p: Principal, step: RecordStep, ctx: { label: Label; workflowId: string; runId: string; depth: number; chain?: ChainRef | null }): Promise<{ output: Record<string, unknown>; label: Label }>;
 }
 
 /**
@@ -205,14 +224,12 @@ interface WfScope {
 const scopeOf = (w: Pick<WorkflowRow, 'tenant_id' | 'workspace_id'>): WfScope => ({ tenantId: w.tenant_id, workspaceId: w.workspace_id });
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** A step that cannot run with the data it would receive (label ceiling, unavailable kind). */
-class StepBlocked extends Error {}
-/** A step that failed; the run stops. */
-class StepFailed extends Error {}
-/** A step paused (approval, wait); the run resumes when it is decided or due. */
-const WAIT = Symbol('wait');
+// StepBlocked (a step that cannot run with the data it would receive), StepFailed (the run stops) and WAIT (the step
+// paused) come from steps/host.ts, shared with the Workflows 2 step runners.
 
 const n0 = (v: unknown) => (v == null ? null : Number(v));
+/** Steps whose time is a child's (a sub-workflow or agent run, map items that are workflows): the child charges it. */
+const delegates = (n: WfNode) => n.kind === 'sub' || n.kind === 'agent' || ((n.kind === 'map' || n.kind === 'loop') && !!(n.config as { workflow?: unknown }).workflow);
 const runFrom = (r: Record<string, unknown>): RunRow => ({ ...(r as unknown as RunRow), tokens: Number(r.tokens ?? 0), locked_until: n0(r.locked_until), created_at: Number(r.created_at), started_at: n0(r.started_at), finished_at: n0(r.finished_at), version: n0(r.version), draft_rev: n0(r.draft_rev) });
 const stepFrom = (r: Record<string, unknown>): StepRow => ({ ...(r as unknown as StepRow), attempts: Number(r.attempts ?? 0), resume_at: n0(r.resume_at), started_at: n0(r.started_at), finished_at: n0(r.finished_at) });
 const wfFrom = (r: Record<string, unknown>): WorkflowRow => ({ ...(r as unknown as WorkflowRow), draft_rev: Number(r.draft_rev), published_version: n0(r.published_version), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
@@ -263,6 +280,8 @@ function compare(op: string, left: unknown, right: unknown): boolean {
  */
 export class WorkflowService implements WorkflowToolRunner {
   private records: RecordStepRunner | null = null;
+  /** Child runs a parent step is executing in this process (their end needs no resume of the parent). */
+  private readonly inline = new Set<string>();
   private lifecycle: WorkflowLifecycle = {};
   /** Sprint 32c (B-3907, B-3908): notify and webhook steps and approval forms. */
   private kit: WorkflowStepKit | null = null;
@@ -325,9 +344,10 @@ export class WorkflowService implements WorkflowToolRunner {
    * The validation environment: published profiles (aliases followed), the registry tools the graph's tool steps
    * name as resolved in the workflow's workspace, and the workflow's input label.
    */
-  private async env(scope: WfScope, g: WfGraph, label: Label) {
+  private async env(scope: WfScope, g: WfGraph, label: Label, self?: { id: string; name: string }) {
     const rows = await this.d.gateway.repo.profiles(scope.tenantId);
-    const names = [...new Set(g.nodes.filter((n) => n.kind === 'tool').map((n) => String(n.config.tool ?? '').trim()).filter(Boolean))];
+    const steps = await stepEnv(this.d.db, this.d.registry, scope, g);
+    const names = [...new Set([...g.nodes.filter((n) => n.kind === 'tool').map((n) => String(n.config.tool ?? '').trim()), ...steps.tools].filter(Boolean))];
     const tools = new Map<string, ToolInfo | { missing: string }>();
     for (const name of names) tools.set(name, await this.toolInfo(scope, name));
     return {
@@ -337,7 +357,11 @@ export class WorkflowService implements WorkflowToolRunner {
         for (let i = 0; t?.alias_of && i < 5; i++) t = rows.find((x) => x.id === t!.alias_of);
         return t && !t.alias_of && t.status === 'published' ? { label: t.label } : undefined;
       },
-      tool: (name: string) => tools.get(name)
+      tool: (name: string) => tools.get(name),
+      workflow: steps.workflow,
+      agent: steps.agent,
+      skill: steps.skill,
+      ...(self ? { self } : {})
     };
   }
 
@@ -352,8 +376,8 @@ export class WorkflowService implements WorkflowToolRunner {
     return { missing: `is ${status.replace('_', ' ')}, not published` };
   }
 
-  async validate(scope: WfScope, g: WfGraph, label: Label): Promise<Validation> {
-    return validateGraph(g, await this.env(scope, g, label));
+  async validate(scope: WfScope, g: WfGraph, label: Label, self?: { id: string; name: string }): Promise<Validation> {
+    return validateGraph(g, await this.env(scope, g, label, self));
   }
 
   async list(p: Principal) {
@@ -376,7 +400,7 @@ export class WorkflowService implements WorkflowToolRunner {
       ...this.summary(w),
       draft,
       dirty,
-      validation: await this.validate(scopeOf(w), draft, w.label),
+      validation: await this.validate(scopeOf(w), draft, w.label, w),
       limits: LIMITS,
       tools: (await this.d.registry.workflowEntries(w.tenant_id, w.id)).map((e) => ({ id: e.id, name: e.name, version: e.version, status: e.status, workflowVersion: Number(e.definition.version), sideEffect: e.side_effect, label: e.label })),
       versions: versions.map((v) => ({ version: Number(v.version), state: String(v.state), note: (v.note as string | null) ?? null, publishedBy: (v.published_by as string | null) ?? null, publishedAt: Number(v.published_at), graph: json<WfGraph>(v.graph, emptyGraph()) }))
@@ -440,7 +464,7 @@ export class WorkflowService implements WorkflowToolRunner {
     const w = await this.workflow(p, id);
     const g = this.graphOf(w);
     await this.checkRefs(p, g);
-    const v = await this.validate(scopeOf(w), g, w.label);
+    const v = await this.validate(scopeOf(w), g, w.label, w);
     if (!v.ok) {
       throw new HttpProblem(422, 'Workflow invalid', `Publishing failed: ${v.errors[0]!.message}${v.errors.length > 1 ? ` (${v.errors.length - 1} more)` : ''}`, { extensions: { errors: v.errors, warnings: v.warnings } });
     }
@@ -478,12 +502,12 @@ export class WorkflowService implements WorkflowToolRunner {
   }
 
   /** Starts a run of the published version, or a dry run of the draft (mocked models and calls, no side effects). */
-  async start(p: Principal, id: string, input: { input: Record<string, unknown>; dry: boolean; trigger?: string }) {
+  async start(p: Principal, id: string, input: { input: Record<string, unknown>; dry: boolean; trigger?: string; chain?: RunChain }) {
     const w = await this.workflow(p, id);
     let graph: WfGraph;
     if (input.dry) {
       graph = this.graphOf(w);
-      const v = await this.validate(scopeOf(w), graph, w.label);
+      const v = await this.validate(scopeOf(w), graph, w.label, w);
       const blocking = v.errors.filter((e) => BLOCKING.includes(e.code));
       if (blocking.length) throw new HttpProblem(422, 'Workflow invalid', `The draft cannot run: ${blocking[0]!.message}`, { extensions: { errors: v.errors, warnings: v.warnings } });
     } else {
@@ -496,13 +520,32 @@ export class WorkflowService implements WorkflowToolRunner {
       const err = checkValue(input.input, trigger.output);
       if (err) throw new HttpProblem(400, 'Invalid request', `The run input does not match the trigger: ${err}.`);
     }
-    return this.createRun(w, p, { graph, version: input.dry ? null : w.published_version, draftRev: input.dry ? w.draft_rev : null, mode: input.dry ? 'dry' : 'run', trigger: input.trigger ?? 'manual', input: input.input, label: w.label });
+    return this.createRun(w, p, { graph, version: input.dry ? null : w.published_version, draftRev: input.dry ? w.draft_rev : null, mode: input.dry ? 'dry' : 'run', trigger: input.trigger ?? 'manual', input: input.input, label: w.label, ...(input.chain ? { chain: input.chain } : {}) });
+  }
+
+  /**
+   * B-4101: the run's node, a child of `chain.parent` (behind `chain.via` when given) or the root of a new chain whose
+   * budgets are the graph's limits. Dry runs are not chained. The label returned is the run's: at least the chain's
+   * high-water mark, which the principal must be cleared for.
+   */
+  private async chainRun(w: WorkflowRow, p: Principal, runId: string, o: { graph: WfGraph; mode: 'run' | 'dry'; label: Label; chain?: RunChain }): Promise<{ node: ChainCtx | null; label: Label }> {
+    const chains = this.d.chains;
+    if (!chains || o.mode === 'dry') return { node: null, label: o.label };
+    let parent = o.chain?.parent ?? null;
+    if (o.chain?.via) parent = await chains.begin(w.tenant_id, { kind: o.chain.via.kind, ...(o.chain.via.ref ? { ref: o.chain.via.ref } : {}), callee: o.chain.via.callee ?? null, principal: p.userId, label: o.label, parent });
+    const node = await chains.begin(w.tenant_id, { kind: 'workflow-run', ref: runId, callee: w.id, principal: p.userId, label: o.label, parent, budgets: { tokens: o.graph.limits.tokens ?? LIMITS.maxTokens, wallMs: o.graph.limits.timeoutMs ?? LIMITS.maxRunTimeoutMs } });
+    if (!clears(p.clearance, node.label)) {
+      await chains.finish(node, 'refused', 'above the clearance');
+      throw forbidden(`The chain carries ${node.label} data; your clearance is ${p.clearance}.`, { step: 'clearance' });
+    }
+    return { node, label: node.label };
   }
 
   /** `jobRunAt` delays the run's job: a caller executing the run itself leaves the job as a backstop for a restart. */
-  private async createRun(w: WorkflowRow, p: Principal, o: { graph: WfGraph; version: number | null; draftRev: number | null; mode: 'run' | 'dry'; trigger: string; input: unknown; label: Label; replayOf?: string; replayFrom?: string; reuse?: StepRow[]; jobRunAt?: number }) {
+  private async createRun(w: WorkflowRow, p: Principal, o: { graph: WfGraph; version: number | null; draftRev: number | null; mode: 'run' | 'dry'; trigger: string; input: unknown; label: Label; replayOf?: string; replayFrom?: string; reuse?: StepRow[]; jobRunAt?: number; chain?: RunChain; caller?: { kind: string; id: string; node: string } }) {
     const id = ulid();
     const version = o.mode === 'run' ? (o.version ?? w.published_version) : null;
+    const { node, label } = await this.chainRun(w, p, id, o);
     const row: RunRow = {
       id,
       tenant_id: w.tenant_id,
@@ -515,7 +558,7 @@ export class WorkflowService implements WorkflowToolRunner {
       trigger: o.trigger,
       state: 'queued',
       input: await this.seal(w.tenant_id, `wfrun:${id}`, o.input),
-      label: o.label,
+      label,
       created_by: p.userId,
       job_id: null,
       replay_of: o.replayOf ?? null,
@@ -525,7 +568,12 @@ export class WorkflowService implements WorkflowToolRunner {
       locked_until: null,
       created_at: Date.now(),
       started_at: null,
-      finished_at: null
+      finished_at: null,
+      chain_id: node?.chain ?? null,
+      chain_node: node?.node ?? null,
+      caller_kind: o.caller?.kind ?? null,
+      caller_id: o.caller?.id ?? null,
+      caller_node: o.caller?.node ?? null
     };
     await this.d.db('workflow_runs').insert(row);
     for (const s of o.reuse ?? []) {
@@ -566,7 +614,41 @@ export class WorkflowService implements WorkflowToolRunner {
     if (run.job_id) await this.d.jobs.cancel(run.tenant_id, run.job_id);
     const after = (await this.runRow(run.id))!;
     this.emitRun(after);
+    await this.chainFinish(after, 'cancelled', 'Cancelled');
+    await this.cancelChildren(after, `Run ${run.id} of the parent workflow was cancelled.`);
     return after;
+  }
+
+  /** B-3901, B-3902: a cancelled run's sub-workflow and agent runs stop with it. */
+  private async cancelChildren(run: RunRow, reason: string): Promise<void> {
+    const kids = ((await this.d.db('workflow_runs').where({ tenant_id: run.tenant_id, caller_kind: 'workflow-run', caller_id: run.id }).whereNotIn('state', TERMINAL)) as Record<string, unknown>[]).map(runFrom);
+    for (const k of kids) {
+      await this.d.db('workflow_runs').where({ id: k.id }).whereNotIn('state', TERMINAL).update({ state: 'cancelled', finished_at: Date.now(), error: reason.slice(0, 1000), locked_until: null });
+      await this.d.db('workflow_approvals').where({ run_id: k.id, state: 'pending' }).update({ state: 'expired', decided_at: Date.now() });
+      if (k.job_id) await this.d.jobs.cancel(k.tenant_id, k.job_id);
+      await this.chainFinish(k, 'cancelled', reason);
+      await this.cancelChildren(k, reason);
+    }
+    const agents = this.d.agents?.();
+    if (!agents) return;
+    const runs = (await this.d.db('agent_runs').where({ tenant_id: run.tenant_id, caller_kind: 'workflow-run', caller_id: run.id }).select('id')) as { id: string }[];
+    for (const a of runs) await agents.cancelForStep(run.tenant_id, a.id, reason);
+  }
+
+  private chainOf(run: Pick<RunRow, 'chain_id' | 'chain_node'>): ChainRef | null {
+    return this.d.chains && run.chain_id && run.chain_node ? { chain: run.chain_id, node: run.chain_node } : null;
+  }
+
+  private async chainFinish(run: Pick<RunRow, 'chain_id' | 'chain_node'>, state: 'succeeded' | 'failed' | 'waiting' | 'cancelled' | 'running', error: string | null = null): Promise<void> {
+    const ref = this.chainOf(run);
+    if (ref) await this.d.chains!.finish(ref, state, error);
+  }
+
+  /** B-3901, B-3902: a child (a sub-workflow run, an agent run) this run waits on ended: the run continues. */
+  async resumeFromCaller(tenantId: string, runId: string): Promise<void> {
+    const run = await this.runRow(runId);
+    if (!run || run.tenant_id !== tenantId || TERMINAL.includes(run.state)) return;
+    await this.resume(run);
   }
 
   private async workflowById(id: string): Promise<WorkflowRow | undefined> {
@@ -605,7 +687,7 @@ export class WorkflowService implements WorkflowToolRunner {
   }
 
   private runSummary(r: RunRow, names: Map<string, string>) {
-    return { id: r.id, workflowId: r.workflow_id, version: r.version, draftRev: r.draft_rev, mode: r.mode, trigger: r.trigger, state: r.state, label: r.label, createdBy: r.created_by, createdByName: names.get(r.created_by) ?? null, replayOf: r.replay_of, replayFrom: r.replay_from, error: r.error, tokens: r.tokens, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at };
+    return { id: r.id, workflowId: r.workflow_id, version: r.version, draftRev: r.draft_rev, mode: r.mode, trigger: r.trigger, state: r.state, label: r.label, createdBy: r.created_by, createdByName: names.get(r.created_by) ?? null, replayOf: r.replay_of, replayFrom: r.replay_from, error: r.error, tokens: r.tokens, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at, chain: r.chain_id ? { id: r.chain_id, node: r.chain_node ?? null } : null, caller: r.caller_kind && r.caller_id ? { kind: r.caller_kind, id: r.caller_id, node: r.caller_node ?? null } : null };
   }
 
   /** One run with its steps (outputs above the caller's clearance withheld) and approvals. */
@@ -632,7 +714,13 @@ export class WorkflowService implements WorkflowToolRunner {
           finishedAt: s.finished_at
         }))
       ),
-      approvals: await Promise.all(approvals.map((a) => this.approvalView(p, a, run, names)))
+      approvals: await Promise.all(approvals.map((a) => this.approvalView(p, a, run, names))),
+      // Sprint 32: the sub-workflow and agent runs this run started (B-3901, B-3902), and its map and loop items.
+      children: [
+        ...((await this.d.db('workflow_runs').where({ tenant_id: run.tenant_id, caller_kind: 'workflow-run', caller_id: run.id }).orderBy('created_at').select('id', 'workflow_id', 'caller_node', 'state', 'label', 'error')) as { id: string; workflow_id: string; caller_node: string | null; state: string; label: Label; error: string | null }[]).filter((k) => clears(p.clearance, k.label)).map((k) => ({ kind: 'workflow-run', id: k.id, workflowId: k.workflow_id, step: k.caller_node, state: k.state, label: k.label, error: k.error })),
+        ...((await this.d.db('agent_runs').where({ tenant_id: run.tenant_id, caller_kind: 'workflow-run', caller_id: run.id }).orderBy('created_at').select('id', 'agent_name', 'caller_node', 'state', 'label', 'error')) as { id: string; agent_name: string; caller_node: string | null; state: string; label: Label; error: string | null }[]).filter((k) => clears(p.clearance, k.label)).map((k) => ({ kind: 'agent-run', id: k.id, agent: k.agent_name, step: k.caller_node, state: k.state, label: k.label, error: k.error }))
+      ],
+      items: ((await this.d.db('workflow_items').where({ run_id: run.id }).orderBy('node_id').orderBy('idx').select('node_id', 'idx', 'state', 'error', 'child_run', 'tokens')) as { node_id: string; idx: number; state: string; error: string | null; child_run: string | null; tokens: number }[]).map((i) => ({ nodeId: i.node_id, index: Number(i.idx), state: i.state, error: i.error, childRun: i.child_run, tokens: Number(i.tokens) }))
     };
   }
 
@@ -786,9 +874,9 @@ export class WorkflowService implements WorkflowToolRunner {
     return stepFrom(row);
   }
 
-  private async finishStep(run: RunRow, step: StepRow, state: StepState, o: { output?: unknown; error?: string; detail?: Record<string, unknown> } = {}): Promise<StepRow> {
+  private async finishStep(run: RunRow, step: StepRow, state: StepState, o: { output?: unknown; error?: string; detail?: Record<string, unknown>; label?: Label } = {}): Promise<StepRow> {
     const detail = { ...json<Record<string, unknown>>(step.detail, {}), ...(o.detail ?? {}) };
-    const patch: Partial<StepRow> = { state, finished_at: Date.now(), error: o.error?.slice(0, 1000) ?? null, detail: JSON.stringify(detail), resume_at: null };
+    const patch: Partial<StepRow> = { state, finished_at: Date.now(), error: o.error?.slice(0, 1000) ?? null, detail: JSON.stringify(detail), resume_at: null, ...(o.label ? { label: o.label } : {}) };
     if (o.output !== undefined) patch.output = await this.seal(step.tenant_id, `wfstep:${step.id}`, o.output);
     await this.d.db('workflow_steps').where({ id: step.id }).update(patch);
     const after = { ...step, ...patch };
@@ -801,9 +889,13 @@ export class WorkflowService implements WorkflowToolRunner {
     const after = { ...run, state, error };
     this.emitRun(after);
     if (TERMINAL.includes(state)) {
-      // Whoever awaited this run (an agent run that called it as a tool) picks the result up now.
+      await this.chainFinish(run, state === 'succeeded' ? 'succeeded' : state === 'cancelled' ? 'cancelled' : 'failed', error);
+      // Whoever awaited this run (an agent run that called it as a tool, a parent workflow's step) picks the result up now.
       const caller = (await this.d.db('workflow_runs').where({ id: run.id }).first('caller_kind', 'caller_id')) as { caller_kind: string | null; caller_id: string | null } | undefined;
-      if (caller?.caller_kind && caller.caller_id) await this.d.onCallerDone?.(run.tenant_id, caller.caller_kind, caller.caller_id).catch((err: unknown) => this.d.log.warn({ run: run.id, err: (err as Error).message }, 'could not resume the caller of a workflow run'));
+      if (caller?.caller_kind === 'workflow-run' && caller.caller_id) {
+        // A child the parent is running inline right now hands its result back directly.
+        if (!this.inline.has(run.id)) await this.resumeFromCaller(run.tenant_id, caller.caller_id).catch((err: unknown) => this.d.log.warn({ run: run.id, err: (err as Error).message }, 'could not resume the parent of a workflow run'));
+      } else if (caller?.caller_kind && caller.caller_id) await this.d.onCallerDone?.(run.tenant_id, caller.caller_kind, caller.caller_id).catch((err: unknown) => this.d.log.warn({ run: run.id, err: (err as Error).message }, 'could not resume the caller of a workflow run'));
     }
     if (TERMINAL.includes(state) && state !== 'succeeded' && state !== 'cancelled') {
       await this.d.audit.append({ tenantId: run.tenant_id, action: `workflow.run.${state}`, kind: 'system', actor: { service: 'workflows' }, target: { workflow: run.workflow_id, run: run.id }, label: run.label, detail: { error, mode: run.mode } });
@@ -833,8 +925,13 @@ export class WorkflowService implements WorkflowToolRunner {
       await this.d.db('workflow_runs').where({ id: run.id }).update({ started_at: now });
     }
     this.emitRun(run);
+    await this.chainFinish(run, 'running');
     try {
-      return await (this.lifecycle.scope ? this.lifecycle.scope(run, () => this.walk(run, ctx)) : this.walk(run, ctx));
+      // B-4101: the run's chain node is the in-process scope of what it causes (events, tool calls), inside the
+      // lifecycle's scope (32b's chain of workflows for the event loop rule).
+      const ref = this.chainOf(run);
+      const walk = () => (ref ? chainScope.run(ref, () => this.walk(run, ctx)) : this.walk(run, ctx));
+      return await (this.lifecycle.scope ? this.lifecycle.scope(run, walk) : walk());
     } catch (err) {
       const reason = String((ctx.signal.reason as Error | undefined)?.message ?? '');
       if (ctx.signal.aborted && /cancel/.test(reason)) return this.finishRun(run, 'cancelled', 'Cancelled');
@@ -902,13 +999,20 @@ export class WorkflowService implements WorkflowToolRunner {
           steps.set(id, done);
           outputs[id] = merged;
         }
-        // Approvals change state when decided; a tool step someone approved runs again below and makes the call.
-        if (n.kind !== 'tool' || !(await this.toolApproved(run.id, id))) continue;
+        // Approvals change state when decided; a tool step someone approved runs again below and makes the call;
+        // a step waiting on a child (a sub-workflow or agent run, map items) runs again and picks up where it was.
+        if (!RESUMES.has(n.kind) && (n.kind !== 'tool' || !(await this.toolApproved(run.id, id)))) continue;
+      }
+      const chain = this.chainOf(run);
+      if (chain) {
+        const over = await this.d.chains!.check(chain);
+        if (over) return this.finishRun(run, 'failed', over);
       }
 
       if (Date.now() - (run.started_at ?? Date.now()) > timeoutMs) return this.finishRun(run, 'failed', `The run went past its timeout of ${Math.round(timeoutMs / 60_000)} minutes.`);
 
-      let step = await this.upsertStep(run, id, { state: 'running', label, attempts: (row?.attempts ?? 0) + 1, started_at: Date.now(), error: null, ...(retryAt != null ? { resume_at: null, detail: JSON.stringify({ ...json<Record<string, unknown>>(row!.detail, {}), retryAt: undefined }) } : {}) });
+      const again = row?.state === 'waiting' && RESUMES.has(n.kind) && retryAt == null;
+      let step = await this.upsertStep(run, id, { state: 'running', label, attempts: again ? row!.attempts : (row?.attempts ?? 0) + 1, ...(again ? {} : { started_at: Date.now() }), error: null, ...(retryAt != null ? { resume_at: null, detail: JSON.stringify({ ...json<Record<string, unknown>>(row!.detail, {}), retryAt: undefined }) } : {}) });
       steps.set(id, step);
       this.emitStep(run, step);
       const t0 = Date.now();
@@ -924,13 +1028,19 @@ export class WorkflowService implements WorkflowToolRunner {
           const err = checkValue(result.output, n.output);
           if (err) throw new StepFailed(`The output does not match the step's schema: ${err}.`);
         }
-        step = await this.finishStep(run, step, 'passed', { output: result.output, detail: { ms: Date.now() - t0, ...(result.detail ?? {}) } });
+        step = await this.finishStep(run, step, 'passed', { output: result.output, detail: { ms: Date.now() - t0, ...(result.detail ?? {}) }, ...(result.label ? { label: highest(label, result.label) } : {}) });
         steps.set(id, step);
         outputs[id] = result.output;
+        if (result.label && chain) await this.d.chains!.raise(chain, result.label);
         if (result.tokens) {
           run.tokens += result.tokens;
           await this.d.db('workflow_runs').where({ id: run.id }).update({ tokens: run.tokens });
           if (run.tokens > tokenBudget) return this.finishRun(run, 'failed', `The run used ${run.tokens.toLocaleString('en-US')} tokens, over its budget of ${tokenBudget.toLocaleString('en-US')}.`);
+        }
+        if (chain) {
+          // B-4101: the step is charged to the chain's root (a child run or agent charges its own work).
+          // A used-up root stops the run before its next step.
+          await this.d.chains!.charge(chain, { steps: 1, tokens: result.charged ? 0 : (result.tokens ?? 0), wallMs: delegates(n) ? 0 : Date.now() - t0, gpuMs: Number(result.detail?.gpuMs ?? 0) || 0 });
         }
       } catch (err) {
         if (ctx.signal.aborted) throw err;
@@ -947,6 +1057,7 @@ export class WorkflowService implements WorkflowToolRunner {
         }
         step = await this.finishStep(run, step, blocked ? 'blocked' : 'failed', { error: message, detail: { ms: Date.now() - t0 } });
         steps.set(id, step);
+        if (chain) await this.d.chains!.charge(chain, { steps: 1, wallMs: delegates(n) ? 0 : Date.now() - t0 });
         // B-3906: a failure edge takes the failure instead of the run.
         if (!blocked && handlesFailure(g, id)) {
           outputs[id] = { error: message, step: id };
@@ -962,6 +1073,7 @@ export class WorkflowService implements WorkflowToolRunner {
     if (waitingOn.length) {
       await this.d.db('workflow_runs').where({ id: run.id }).update({ state: 'waiting', locked_until: null });
       this.emitRun({ ...run, state: 'waiting' });
+      await this.chainFinish(run, 'waiting');
       const due = waitingOn.map((s) => s.resume_at).filter((x): x is number => x != null);
       if (due.length) await this.resume(run, Math.min(...due));
       return { state: 'waiting', on: waitingOn.map((s) => s.node_id) };
@@ -982,13 +1094,13 @@ export class WorkflowService implements WorkflowToolRunner {
     return after;
   }
 
-  private async runNode(run: RunRow, p: Principal, n: WfNode, step: StepRow, c: { scope: TemplateScope; merged: Record<string, unknown>; input: unknown; label: Label; signal: AbortSignal }): Promise<{ output: unknown; detail?: Record<string, unknown>; tokens?: number } | typeof WAIT> {
+  private async runNode(run: RunRow, p: Principal, n: WfNode, step: StepRow, c: { scope: TemplateScope; merged: Record<string, unknown>; input: unknown; label: Label; signal: AbortSignal }): Promise<StepResult | typeof WAIT> {
     const dry = run.mode === 'dry';
     switch (n.kind) {
       case 'trigger':
         return { output: c.input };
       case 'model':
-        return dry ? { output: n.config.format === 'json' ? sampleOf(n.output ?? { type: 'object' }) : { text: `Mocked answer for ${n.title}.` }, detail: { mocked: true } } : this.runModel(run, p, n, c);
+        return dry ? { output: n.config.format === 'json' ? sampleOf(n.output ?? { type: 'object' }) : { text: `Mocked answer for ${n.title}.` }, detail: { mocked: true } } : this.runModel(run, p, n, c, step);
       case 'transform': {
         const cfg = configOf(n as WfNode & { kind: 'transform' });
         return { output: Object.fromEntries(Object.entries(cfg.fields).map(([k, t]) => [k, render(t, c.scope)])) };
@@ -1064,7 +1176,7 @@ export class WorkflowService implements WorkflowToolRunner {
         // A run a trigger started carries its depth; the record step passes it on so chains of triggers end.
         const depth = Number((c.input as { trigger?: { depth?: unknown } } | null)?.trigger?.depth ?? 0) || 0;
         try {
-          const r = await this.records.runStep(p, rendered, { label: c.label, workflowId: run.workflow_id, runId: run.id, depth });
+          const r = await this.records.runStep(p, rendered, { label: c.label, workflowId: run.workflow_id, runId: run.id, depth, chain: this.chainOf(run) });
           return { output: r.output, detail: { action: cfg.action, app: cfg.app, entity: cfg.entity, record: r.output.id } };
         } catch (err) {
           if (err instanceof HttpProblem && err.status === 403 && /label/i.test(err.detail ?? '')) throw new StepBlocked(err.detail ?? err.title);
@@ -1078,6 +1190,10 @@ export class WorkflowService implements WorkflowToolRunner {
         if (!this.kit) throw new StepFailed(`${n.kind} steps are not available on this server.`);
         return this.kit[n.kind]({ run, node: n, principal: p, label: c.label, scope: c.scope, merged: c.merged });
       }
+      default:
+        // Sprint 32: the Workflows 2 kinds (sub, agent, map, loop) run in steps/; see steps/registry.ts.
+        if (isStepKind(n.kind)) return STEP_RUNNERS[n.kind]({ run, p, n, step, ...c }, this.host);
+        throw new StepBlocked(`${n.title}: steps of kind ${String(n.kind)} are not available on this server.`);
     }
   }
 
@@ -1162,7 +1278,7 @@ export class WorkflowService implements WorkflowToolRunner {
     return WAIT;
   }
 
-  private async runModel(run: RunRow, p: Principal, n: WfNode, c: { scope: TemplateScope; label: Label; signal: AbortSignal }): Promise<{ output: unknown; detail: Record<string, unknown>; tokens: number }> {
+  private async runModel(run: RunRow, p: Principal, n: WfNode, c: { scope: TemplateScope; merged?: Record<string, unknown>; input?: unknown; label: Label; signal: AbortSignal }, step: StepRow): Promise<{ output: unknown; detail: Record<string, unknown>; tokens: number }> {
     const cfg = configOf(n as WfNode & { kind: 'model' });
     const r = await this.d.gateway.resolve(run.tenant_id, cfg.profile);
     if (r.model.state !== 'approved' && r.model.state !== 'deprecated') throw new StepFailed(`Profile ${r.profile.name} routes to ${r.model.name}, which is ${r.model.state}.`);
@@ -1186,29 +1302,51 @@ export class WorkflowService implements WorkflowToolRunner {
     if (r.model.capabilities.includes('thinking')) req.think = think === 'off' ? false : r.model.name.startsWith('gpt-oss') ? think : true;
     if (cfg.format === 'json') req.format = n.output ? jsonSchema(n.output) : 'json';
 
-    let lease: Lease | null = null;
-    let text = '';
     let prompt = 0;
     let output = 0;
     let gpuMs = 0;
-    try {
-      lease = await this.d.gateway.acquire(r.profile, r.model, c.label, { signal: c.signal });
-      for await (const chunk of lease.client.chat(req, c.signal)) {
-        if (chunk.message?.content) text += chunk.message.content;
-        if (chunk.done) {
-          prompt += chunk.prompt_eval_count ?? 0;
-          output += chunk.eval_count ?? 0;
-          gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
+    let instance: string | null = null;
+    /** One model call, metered as the run's (a step with skills makes several). */
+    const chatOnce = async (msgs: ChatMessage[], tools: ToolDef[]): Promise<ChatTurn> => {
+      let lease: Lease | null = null;
+      let text = '';
+      let pt = 0;
+      let ot = 0;
+      let gm = 0;
+      const calls: ChatTurn['toolCalls'] = [];
+      try {
+        lease = await this.d.gateway.acquire(r.profile, r.model, c.label, { signal: c.signal });
+        for await (const chunk of lease.client.chat({ ...req, messages: msgs, ...(tools.length ? { tools } : {}) }, c.signal)) {
+          if (chunk.message?.content) text += chunk.message.content;
+          for (const tc of chunk.message?.tool_calls ?? []) if (tc?.function?.name) calls.push({ name: tc.function.name, arguments: (tc.function.arguments ?? {}) as Record<string, unknown> });
+          if (chunk.done) {
+            pt += chunk.prompt_eval_count ?? 0;
+            ot += chunk.eval_count ?? 0;
+            gm += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
+          }
         }
+      } finally {
+        lease?.release();
       }
-    } finally {
-      lease?.release();
-    }
-    if (!prompt && !output) {
-      prompt = Math.ceil(messages.reduce((a, m) => a + m.content.length, 0) / 4);
-      output = Math.ceil(text.length / 4);
-    }
-    await this.d.quotas.record({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.created_by, kind: 'workflow', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens: prompt, outputTokens: output, gpuMs });
+      if (!pt && !ot) {
+        pt = Math.ceil(msgs.reduce((a, m) => a + m.content.length, 0) / 4);
+        ot = Math.ceil(text.length / 4);
+      }
+      instance = lease?.instance.name ?? instance;
+      await this.d.quotas.record({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.created_by, kind: 'workflow', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens: pt, outputTokens: ot, gpuMs: gm });
+      prompt += pt;
+      output += ot;
+      gpuMs += gm;
+      return { text, toolCalls: calls, tokens: pt + ot, gpuMs: gm };
+    };
+    let text: string;
+    let extra: Record<string, unknown> = {};
+    if (cfg.skills?.length) {
+      // B-3902: the skills' instructions and tools, through the dispatcher (steps/skills.ts).
+      const out = await modelWithSkills({ run, p, n, step, scope: c.scope, merged: c.merged ?? {}, input: c.input ?? null, label: c.label, signal: c.signal }, this.host, { skills: cfg.skills, messages, toolsCapable: r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld, chat: chatOnce });
+      text = out.text;
+      extra = out.detail;
+    } else text = (await chatOnce(messages, [])).text;
     let value: unknown = { text };
     if (cfg.format === 'json') {
       try {
@@ -1217,7 +1355,124 @@ export class WorkflowService implements WorkflowToolRunner {
         throw new StepFailed("The model's answer is not valid JSON.");
       }
     }
-    return { output: value, detail: { profile: r.profile.name, model: r.model.name, instance: lease?.instance.name ?? null, tokens: prompt + output, promptTokens: prompt, outputTokens: output, gpuMs: Math.round(gpuMs) }, tokens: prompt + output };
+    return { output: value, detail: { profile: r.profile.name, model: r.model.name, instance, tokens: prompt + output, promptTokens: prompt, outputTokens: output, gpuMs: Math.round(gpuMs), ...extra }, tokens: prompt + output };
+  }
+
+  // ---------- Sprint 32: what the Workflows 2 step runners use (steps/host.ts) ----------
+
+  private readonly host: StepHost = ((self: WorkflowService) => ({
+    get registry() {
+      return self.d.registry;
+    },
+    get tools() {
+      return self.d.tools;
+    },
+    get chains() {
+      return self.d.chains ?? null;
+    },
+    get agents() {
+      return self.d.agents?.() ?? null;
+    },
+    seal: (t, aad, v) => this.seal(t, aad, v),
+    open: (t, aad, sealed, fallback) => this.open(t, aad, sealed, fallback),
+    chainOf: (run) => this.chainOf(run),
+    child: (c, spec) => this.runChild(c, spec),
+    prompt: async (c, spec) => {
+      const node: WfNode = { ...c.n, kind: 'model', config: { profile: spec.profile, prompt: spec.prompt, format: spec.format }, output: undefined };
+      const r = await this.runModel(c.run as RunRow, c.p, node, { scope: spec.scope, label: c.label, signal: c.signal }, c.step as StepRow);
+      return { output: r.output, tokens: r.tokens, gpuMs: Number(r.detail.gpuMs ?? 0) };
+    },
+    wait: async (c, detail) => {
+      const step = c.step as StepRow;
+      const merged = { ...json<Record<string, unknown>>(step.detail, {}), ...detail };
+      await this.d.db('workflow_steps').where({ id: step.id }).update({ state: 'waiting', detail: JSON.stringify(merged), output: await this.seal(step.tenant_id, `wfstep:${step.id}`, c.merged) });
+      this.emitStep(c.run as RunRow, { ...step, state: 'waiting', detail: merged });
+      return WAIT;
+    },
+    note: async (c, detail) => {
+      const row = (await this.d.db('workflow_steps').where({ id: c.step.id }).first('detail')) as { detail: string | null } | undefined;
+      const merged = { ...json<Record<string, unknown>>(row?.detail ?? null, {}), ...detail };
+      await this.d.db('workflow_steps').where({ id: c.step.id }).update({ detail: JSON.stringify(merged) });
+      (c.step as StepRow).detail = JSON.stringify(merged);
+    },
+    items: {
+      list: async (c) => {
+        const rows = (await this.d.db('workflow_items').where({ run_id: c.run.id, node_id: c.n.id }).orderBy('idx')) as { id: string; idx: number; state: string; output: string | null; error: string | null; child_run: string | null }[];
+        return Promise.all(rows.map(async (r) => ({ idx: Number(r.idx), state: r.state, output: r.state === 'passed' ? await this.open(c.run.tenant_id, `wfitem:${r.id}`, r.output, null) : null, error: r.error, childRun: r.child_run })));
+      },
+      save: async (c, idx, row) => {
+        const existing = (await this.d.db('workflow_items').where({ run_id: c.run.id, node_id: c.n.id, idx }).first('id')) as { id: string } | undefined;
+        const id = existing?.id ?? ulid();
+        const values = { state: row.state, output: row.output === undefined ? null : await this.seal(c.run.tenant_id, `wfitem:${id}`, row.output), error: row.error?.slice(0, 1000) ?? null, child_run: row.childRun ?? null, tokens: Math.round(row.tokens ?? 0), finished_at: row.state === 'waiting' ? null : Date.now() };
+        if (existing) await this.d.db('workflow_items').where({ id }).update(values);
+        else await this.d.db('workflow_items').insert({ id, tenant_id: c.run.tenant_id, run_id: c.run.id, node_id: c.n.id, idx, created_at: Date.now(), ...values });
+      },
+      countOthers: async (c) => {
+        const g = graphSchema.parse(JSON.parse(c.run.graph));
+        const maps = g.nodes.filter((x) => x.kind === 'map' && x.id !== c.n.id).map((x) => x.id);
+        if (!maps.length) return 0;
+        const r = (await this.d.db('workflow_items').where({ run_id: c.run.id }).whereIn('node_id', maps).count({ n: '*' }).first()) as { n: number | string } | undefined;
+        return Number(r?.n ?? 0);
+      }
+    }
+  }))(this);
+
+  /**
+   * B-3901: a child run of a published workflow for a step (or one item of a map or loop): found again by its parent
+   * step on every pass, created once (as the parent's principal, under the higher of the two labels, in the parent's
+   * chain) and executed here while it can go on. A child waiting on an approval leaves the parent step waiting; its
+   * end resumes the parent (`finishRun`).
+   */
+  private async runChild(c: StepCall, spec: ChildSpec): Promise<ChildResult> {
+    const parent = c.run as RunRow;
+    const failed = (error: string, blocked = false): ChildResult => ({ state: 'failed', run: null, error, blocked });
+    const row = (await this.d.db('workflow_runs').where({ tenant_id: parent.tenant_id, caller_kind: 'workflow-run', caller_id: parent.id, caller_node: spec.key }).orderBy('created_at', 'desc').first()) as Record<string, unknown> | undefined;
+    let child = row ? runFrom(row) : undefined;
+    let w: WorkflowRow | undefined;
+    if (!child) {
+      try {
+        w = await this.workflow(c.p, spec.workflow);
+      } catch {
+        return failed(`${spec.workflow} is not a workflow in this workspace.`);
+      }
+      if (w.id === parent.workflow_id) return failed('A workflow cannot run itself as a sub-workflow.');
+      const version = spec.version ?? w.published_version;
+      if (!version) return failed(`${w.name} has no published version.`);
+      const v = await this.version(w.id, version);
+      if (!v) return failed(`Version ${version} of ${w.name} does not exist.`);
+      const label = highest(w.label, spec.label);
+      if (!clears(c.p.clearance, label)) return failed(`A run of ${w.name} is ${label}, above the run owner's clearance.`, true);
+      const trigger = v.graph.nodes.find((x) => x.kind === 'trigger');
+      const bad = trigger?.output ? checkValue(spec.input, trigger.output) : null;
+      if (bad) return failed(`The input does not match the trigger of ${w.name}: ${bad}.`);
+      try {
+        child = await this.createRun(w, c.p, { graph: v.graph, version, draftRev: null, mode: 'run', trigger: `workflow:${parent.id}`, input: spec.input, label, jobRunAt: Date.now() + spec.timeoutMs + 30_000, caller: { kind: 'workflow-run', id: parent.id, node: spec.key }, chain: { parent: this.chainOf(parent) } });
+      } catch (err) {
+        if (err instanceof ChainLimit) return failed(err.message);
+        if (err instanceof HttpProblem) return failed(err.detail ?? err.title, err.status === 403);
+        throw err;
+      }
+      await this.d.audit.append({ tenantId: parent.tenant_id, action: 'workflow.run.started', kind: 'system', actor: { service: 'workflows', user: parent.created_by }, target: { workflow: w.id, run: child.id }, label: child.label, detail: { version, parentRun: parent.id, parentWorkflow: parent.workflow_id, step: spec.key, chain: child.chain_id ?? null } });
+    }
+    if (!TERMINAL.includes(child.state) && child.state !== 'waiting') {
+      this.inline.add(child.id);
+      try {
+        await this.execute(child.id, { signal: c.signal });
+      } finally {
+        this.inline.delete(child.id);
+      }
+      child = (await this.runRow(child.id))!;
+    }
+    const version = child.version ?? 0;
+    if (child.state === 'succeeded') {
+      const out = await this.runOutput(child, graphSchema.parse(JSON.parse(child.graph)));
+      return { state: 'succeeded', run: child.id, output: out.value, label: out.label, version };
+    }
+    if (TERMINAL.includes(child.state)) {
+      w ??= await this.workflowById(child.workflow_id);
+      return { state: 'failed', run: child.id, error: `Run ${child.id} of ${w?.name ?? 'the sub-workflow'} ${child.state}${child.error ? `: ${child.error}` : ''}` };
+    }
+    return { state: 'waiting', run: child.id, version };
   }
 
   /**
@@ -1229,6 +1484,27 @@ export class WorkflowService implements WorkflowToolRunner {
     const byName = new Map<string, EntryRow>();
     for (const e of rows.sort((a, b) => b.created_at - a.created_at)) if (!byName.has(e.name) || (byName.get(e.name)!.status !== 'published' && e.status === 'published')) byName.set(e.name, e);
     return [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : 1)).map((e) => ({ name: e.name, version: e.version, description: e.description, impl: e.impl, sideEffect: e.side_effect ?? 'read', confirm: e.confirm, label: e.label, status: e.status, inputSchema: e.input_schema, outputSchema: e.output_schema }));
+  }
+
+  /**
+   * Sprint 32: what the Workflows 2 steps may call from the caller's workspace, for the editor: published workflows
+   * (sub steps, map and loop items) with their input schema, published agents (agent steps) and skills (model steps),
+   * within the caller's clearance.
+   */
+  async callees(p: Principal) {
+    const rows = ((await this.d.db('workflows').where(this.scope(p)).whereNotNull('published_version').orderBy('name')) as Record<string, unknown>[]).map(wfFrom).filter((w) => clears(p.clearance, w.label));
+    const workflows = [];
+    for (const w of rows) {
+      const v = await this.version(w.id, w.published_version!);
+      workflows.push({ id: w.id, name: w.name, label: w.label, version: w.published_version, input: v?.graph.nodes.find((n) => n.kind === 'trigger')?.output ?? null });
+    }
+    const visible = (kind: 'agent' | 'skill') => this.d.registry.list(p.tenantId, { kind }).then((list) => {
+      const seen = new Set<string>();
+      return list.filter((e) => (e.status === 'published' || e.status === 'deprecated') && e.approved_hash === e.schema_hash && this.d.registry.visibleTo(e, p) && clears(p.clearance, e.label) && !seen.has(e.name) && seen.add(e.name));
+    });
+    const agents = (await visible('agent')).map((e) => ({ name: e.name, version: e.version, description: e.description, label: e.label, budgets: (e.definition as { budgets?: unknown }).budgets ?? null }));
+    const skills = (await visible('skill')).map((e) => ({ name: e.name, version: e.version, description: e.description, label: e.label, tools: Array.isArray(e.definition.tools) ? e.definition.tools : [] }));
+    return { workflows, agents, skills, limits: { chainMaxDepth: this.d.chains?.limits.maxDepth ?? null, workflowMaxDepth: this.d.chains?.limits.kindCaps['workflow-run'] ?? null, maxItems: LIMITS.maxItems, maxParallel: LIMITS.maxParallel } };
   }
 
   // ---------- workflows published as registry tools ----------
@@ -1307,7 +1583,7 @@ export class WorkflowService implements WorkflowToolRunner {
     const bad = trigger?.output ? checkValue(args, trigger.output) : null;
     if (bad) throw new Error(`The arguments do not match the trigger of ${w.name}: ${bad}.`);
     const limit = Math.min(v.graph.limits.timeoutMs ?? WORKFLOW_TOOL_TIMEOUT_MS, WORKFLOW_TOOL_TIMEOUT_MS);
-    const run = await this.createRun(w, p, { graph: v.graph, version, draftRev: null, mode: 'run', trigger: 'tool', input: args, label, jobRunAt: Date.now() + limit + 30_000 });
+    const run = await this.createRun(w, p, { graph: v.graph, version, draftRev: null, mode: 'run', trigger: 'tool', input: args, label, jobRunAt: Date.now() + limit + 30_000, chain: { parent: ctx.chain ?? null } });
     await this.d.audit.append({ tenantId: w.tenant_id, action: 'workflow.run.started', kind: 'system', actor: { service: 'tools', user: p.userId }, target: { workflow: w.id, run: run.id }, label, detail: { version, tool: entry.name, source: ctx.source ?? null } });
 
     const ac = new AbortController();

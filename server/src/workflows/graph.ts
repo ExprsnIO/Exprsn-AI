@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { highest, labelRank, LABELS, type Label } from '../authz/labels.js';
 import { isRole } from '../authz/permissions.js';
 import { CHECKPOINTS } from '../guardrails/types.js';
+import { checkModelSkills, isStepKind, STEP_KIND_NAMES, STEP_KINDS, STEP_LIMITS, type AgentRefInfo, type SkillRefInfo, type WorkflowRefInfo } from './steps/kinds.js';
 import { FAILURE_PORT, failureIssues, isFailureEdge, retryPolicySchema } from './retry.js';
 import { triggerConfigSchema, triggerIssues, type TriggerConfig } from './trigger-config.js';
 import { approvalFormSchema, endpointProblem, notifyConfig, webhookConfig } from './steps/configs.js';
@@ -12,7 +13,7 @@ import { approvalFormSchema, endpointProblem, notifyConfig, webhookConfig } from
  * step. Validation reports every problem with the node (and edge) it belongs to, so the editor can point at it.
  */
 
-export const NODE_KINDS = ['trigger', 'model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool', 'record', 'notify', 'webhook'] as const;
+export const NODE_KINDS = ['trigger', 'model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool', 'record', 'notify', 'webhook', ...STEP_KIND_NAMES] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 
 /** Limits a published workflow must stay within (the board's "40 steps, 200k tokens, 2 h"). */
@@ -24,7 +25,10 @@ export const LIMITS = {
   maxRunTimeoutMs: 2 * 3_600_000,
   maxTokens: 200_000,
   maxApprovalMs: 7 * 24 * 3_600_000,
-  maxWaitMs: 7 * 24 * 3_600_000
+  maxWaitMs: 7 * 24 * 3_600_000,
+  /** Sprint 32 (B-3905): items a run's maps may fan out over, and items in flight at once. */
+  maxItems: STEP_LIMITS.maxItems,
+  maxParallel: STEP_LIMITS.maxParallel
 } as const;
 
 export type SchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'any';
@@ -129,7 +133,8 @@ export const CONFIGS = {
   // 1.4.0 (B-2206): `record` and `schedule` workflows are started by an app's triggers (the run input names the event).
   // Sprint 32b (B-3903): also `event`, and `schedule` with its own `cron` (trigger-config.ts).
   trigger: triggerConfigSchema,
-  model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text') }).strict(),
+  // Sprint 32 (B-3902): `skills` loads published skills' instructions and tools into the step.
+  model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text'), skills: z.array(z.string().trim().min(1).max(120)).max(8).optional() }).strict(),
   transform: z.object({ fields: z.record(propName, template).refine((f) => Object.keys(f).length > 0 && Object.keys(f).length <= 50, 'Between 1 and 50 fields') }).strict(),
   branch: z.object({ left: template.min(1), op: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists']), right: z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]).optional() }).strict(),
   guardrail: z.object({ checkpoint: z.enum(CHECKPOINTS).default('context'), text: template.min(1), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict(),
@@ -168,7 +173,12 @@ export const CONFIGS = {
     .refine((c) => c.action !== 'transition' || !!c.to, 'A transition names the state to move to'),
   // 1.5.0 (B-3908): notices to cleared recipients, and signed webhooks to the tenant's allowed hosts.
   notify: notifyConfig,
-  webhook: webhookConfig
+  webhook: webhookConfig,
+  // Sprint 32 (B-3901, B-3902, B-3905): the Workflows 2 kinds, defined in steps/kinds.ts.
+  sub: STEP_KINDS.sub.config,
+  agent: STEP_KINDS.agent.config,
+  map: STEP_KINDS.map.config,
+  loop: STEP_KINDS.loop.config
 } satisfies Record<NodeKind, z.ZodType>;
 
 export type NodeConfig<K extends NodeKind> = z.infer<(typeof CONFIGS)[K]>;
@@ -265,6 +275,8 @@ export function outputSchemaOf(n: WfNode, incoming: PortSchema, tool?: ToolInfo)
         return obj({ notified: { type: 'integer' }, skipped: { type: 'integer' } });
       case 'webhook':
         return obj({ webhook: { type: 'string' }, delivery: ANY, event: { type: 'string' } });
+      default:
+        return STEP_KINDS[n.kind].output(n, incoming);
     }
   };
   return PASS_THROUGH.includes(n.kind) ? mergeSchemas([incoming, own()]) : own();
@@ -407,6 +419,10 @@ export function references(tpl: string): { steps: string[]; bad: string[] } {
 
 function templatesOf(n: WfNode): string[] {
   const c = n.config as Record<string, unknown>;
+  if (isStepKind(n.kind)) {
+    const r = STEP_KINDS[n.kind].config.safeParse(c);
+    return r.success ? STEP_KINDS[n.kind].templates(r.data as Record<string, unknown>) : [];
+  }
   const out: string[] = [];
   for (const k of ['prompt', 'text', 'show', 'left', 'url', 'body', 'expression', 'args', 'record', 'title']) if (typeof c[k] === 'string') out.push(c[k] as string);
   for (const k of ['fields', 'args', 'values', 'users', 'body']) if (c[k] && typeof c[k] === 'object') for (const v of Object.values(c[k] as Record<string, unknown>)) if (typeof v === 'string') out.push(v);
@@ -524,6 +540,13 @@ export interface ValidationEnv {
   profile(name: string): { label: Label } | undefined;
   /** Registry tools callable from the workflow's workspace, or why a name is not (missing: "is a draft"). */
   tool?(name: string): ToolInfo | { missing: string } | undefined;
+  /** Sprint 32: published workflows a sub step (or a map or loop item) may run, by name or id and optional pinned version. */
+  workflow?(ref: string, version?: number): WorkflowRefInfo | { missing: string } | undefined;
+  /** Published agents an agent step may run, and skills a model step may load. */
+  agent?(name: string): AgentRefInfo | { missing: string } | undefined;
+  skill?(name: string): SkillRefInfo | { missing: string } | undefined;
+  /** The workflow being validated (it may not run itself). */
+  self?: { id: string; name: string };
 }
 
 export interface Validation {
@@ -561,7 +584,18 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
   for (const t of triggers) if (incoming(g, t.id).length) errors.push({ code: 'structure', nodeId: t.id, message: 'Nothing can feed into the trigger.' });
 
   // Limits.
-  if (g.nodes.length > LIMITS.maxSteps) errors.push({ code: 'limit', message: `${g.nodes.length} steps; the limit is ${LIMITS.maxSteps}.` });
+  // Each loop iteration counts as a step (B-3905); a run's maps fan out over at most LIMITS.maxItems items.
+  const extra = (k: 'extraSteps' | 'items') => g.nodes.reduce((a, n) => {
+    if (!isStepKind(n.kind)) return a;
+    const def = STEP_KINDS[n.kind] as { extraSteps?: (c: Record<string, unknown>) => number; items?: (c: Record<string, unknown>) => number; config: z.ZodType };
+    const r = def.config.safeParse(n.config);
+    // A map's items count by the maxItems it declares (the run-time check counts the real lists).
+    return a + (r.success ? (def[k]?.(k === 'items' ? n.config : (r.data as Record<string, unknown>)) ?? 0) : 0);
+  }, 0);
+  const counted = g.nodes.length + extra('extraSteps');
+  if (counted > LIMITS.maxSteps) errors.push({ code: 'limit', message: counted > g.nodes.length ? `${g.nodes.length} steps and ${counted - g.nodes.length} more loop iterations; the limit is ${LIMITS.maxSteps}.` : `${g.nodes.length} steps; the limit is ${LIMITS.maxSteps}.` });
+  const items = extra('items');
+  if (items > LIMITS.maxItems) errors.push({ code: 'limit', message: `The maps fan out over up to ${items} items; a run's limit is ${LIMITS.maxItems}. Lower their maxItems.` });
   for (const n of g.nodes) {
     const fan = outgoing(g, n.id).length;
     if (fan > LIMITS.maxFanOut) errors.push({ code: 'limit', nodeId: n.id, message: `${n.title} fans out to ${fan} steps; the limit is ${LIMITS.maxFanOut}.` });
@@ -664,10 +698,18 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
       }
       const tool = n.kind === 'tool' ? checkToolStep(g, n, merged, preds, env, errors, warnings) : undefined;
       outs.set(id, outputSchemaOf(n, merged, tool));
+      let stepCeiling: Label | undefined;
+      if (isStepKind(n.kind)) {
+        const def = STEP_KINDS[n.kind] as { check?: (n: WfNode, c: Record<string, unknown>, ctx: Parameters<NonNullable<(typeof STEP_KINDS)['sub']['check']>>[2]) => Label | undefined; config: z.ZodType };
+        const r = def.config.safeParse(n.config);
+        if (r.success) stepCeiling = def.check?.(n, r.data as Record<string, unknown>, { g, merged, preds, env, errors, warnings, compatible: (a, b) => compatible(a, b), portFromJsonSchema, guardedByApproval });
+      }
+      if (n.kind === 'model' && Array.isArray(n.config.skills) && n.config.skills.length) stepCeiling = checkModelSkills(n, n.config.skills.map(String), env, errors);
 
       const label = highest(env.label, ...preds.map((e) => labels[e.from] ?? env.label), ...(n.raises ? [n.raises] : []));
       let ceiling: Label | undefined = n.ceiling;
       if (tool) ceiling = ceiling && labelRank(ceiling) < labelRank(tool.label) ? ceiling : tool.label;
+      if (stepCeiling) ceiling = ceiling && labelRank(ceiling) < labelRank(stepCeiling) ? ceiling : stepCeiling;
       if (n.kind === 'model' && typeof n.config.profile === 'string') {
         const p = env.profile(n.config.profile);
         if (!p) errors.push({ code: 'config', nodeId: id, message: `${n.title}: profile ${n.config.profile} is not published.` });

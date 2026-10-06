@@ -15,7 +15,8 @@ import type { Issue, PortSchema, WfEdge, WfGraph, WfNode } from './graph.js';
  */
 
 /** Kinds a retry makes no sense for: they pause or decide rather than fail. */
-const NO_RETRY = new Set(['trigger', 'approval', 'wait', 'branch']);
+/** Sprint 32a: sub, agent, map and loop wait on children and checkpoint their own items; a retry would find the same child. */
+const NO_RETRY = new Set(['trigger', 'approval', 'wait', 'branch', 'sub', 'agent', 'map', 'loop']);
 
 export const retryPolicySchema = z
   .object({

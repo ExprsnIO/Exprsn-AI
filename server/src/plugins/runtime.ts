@@ -414,7 +414,8 @@ export class PluginRuntime {
     }
     const input = { ...(plain(args.input) ? args.input : {}), ...(args.includeEvent ? { event: ctx.event } : {}) };
     const chain = pluginCause.getStore()?.chain ?? [...ctx.invocation.chain, p.id];
-    const run = await s.workflows.start(who, String(args.workflow), { input, dry: false, trigger: `plugin:${chain.join(',')}` });
+    // B-4101: the plugin action is a node of the chain the run joins (a new chain rooted at the action).
+    const run = await s.workflows.start(who, String(args.workflow), { input, dry: false, trigger: `plugin:${chain.join(',')}`, chain: { via: { kind: 'plugin-action', ref: `${ctx.invocation.id}:${ctx.seq.n++}`, callee: p.plugin_key } } });
     await s.audit.append({ tenantId: p.tenant_id, action: 'workflow.run.started', kind: 'system', actor: { service: `plugin:${p.plugin_key}`, user: p.installed_by }, target: { workflow: run.workflow_id, run: run.id }, label: run.label, detail: { version: run.version, plugin: p.plugin_key, event: ctx.event.type } });
     return { run: run.id };
   }

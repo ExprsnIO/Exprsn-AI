@@ -36,7 +36,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 23 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 24 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
@@ -217,6 +217,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 - `GET /api/agents`
 - `GET /api/workflow-tools`
+- `GET /api/workflow-callees`
 - `GET /api/workflows`
 - `GET /api/workflows/{id}`
 - `GET /api/workflows/{id}/runs`

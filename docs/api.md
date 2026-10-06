@@ -3718,6 +3718,87 @@ promoted, `imports.bundle-match` (every `IMPORT_BUNDLE_POLL_MINUTES`) continues 
 the same checks; a pin recorded at request time must still match. A `bundle` repository browses and imports promoted
 bundle files directly.
 
+## Sprint 32 (1.5.0): the chain context, sub-workflow, agent, map and loop steps (B-4101, B-3901, B-3902, B-3905)
+
+### The chain context (B-4101)
+
+Every invocation is a node of one chain (`server/src/chain/context.ts`, tables `chains` and `chain_nodes`): a chat turn
+whose answer called a tool, an agent run, a workflow run, a tool call, a skill load, a plugin action that started a
+workflow, an app trigger. The first is the root; what it causes are its descendants. The rules, read from the database
+so every instance gives the same answer:
+
+- **Principal**: a child acts as the root's principal; a call that would act as someone else is refused (an app trigger
+  owned by another user starts a chain of its own instead).
+- **Label**: a child's label is at least the chain's high-water mark, and the mark rises with every node and every
+  step output above it (a sub-workflow's result, an agent's answer). Nothing runs above a callee's ceiling: a tool call
+  whose chain carries data above the tool's ceiling is refused (`tool_unavailable`).
+- **Depth**: at most `CHAIN_MAX_DEPTH` (default 8; the root is depth 0) across kinds, with `WORKFLOW_MAX_DEPTH`
+  (3) nested workflow runs and `AGENT_MAX_DEPTH` (3) nested agent runs as per-kind caps; `PLUGIN_MAX_DEPTH` and
+  `APPS_TRIGGER_MAX_DEPTH` still apply to their own chains of events.
+- **Budgets**: tokens, steps, wall time and GPU time (the cost meter) of every node are charged to the root's budgets:
+  an agent root's are its run budgets, a workflow root's its graph limits (tokens, timeout; `CHAIN_MAX_STEPS` steps); a
+  chat turn, plugin action, app trigger or bare tool call gets `CHAIN_MAX_TOKENS`, `CHAIN_MAX_STEPS`,
+  `CHAIN_MAX_WALL_SECONDS` and `CHAIN_MAX_GPU_SECONDS`. Wall time is the time of the leaf work (model calls, tool
+  calls, steps that do not hand their work to a child), so nested runs are not counted twice. Once a budget is used up
+  the chain is `stopped` (audited `chain.stopped` once): nothing new begins in it, an agent run stops before its next
+  thinking step (state `budget`, its error naming the root's budget), a workflow run fails before its next step. Raising
+  a root agent run's budgets (`POST /api/runs/:id/resume`) raises its chain's.
+- **Retries and instances**: a node is unique by `(kind, ref)` (the run id for runs) and its chain rides on the run's
+  row (`chain_id`, `chain_node`), so a job retried on another instance resumes the node it began.
+
+A refused invocation (`code`: `depth`, `kind-depth`, `principal`, `budget`, `stopped`) is audited `chain.refused`
+`{chain, parent, kind, callee}` with `{rule, reason}`. A refused tool call comes back to the caller as an error
+`chain_limit: …` (the model sees it as a tool error) and is recorded as a `refused` node under its would-be parent. A
+refused sub-workflow, agent step or map item fails its step.
+
+Run views carry `chain: {id, node}` and `caller: {kind, id, node}`: `GET /api/runs/:id` (agent runs) and `GET
+/api/workflow-runs/:id`, which also lists `children: [{kind: workflow-run | agent-run, id, workflowId | agent, step,
+state, label, error}]` (within the caller's clearance) and `items: [{nodeId, index, state, error, childRun, tokens}]` (map
+and loop checkpoints). The tree view of a chain is `GET /api/chains/:id` (B-4107, Sprint 33).
+
+### New step kinds
+
+Validated at publish with the existing codes; a reference that is not published to the workflow's workspace is
+`unavailable`. Dry runs mock all four and call nothing.
+
+| Kind | Config | Output |
+| --- | --- | --- |
+| `sub` | `workflow` (name or id, same workspace), `version?` (pinned; else the version published when the step runs), `input?` (field templates, one template rendering to an object, or the step's input) | `{run, output}`: the child run and the merged output of its last steps |
+| `agent` | `agent` (registry name), `input?` (task template; the step's input as JSON when omitted), `budgets?` (`steps`, `tokens`, `wallSeconds`, `toolCalls`, up to the registry maximum) | `{run, text}` |
+| `map` | `over` (a template rendering to a list), one action (below), `maxParallel` (1–20, default 10), `maxItems` (1–200, default 200), `as` (field name, default `results`) | `{[as]: [...], count}` in item order |
+| `loop` | one action, `max` (1–40, default 5), `while?` `{left, op, right}` (branch operators, checked before every iteration) | `{iterations, last, results, stopped: condition \| max}` |
+
+An action (map item or loop iteration) is a model prompt (`profile`, `prompt`, `format?`), a registry tool (`tool`,
+`args?`; for a map without `args` the item itself, or `{item}`), or a published workflow run as a child (`workflow`,
+`version?`, `input?`; default `{item, index}` for a map, `{iteration, last, results}` for a loop). Templates read
+`{{item}}`, `{{index}}` (map), `{{iteration}}`, `{{last}}` and `{{results}}` (loop) as well as `input` and `steps`.
+
+- **Sub-workflow (B-3901)**: the child runs as the parent's owner, under the higher of the step's label and the
+  child workflow's, in the parent's chain (trigger `workflow:<parent run>`, `caller_kind: workflow-run`), audited
+  `workflow.run.started` with `{parentRun, parentWorkflow, step}`. It runs inside the step while it can; when it waits
+  on an approval the step and the parent wait, and the child's end resumes the parent with its output and label.
+  Cancelling the parent cancels its waiting children (and agent runs). A workflow cannot run itself; `workflow.*`
+  tools stay refused in tool steps and items; nesting is bounded by `WORKFLOW_MAX_DEPTH`.
+- **Agent step (B-3902)**: starts a run of the published agent as the run's owner (audited `agent.run.started` with
+  `{workflowRun, step}`), under the agent's ceiling (above it the step is blocked); the step waits without a worker and
+  continues when the agent run ends; a failed, cancelled or budget-stopped run fails the step.
+- **Skills on a model step (B-3902)**: `skills: [name…]` (up to 8) on a `model` step loads each published skill
+  (a `skill-load` node in the chain): its instructions join the system prompt and its tools are offered through the
+  dispatcher, so every call passes the tool's ceiling, its schema, the `tool-call` guardrail checkpoint and its rate
+  limit. A write or destructive call runs only when an Approval step comes before the model step on every path;
+  otherwise the model is told it needs an approval. At most six rounds of calls. The step's detail lists `skills`,
+  `tools`, `hidden` and `toolCalls: [{tool, ok, decision, error}]`.
+- **Map and loop (B-3905)**: items run at most `maxParallel` at once; every item and iteration is a step of the chain
+  (checked against the root's budgets before it starts) and its tokens count toward the run's token budget. A run's
+  maps fan out over at most 200 items (`maxItems` declared on the maps are summed at publish, the real lists at run
+  time); each loop iteration beyond the first counts toward the 40-step limit at publish. Each item's result is a
+  checkpoint (`workflow_items`, sealed) so a map resumes without running finished items again. Items never pause one
+  by one: a write tool in a map or loop needs an Approval step before it on every path (refused at publish otherwise),
+  and child workflows that wait leave the step waiting until all are done. The first failing item fails the step.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-callees` | `agents:run`. What the new steps may call from the current workspace, within the caller's clearance: `{workflows: [{id, name, label, version, input}], agents: [{name, version, description, label, budgets}], skills: [{name, version, description, label, tools}], limits: {chainMaxDepth, workflowMaxDepth, maxItems, maxParallel}}` |
 ## Sprint 32b (1.5.0): workflow triggers, failure handling and bundles (B-3903, B-3906, B-3909)
 
 **Triggers on the workflow itself (B-3903).** The trigger step takes two more sources: `{source: event, event}` (a
