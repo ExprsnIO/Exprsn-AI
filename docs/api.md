@@ -4177,3 +4177,91 @@ Completions servers. `POST /admin/models/:id/pull` on a held model checks that a
 Retiring a held model deletes nothing on the server. Migration `037_model_servers` adds `instances.kind`,
 `socket_path`, `token_ref`, `token_tenant`, `token_owner` and `models.server_instance_id`, `server_model`.
 
+## Sprint 35d (1.6.0): tenant provisioning templates (B-4501)
+
+A system admin creates a tenant from a template with its first admin in one step (decision Q11). Templates are code
+(`server/src/tenancy/templates.ts`): `enterprise`, `team` and `personal`, exprsn-platform's organisation types. Both
+routes need `tenant:manage`; provisioning also needs the `system-admin` role (`403 step role`) and a clearance that
+reaches the template's highest workspace ceiling (`403 step clearance`). The CLI does the same with `exprsn-ai
+tenant:create --template <id> --slug <slug> --name <name> --admin-username <name> --admin-display-name <name>
+[--admin-email <address>] [--password]` (without `--password` it prints the enrolment link).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/tenant-templates` | `[{id, name, description, workspaces: [{name, description, label, visibility}], roles: [{name, description, permissions}], profiles: [{name, displayName, description, label}], zone, issuer, adminClearance}]` |
+| `POST /api/admin/tenants/from-template` `{template, slug, name, directoryDn?, admin: {username, displayName, email?, password?}}` | `201 {tenant, applied, admin}`. `tenant` as `GET /api/admin/tenants/:tid`; `applied: {template, workspaces: [{id, name, label}], roles: [{id, name}], profiles: [{id, name, poolId}], zone: {id, state: pinned \| no pool in zone, poolId, poolName}, issuer: {state: created \| skipped \| not in template, id, reason}}`; `admin: {id, username, roles: [tenant-admin], clearance, enrolLink, enrolHours}`. A taken slug is `409` with nothing created; a password the policy refuses is `422` (field `admin.password`) before anything is created; an unknown template `400` |
+
+What provisioning makes, in order: the tenant with a Local accounts store and its data key (as `POST
+/api/admin/tenants`); the template's workspaces; its custom roles, built only from member-baseline permissions and
+applied as version 1 (`grantableBy` tenant-admin and identity-admin); its profiles as drafts without a model, pinned
+to the first pool (by name) in the template's zone whose ceiling reaches the profile's label; the tenant's issuing
+intermediate (ECDSA P-256, three years) under the active platform root when the template has an issuer, the root
+exists and the CA's key custody is available, else `skipped` with the reason; then the first admin, `tenant-admin`
+with the clearance of the highest workspace ceiling and a direct member of every workspace, with a single-use
+enrolment link (`PASSWORD_INVITE_HOURS`; `POST /api/auth/password/reset` with its token sets the password and answers
+an `enroll` session) or, with `admin.password`, a password (sign-in with `{tenant, username, password}` then asks for
+the second factor, stage `enroll`). Audited in the new tenant's chain and in the provisioning admin's:
+`tenant.created` (`detail.template`), `workspace.created`, `authz.role.created`, `profile.created`,
+`pki.intermediate.created`, `user.created`, `user.enrol_link.issued`, `workspace.member.added` and the summary
+`tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin: {user, username, enrolLink}}`.
+
+## Sprint 35d (1.6.0): Social and messaging (B-4206)
+
+The administrator's policies and health views for the feed, groups, messaging and relations of every workspace they
+may act in (all of them for a tenant admin), behind the Social and messaging screen (`#/social`). Decisions
+(`design/platform-admin/DECISIONS.md`): `social:manage` governs the feed, group, messaging and relations policies
+(Q4); whether posts pass `user-input` in full and who approves held posts are the moderation-facing parts and also
+need `moderation:manage` (`403 step permission`); exporting another member's conversation is under dual control, a
+second platform admin approving (Q5). Realtime needs `platform:manage`. Every route answers `Cache-Control: no-store`.
+Migration `037d_platform_social`; `server/src/social/admin.ts` is `s.socialAdmin`.
+
+**Workspace policies** apply where they belong. Without a row a workspace has the defaults shown.
+
+| Field | Default | Where it applies |
+| --- | --- | --- |
+| `feedGuard` | `true` | Posting: `false` checks posts labelled internal or below against the platform baseline only (the engine's `meta.baselineOnly`); anything above internal, and every comment, is still checked in full |
+| `feedApprover` | `reviewers` | Deciding a held post (`POST /api/flags/:ref/decide`): `reviewers` is any flag reviewer (`flags:review`), `feed` needs `feed:manage`, `guardrails` `guardrails:manage`, `moderators` `moderation:review` (`403 step approver, permission`) |
+| `feedMedia`, `feedMediaMaxBytes` | `true`, `null` | Posting with media: off is `422 step workspace-policy`; a file larger than the limit too. Turning media off clears the limit |
+| `groupCreate` | `members` | `admins`: creating a group needs `groups:manage` or `social:manage` (`403 step workspace-policy`) |
+| `groupVisibility`, `groupJoin` | `private`, `request` | A new group without them (`visibility` and `joinMode` are now optional on `POST /api/groups`) |
+| `eventCapacity` | `null` | A new event without `capacity` |
+| `contactRule` | `workspace` | Starting a conversation or adding someone: `contacts` needs mutual follows, `admins` needs `social:manage` or `tenant:manage`; one shared workspace that admits the caller is enough, and each person's own contact rule and blocks still apply (the same `403` words) |
+
+**Tenant settings**: the weekly digest's `digestProfile` (before `FEED_DIGEST_PROFILE`; a workspace's own digest
+profile still comes first), `digestDay` (0 Monday to 6 Sunday) and `digestHour` (UTC: the digest week ends at the
+latest such time, Monday 00:00 by default), `digestTop` (before `FEED_DIGEST_TOP`), `digestMaxLabel` (before
+`FEED_DIGEST_MAX_LABEL`, at most the caller's clearance), and `summaryProfile` for messaging summaries (before
+`MESSAGING_SUMMARY_PROFILE`). A profile must resolve through the gateway (`422` with `field`). `null` restores the
+environment's value.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/admin/social/policies/:workspaceId` `{feedGuard?, feedApprover?: reviewers \| feed \| guardrails \| moderators, feedMedia?, feedMediaMaxBytes?: 1024 to 1 GiB \| null, groupCreate?: members \| admins, groupVisibility?, groupJoin?, eventCapacity?: 1 to 100000 \| null, contactRule?: workspace \| contacts \| admins}` | The policy after the change. A workspace the caller does not administer is `404`. Audited `social.policy.updated {changed, before, after, weakened?: feedGuard}` |
+| `PUT /api/admin/social/settings` `{digestProfile?, digestDay?, digestHour?, digestTop?: 1 to 50, digestMaxLabel?, summaryProfile?}` | The settings after the change. Audited `social.settings.updated {changed, before, after}` |
+| `GET /api/admin/social/feed` | `{counters: {postsToday, held, commentsToday, reactionsToday, trendingTags}, workspaces: [{id, name, label, feedGuard, feedApprover, feedMedia, feedMediaMaxBytes, postsToday, held}], trending: {minutes, hours, lastRun, tags: [{tag, posts, people, excluded}]}, digest: {settings, effective: {digestProfile, digestDay, digestHour, digestTop, digestMaxLabel, summaryProfile}, profiles: [name], last: {id, workspaceId, state: ready \| empty \| failed, profile, error, posts, weekStart, createdAt} \| null}, canModerate}`. Counts and tags only at labels the caller is cleared for |
+| `POST /api/admin/social/trending/exclusions` `{tag}` | `201 {tag, excluded: true}` (the tag normalised; already excluded answers the same). An excluded tag leaves `GET /api/feed/trending` at once and the `feed.trending` job leaves it out; it still works on posts and in hashtag feeds. Audited `feed.trending.excluded` |
+| `DELETE /api/admin/social/trending/exclusions/:tag` | `{tag, excluded: false}`. Audited `feed.trending.included` |
+| `POST /api/admin/social/trending/run` | `202 {jobId}`: the `feed.trending` job for the tenant now (requests within the same minute share one job). Audited `feed.trending.requested` |
+| `POST /api/admin/social/digest/test` | `202 {jobId, workspaces}`: the `feed.digest` job in test mode over the workspaces the caller administers that have a digest profile: the last seven days ranked and summarised, sent to the caller alone as a notification (never above their clearance); nothing is stored or posted. No workspace with a profile is `409`. Audited `feed.digest.test-requested` |
+| `GET /api/admin/social/groups` | `{settings: {requestDays, inviteDays, feedPerMinute, feedMaxLabel}, defaults: [{workspaceId, name, groupCreate, groupVisibility, groupJoin, eventCapacity}], groups: [{id, name, workspaceId, workspace, label, visibility, joinMode, state: active \| hidden \| archived, members, pending, upcomingEvents, openReports, feeds, owners: [{userId, displayName}], createdAt}], above, feeds: [{id, kind: event \| group \| user, targetId, name, issuedTo: {userId, username, displayName}, label, createdAt, lastUsedAt, revokedAt, state}]}`. Groups above the caller's clearance are counted in `above`, not listed; feeds of groups and events outside the caller's workspaces or clearance are left out |
+| `GET /api/admin/social/groups/:id/members` | `{id, name, state, members: [{userId, username, displayName, role}]}` (for the transfer picker) |
+| `POST /api/admin/social/groups/:id/transfer` `{userId}` | `{id, owners: [userId], moderators: [previous owners]}`. The new owner must be a member (`422 step member`); an archived group is `409`. The members are told. Audited `group.ownership.transferred {before, after}` |
+| `POST /api/admin/social/groups/:id/archive` | `{id, state: archived, members}`: read only from now on. Members keep reading posts and events; posting, commenting, reacting, reposting, joining, inviting and scheduling answer `409`; pending requests and reminders are cancelled; calendar feeds keep the events. The members are told. Audited `group.archived {members, requestsCancelled, remindersCancelled}` |
+| `POST /api/admin/social/calendar-feeds/:id/revoke` | The feed view with `url: null`: its signed URL answers `404` on its next fetch. Audited `calendar.feed.revoked` (`detail.via: social-admin`) |
+| `GET /api/admin/social/messaging` | `{retention: [{workspaceId, name, days, source: workspace \| tenant \| none}], limits: {maxMembers, attachmentMaxBytes, signalsPerMinute}, search: {keyword, semantic, embedModel}, summary: {profile, effective, maxMessages, profiles}, relations: {blocks, mutedConversations, exported}, exports: [export], approvers: [{userId, displayName, username}], canApprove}` |
+| `GET /api/admin/social/conversations?q=` | Up to 200 conversations the caller may ask to export: group conversations in a workspace they administer and direct ones with a member in one, at labels they are cleared for, most recent first: `[{id, kind, title, workspace, members, label, lastMessageAt}]` (group titles, or the people's names; never a message) |
+| `POST /api/admin/social/exports` `{conversationId, reason: 10 to 2000 characters, approverId}` | `201` export, `state: pending`. Needs a recent sign-in (`401 step_up`). The approver is another platform admin of the tenant (`403 step dual-control` for oneself, `422 field approverId` otherwise); one pending request per conversation (`409`). The reason is sealed; the approver is notified. Audited `messaging.export.requested {reason}` |
+| `POST /api/admin/social/exports/:id/approve` `{note?}` | `platform:manage`, a recent sign-in, and not the requester (`403 step dual-control`). Queues the job `messaging.conversation.export`. Audited `messaging.export.approved` |
+| `POST /api/admin/social/exports/:id/reject` `{note?}` | `platform:manage`, not the requester. Audited `messaging.export.rejected` |
+| `POST /api/admin/social/exports/:id/withdraw` | The requester only, while pending. Audited `messaging.export.withdrawn` |
+| `GET /api/admin/social/exports/:id/download` | The requester only (`404` for anyone else), once `ready`: `text/csv` with `message, sent, author, author_name, thread, reply_to, state, edits, attachments, label, text` (deleted messages as rows without text, attachments as file ids, cells defused against formulas, at most 50 000 messages). Audited `messaging.export.downloaded` |
+| `GET /api/admin/social/realtime` | `platform:manage`. This instance's counts: `{instance, kinds: [{kind: conversation \| group \| feed \| channel, rooms, sockets, signalsPerMinute: [12 numbers, oldest first], refusedLastHour}], sockets, authFailuresLastHour, signalsPerMinuteLimit, redis}` |
+| `GET /api/admin/social/people?q=` | `platform:manage`. Up to 200 active people of the tenant, for the Close rooms picker |
+| `POST /api/admin/social/realtime/close` `{userId}` | `platform:manage`. Every socket of the user closes on every instance (`TOPICS.roomsClose`; the client hears `rooms.closed` first); the session stays. Audited `realtime.rooms.closed` |
+| `GET /api/admin/social/relations` | `{counts: {follows, blocks, mutes, lists}, rules: [{workspaceId, name, contactRule}], mostBlocked: [{userId, displayName, username, blockedBy, workspace, sanction: {kind, endsAt} \| null}]}`: counts only, never who blocked whom |
+
+An export is `{id, conversationId, label, reason (the requester and platform admins only), requestedBy, approver,
+decidedBy, decidedAt, note, state: pending \| approved \| rejected \| withdrawn \| ready \| failed, jobId, file,
+messages, error, downloadedAt, createdAt, mine, canDecide}`. Platform admins see every request of the tenant; others
+their own. The job writes the CSV sealed with the tenant key (`exports/<tenant>/messaging/<id>.sealed`) and audits
+`messaging.conversation.exported {reason, requestedBy, approvedBy, messages, truncated}`; the members are not told.

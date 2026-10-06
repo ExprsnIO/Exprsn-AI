@@ -265,10 +265,12 @@ export class CalendarService {
     const t = Date.now();
     const seal = (v: string | null | undefined, kind: string) => (v ? s.keys.seal(g.tenant_id, v, `event-${kind}:${id}`) : Promise.resolve(null));
     const reminders = [...new Set(input.reminders ?? [])].sort((x, y) => y - x);
+    // 1.6.0 (B-4206): an event without a capacity starts from its workspace's default (Social and messaging).
+    const capacity = input.capacity !== undefined ? input.capacity : (await s.socialAdmin.policy(g.tenant_id, g.workspace_id)).eventCapacity;
     const row = {
       id, tenant_id: g.tenant_id, group_id: g.id, workspace_id: g.workspace_id,
       title: (await seal(input.title, 'title'))!, description: await seal(input.description, 'description'), location: await seal(input.location, 'location'),
-      starts_at: start, ends_at: end, time_zone: input.timeZone, all_day: !!input.allDay, capacity: input.capacity ?? null, max_guests: input.maxGuests ?? 0,
+      starts_at: start, ends_at: end, time_zone: input.timeZone, all_day: !!input.allDay, capacity: capacity ?? null, max_guests: input.maxGuests ?? 0,
       reminders: JSON.stringify(reminders), label: g.label, state: 'scheduled', sequence: 0, cancel_reason: null, created_by: ctx.p.userId, created_at: t, updated_at: t
     };
     await s.db('group_events').insert(row);
@@ -595,15 +597,16 @@ export class CalendarService {
     return ((await this.db('calendar_feeds').where({ tenant_id: p.tenantId, user_id: p.userId }).orderBy('created_at', 'desc')) as Record<string, unknown>[]).map(feedFrom).map((f) => this.feedView(f));
   }
 
-  async revokeFeed(ctx: Ctx, id: string) {
+  /** `admin`: from Social and messaging (B-4206), where the route already required social:manage. */
+  async revokeFeed(ctx: Ctx, id: string, o: { admin?: boolean } = {}) {
     const r = await this.db('calendar_feeds').where({ tenant_id: ctx.p.tenantId, id }).first();
     if (!r) throw notFound('Feed');
     const f = feedFrom(r);
-    // Owners revoke their own feeds; groups:manage holders any feed in the tenant.
-    if (f.user_id !== ctx.p.userId && !effectivePermissions(ctx.p).has('groups:manage')) throw notFound('Feed');
+    // Owners revoke their own feeds; groups:manage holders (and social:manage, from the admin screen) any feed in the tenant.
+    if (f.user_id !== ctx.p.userId && !o.admin && !effectivePermissions(ctx.p).has('groups:manage')) throw notFound('Feed');
     if (f.revoked_at) return this.feedView(f);
     await this.db('calendar_feeds').where({ id: f.id }).update({ revoked_at: Date.now(), revoked_by: ctx.p.userId });
-    await this.audit(ctx, 'calendar.feed.revoked', { feed: f.id, kind: f.kind, owner: f.user_id });
+    await this.audit(ctx, 'calendar.feed.revoked', { feed: f.id, kind: f.kind, owner: f.user_id }, o.admin ? { via: 'social-admin' } : undefined);
     return this.feedView(feedFrom(await this.db('calendar_feeds').where({ id: f.id }).first()));
   }
 

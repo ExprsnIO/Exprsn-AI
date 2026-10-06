@@ -74,8 +74,73 @@ const EVENT = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
 
 export const roomName = (tenantId: string, kind: RoomKind, id: string) => `room:${kind}:${tenantId}:${id}`;
 
+/** One kind's numbers on this instance (B-4206, Social and messaging › Realtime). */
+export interface RoomKindStats {
+  kind: RoomKind;
+  rooms: number;
+  sockets: number;
+  /** Signals relayed per minute, the last 12 minutes, oldest first. */
+  signalsPerMinute: number[];
+  /** Signals refused by ROOM_SIGNALS_PER_MINUTE in the last hour. */
+  refusedLastHour: number;
+}
+
+const MINUTE = 60_000;
+
+/**
+ * 1.6.0 (B-4206): counters for the Realtime tab, kept per instance in memory: signals relayed and refused per room kind
+ * by the minute (an hour of buckets), socket authentication failures in the last hour, and an inspector that
+ * `attachRooms` sets to count the rooms and sockets this instance holds. Nothing here names a user or a room.
+ */
+export class RoomStats {
+  private readonly buckets = new Map<RoomKind, { minute: number; signals: number; refused: number }[]>();
+  private failures: number[] = [];
+  inspector: (() => { byKind: Map<RoomKind, { rooms: number; sockets: number }>; sockets: number }) | null = null;
+
+  private bucket(kind: RoomKind, now: number) {
+    const minute = Math.floor(now / MINUTE);
+    const list = this.buckets.get(kind) ?? [];
+    let b = list[list.length - 1];
+    if (!b || b.minute !== minute) {
+      b = { minute, signals: 0, refused: 0 };
+      list.push(b);
+      while (list.length && list[0]!.minute <= minute - 60) list.shift();
+      this.buckets.set(kind, list);
+    }
+    return b;
+  }
+
+  signal(kind: RoomKind, now = Date.now()): void {
+    this.bucket(kind, now).signals++;
+  }
+
+  refused(kind: RoomKind, now = Date.now()): void {
+    this.bucket(kind, now).refused++;
+  }
+
+  authFailed(now = Date.now()): void {
+    this.failures.push(now);
+    if (this.failures.length > 10_000) this.failures = this.failures.slice(-5000);
+  }
+
+  snapshot(now = Date.now()): { kinds: RoomKindStats[]; sockets: number; authFailuresLastHour: number } {
+    const minute = Math.floor(now / MINUTE);
+    const live = this.inspector?.() ?? { byKind: new Map(), sockets: 0 };
+    this.failures = this.failures.filter((t) => t > now - 60 * MINUTE);
+    const kinds = ROOM_KINDS.map((kind) => {
+      const list = (this.buckets.get(kind) ?? []).filter((b) => b.minute > minute - 60);
+      const spark = Array.from({ length: 12 }, (_, i) => list.find((b) => b.minute === minute - 11 + i)?.signals ?? 0);
+      const n = live.byKind.get(kind) ?? { rooms: 0, sockets: 0 };
+      return { kind, rooms: n.rooms, sockets: n.sockets, signalsPerMinute: spark, refusedLastHour: list.reduce((a, b) => a + b.refused, 0) };
+    });
+    return { kinds, sockets: live.sockets, authFailuresLastHour: this.failures.length };
+  }
+}
+
 /** The authorisers domains register (on `s.rooms`) and the helpers they publish with. */
 export class RoomRegistry {
+  /** 1.6.0 (B-4206): this instance's room counters. */
+  readonly stats = new RoomStats();
   private readonly authorizers = new Map<RoomKind, RoomAuthorizer>();
   private readonly signals = new Map<RoomKind, RoomSignalHandler>();
   private readonly presence = new Map<RoomKind, RoomPresenceHooks>();
@@ -164,6 +229,24 @@ const signalMsg = z.object({ kind: z.enum(ROOM_KINDS), id: z.string().regex(ID),
  */
 export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: (userId: string) => string, log: { warn(o: object, m: string): void }, opts: { signalsPerMinute?: number } = {}): { onConnection(socket: Socket): void; offs: (() => void)[] } {
   const signalsPerMinute = opts.signalsPerMinute ?? 60;
+  // 1.6.0 (B-4206): the Realtime tab counts the rooms and sockets this instance holds, by kind.
+  registry.stats.inspector = () => {
+    const byKind = new Map<RoomKind, { rooms: number; sockets: number }>();
+    const sids = new Map<RoomKind, Set<string>>();
+    for (const [name, members] of io.of('/').adapter.rooms) {
+      if (!name.startsWith('room:')) continue;
+      const kind = name.split(':')[1] as RoomKind;
+      if (!(ROOM_KINDS as readonly string[]).includes(kind)) continue;
+      const e = byKind.get(kind) ?? { rooms: 0, sockets: 0 };
+      e.rooms++;
+      byKind.set(kind, e);
+      const set = sids.get(kind) ?? new Set<string>();
+      for (const sid of members) set.add(sid);
+      sids.set(kind, set);
+    }
+    for (const [kind, set] of sids) byKind.get(kind)!.sockets = set.size;
+    return { byKind, sockets: io.of('/').sockets.size };
+  };
   const presence = (fn: 'joined' | 'left', p: Principal, kind: RoomKind, id: string) => {
     void registry[fn](p, kind, id).catch((err: unknown) => log.warn({ err, kind }, `room ${fn} hook failed`));
   };
@@ -287,7 +370,11 @@ export function attachRooms(io: Io, registry: RoomRegistry, bus: Bus, userRoom: 
       if (!d.rooms?.has(roomName(d.principal.tenantId, kind, id))) return reply({ ok: false, error: 'Join the room first.' });
       const now = Date.now();
       if (now - budget.start >= 60_000) budget = { start: now, n: 0 };
-      if (++budget.n > signalsPerMinute) return reply({ ok: false, error: 'Too many signals; slow down.' });
+      if (++budget.n > signalsPerMinute) {
+        registry.stats.refused(kind, now);
+        return reply({ ok: false, error: 'Too many signals; slow down.' });
+      }
+      registry.stats.signal(kind, now);
       try {
         reply({ ok: await registry.signal(d.principal, kind, id, signal, data ?? {}) });
       } catch (err) {

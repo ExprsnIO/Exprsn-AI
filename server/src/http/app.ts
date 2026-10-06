@@ -16,6 +16,7 @@ import { identityAdminRoutes } from '../routes/admin/identity.js';
 import { userAdminRoutes } from '../routes/admin/users.js';
 import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
+import { socialAdminRoutes } from '../routes/admin/social.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
@@ -255,6 +256,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
   api.use(eventRoutes(s));
   api.use('/admin', pluginAdminRoutes(s));
+  // 1.6.0 (B-4206): Social and messaging: workspace policies, digests, legal-hold exports, realtime counts.
+  api.use('/admin', socialAdminRoutes(s));
   // 1.4.0, Sprint 25c (B-1704): database leases from the built-in engines.
   api.use(vaultLeaseRoutes(s));
   // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.

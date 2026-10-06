@@ -57,9 +57,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `identity:manage` | yes | 51 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
-| `tenant:manage` | yes | 28 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `tenant:manage` | yes | 30 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `platform:manage` | yes | 50 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `platform:manage` | yes | 55 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `audit:read` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `usage:read` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `webhooks:manage` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -93,7 +93,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |  |
 | `social:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `social:write` | no | 16 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `social:manage` | yes | 1 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `social:manage` | yes | 19 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:read` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -627,6 +627,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 - `DELETE /api/admin/tenants/{tid}/workspaces/{wid}/members/{uid}`
 - `GET /api/admin/integrations/hosts`
+- `GET /api/admin/tenant-templates`
 - `GET /api/admin/tenants`
 - `GET /api/admin/tenants/{tid}`
 - `GET /api/admin/tenants/{tid}/quota`
@@ -640,6 +641,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PATCH /api/admin/tenants/{tid}/workspaces/{wid}`
 - `POST /api/admin/authz/evaluate`
 - `POST /api/admin/tenants`
+- `POST /api/admin/tenants/from-template`
 - `POST /api/admin/tenants/{tid}/offboard`
 - `POST /api/admin/tenants/{tid}/retention/run`
 - `POST /api/admin/tenants/{tid}/workspaces`
@@ -698,6 +700,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/admin/platform/signers`
 - `GET /api/admin/platform/signers/proposals`
 - `GET /api/admin/platform/summary`
+- `GET /api/admin/social/people`
+- `GET /api/admin/social/realtime`
 - `PATCH /api/admin/platform/certificates/{id}`
 - `PATCH /api/admin/platform/mirrors/{id}`
 - `POST /api/admin/platform/backups`
@@ -722,6 +726,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/platform/signers/proposals/{id}/approve`
 - `POST /api/admin/platform/signers/proposals/{id}/reject`
 - `POST /api/admin/platform/signers/proposals/{id}/withdraw`
+- `POST /api/admin/social/exports/{id}/approve`
+- `POST /api/admin/social/exports/{id}/reject`
+- `POST /api/admin/social/realtime/close`
 - `PUT /api/admin/platform/bundles/{id}/transfer`
 - `PUT /api/admin/platform/mirrors/{id}/push-target`
 - `GET /api/admin/pds/tenants`
@@ -1247,7 +1254,25 @@ No route requires it directly; handlers and services check it.
 
 ### `social:manage`
 
+- `DELETE /api/admin/social/trending/exclusions/{tag}`
+- `GET /api/admin/social/conversations`
+- `GET /api/admin/social/exports/{id}/download`
+- `GET /api/admin/social/feed`
+- `GET /api/admin/social/groups`
+- `GET /api/admin/social/groups/{id}/members`
+- `GET /api/admin/social/messaging`
+- `GET /api/admin/social/relations`
 - `GET /api/social/admin/users/{id}`
+- `POST /api/admin/social/calendar-feeds/{id}/revoke`
+- `POST /api/admin/social/digest/test`
+- `POST /api/admin/social/exports`
+- `POST /api/admin/social/exports/{id}/withdraw`
+- `POST /api/admin/social/groups/{id}/archive`
+- `POST /api/admin/social/groups/{id}/transfer`
+- `POST /api/admin/social/trending/exclusions`
+- `POST /api/admin/social/trending/run`
+- `PUT /api/admin/social/policies/{id}`
+- `PUT /api/admin/social/settings`
 
 ### `messages:read`
 

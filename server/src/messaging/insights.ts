@@ -149,7 +149,8 @@ export class MessagingInsights {
   private async summarise(ctx: Ctx, a: Access, rows: MessageRow[], kind: 'thread' | 'recent' | 'digest', profileName?: string) {
     const s = this.s();
     const p = ctx.p;
-    const profile = profileName ?? this.o.summaryProfile;
+    // 1.6.0 (B-4206): the tenant's summary profile (Social and messaging) before MESSAGING_SUMMARY_PROFILE.
+    const profile = profileName ?? (await s.socialAdmin.tenantSettings(p.tenantId)).summaryProfile ?? this.o.summaryProfile;
     const base = { conversationId: a.conv.id, kind, profile, messages: rows.length, from: rows[0]?.created_at ?? null, to: rows[rows.length - 1]?.created_at ?? null };
     if (!rows.length) return { ...base, summary: null, citations: [] as Citation[] };
     const names = new Map(((await this.db('users').where({ tenant_id: p.tenantId }).whereIn('id', [...new Set(rows.map((m) => m.author_id))]).select('id', 'display_name')) as { id: string; display_name: string }[]).map((u) => [u.id, u.display_name]));

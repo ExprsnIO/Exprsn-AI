@@ -168,6 +168,30 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
   `y-reflow-overlays.spec.ts`.
 
+## Screens made live in 1.6.0 (Sprint 35, B-4207)
+
+The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every
+design state (Standard and Enhanced, light and dark), the reflow check at 320 and 640 px, and their dialogs and
+drawers. Each one's own spec also runs those checks on each tab and dialog, so the screen is checked without the full
+suite.
+
+- **Social and messaging** (B-4206, `e2e/tests/social.spec.ts`): five tabs (Feed, Groups and events, Messaging,
+  Realtime for platform admins, Relations) in one tabpanel. Every policy control in a table is named for its
+  workspace (`Approver for Finance Ops`, `Default join mode for Legal`, `Contact rule for Field Sales`); the switches
+  for "Posts pass user-input" and "Media" are `role="switch"` buttons read with their column header, and those the
+  caller may not change are disabled, with the reason in the notice under the table. Exclude, Include, Revoke and
+  Apply buttons in repeated rows carry an accessible name naming the tag, feed or workspace. Groups are
+  keyboard-operable rows that fill a labelled inspector ("Selected group"). The realtime sparklines are decorative
+  (`aria-hidden`), with the current count beside each in text. Transfer ownership, Close a user's rooms and the
+  confirms are dialogs that return focus; the export drawer reports a missing reason or a refusal in a
+  `role="alert"` region, and the step-up check for exports asks in a dialog like the one for sanctions. Long ids,
+  hashtags and reasons wrap rather than scroll sideways; the wide policy tables scroll inside their named table
+  region. The spec checks each tab, the Transfer ownership and Close rooms dialogs, the export drawer and every
+  design state.
+- **Tenants, Create from template** (B-4501, `e2e/tests/tenants-templates.spec.ts`): the template picker is a group of
+  radio cards, each a label for its radio with what the template creates; the enrolment link is shown once in a
+  dialog with a Copy button. Both dialogs pass the checks above.
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values

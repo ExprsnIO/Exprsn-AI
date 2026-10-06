@@ -1,6 +1,6 @@
 import { ulid } from 'ulid';
 import { actorFrom, isUniqueViolation } from '../audit/chain.js';
-import type { Principal } from '../authz/policy.js';
+import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { workspacesFor } from '../http/middleware.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { TOPICS } from '../platform/bus.js';
@@ -194,12 +194,33 @@ export class SocialService {
   async mayContact(p: Principal, targetId: string): Promise<ContactDecision> {
     if (targetId === p.userId) return { ok: false, status: 403, why: 'That is you.', step: 'self' };
     if (!(await this.activeUser(p.tenantId, targetId))) return { ok: false, status: 404, why: 'User not found.', step: 'workspace' };
-    if (!(await this.sharedWorkspaces(p, targetId)).length) return { ok: false, status: 404, why: 'User not found.', step: 'workspace' };
+    const shared = await this.sharedWorkspaces(p, targetId);
+    if (!shared.length) return { ok: false, status: 404, why: 'User not found.', step: 'workspace' };
     if (await this.isBlocked(p.tenantId, p.userId, targetId)) return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
+    // 1.6.0 (B-4206): the workspaces' contact rules (Social and messaging): one shared workspace that admits the caller
+    // is enough. `contacts` needs mutual follows; `admins` needs social:manage or tenant:manage.
+    if (!(await this.workspaceAdmits(p, targetId, shared))) return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
     const rule = await this.contactRule(p.tenantId, targetId);
     if (rule === 'nobody') return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
     if (rule === 'following' && !(await this.isFollowing(p.tenantId, targetId, p.userId))) return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
     return { ok: true };
+  }
+
+  /** Does a workspace the two share let the caller start a conversation with the target? */
+  private async workspaceAdmits(p: Principal, targetId: string, shared: string[]): Promise<boolean> {
+    const rules = await this.s().socialAdmin.policies(p.tenantId, shared);
+    const perms = effectivePermissions(p);
+    let mutual: boolean | null = null;
+    for (const w of shared) {
+      const r = rules.get(w)?.contactRule ?? 'workspace';
+      if (r === 'workspace') return true;
+      if (r === 'admins' && (perms.has('social:manage') || perms.has('tenant:manage'))) return true;
+      if (r === 'contacts') {
+        mutual ??= (await this.isFollowing(p.tenantId, p.userId, targetId)) && (await this.isFollowing(p.tenantId, targetId, p.userId));
+        if (mutual) return true;
+      }
+    }
+    return false;
   }
 
   /** `mayContact` as a refusal (problem+json) when it says no. */

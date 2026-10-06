@@ -142,6 +142,38 @@ filter, private `/tmp`, only the state directory writable.
   refuses `/v1/embeddings`, embedding requests go to any other instance the embedding model is placed on, not
   specifically one in the same zone. The Pools screen's own instance form still edits only Ollama settings; kind,
   socket and token are set from the Models screen's Model servers.
+- Social and messaging administration (1.6.0, Sprint 35d, B-4206). The policies need `social:manage` (decision Q4);
+  turning the full `user-input` check off for a workspace's posts or changing who approves held posts also needs
+  `moderation:manage` and is audited (`social.policy.updated`, `weakened: feedGuard`). With the check off, posts
+  labelled internal or below are still checked against the platform baseline (the engine keeps platform sets only,
+  so no tenant setting relaxes the baseline) and anything above internal, and every comment, is checked in full. A
+  held post is decided only by holders of the permission the workspace names (any flag reviewer by default, or `feed:manage`,
+  `guardrails:manage` or `moderation:review`), never by its author. Exporting another member's conversation is under dual control
+  (decision Q5): a holder of `social:manage` asks with a sealed reason and a recent sign-in, a second platform admin
+  (`platform:manage`, another person, also with a recent sign-in) approves, and only then does a job read the
+  messages; the CSV is sealed with the tenant key in the blob store, downloadable by the requester alone (cells
+  defused against formulas), and the request, decision, export and download are audited with the reason and both
+  names. The members are not told, by design. A revoked calendar feed answers 404 like an unknown one. Closing a
+  user's rooms disconnects their sockets on every instance over the bus; it is not a sign-out. Gaps: realtime counts
+  are per instance (the screen says which), and signals are counted only when relayed or refused; an export holds at
+  most 50 000 messages (the CSV says when it was cut) and stays in the blob store until the tenant is offboarded; a
+  workspace contact rule of `admins` lets holders of `social:manage` or `tenant:manage` start conversations with
+  anyone in the workspace (each person's own contact rule and blocks still apply).
+
+- Tenant provisioning templates (1.6.0, Sprint 35d, B-4501). Only a system admin provisions a tenant from a
+  template (`POST /api/admin/tenants/from-template`, or `exprsn-ai tenant:create` on the host), and only a template
+  whose highest workspace ceiling the caller's clearance reaches. Templates are code, not data: their custom roles
+  hold member-baseline permissions only (a role with an admin permission stays under B-3302 dual control and is never
+  part of a template), their profiles are drafts without a model (a model admin of the tenant picks and publishes
+  them), and the first admin is a `tenant-admin` (never `system-admin`) who must enrol a second factor at first
+  sign-in. By default the first admin gets a single-use enrolment link (`PASSWORD_INVITE_HOURS`) that sets the
+  password and opens only factor enrolment; a password given instead passes the password policy before anything is
+  created, and is never stored or echoed. Every part is audited in the new tenant's chain and the provisioning
+  admin's (`tenant.created` with `detail.template`, the parts' own events, `tenant.template.applied`). The issuing CA
+  is made only when a platform root and key custody exist; otherwise it is reported as skipped. Gaps: provisioning
+  is not one transaction, so a failure part-way (a database fault after the tenant row) leaves a tenant with the parts
+  made so far (visible on Tenants and in its audit chain, to finish by hand or offboard); a template's workspaces get
+  no directory group mappings; templates cannot be edited from the console.
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
