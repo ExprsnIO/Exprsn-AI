@@ -58,7 +58,7 @@ export function groupRoutes(s: Services): Router {
   });
 
   r.post('/groups', write, async (req, res) => {
-    const body = parseBody(z.object({ workspaceId: id26.optional(), name, description: text(5000).nullable().optional(), visibility: z.enum(VISIBILITIES).default('private'), joinMode: z.enum(JOIN_MODES).default('request'), label: z.enum(LABELS).optional() }).strict(), req.body);
+    const body = parseBody(z.object({ workspaceId: id26.optional(), name, description: text(5000).nullable().optional(), visibility: z.enum(VISIBILITIES).optional(), joinMode: z.enum(JOIN_MODES).optional(), label: z.enum(LABELS).optional() }).strict(), req.body);
     res.status(201).json(await g.create(ctx(req), body));
   });
 

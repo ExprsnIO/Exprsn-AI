@@ -110,6 +110,11 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   classified for payment cards, IBANs, national identifiers, emails and phone numbers before a chat can use them;
   a file classified above its owner's clearance or the workspace ceiling is rejected.
 - Model output is rendered as text in the console, never as HTML.
+- Since 1.6.0 (B-43) an instance may be a Chat Completions server (`kind: openai`: Apple's `fm serve`,
+  `mlx_lm.server`, `llama-server`) on a URL, under the same egress check and mutual TLS, or on a Unix socket on the
+  server's host. Its bearer token is a vault secret read as the administrator who saved it. Its models are registered
+  from its `/v1/models` listing with `format: server` and no digest; the licence, the conformance run, the label
+  ceiling and dual-control approval apply as to a pulled model.
 
 ## Deployment hardening
 
@@ -118,6 +123,103 @@ the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, emp
 filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
+
+- Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
+  server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers
+  behind the model id the server lists, that the file is GGUF or safetensors, or that it stays the same between the
+  conformance run and later requests; an operator who swaps the model behind the same id (an `mlx_lm.server` or
+  `llama-server` restarted on another file with the same alias) is not noticed. None of the servers targeted here
+  exposes a file hash in `/v1/models`, so the backlog's "where the server exposes it, the file's hash" is not
+  implemented; the model id is the only identity, and approval should be read as approval of the server's operator
+  as much as of the model. The probe and the evaluation trust what the server answers. A Unix socket is not checked
+  against the egress policy: its file permissions are the only access control, and `fm serve` itself has no
+  authentication (run it on a socket only the service user can open, or on loopback, never on `0.0.0.0`). A bearer
+  token is read from the vault once per client and kept in memory until the instance's address or token reference
+  changes or the server restarts, so a token rotated in the vault reaches the gateway only then; it resolves as the
+  person who saved it, and stops resolving when they lose `secrets:read` or leave. Chat Completions servers report no
+  residency, so the memory planner, the anti-thrash limit and pinned residency do not apply to them, and usage is
+  estimated at four characters a token when the server reports none (`fm serve` while streaming). When a server
+  refuses `/v1/embeddings`, embedding requests go to any other instance the embedding model is placed on, not
+  specifically one in the same zone. The Pools screen's own instance form still edits only Ollama settings; kind,
+  socket and token are set from the Models screen's Model servers.
+- Social and messaging administration (1.6.0, Sprint 35d, B-4206). The policies need `social:manage` (decision Q4);
+  turning the full `user-input` check off for a workspace's posts or changing who approves held posts also needs
+  `moderation:manage` and is audited (`social.policy.updated`, `weakened: feedGuard`). With the check off, posts
+  labelled internal or below are still checked against the platform baseline (the engine keeps platform sets only,
+  so no tenant setting relaxes the baseline) and anything above internal, and every comment, is checked in full. A
+  held post is decided only by holders of the permission the workspace names (any flag reviewer by default, or `feed:manage`,
+  `guardrails:manage` or `moderation:review`), never by its author. Exporting another member's conversation is under dual control
+  (decision Q5): a holder of `social:manage` asks with a sealed reason and a recent sign-in, a second platform admin
+  (`platform:manage`, another person, also with a recent sign-in) approves, and only then does a job read the
+  messages; the CSV is sealed with the tenant key in the blob store, downloadable by the requester alone (cells
+  defused against formulas), and the request, decision, export and download are audited with the reason and both
+  names. The members are not told, by design. A revoked calendar feed answers 404 like an unknown one. Closing a
+  user's rooms disconnects their sockets on every instance over the bus; it is not a sign-out. Gaps: realtime counts
+  are per instance (the screen says which), and signals are counted only when relayed or refused; an export holds at
+  most 50 000 messages (the CSV says when it was cut) and stays in the blob store until the tenant is offboarded; a
+  workspace contact rule of `admins` lets holders of `social:manage` or `tenant:manage` start conversations with
+  anyone in the workspace (each person's own contact rule and blocks still apply).
+
+- Tenant provisioning templates (1.6.0, Sprint 35d, B-4501). Only a system admin provisions a tenant from a
+  template (`POST /api/admin/tenants/from-template`, or `exprsn-ai tenant:create` on the host), and only a template
+  whose highest workspace ceiling the caller's clearance reaches. Templates are code, not data: their custom roles
+  hold member-baseline permissions only (a role with an admin permission stays under B-3302 dual control and is never
+  part of a template), their profiles are drafts without a model (a model admin of the tenant picks and publishes
+  them), and the first admin is a `tenant-admin` (never `system-admin`) who must enrol a second factor at first
+  sign-in. By default the first admin gets a single-use enrolment link (`PASSWORD_INVITE_HOURS`) that sets the
+  password and opens only factor enrolment; a password given instead passes the password policy before anything is
+  created, and is never stored or echoed. Every part is audited in the new tenant's chain and the provisioning
+  admin's (`tenant.created` with `detail.template`, the parts' own events, `tenant.template.applied`). The issuing CA
+  is made only when a platform root and key custody exist; otherwise it is reported as skipped. Gaps: provisioning
+  is not one transaction, so a failure part-way (a database fault after the tenant row) leaves a tenant with the parts
+  made so far (visible on Tenants and in its audit chain, to finish by hand or offboard); a template's workspaces get
+  no directory group mappings; templates cannot be edited from the console.
+- Overview and Jobs and queues (1.6.0, Sprint 35b, B-4202, B-4203). Reading needs `tenant:manage` or
+  `platform:manage`; a tenant admin sees and acts on their own tenant's jobs only (another tenant's id is `403`, its
+  jobs `404`), a system admin every tenant's (Q9). Draining an instance, pausing a job type and running or pausing a
+  schedule act on every tenant and need `platform:manage`; a drain also needs a browser session and a sign-in within
+  `STEPUP_WINDOW_SECONDS`. Every change is audited in the actor's tenant (`platform.alert.acknowledged`,
+  `platform.instance.drained`, `jobs.*`), including a system admin's cancel or retry of another tenant's job, which
+  that tenant's chain does not record. Payloads are shown as keys only; error messages and progress messages are shown
+  as the job wrote them, so a handler that puts tenant content in an error would show it to the tenant's admins (and
+  to system admins). Dead letters are the caller's own tenant only and need the domain's permission to redrive or
+  discard. Gaps: a drain lasts for the life of the process (a restart is a new, undrained instance) and does not end
+  open chat streams or sockets, which finish or move on their own; instance rows are written by the instances
+  themselves, so a process that can write the database can report any state for itself; the cache statistics are the
+  answering instance's since it started; the schedules listed are those registered on the answering instance (an
+  API-only instance lists none); signer and worker processes (training, images) are not instances here, their
+  health stays on their own screens.
+- Configuration (1.6.0, Sprint 35c, B-4205). The screen never receives a secret's value: instances report a secret
+  as set or unset, its length, the `<NAME>_FILE` path and mode, and an HMAC-SHA256 fingerprint keyed with
+  `SESSION_SECRET` (16 hex), stored in `platform_instance_settings` so that instances can be compared. Anyone who can
+  read that table and already knows `SESSION_SECRET` can confirm a guess of a secret; nobody else learns anything.
+  Plain values are scrubbed of URL credentials and `key=value` secrets before they are stored, but a credential in a
+  setting the descriptor does not mark as a secret and that the scrubber does not recognise would be shown to platform
+  admins; the secret list is `FILE_VARS`, `S3_ACCESS_KEY_ID` and `OTEL_EXPORTER_OTLP_HEADERS`. Overrides are dual
+  control (a second platform admin, never the proposer) and audited, but they move part of the configuration from the
+  deployment into the database: whoever can write `platform_setting_overrides` directly (a database admin) changes
+  the next start of every instance. Secrets, the database settings, `NODE_ENV`, `PLATFORM_SETTINGS_OVERRIDES` and
+  `INSTANCE_NAME` cannot be overridden; set `PLATFORM_SETTINGS_OVERRIDES=false` to keep every setting in the
+  environment. Hot settings are those the generator lists after reading their callers; one wrongly listed would need
+  a restart to take effect although the screen says it applied. An instance that is down or not yet reporting cannot
+  be compared, and stale rows age out after 24 hours.
+
+- Storage (1.6.0, Sprint 35c, B-4204). The integrity check treats an object as referenced when any row anywhere names
+  it, owns its directory, or has an id that appears in its key; that errs towards keeping objects, so a deleted row
+  whose id is still in another row leaves its objects in place (they are not found as orphans). Objects younger than
+  `BLOBS_ORPHAN_GRACE_HOURS`, backups and mirror files are never orphans. A dry run walks the references again and a
+  deletion removes only the dry run's objects, within `BLOBS_DRY_RUN_MINUTES`; a row that starts naming one of them
+  in that window (none of the server's writers reuse an old key) would lose its object. Checksums are first-seen
+  baselines, not a manifest sealed at write time: an object changed before its first checked run is not detected,
+  and a change through the store (which moves the modification time) is taken as legitimate, as is a change by
+  someone who also resets the time. Missing objects are restored from a backup by hand (Platform › Backups); there is
+  no per-object restore yet. Blob store migration copies with a SHA-256 check and dual writes while the copy runs, and
+  waits for every live instance to confirm dual writes before copying; an instance that is not reporting (stopped,
+  or started from an older build) would write only to the old store, so the migration fails rather than copy when a live instance
+  has not confirmed in time, and an instance started later reads the shared mode before it serves. The `exprsn-ai`
+  command line follows the shared mode too, but a restore into an empty database has no mode to follow and uses the
+  store the environment names, so after a migration update `BLOB_STORE` and its settings in the environment. The quarantine's Rescan re-queues the existing scan jobs and Delete removes held
+  bytes; neither releases anything without a clean scan.
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or

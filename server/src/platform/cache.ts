@@ -88,6 +88,14 @@ export class MemoryCacheStore implements CacheStore {
     return this.map.size;
   }
 
+  /** 1.6.0 (B-4203): live entries whose key starts with `prefix`. */
+  count(prefix: string): number {
+    const now = Date.now();
+    let n = 0;
+    for (const [k, e] of this.map) if (e.expires > now && k.startsWith(prefix)) n++;
+    return n;
+  }
+
   async close(): Promise<void> {
     this.map.clear();
   }
@@ -136,6 +144,19 @@ export interface CacheOptions {
 
 const NS = /^[a-z][a-z0-9.-]{0,63}$/;
 
+/** 1.6.0 (B-4203): a namespace's counters on this instance since it started, and its live entries for one tenant. */
+export interface CacheNamespaceStats {
+  ns: string;
+  tier: CacheTier | null;
+  requests: number;
+  hits: number;
+  invalidations: { local: number; bus: number };
+  /** Live entries of the namespace's current generation for the tenant; null for a shared store (not counted). */
+  entries: number | null;
+}
+
+export const isCacheNamespace = (ns: string): boolean => NS.test(ns);
+
 export class TenantCache {
   readonly requests: client.Counter<'ns' | 'result'>;
   readonly invalidations: client.Counter<'ns' | 'source'>;
@@ -145,6 +166,8 @@ export class TenantCache {
   private readonly prefix: string;
   /** This cache, so it skips its own invalidations when the bus hands them back. */
   private readonly origin = randomBytes(8).toString('hex');
+  /** 1.6.0 (B-4203): the namespaces read on this instance, with the tier they were read at. */
+  private readonly seen = new Map<string, CacheTier>();
 
   constructor(
     readonly store: CacheStore,
@@ -183,6 +206,7 @@ export class TenantCache {
   /** The cached value, or the loader's (stored for the tier's TTL). `undefined` from the loader is not cached. */
   async get<T>(tenantId: string, ns: string, key: string, tier: CacheTier, load: () => Promise<T>): Promise<T> {
     if (!NS.test(ns)) throw new Error(`Bad cache namespace ${ns}`);
+    this.seen.set(ns, tier);
     let full: string;
     try {
       full = await this.fullKey(tenantId, ns, key);
@@ -248,6 +272,33 @@ export class TenantCache {
       this.errors.inc({ op: 'invalidate' });
       this.log?.warn({ err: (err as Error).message, ns: e.ns }, 'cache invalidation failed');
     }
+  }
+
+  /** The tier a namespace was last read at on this instance, or null when it was not read here yet. */
+  tierOf(ns: string): CacheTier | null {
+    return this.seen.get(ns) ?? null;
+  }
+
+  /** The namespaces read on this instance since it started. */
+  namespaces(): string[] {
+    return [...this.seen.keys()].sort();
+  }
+
+  /** 1.6.0 (B-4203): counters for the given namespaces (this instance, since start) and the tenant's live entries. */
+  async stats(tenantId: string, namespaces: readonly string[]): Promise<CacheNamespaceStats[]> {
+    const [req, inv] = await Promise.all([this.requests.get(), this.invalidations.get()]);
+    const sum = (values: { labels: Record<string, string | number>; value: number }[], ns: string, key: string, v: string) => values.filter((x) => x.labels.ns === ns && x.labels[key] === v).reduce((n, x) => n + x.value, 0);
+    const out: CacheNamespaceStats[] = [];
+    for (const ns of namespaces) {
+      let entries: number | null = null;
+      if (this.store instanceof MemoryCacheStore) {
+        const gen = await this.store.generation(this.genKey(tenantId, ns));
+        entries = this.store.count(`${this.prefix}:${tenantId}:${ns}:${gen}:`);
+      }
+      const hits = sum(req.values, ns, 'result', 'hit');
+      out.push({ ns, tier: this.tierOf(ns), requests: hits + sum(req.values, ns, 'result', 'miss'), hits, invalidations: { local: sum(inv.values, ns, 'source', 'local'), bus: sum(inv.values, ns, 'source', 'bus') }, entries });
+    }
+    return out;
   }
 
   async close(): Promise<void> {

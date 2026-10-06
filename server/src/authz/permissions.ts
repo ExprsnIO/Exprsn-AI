@@ -54,7 +54,8 @@ export const PERMISSIONS = [
   // review: work customer sessions in one's workspaces (transcripts, held replies, replies as a person, CSV exports).
   'channels:manage', 'channels:review',
   // 1.4.0 (Sprint 28b, B-2606 with B-2702): social relations shared by messaging and the feed. read: one's own blocks,
-  // mutes, follows, followers, lists and contact rule; write: change them; manage: see any user's relations (audited).
+  // mutes, follows, followers, lists and contact rule; write: change them; manage: see any user's relations (audited)
+  // and, since 1.6.0 (B-4206, decision Q4), the feed, group, messaging and relations policies of Social and messaging.
   'social:read', 'social:write', 'social:manage',
   // 1.4.0 (Sprint 28b, B-26): person-to-person messaging. read: one's conversations and their messages; write: start
   // conversations, send, edit, react and pin (what a member may do inside one is their conversation role).

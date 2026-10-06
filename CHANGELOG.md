@@ -1,5 +1,162 @@
 # Changelog
 
+## 1.6.0 (in progress)
+
+### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
+
+- The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
+  `models`, `loaded`, `show`, `load`, `unload`, `pull`, `delete`, `chat` and `embed`; `OllamaClient` implements it
+  unchanged and no gateway test changed. What a server cannot do throws `Unsupported`, which the gateway, placements
+  and the catalogue skip: nothing resident is reported, loads and unloads are recorded as `unsupported` instance
+  events, pulls onto a mixed pool and rolling upgrades skip the server.
+- `kind: openai` instances (B-4302): migration `037_model_servers` (`instances.kind` defaulting to `ollama`,
+  `socket_path`, `token_ref`, `token_tenant`, `token_owner`). A Chat Completions server on a URL (the egress check and
+  mutual TLS as for Ollama) or a Unix socket (`fm serve --socket`), with an optional bearer token stored in the
+  caller's vault (`model-servers/<id>#token`) or given as a vault reference, resolved as the person who saved it.
+  Health from `/health` or `/v1/models`; models from `/v1/models` (Apple's `pcc` listed but unavailable is not
+  offered); llama.cpp's `/props` context length. The new `instance.probe` job (`POST /api/admin/instances/:id/probe`,
+  run at registration) records whether tool calls and JSON schema output work; what the server reported is in
+  `settings.reported`. `GET /api/admin/model-servers` (`models:manage`) is the import picker's list. Audited
+  `instance.created {kind, socket, token}`, `instance.probe.started`.
+- Chat Completions mapped onto the gateway's chat (B-4303, `server/src/gateway/openai-server.ts`): messages, the
+  system prompt, tools and tool calls (ids kept, results paired with their calls), streamed deltas and reasoning,
+  `response_format` from a JSON schema (`format` on the gateway's chat request, also passed to Ollama), stop,
+  temperature, max tokens and usage (estimated when the server reports none). Ollama-only options are dropped and
+  noted once as a `dropped` instance event. The tool loop, guardrails, labels and metering are unchanged.
+  `server/test/fake-openai-server.ts` stands in for `fm serve`, `mlx_lm.server` and `llama-server` (TCP or socket).
+- Catalogue entries without a pull (B-4304): `POST /api/admin/models {serverInstanceId, serverModel}` registers a
+  listed model with `format: server`, no expected digest, `source: server:<instance>/<id>` (`models.server_instance_id`,
+  `server_model`), placed warm on the instance's pool. Licence, conformance (run on that instance; the tool-calling
+  test always runs and grants `tools`), label and dual-control approval apply; placements on a pool with such a
+  server are warm only; retiring deletes nothing on the server.
+- Embeddings and guard models (B-4305): a server that answers `/v1/embeddings` serves embedding models; one that
+  refuses is remembered and the request goes to another instance with the model, such as an Ollama pool, with no
+  change to the knowledge or guardrail code.
+- Docs (B-4306): `docs/deploy.md` on `fm serve --socket` under launchd beside Ollama on a `metal` pool, with
+  `mlx_lm.server` and `llama-server` as alternatives; `docs/security.md` on what the digest check cannot cover for
+  server-held models; `docs/api.md` and `docs/openapi.json`.
+- Console (B-4307): the Models screen gets Model servers (a drawer of the registered servers with what they report,
+  Register model server with the kind, the socket path or URL and the token, and Probe again), Request import gets
+  "Held by a model server" (the import picker of server-held models, unavailable ones disabled with the reason), and
+  a held model's inspector, approval and card say "held by the server, no digest" with the capabilities the server
+  reported. The prototype board first, then the live screen; `e2e/tests/models.spec.ts` registers an `fm serve`
+  socket (the e2e server starts the fake on one) and approves its model with axe-core and 320 px reflow checks. The
+  Pools screen's Load model offers Ollama instances only.
+
+### Social and messaging live (Sprint 35d, B-4206, with B-4207)
+
+- The Social and messaging screen is live (`#/social`, after Channels, its own sidebar icon; decision Q13), over
+  `GET`/`PUT` routes under `/api/admin/social/` (`docs/api.md`). Migration `037d_platform_social`
+  (`social_workspace_policies`, `social_tenant_settings`, `feed_trending_exclusions`, `messaging_exports`) and the
+  group state `archived`. `social:manage` now also governs these policies (decision Q4); held content stays under
+  `moderation:manage`.
+- Feed: per-workspace approval policy (whether posts pass `user-input` in full, with the platform baseline always
+  kept; who approves held posts; media allowed and their largest size), a per-tenant trending exclusion list honoured
+  at once and by the `feed.trending` job, Run trending now, and the weekly digest's profile, weekday and hour (UTC),
+  size and highest label per tenant, with a test digest sent to the requester alone.
+- Groups and events: per-workspace defaults (who may create groups, visibility, join mode, event capacity), groups
+  across workspaces with members, pending requests, upcoming events, open reports and feeds, Transfer ownership and
+  Archive (read only), and the tenant's calendar feeds with Revoke: a revoked feed answers 404 on its next fetch
+  (the item's "done when").
+- Messaging: retention, limits, search and the tenant's summary profile; legal-hold export of a conversation under
+  dual control (decision Q5): requested with a reason and a recent sign-in, approved by a second platform admin, then
+  written by the job `messaging.conversation.export` as a sealed CSV only the requester downloads. Audited
+  `messaging.export.*` and `messaging.conversation.exported`.
+- Realtime (`platform:manage`): this instance's rooms and sockets by kind, signals per minute and those refused by
+  `ROOM_SIGNALS_PER_MINUTE`, socket authentication failures, and Close a user's rooms on every instance
+  (`TOPICS.roomsClose`, audited `realtime.rooms.closed`).
+- Relations: follow, block, mute and list counts, the most blocked accounts (counts only), and contact rules per
+  workspace (anyone in the workspace, contacts only, admins only) enforced when a conversation is started or someone
+  added, on top of each person's own rule.
+- Accessibility and reflow for the screen and its dialogs (B-4207's share): `docs/accessibility.md`,
+  `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
+  refused signals instead of a backlog, as the server reports them.
+
+### Tenant provisioning templates (Sprint 35d, B-4501)
+
+- Tenants are created from a template (decision Q11): **Create from template** on the Tenants screen (system
+  admins), `POST /api/admin/tenants/from-template` and `exprsn-ai tenant:create --template <id>`. The first
+  templates are exprsn-platform's organisation types: **enterprise** (General, Finance, People, Engineering and Legal
+  workspaces up to confidential; Reader and Contributor roles; assistant, analyst and summariser profiles; an issuing
+  CA), **team** (Team and Projects workspaces; a Contributor role; an assistant profile; an issuing CA) and
+  **personal** (one confidential workspace; an assistant profile). `GET /api/admin/tenant-templates` lists what each
+  creates. No new permission (`tenant:manage` and the system-admin role) and no migration.
+- One step: the tenant, its local user store and data key, the workspaces, the custom roles (member-baseline
+  permissions only, version 1 applied), draft gateway profiles pinned to a pool in the template's zone (`inference`)
+  when one may process their label, the tenant's intermediate CA under the platform root when there is one (reported
+  as skipped otherwise), and the first admin: `tenant-admin`, cleared for the highest workspace ceiling, a member of
+  every workspace, with a single-use enrolment link by default or a password. Audited in both chains: the parts' own
+  events and `tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin}`.
+- `admin:create`'s `createAdmin` takes the audit actor, so the first admin's `user.created` names the provisioning
+  admin rather than the CLI.
+
+### Overview and Jobs and queues live (Sprint 35b, B-4202, B-4203, with B-4207)
+
+- The Overview screen is live, first in the Admin group (Q3): open alerts computed from the existing watches (an
+  instance behind the schema or not answering, the backup RPO, zone drift in the cluster, platform certificates and the
+  tenant's own certificates expiring within 7 days, the rate-limit probe), acknowledged tenant-wide and audited
+  `platform.alert.acknowledged` (Q15); counters for 1 h, 24 h or 7 d; every server instance with its `/readyz` checks,
+  schema, claimed jobs, sockets, rate-limit store, tracing and NTP offset; the next schedules; the recent audit; and
+  capacity (database size and pool, vectors, blob store). `GET /api/admin/overview`.
+- Instances register themselves: each server process beats into `platform_instances` every 30 seconds (migration
+  `037b_platform_ops`) with what `/readyz` answers, which now shares that code. Draining an instance from the screen
+  (Q14: a confirm and a recent sign-in, `platform:manage`) stops it claiming jobs and makes `/readyz` answer 503 with
+  `checks.shutdown: draining`; audited `platform.instance.drained`.
+- The Jobs and queues screen is live, with five tabs: Queues (every job type with queued, running, oldest, failed,
+  p50 and p95, and pause by type, which every instance honours within one poll: `jobs.type.paused`,
+  `jobs.type.resumed`), Jobs (filters by state, type, window, job id or trace id; cancel and retry, retry every failed
+  job: `jobs.cancelled`, `jobs.retried`), Schedules (last runs, run now, pause: `jobs.schedule.*`), Dead letters
+  (moderation jobs and workflow runs, redriven or discarded with a reason: `jobs.deadletter.discarded`) and Cache (the
+  tenant cache's namespaces with reads, hits and invalidations, and invalidate: `jobs.cache.invalidated`, Q1). System
+  admins see every tenant's jobs with a tenant filter, tenant admins their own (Q9). `JobQueue` gains pause by type
+  and `requeue`; `Scheduler` lists its schedules, runs one now and skips a paused one.
+- Both screens are in the accessibility and reflow checks (axe-core, Standard and Enhanced, light and dark, 320 and
+  640 px) through their own Playwright spec; `docs/accessibility.md` lists them.
+
+### Storage and Configuration live (Sprint 35c, B-4204, B-4205, with B-4207)
+
+- **Storage** (B-4204) is a live admin screen (`platform:manage`) with Stores, Usage, Quarantine, Integrity and Purges.
+  Stores: the blob store (health from `/readyz`, size and objects from the last verification, capacity from `statfs`),
+  the database (its own size and connections), the vector store, backups, the media work directory, training datasets
+  and model files, with daily growth samples (`ops.storage.sample`). Usage: bytes by workspace (files, versions,
+  trash, media, knowledge uploads, attachments) against the file quota (which counts files, versions and trash), by
+  user and by kind; quotas are set from the screen. Quarantine: what waits for its scan or was refused in the last 24
+  hours, the ClamAV scanner (`PING`, `VERSION`, counts today), Rescan (`503` while ClamAV does not answer) and Delete,
+  audited `file.quarantine.rescanned` and `file.quarantine.deleted`.
+- The integrity check `ops.blobs.verify` (every `BLOBS_VERIFY_MINUTES`, or from the screen, optionally comparing
+  checksums) lists the store and walks every row: **missing** objects a row names, **orphans** older than
+  `BLOBS_ORPHAN_GRACE_HOURS` that nothing references (never backups or mirror files), and **mismatches** (an object
+  whose SHA-256 changed without the server writing it). It never changes the store. Orphans are deleted after a dry
+  run that walks the references again, by one admin with a reason (decision Q10), within `BLOBS_DRY_RUN_MINUTES`;
+  audited `platform.blobs.orphans.dry-run` and `platform.blobs.orphans.deleted` with the list of objects. An expected
+  checksum change is accepted with a reason (`platform.blobs.checksum.accepted`).
+- Blob store migration (decision Q16) as a copy-then-switch job `ops.blobs.migrate`, started with a recent sign-in and
+  a reason: every instance also writes to the target while every object is copied and its SHA-256 checked, the target
+  is verified, then reads and writes switch, with reads of anything missed falling back to the old store until it is
+  retired. A failure puts every instance back on the old store. The store any process uses is now a switchable store
+  (`platform/blob-switch.ts`) that follows the shared mode.
+- **Configuration** (B-4205) is a live admin screen: every setting this build reads, from a descriptor generated from
+  `server/src/config/index.ts` (`npm run gen:settings -w server`; section, type, constraint, default, secret, hot or
+  restart, description), what each instance reads and where it came from (env, file, default or override), and
+  whether instances differ. Every instance reports under `INSTANCE_NAME` every `PLATFORM_INSTANCE_REPORT_SECONDS`;
+  secrets are reported as set or unset, their length, file and mode and a keyed fingerprint, never their value.
+  Export as `.env` (secrets masked, audited `platform.settings.exported`) and Diff against defaults.
+- Database overrides for every overridable setting under dual control (decision Q2): one platform admin proposes a
+  value with a reason, another approves (never the proposer). The value is checked against the field and the
+  configuration's cross-field rules. A hot setting applies on every instance at once; a restart setting at each
+  instance's next start (applied before the services are built), and the screen names the instances still waiting.
+  Secrets and the settings needed to reach the database are not overridable; `PLATFORM_SETTINGS_OVERRIDES=false` keeps
+  every setting in the environment. Audited `platform.setting.proposed`, `.approved`, `.rejected`, `.withdrawn`.
+- New routes under `/api/admin/storage/` and `/api/admin/platform/settings` (`docs/api.md`, `docs/openapi.json`,
+  `docs/permissions.md`); migration `037c_platform_storage`; new settings `PLATFORM_SETTINGS_OVERRIDES`,
+  `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`, `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`,
+  `BLOBS_DRY_RUN_MINUTES`. The boards (B-4201) follow what the server does: the migration and the verification are no
+  longer proposals, a checksum mismatch is accepted rather than re-sealed, the purge table lists the jobs the server
+  schedules, and Mark restarted became Check again (the banner clears itself as instances report).
+- Accessibility and reflow (B-4207, this part): both screens in the Playwright sweeps and in
+  `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
+  and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
+
 ## 1.5.0
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)

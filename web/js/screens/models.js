@@ -32,7 +32,7 @@
   App.register({
     id: 'models', title: 'Models', live: true,
     summary: 'Catalog, import requests, conformance evaluation, lifecycle approvals, placement', section: 'admin', crumb: ['Admin', 'Models'],
-    commands: [{ label: 'Request model import', sub: 'Models', run(app) { app.stateFor('models').openRequest = {}; app.render(); } }],
+    commands: [{ label: 'Request model import', sub: 'Models', run(app) { app.stateFor('models').openRequest = {}; app.render(); } }, { label: 'Model servers', sub: 'Models', run(app) { app.stateFor('models').openServers = true; app.render(); } }],
     states: [
       { title: 'Pickle rejected', tone: 'danger', text: 'Import refused: the source is a pickle checkpoint. Only GGUF and safetensors are accepted.', apply(ctx) { ctx.state.openRequest = { name: 'consolidated-7b', source: 'https://huggingface.co/example/consolidated-7b/resolve/main/pytorch_model.bin' }; ctx.rerender(); } },
       { title: 'Digest mismatch', tone: 'danger', text: 'The pulled blob does not match the expected digest. The gateway deletes the blob and nothing is registered.', apply(ctx) {
@@ -47,6 +47,7 @@
         if (!m) { ctx.toast('Every model in the catalogue has a licence recorded.', '', 5000); return; }
         Object.assign(ctx.state, { selected: m.id, lifecycle: 'all', cap: 'all', query: '' }); ctx.rerender();
       } },
+      { title: 'Server model unavailable', tone: 'warn', text: 'The model server lists the model but reports it unavailable (Private Cloud Compute on fm serve). It cannot be registered.', apply(ctx) { ctx.state.openRequest = { mode: 'server', unavailable: true }; ctx.rerender(); } },
       { title: 'Retired', tone: 'neutral', text: 'Retired models stay in the catalogue for audit and are removed from routing. Shown read-only.', apply(ctx) {
         const m = (ctx.state.models || []).find((x) => x.state === 'retired');
         Object.assign(ctx.state, { lifecycle: 'retired', cap: 'all', query: '' }); if (m) ctx.state.selected = m.id; ctx.rerender();
@@ -164,19 +165,25 @@
         const mine = sel.requestedBy && sel.requestedBy === meId();
         const ev = sel.evaluation;
         const stepper = '<div class="md-steps">' + STEPS.map((s, i) => '<span class="' + (s === lc ? 'cur' : STEPS.indexOf(lc) > i ? 'done' : '') + '">' + s + '</span>' + (i < STEPS.length - 1 ? '<span class="sep">›</span>' : '')).join('') + '</div>';
-        const digest = !sel.digest ? '<span class="muted">not pulled yet</span>'
+        const held = !!sel.held, srv = sel.server || null, rep = (srv && srv.reported) || {};
+        const said = (v, yes, no) => (v === true ? yes : v === false ? no : 'not probed yet');
+        const digest = held ? '<span class="fg2">held by the server, no digest</span>' : !sel.digest ? '<span class="muted">not pulled yet</span>'
           : st.reveal[sel.id] ? '<span class="mono fg2" style="overflow-wrap:anywhere">sha256:' + esc(hex(sel.digest)) + '</span> <a href="#" data-reveal style="font-size:12px">hide</a>'
           : '<span class="mono fg2">' + esc(shortDigest(sel.digest)) + '</span> <a href="#" data-reveal style="font-size:12px">reveal</a>';
-        const importCell = job ? UI.pill(job.kind === 'pull' ? 'pulling' : 'pulled', 'info') : sel.importState === 'failed' ? UI.pill('failed', 'danger') : sel.importState === 'pulled' ? UI.pill('pulled and verified', 'ok') : sel.importState === 'pulling' ? UI.pill('pulling', 'info') : UI.pill('not pulled', 'outline');
+        const importCell = held ? UI.pill('held by the server', 'ok') : job ? UI.pill(job.kind === 'pull' ? 'pulling' : 'pulled', 'info') : sel.importState === 'failed' ? UI.pill('failed', 'danger') : sel.importState === 'pulled' ? UI.pill('pulled and verified', 'ok') : sel.importState === 'pulling' ? UI.pill('pulling', 'info') : UI.pill('not pulled', 'outline');
         const kv = [
           ['Digest', digest],
-          ['Expected digest', sel.expectedDigest ? '<span class="mono fg2">' + esc(shortDigest(sel.expectedDigest)) + '</span>' : '<span class="muted">none given</span>'],
+          ['Expected digest', held ? '<span class="muted">not applicable: the server reports its model id</span>' : sel.expectedDigest ? '<span class="mono fg2">' + esc(shortDigest(sel.expectedDigest)) + '</span>' : '<span class="muted">none given</span>'],
           ['Import', importCell],
-          ['Format', sel.format ? esc([sel.format, sel.quantization].filter(Boolean).join(', ')) : '<span class="muted">known after the pull</span>'],
-          ['Size on disk', sel.sizeBytes ? esc(gb(sel.sizeBytes)) : '<span class="muted">known after the pull</span>'],
-          ['Context length', sel.contextLength ? esc(Number(sel.contextLength).toLocaleString()) : '<span class="muted">known after the pull</span>'],
+          ['Format', held ? 'server' : sel.format ? esc([sel.format, sel.quantization].filter(Boolean).join(', ')) : '<span class="muted">known after the pull</span>'],
+          ['Size on disk', held ? '<span class="muted">held by the server</span>' : sel.sizeBytes ? esc(gb(sel.sizeBytes)) : '<span class="muted">known after the pull</span>'],
+          ['Context length', sel.contextLength ? esc(Number(sel.contextLength).toLocaleString()) : held ? '<span class="muted">not reported by the server</span>' : '<span class="muted">known after the pull</span>'],
           ['Capabilities', capsOf(sel).length ? esc(capsOf(sel).join(', ')) + (ev && ev.toolsWithheld ? ' <span style="color:var(--warn-fg)">(tools withheld)</span>' : '') : '<span class="muted">known after the pull</span>'],
           ['Source', esc(sel.source || '')],
+          ...(held ? [
+            ['Model server', esc((srv && srv.instance) || 'removed') + ' <span class="muted" style="font-size:12px">model id <span class="mono">' + esc(sel.serverModel || sel.name) + '</span>' + (srv && srv.health ? ', ' + esc(srv.health) : '') + '</span>'],
+            ['Reported by the server', esc([rep.server || 'Chat Completions', 'context ' + (rep.contextLength ? Number(rep.contextLength).toLocaleString() : 'not reported'), 'tools ' + said(rep.tools, 'work', 'do not work'), 'JSON schema output ' + said(rep.jsonSchema, 'works', 'does not work'), 'embeddings ' + (rep.embeddings === true ? 'offered' : rep.embeddings === false ? 'not offered' : 'not tried')].join('; '))]
+          ] : []),
           ['Licence', licence ? (licence.url ? '<a href="' + esc(licence.url) + '" target="_blank" rel="noopener noreferrer">' + esc(licence.name) + '</a>' : esc(licence.name)) + (licence.recordedBy ? ' <span class="muted" style="font-size:12px">recorded by ' + esc(licence.recordedBy) + (licence.recordedAt ? ', ' + esc(day(licence.recordedAt)) : '') + '</span>' : '')
             : '<span style="color:var(--warn-fg)">not recorded</span>' + (canManage && !readOnly ? ' ' + UI.btn('Record licence', { size: 'xs', attrs: 'data-licence' }) : '')],
           ['Tool-calling conformance', !ev ? '<span class="fg2">not run</span>' : !ev.tests.some((t) => t.name === 'Tool calling') ? '<span class="fg2">not applicable, no tools capability</span>' : ev.toolsWithheld ? UI.pill('failed, tools withheld', 'warn') : UI.pill('passed', 'ok')],
@@ -199,6 +206,7 @@
           if (lc === 'evaluated' && mine) notices.push(UI.notice('You requested this import. Dual control: someone other than the requester must approve it.', 'info'));
           if (ev && ev.toolsWithheld && (lc === 'evaluated' || lc === 'approved')) notices.push(UI.notice('Tool calling failed the conformance test, so the tools capability is withheld from profiles. ' + (lc === 'approved' ? 'Approved for chat only.' : 'Approval is still possible for chat only.'), 'warn'));
           if (lc === 'draft' && ev && !ev.tests.some((t) => t.name === 'Chat smoke test' && t.ok)) notices.push(UI.notice('The chat smoke test failed, so the model stays a draft. Fix the cause and run the evaluation again.', 'danger'));
+          if (held && (lc === 'draft' || lc === 'evaluated')) notices.push(UI.notice('Held by the server: nothing is pulled and there is no digest to verify. The server\'s model id stands in for it; the licence, the conformance run and a second approver still apply.', 'info'));
           if (lc === 'deprecated') notices.push(UI.notice('Deprecated. New profiles cannot pick it; profiles that already use it keep routing' + (sel.retireAt ? ' until ' + esc(day(sel.retireAt)) : ' until it is retired') + '.', 'warn'));
         }
         const evalHtml = ev ? '<div class="eyebrow">Conformance, ' + esc(ev.passed + ' of ' + ev.total) + ' passed</div><div class="muted" style="font-size:12px">On ' + esc(ev.instance) + ', ' + esc(when(ev.at)) + '</div>'
@@ -212,7 +220,7 @@
           if (lc === 'approved') actions += UI.btn('Deprecate', { attrs: 'data-deprecate', disabled: busy });
           if (lc === 'deprecated') actions += UI.btn('Retire', { kind: 'danger', attrs: 'data-retire', disabled: busy });
           if (lc !== 'deprecated') actions += UI.btn(ev ? 'Evaluate again' : 'Evaluate', { attrs: 'data-evaluate', disabled: busy || sel.importState !== 'pulled', title: sel.importState !== 'pulled' ? 'Pull the model onto a pool first' : '' });
-          if ((sel.pools || []).length) actions += UI.btn(sel.importState === 'pulled' ? 'Pull again' : 'Pull', { attrs: 'data-pull', disabled: busy });
+          if ((sel.pools || []).length && !held) actions += UI.btn(sel.importState === 'pulled' ? 'Pull again' : 'Pull', { attrs: 'data-pull', disabled: busy });
           actions += UI.btn('Edit', { kind: 'ghost', icon: 'edit', attrs: 'data-edit' });
           if (lc === 'draft' || lc === 'evaluated') actions += UI.btn('Retire', { kind: 'ghost', attrs: 'data-retire', disabled: busy });
         }
@@ -238,10 +246,12 @@
         + '.md-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.md-steps span{color:var(--muted);font-weight:500}.md-steps .cur{color:var(--fg);font-weight:700}.md-steps .done{color:var(--fg2)}.md-steps .sep{color:var(--faint-text)}'
         + '.md-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
         + '.md-pl{display:inline-flex;align-items:center;gap:4px;margin-right:8px}'
+        + '.md-srv{border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}.md-srv .mono{overflow-wrap:anywhere}'
+        + '.md-pick{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;border:0;min-width:0}.md-pick label{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:6px}.md-pick label.off{color:var(--muted)}.md-pick .mono{overflow-wrap:anywhere}'
         + '</style>'
         + '<div class="page">'
-        + UI.pagehead('Model catalog', 'Weights enter only through the import path: GGUF or safetensors, verified by digest, approved by a second person',
-          UI.iconbtn('refresh', 'Refresh', { attrs: 'data-reload', cls: 'sm ghost' }) + (canManage ? UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }) : ''))
+        + UI.pagehead('Model catalog', 'Weights enter only through the import path: GGUF or safetensors, verified by digest, approved by a second person; models a server holds are registered without a pull',
+          UI.iconbtn('refresh', 'Refresh', { attrs: 'data-reload', cls: 'sm ghost' }) + (canManage ? UI.btn('Model servers', { icon: 'pools', attrs: 'data-servers' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }) : ''))
         + problem + body
         + '</div>' + inspector;
 
@@ -285,13 +295,131 @@
       const poolOptions = (model) => (st.pools || []).slice().sort((x, y) => ((y.instances || []).length ? 1 : 0) - ((x.instances || []).length ? 1 : 0))
         .map((p) => { const n = (p.instances || []).length; return { value: p.id, label: p.name + ' (' + p.accelerator + ', ceiling ' + p.label_ceiling + ', ' + (n ? n + ' instance' + (n === 1 ? '' : 's') : 'no instances') + ')', ok: !model || LABELS.indexOf(model.label) <= LABELS.indexOf(p.label_ceiling) }; });
 
-      // ----- import request -----
+      // ----- model servers (B-4302): Chat Completions servers registered as instances -----
+      const said = (v, yes, no, none) => (v === true ? yes : v === false ? no : none || 'not probed yet');
+      const serverCard = (sv) => {
+        const rep = sv.reported || {};
+        const down = sv.health === 'unreachable';
+        return '<div class="md-srv" data-srv="' + esc(sv.instanceId) + '"><div class="hstack"><b class="mono grow">' + esc(sv.instance) + '</b>' + UI.pill(sv.state === 'disabled' ? 'disabled' : sv.health, sv.health === 'healthy' ? 'ok' : sv.health === 'degraded' ? 'warn' : sv.health === 'unreachable' ? 'danger' : 'outline') + '</div>'
+          + UI.kv([
+            ['Pool', esc(sv.pool || '')],
+            ['Transport', sv.transport === 'socket' ? 'Unix socket on the server' : 'URL'],
+            ['Bearer token', sv.token ? 'in the vault' : 'none'],
+            ['Server', esc(sv.version || rep.server || 'Chat Completions')],
+            ['Context length', rep.contextLength ? esc(Number(rep.contextLength).toLocaleString()) : 'not reported'],
+            ['Tools', esc(said(rep.tools, 'work', 'do not work'))],
+            ['JSON schema output', esc(said(rep.jsonSchema, 'works', 'does not work'))],
+            ['Embeddings', esc(said(rep.embeddings, 'offered', 'not offered: knowledge and memory embed on an Ollama pool', 'not tried'))],
+            ['Models listed', (sv.models || []).length ? sv.models.map((m) => '<span class="mono">' + esc(m.id) + '</span>' + (m.available ? '' : ' <span class="muted">(unavailable)</span>') + (m.catalogued ? ' <span class="muted">(in the catalogue)</span>' : '')).join(', ') : '<span class="muted">none</span>']
+          ], 1)
+          + (rep.probeDetail ? '<div class="muted" style="font-size:12px">Probe: ' + esc(rep.probeDetail) + '</div>' : '')
+          + (down ? UI.notice('Not answering on /health or /v1/models. ' + esc(sv.healthDetail || '') + ' Requests route to other instances in the pool.', 'danger') : '')
+          + '<div class="hstack wrap gap6">' + (canPools ? UI.btn('Probe again', { size: 'sm', attrs: 'data-probe="' + esc(sv.instanceId) + '"', disabled: down, title: down ? 'The server is not answering' : '' }) : '') + UI.btn('Import a model', { size: 'sm', attrs: 'data-heldimport' }) + '</div></div>';
+      };
+      const serversDrawer = () => ctx.drawer({
+        title: 'Model servers', onClose,
+        body: '<p class="fg2" style="margin:0">Chat Completions servers that join a pool like an Ollama node: Apple\'s fm serve, mlx_lm.server, llama.cpp\'s llama-server. They hold their own models, so load, unload and pull are skipped and recorded as not available; health comes from /health or /v1/models.</p><div data-srvlist>' + UI.notice('Loading…', 'info') + '</div>',
+        actions: (canPools ? UI.btn('Register model server', { kind: 'primary', icon: 'plus', attrs: 'data-register' }) : '') + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+        onMount(d) {
+          const box = d.querySelector('[data-srvlist]');
+          const wire = () => {
+            box.querySelectorAll('[data-heldimport]').forEach((b) => b.addEventListener('click', () => { App.closeOverlay(); setTimeout(() => requestModal({ mode: 'server' }), 0); }));
+            box.querySelectorAll('[data-probe]').forEach((b) => b.addEventListener('click', async () => {
+              b.disabled = true;
+              try { const r = await App.post('/api/admin/instances/' + encodeURIComponent(b.dataset.probe) + '/probe'); say('Probe started: a tool call and JSON schema output on the server\'s first model. Job <span class="mono">' + esc(String(r.jobId).slice(-6)) + '</span>.', '', 5000); setTimeout(fill, 2500); }
+              catch (err) { b.disabled = false; App.fail(err, 'Probe not started'); }
+            }));
+          };
+          const fill = () => App.get('/api/admin/model-servers').then((list) => {
+            if (!box.isConnected) return;
+            box.innerHTML = list.length ? '<div class="vstack gap12">' + list.map(serverCard).join('') + '</div>' : UI.empty('No model servers yet', 'Register Apple\'s fm serve, an mlx_lm.server or a llama-server as an instance of a pool.', '');
+            wire();
+          }).catch((err) => { if (box.isConnected) box.innerHTML = UI.problem('Model servers could not be loaded', err.message, err.problem && err.problem.trace_id); });
+          fill();
+          const reg = d.querySelector('[data-register]');
+          if (reg) reg.addEventListener('click', () => { App.closeOverlay(); setTimeout(registerModal, 0); });
+        }
+      });
+      // The instance form with the kind, the Unix socket path and the token (stored in the vault, never shown again).
+      const registerModal = () => {
+        const pools = (st.pools || []).map((p) => ({ value: p.id, label: p.name + ' (' + p.accelerator + ', ceiling ' + p.label_ceiling + ')' }));
+        if (!pools.length) { say('No pool to register the server in. Add one under Pools first; an Apple silicon pool is accelerator metal.', 'warn', 6000); return; }
+        const metal = (st.pools || []).find((p) => p.accelerator === 'metal');
+        formModal({
+          title: 'Register model server', cls: 'wide', ok: 'Register',
+          body: '<div class="formgrid" style="--cols:2">'
+            + UI.field('Pool', UI.select(pools, metal ? metal.id : pools[0].value, 'data-f="pool"'), 'An Apple silicon pool is accelerator metal')
+            + UI.field('Name', UI.input('', { placeholder: 'mac-studio-1-fm', attrs: 'data-f="iname" autocomplete="off"' }), 'Lower case, digits, dots and dashes')
+            + UI.field('Kind', UI.select([{ value: 'openai', label: 'Chat Completions server (fm serve, mlx_lm.server, llama-server)' }, { value: 'ollama', label: 'Ollama' }], 'openai', 'data-f="kind"'))
+            + UI.field('Transport', UI.select([{ value: 'socket', label: 'Unix socket on this host' }, { value: 'url', label: 'URL' }], 'socket', 'data-f="transport"'), 'fm serve --socket listens on a socket')
+            + '<div data-w="socket">' + UI.field('Socket path', UI.input('', { placeholder: '/var/run/exprsn/fm.sock', attrs: 'data-f="socket" autocomplete="off"' }), 'An absolute path on the server; no TLS on a socket') + '</div>'
+            + '<div data-w="url" hidden>' + UI.field('URL', UI.input('', { placeholder: 'http://10.20.4.31:8081', attrs: 'data-f="url" autocomplete="off"' }), 'Checked against the egress policy') + '</div>'
+            + '<div data-w="token">' + UI.field('Bearer token', UI.input('', { type: 'password', placeholder: 'Optional', attrs: 'data-f="token" autocomplete="off"' }), 'Stored in your tenant\'s vault and never shown again; needs secrets:write and secrets:read') + '</div>'
+            + UI.field('Deploy', UI.select(['baremetal', 'docker'], 'baremetal', 'data-f="deploy"'))
+            + '</div>'
+            + UI.notice('After registering, a probe asks the server for a tool call and for JSON schema output and records what it reports. Its models then appear in the import picker under Request import.', 'info'),
+          onMount(m) {
+            const f = (k) => m.querySelector('[data-f="' + k + '"]');
+            const sync = () => {
+              const ollama = f('kind').value === 'ollama';
+              if (ollama) f('transport').value = 'url';
+              f('transport').disabled = ollama;
+              const sock = f('transport').value === 'socket';
+              m.querySelector('[data-w="socket"]').hidden = !sock;
+              m.querySelector('[data-w="url"]').hidden = sock;
+              m.querySelector('[data-w="token"]').hidden = ollama;
+            };
+            f('kind').addEventListener('change', sync); f('transport').addEventListener('change', sync);
+          },
+          read(m) {
+            const v = (k) => { const el = m.querySelector('[data-f="' + k + '"]'); return el ? el.value.trim() : ''; };
+            const name = v('iname');
+            if (!/^[a-z0-9][a-z0-9./-]{0,99}$/.test(name)) throw new Error('Enter a name: lower case letters, digits, dots and dashes.');
+            const kind = v('kind'), sock = kind === 'openai' && v('transport') === 'socket';
+            const body = { poolId: v('pool'), name, kind, deploy: v('deploy') };
+            if (sock) { if (v('socket').charAt(0) !== '/') throw new Error('A socket path is absolute, such as /var/run/exprsn/fm.sock.'); body.socketPath = v('socket'); }
+            else { if (!/^https?:\/\//.test(v('url'))) throw new Error('Enter the server\'s http:// or https:// URL.'); body.url = v('url'); }
+            if (kind === 'openai' && v('token')) body.token = v('token');
+            return body;
+          },
+          submit: (body) => { const poolId = body.poolId; const b = Object.assign({}, body); delete b.poolId; return App.post('/api/admin/pools/' + encodeURIComponent(poolId) + '/instances', b); },
+          done(inst) {
+            const healthy = inst && inst.health === 'healthy';
+            say('<b>' + esc(inst.name) + '</b> registered' + (healthy ? ' and healthy' : ', health ' + esc(inst.health)) + '.' + (inst.kind === 'openai' ? ' Probe queued; its models are in the import picker.' : ' It is managed on the Pools screen.') + (inst.tokenRef ? ' The token is in the vault.' : ''), healthy ? 'ok' : 'warn', 6000);
+            App.get('/api/admin/pools').then((p) => { st.pools = p; }).catch(() => undefined);
+            if (inst.kind === 'openai') setTimeout(serversDrawer, 0);
+          }
+        });
+      };
+
+      // ----- import request: pull from a library, or register a model a server holds (B-4304) -----
+      const heldChoices = (servers) => (servers || []).reduce((a, sv) => a.concat((sv.models || []).map((m) => ({ sv, m }))), []);
+      const heldBody = (servers, err) => {
+        if (err) return UI.problem('Model servers could not be loaded', err.message, err.problem && err.problem.trace_id);
+        if (!servers) return UI.notice('Asking the model servers what they hold…', 'info');
+        const list = heldChoices(servers);
+        if (!list.length) return UI.empty('No model server lists a model', servers.length ? 'The registered servers list nothing yet. Check that each one answers /v1/models.' : 'Register a Chat Completions server (fm serve, mlx_lm.server, llama-server) under Model servers first.', '');
+        const usable = (o) => o.m.available && !o.m.catalogued && o.sv.health !== 'unreachable' && o.sv.state !== 'disabled';
+        const first = list.find(usable);
+        const unavailable = list.filter((o) => !o.m.available);
+        return '<fieldset class="md-pick"><legend class="eyebrow">Models the servers hold</legend>' + list.map((o, i) => {
+          const why = !o.m.available ? 'unavailable: ' + (o.m.reason || 'the server refuses it') : o.m.catalogued ? 'already in the catalogue' : o.sv.health === 'unreachable' ? 'the server is not answering' : o.sv.state === 'disabled' ? 'the instance is disabled' : 'available';
+          return '<label class="' + (usable(o) ? '' : 'off') + '"><input type="radio" name="md-held" value="' + i + '"' + (usable(o) ? '' : ' disabled') + (o === first ? ' checked' : '') + '><span class="vstack" style="gap:2px"><span class="mono">' + esc(o.m.id) + '</span><span class="muted" style="font-size:12px">' + esc(o.sv.instance) + ' on ' + esc(o.sv.pool || 'its pool') + ', ' + esc((o.sv.reported && o.sv.reported.server) || 'Chat Completions') + ', ' + esc(why) + '</span></span></label>';
+        }).join('') + '</fieldset>'
+          + (st.showUnavailable && unavailable.length ? UI.notice('<b>' + esc(unavailable.map((o) => o.m.id).join(', ')) + ' ' + (unavailable.length === 1 ? 'is' : 'are') + ' unavailable.</b> ' + esc(unavailable[0].m.reason || 'The server refuses it.') + ' A model the server reports unavailable cannot be registered.', 'warn') : '')
+          + '<div class="formgrid" style="--cols:2">'
+          + UI.field('Requested max label', UI.select(LABELS, 'internal', 'data-f="hlabel"'), 'At most the pool\'s ceiling')
+          + UI.field('Licence', UI.input('', { placeholder: 'Required before approval', attrs: 'data-f="hlicence"' }))
+          + '<div class="span2">' + UI.field('Why this model', UI.textarea('', { placeholder: 'Which workload it serves', rows: 2, attrs: 'data-f="hnotes"' })) + '</div></div>'
+          + UI.notice('Nothing is pulled and there is no digest: the server holds the weights, and its model id stands in for the digest. The model is placed warm on the server\'s pool; the conformance run, the licence and a second approver still apply.', 'info');
+      };
       const requestModal = (prefill) => {
         prefill = prefill || {};
+        let mode = prefill.mode === 'server' ? 'server' : 'library';
+        let servers = null, serversErr = null;
+        st.showUnavailable = !!prefill.unavailable;
         const pools = canPools ? [{ value: '', label: 'None yet, record the request only' }].concat(poolOptions(null)) : [];
-        formModal({
-          title: 'Request model import', cls: 'wide', ok: 'Send request',
-          body: '<div class="formgrid" style="--cols:2">'
+        const libraryBody = '<div class="formgrid" style="--cols:2">'
             + UI.field('Model and tag', UI.input(prefill.name || '', { placeholder: 'llama3.1:8b or hf.co/org/repo:Q4_K_M', attrs: 'data-f="name"' }), 'The name Ollama pulls')
             + UI.field('Source', UI.input(prefill.source || 'Ollama library', { attrs: 'data-f="source"' }), 'Where the weights come from, for the record')
             + UI.field('Expected digest', UI.input('', { placeholder: 'sha256:… (optional)', attrs: 'data-f="digest"' }), 'The pull fails and the blob is deleted if it does not match')
@@ -300,8 +428,8 @@
             + UI.field('Licence URL', UI.input('', { placeholder: 'https://… (optional)', attrs: 'data-f="licenceUrl"' }))
             + (canPools ? UI.field('Pull onto pool', UI.select(pools, '', 'data-f="pool"'), 'Placed warm and pulled right away') : '')
             + '<div class="span2">' + UI.field('Why this model', UI.textarea('', { placeholder: 'Which workload it serves and what the current model lacks', rows: 3, attrs: 'data-f="notes"' })) + '</div></div>'
-            + UI.notice('Pickle checkpoints (.bin, .pt, .pth, .pkl, .ckpt) are refused; only GGUF and safetensors are accepted. The model appears here as a draft; it is evaluated, its licence recorded, and a second administrator approves it before profiles can use it.', 'info'),
-          read(m) {
+            + UI.notice('Pickle checkpoints (.bin, .pt, .pth, .pkl, .ckpt) are refused; only GGUF and safetensors are accepted. The model appears here as a draft; it is evaluated, its licence recorded, and a second administrator approves it before profiles can use it.', 'info');
+        const readLibrary = (m) => {
             const v = (k) => { const el = m.querySelector('[data-f="' + k + '"]'); return el ? el.value.trim() : ''; };
             if (!v('name')) throw new Error('Enter the model and tag.');
             const body = { name: v('name'), source: v('source') || 'Ollama library', label: v('label') };
@@ -309,6 +437,34 @@
             if (v('licence')) body.license = v('licenceUrl') ? { name: v('licence'), url: v('licenceUrl') } : { name: v('licence') };
             if (v('notes')) body.notes = v('notes');
             if (v('pool')) body.poolId = v('pool');
+            return body;
+          };
+        formModal({
+          title: 'Request model import', cls: 'wide', ok: mode === 'server' ? 'Register model' : 'Send request',
+          body: UI.seg([{ id: 'library', label: 'Pull from a library' }, { id: 'server', label: 'Held by a model server' }], mode, 'data-src aria-label="Where the model comes from"') + '<div data-srcbody>' + (mode === 'server' ? heldBody(null) : libraryBody) + '</div>',
+          onMount(m) {
+            const box = m.querySelector('[data-srcbody]');
+            const fetchServers = () => App.get('/api/admin/model-servers').then((list) => { servers = list; serversErr = null; }).catch((err) => { serversErr = err; }).finally(() => { if (mode === 'server' && box.isConnected) box.innerHTML = heldBody(servers, serversErr); });
+            const show = () => {
+              m.querySelectorAll('[data-src] [data-seg]').forEach((x) => { const on = x.dataset.seg === mode; x.classList.toggle('active', on); x.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+              box.innerHTML = mode === 'server' ? heldBody(servers, serversErr) : libraryBody;
+              m.querySelector('[data-ok]').textContent = mode === 'server' ? 'Register model' : 'Send request';
+              m.querySelector('[data-err]').innerHTML = '';
+              if (mode === 'server' && !servers && !serversErr) fetchServers();
+            };
+            // The source switch swaps the form in place; the dialog and its focus stay where they are.
+            m.querySelectorAll('[data-src] [data-seg]').forEach((b) => b.addEventListener('click', () => { if (b.dataset.seg !== mode) { mode = b.dataset.seg; show(); } }));
+            if (mode === 'server') fetchServers();
+          },
+          read(m) {
+            if (mode !== 'server') return readLibrary(m);
+            const pick = m.querySelector('input[name="md-held"]:checked');
+            if (!pick) throw new Error('Choose an available model a server holds.');
+            const o = heldChoices(servers)[Number(pick.value)];
+            const v = (k) => { const el = m.querySelector('[data-f="' + k + '"]'); return el ? el.value.trim() : ''; };
+            const body = { serverInstanceId: o.sv.instanceId, serverModel: o.m.id, label: v('hlabel') || 'internal' };
+            if (v('hlicence')) body.license = { name: v('hlicence') };
+            if (v('hnotes')) body.notes = v('hnotes');
             return body;
           },
           submit: (body) => App.post('/api/admin/models', body),
@@ -321,12 +477,15 @@
             put(m); Object.assign(st, { selected: m.id, lifecycle: 'all', cap: 'all', query: '' });
             if (m.jobId) track(m.jobId, m.id, 'pull');
             refresh(); reloadModels();
+            if (m.held) { say('<b>' + esc(m.name) + '</b> registered from its server as a draft and placed warm on the server\'s pool. Nothing was pulled. Run the evaluation next.', 'ok', 6000); return; }
             say('Import of <b>' + esc(m.name) + '</b> requested as a draft' + (m.jobId ? '; pulling onto ' + esc(((st.pools || []).find((p) => p.id === body.poolId) || { name: 'the pool' }).name) + '.' : '. Place it on a pool to pull it.'), 'ok', 6000);
           }
         });
       };
       ctx.on('click', '[data-request]', () => requestModal());
       if (st.openRequest && st.loaded) { const pre = st.openRequest; st.openRequest = null; setTimeout(() => requestModal(pre), 30); }
+      ctx.on('click', '[data-servers]', () => serversDrawer());
+      if (st.openServers && st.loaded) { st.openServers = false; setTimeout(serversDrawer, 30); }
 
       if (!sel) return;
 
@@ -360,7 +519,7 @@
       ctx.on('click', '[data-evaluate]', async () => {
         const claimsTools = (sel.capabilities || []).indexOf('tools') >= 0;
         const ok = await ctx.confirm({ title: 'Evaluate ' + sel.name, tag: 'conformance', tone: 'info', ok: 'Run evaluation',
-          body: '<p style="margin:0" class="fg2">Runs a chat smoke test on a healthy instance that has the model pulled' + (claimsTools ? ', and a tool-calling test because the model claims tools. Failing it withholds tools from profiles' : '') + '. Passing the smoke test moves a draft to evaluated.</p>' });
+          body: '<p style="margin:0" class="fg2">Runs a chat smoke test on a healthy instance that has the model ' + (sel.held ? 'listed' : 'pulled') + (sel.held ? ', and a tool-calling test: passing it gives a server-held model the tools capability' : claimsTools ? ', and a tool-calling test because the model claims tools. Failing it withholds tools from profiles' : '') + '. Passing the smoke test moves a draft to evaluated.</p>' });
         if (!ok) return;
         try { const r = await App.post('/api/admin/models/' + encodeURIComponent(sel.id) + '/evaluate'); track(r.jobId, sel.id, 'evaluate'); refresh(); say('Evaluation of <b>' + esc(sel.name) + '</b> started.'); }
         catch (err) { App.fail(err, 'Evaluation not started'); }
@@ -384,17 +543,18 @@
         const options = poolOptions(sel).filter((p) => p.ok && !placed[p.value]);
         const refused = poolOptions(sel).filter((p) => !p.ok);
         if (!options.length) { say(refused.length ? 'Every other pool\'s label ceiling is below ' + esc(sel.label) + '.' : 'No pool to place it on. Create one under Pools first.', 'warn', 6000); return; }
+        const residencies = sel.held ? [{ value: 'warm', label: 'warm, the server decides what stays loaded' }] : [{ value: 'warm', label: 'warm, loaded on demand' }, { value: 'pinned', label: 'pinned, kept loaded' }, { value: 'cold', label: 'cold, pulled only' }];
         formModal({
-          title: 'Place ' + esc(sel.name) + ' on a pool', ok: 'Place and pull',
-          body: '<div class="formgrid" style="--cols:2">' + UI.field('Pool', UI.select(options, options[0].value, 'data-f="pool"')) + UI.field('Residency', UI.select([{ value: 'warm', label: 'warm, loaded on demand' }, { value: 'pinned', label: 'pinned, kept loaded' }, { value: 'cold', label: 'cold, pulled only' }], 'warm', 'data-f="res"')) + '</div>'
+          title: 'Place ' + esc(sel.name) + ' on a pool', ok: sel.held ? 'Place' : 'Place and pull',
+          body: '<div class="formgrid" style="--cols:2">' + UI.field('Pool', UI.select(options, options[0].value, 'data-f="pool"')) + UI.field('Residency', UI.select(residencies, 'warm', 'data-f="res"'), 'Pools with Chat Completions servers take warm placements only') + '</div>'
             + (refused.length ? UI.notice('Not offered: ' + refused.map((p) => esc(p.label.split(' (')[0])).join(', ') + ', whose label ceiling is below ' + esc(sel.label) + '.', 'info') : '')
-            + UI.notice('The pull starts right away on every instance in the pool.', 'info'),
-          read: (m) => ({ modelId: sel.id, poolId: m.querySelector('[data-f="pool"]').value, residency: m.querySelector('[data-f="res"]').value, pull: true }),
+            + UI.notice(sel.held ? 'A model a server holds is placed only on a pool where an instance lists it. Nothing is pulled.' : 'The pull starts right away on every instance in the pool.', 'info'),
+          read: (m) => ({ modelId: sel.id, poolId: m.querySelector('[data-f="pool"]').value, residency: m.querySelector('[data-f="res"]').value, pull: !sel.held }),
           submit: (body) => App.post('/api/admin/placements', body),
           done(r, body) {
             const pool = (st.pools || []).find((p) => p.id === body.poolId) || { name: 'the pool' };
             if (r.jobId) track(r.jobId, sel.id, 'pull');
-            reloadModels(); say('<b>' + esc(sel.name) + '</b> placed on ' + esc(pool.name) + ' (' + esc(body.residency) + '); pulling.', 'ok');
+            reloadModels(); say('<b>' + esc(sel.name) + '</b> placed on ' + esc(pool.name) + ' (' + esc(body.residency) + ')' + (r.jobId ? '; pulling.' : '.'), 'ok');
           }
         });
       });
@@ -413,7 +573,7 @@
         const ev = sel.evaluation || {};
         const ok = await ctx.confirm({ title: 'Approve ' + sel.name, tag: ev.toolsWithheld ? 'chat only' : 'approved', tone: 'ok', ok: 'Approve',
           body: '<p style="margin:0" class="fg2">Profiles can pick this model once it is approved and placed on a pool cleared for their label.' + (ev.toolsWithheld ? ' The tools capability stays withheld because tool calling failed the conformance test.' : '') + '</p>',
-          kv: [['Digest', '<span class="mono">' + esc(shortDigest(sel.digest)) + '</span>'], ['Max label', UI.label(sel.label, { sm: true })], ['Licence', esc((sel.license || {}).name || '')], ['Conformance', esc((ev.passed || 0) + ' of ' + (ev.total || 0) + ' passed')], ['Placed on', esc((sel.pools || []).map((p) => p.pool).join(', ') || 'no pool yet')], ['Requested by', who(sel.requestedBy)]] });
+          kv: [['Digest', sel.held ? 'held by the server, no digest' : '<span class="mono">' + esc(shortDigest(sel.digest)) + '</span>'], ['Max label', UI.label(sel.label, { sm: true })], ['Licence', esc((sel.license || {}).name || '')], ['Conformance', esc((ev.passed || 0) + ' of ' + (ev.total || 0) + ' passed')], ['Placed on', esc((sel.pools || []).map((p) => p.pool).join(', ') || 'no pool yet')], ['Requested by', who(sel.requestedBy)]] });
         if (!ok) return;
         try { const m = await lifecycle({ to: 'approved' }); put(m); refresh(); say('<b>' + esc(m.name) + '</b> approved' + (ev.toolsWithheld ? ' for chat only' : '') + '. Audit entry written.', 'ok', 5000); }
         catch (err) {
@@ -455,15 +615,16 @@
       // ----- model card -----
       ctx.on('click', '[data-card]', () => {
         const ev = sel.evaluation;
-        const card = { name: sel.name, digest: sel.digest ? 'sha256:' + hex(sel.digest) : null, expectedDigest: sel.expectedDigest, family: sel.family, parameterSize: sel.parameterSize, quantization: sel.quantization, format: sel.format, sizeBytes: sel.sizeBytes, contextLength: sel.contextLength, capabilities: sel.capabilities, source: sel.source, license: sel.license, label: sel.label, state: sel.state, evaluation: ev, requestedBy: sel.requestedBy, approvedBy: sel.approvedBy, approvedAt: sel.approvedAt, retireAt: sel.retireAt, pools: (sel.pools || []).map((p) => ({ pool: p.pool, residency: p.residency })), notes: sel.notes, exportedAt: new Date().toISOString() };
+        const srv = sel.server || null, rep = (srv && srv.reported) || {};
+        const card = { name: sel.name, held: !!sel.held, server: sel.held ? { instance: srv && srv.instance, model: sel.serverModel, reported: rep } : undefined, digest: sel.digest ? 'sha256:' + hex(sel.digest) : null, expectedDigest: sel.expectedDigest, family: sel.family, parameterSize: sel.parameterSize, quantization: sel.quantization, format: sel.format, sizeBytes: sel.sizeBytes, contextLength: sel.contextLength, capabilities: sel.capabilities, source: sel.source, license: sel.license, label: sel.label, state: sel.state, evaluation: ev, requestedBy: sel.requestedBy, approvedBy: sel.approvedBy, approvedAt: sel.approvedAt, retireAt: sel.retireAt, pools: (sel.pools || []).map((p) => ({ pool: p.pool, residency: p.residency })), notes: sel.notes, exportedAt: new Date().toISOString() };
         const idx = STEPS.indexOf(sel.state);
         ctx.drawer({
           title: 'Model card, ' + esc(sel.name), onClose,
           body: '<div class="hstack">' + UI.pill(sel.state) + UI.label(sel.label, { sm: true }) + '</div>'
-            + UI.kv([['Digest', sel.digest ? '<span class="mono">' + esc(shortDigest(sel.digest)) + '</span>' : 'not pulled'], ['Family, size', esc([sel.family, sel.parameterSize, gb(sel.sizeBytes)].filter(Boolean).join(', ') || 'unknown')], ['Format', esc([sel.format, sel.quantization].filter(Boolean).join(', ') || 'unknown')], ['Capabilities', esc(capsOf(sel).join(', ') || 'unknown')], ['Context length', sel.contextLength ? esc(Number(sel.contextLength).toLocaleString()) : 'unknown'], ['Source', esc(sel.source || '')], ['Licence', esc((sel.license || {}).name || 'not recorded')], ['Conformance', ev ? esc(ev.passed + ' of ' + ev.total + ' passed on ' + ev.instance) + (ev.toolsWithheld ? ', tools withheld' : '') : 'not run']], 1)
+            + UI.kv([['Digest', sel.held ? 'held by the server, no digest' : sel.digest ? '<span class="mono">' + esc(shortDigest(sel.digest)) + '</span>' : 'not pulled']].concat(sel.held ? [['Model server', esc((srv && srv.instance) || 'removed') + ', model id <span class="mono">' + esc(sel.serverModel || sel.name) + '</span>'], ['Server reports', esc([rep.server || 'Chat Completions', 'context ' + (rep.contextLength || 'not reported'), 'tools ' + (rep.tools === true ? 'work' : rep.tools === false ? 'do not work' : 'not probed'), 'JSON schema output ' + (rep.jsonSchema === true ? 'works' : rep.jsonSchema === false ? 'does not work' : 'not probed'), 'embeddings ' + (rep.embeddings === true ? 'offered' : rep.embeddings === false ? 'not offered' : 'not tried')].join(', '))]] : []).concat([ ['Family, size', esc([sel.family, sel.parameterSize, gb(sel.sizeBytes)].filter(Boolean).join(', ') || 'unknown')], ['Format', esc([sel.format, sel.quantization].filter(Boolean).join(', ') || 'unknown')], ['Capabilities', esc(capsOf(sel).join(', ') || 'unknown')], ['Context length', sel.contextLength ? esc(Number(sel.contextLength).toLocaleString()) : 'unknown'], ['Source', esc(sel.source || '')], ['Licence', esc((sel.license || {}).name || 'not recorded')], ['Conformance', ev ? esc(ev.passed + ' of ' + ev.total + ' passed on ' + ev.instance) + (ev.toolsWithheld ? ', tools withheld' : '') : 'not run']]), 1)
             + UI.timeline([
               { title: 'Import requested', text: esc(sel.source || ''), meta: esc(when(sel.createdAt)), tone: 'ok' },
-              { title: 'Pulled', text: sel.importState === 'pulled' ? 'digest and format verified' : sel.importState === 'failed' ? esc(sel.importError || 'failed') : 'pending', tone: sel.importState === 'pulled' ? 'ok' : sel.importState === 'failed' ? 'danger' : '' },
+              { title: sel.held ? 'Registered from the server' : 'Pulled', text: sel.held ? 'model id from /v1/models, nothing pulled' : sel.importState === 'pulled' ? 'digest and format verified' : sel.importState === 'failed' ? esc(sel.importError || 'failed') : 'pending', tone: sel.importState === 'pulled' ? 'ok' : sel.importState === 'failed' ? 'danger' : '' },
               { title: 'Evaluated', text: ev ? esc(ev.passed + ' of ' + ev.total + ' passed') : 'pending', meta: ev ? esc(when(ev.at)) : '', tone: ev ? (ev.passed === ev.total ? 'ok' : 'warn') : '' },
               { title: 'Approved', text: sel.approvedBy ? who(sel.approvedBy) : 'pending', meta: esc(when(sel.approvedAt)), tone: sel.approvedBy ? 'ok' : '' },
               { title: sel.state === 'retired' ? 'Retired' : 'Deprecated', text: idx >= 3 ? (sel.retireAt ? 'retire on ' + esc(day(sel.retireAt)) : '') : 'not planned', tone: idx >= 3 ? 'warn' : '' }

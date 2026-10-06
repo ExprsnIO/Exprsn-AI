@@ -21,9 +21,27 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
-| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | Next |
-| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies | B-4401–B-4405, B-4601, B-4701, B-4803 | 40 | Planned |
+| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies | B-4401–B-4405, B-4601, B-4701, B-4803 | 40 | Next |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release | B-4901, B-5001, B-4801, B-4802, B-5101 | 21 | Planned |
+
+### Progress
+
+**Sprint 35: done** (this PR). Model servers beyond Ollama (B-4301 to B-4307, migration `037_model_servers`):
+`kind: openai` instances on a URL or a Unix socket with an optional bearer token in the vault, Chat Completions mapped
+onto the gateway, server-held models in the catalogue without a pull, the `instance.probe` job, and the Models
+screen's Model servers. A smoke against the real `fm serve` on macOS 27 registered, evaluated and approved `system`,
+which then answered a tool-calling chat turn. The five platform administration screens are live with their
+accessibility and reflow checks (B-4202 to B-4207, migrations `037b_platform_ops`, `037c_platform_storage`,
+`037d_platform_social`): Overview (instance heartbeats, computed alerts, drain), Jobs and queues (pause by type,
+schedules, dead letters, cache), Storage (integrity job, orphan deletion after a dry run, copy-then-switch blob
+migration), Configuration (a generated settings descriptor, overrides under dual control) and Social and messaging
+(feed, groups, messaging, realtime and relations policies; legal-hold export under dual control). Tenants can be
+created from the enterprise, team and personal templates (B-4501). Unit suite 1036 passed; PostgreSQL and MySQL
+integration passed. At the owner's request the full Playwright suite was not run; each part ran its own specs.
+Known gaps are in `docs/security.md`: realtime counts and schedule counters per instance, a drain does not end open
+streams, provisioning is not one transaction, exports hold at most 50 000 messages, the Pools screen's instance form
+edits Ollama settings only, and no server exposes a model file hash.
 
 The order follows the dependencies: the Storage screen (B-4204) before blob deduplication shows its savings (B-4601);
 the Social and messaging screen (B-4206) before group categories are managed from it (B-4405); vault anomaly detection

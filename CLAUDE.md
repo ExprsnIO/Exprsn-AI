@@ -60,7 +60,7 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate [--check] | admin:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
+npm run cli -w server -- <migrate [--check] | admin:create | tenant:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
                              kms:recover | signer | backup:create | backup:restore-drill | backup:restore>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
                                              # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL,
@@ -234,6 +234,16 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   clearance; `presence.ts` `s.presence`: chosen or derived status, connection rows per instance with a heartbeat, one
   publish per change on `TOPICS.presence`), with `routes/people.ts` (`/api/people`, `/api/presence`) and
   `realtime/presence.ts` (`presence.watch`, `presence.idle`, `presence.changed` on the console's socket).
+- 1.6.0 Sprint 35d: `social/admin.ts` (`s.socialAdmin`, B-4206: workspace policies the feed, groups and social
+  relations read, the tenant's digest and summary settings, trending exclusions, legal-hold conversation exports under
+  dual control as the job `messaging.conversation.export`, realtime counts from `RoomStats` in `realtime/rooms.ts`)
+  with `routes/admin/social.ts`; `tenancy/templates.ts` (B-4501: tenant provisioning templates).
+
+- 1.6.0 Sprint 35b: `ops/instances.ts` (`s.instances`: every server process's heartbeat row in `platform_instances`, the
+  `readiness` checks `/readyz` shares, drain), `ops/overview.ts` (`s.overview`: computed alerts, acknowledgements,
+  counters, recent audit, capacity) and `ops/jobs-admin.ts` (`s.jobsAdmin`: job types, jobs, schedules, dead letters,
+  the cache), behind `routes/admin/operations.ts`; `JobQueue` pauses by type (`pausesLoader`) and `requeue`s, and the
+  `Scheduler` lists its schedules, runs one now and skips a paused one (`isPaused`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

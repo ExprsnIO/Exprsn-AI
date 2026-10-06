@@ -2,6 +2,7 @@ import { ulid } from 'ulid';
 import { json, type Db } from '../db/knex.js';
 import type { Label } from '../authz/labels.js';
 import type { InstanceTls } from './ollama.js';
+import type { ServerKind, ServerReport } from './server.js';
 
 export type ThinkLevel = 'off' | 'low' | 'medium' | 'high';
 export const THINK_LEVELS: readonly ThinkLevel[] = ['off', 'low', 'medium', 'high'];
@@ -29,6 +30,8 @@ export interface InstanceSettings {
   numCtx?: number;
   kvCacheType?: string;
   keepAlive?: string;
+  /** B-4302: what a Chat Completions server reported about itself (written by the poller and the probe). */
+  reported?: ServerReport;
 }
 
 export interface InstanceRow {
@@ -36,6 +39,14 @@ export interface InstanceRow {
   pool_id: string;
   name: string;
   url: string;
+  /** B-4302: `ollama`, or `openai` for a Chat Completions server. */
+  kind: ServerKind;
+  /** A Unix socket path the server listens on (then `url` is only the HTTP origin). */
+  socket_path: string | null;
+  /** `vault:<path>#<key>` for the bearer token, resolved as `token_owner` in `token_tenant`. */
+  token_ref: string | null;
+  token_tenant: string | null;
+  token_owner: string | null;
   deploy: 'docker' | 'baremetal';
   tls: InstanceTls | null;
   settings: InstanceSettings;
@@ -82,6 +93,9 @@ export interface ModelRow {
   approved_at: number | null;
   retire_at: number | null;
   notes: string | null;
+  /** B-4304: a model held by a Chat Completions server (`format` `server`): where it was registered from. */
+  server_instance_id: string | null;
+  server_model: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -124,6 +138,11 @@ const n = (v: unknown): number | null => (v == null ? null : Number(v));
 
 const instanceFrom = (r: Record<string, unknown>): InstanceRow => ({
   ...(r as unknown as InstanceRow),
+  kind: ((r.kind as string | null) ?? 'ollama') as ServerKind,
+  socket_path: (r.socket_path as string | null) ?? null,
+  token_ref: (r.token_ref as string | null) ?? null,
+  token_tenant: (r.token_tenant as string | null) ?? null,
+  token_owner: (r.token_owner as string | null) ?? null,
   tls: json<InstanceTls | null>(r.tls, null),
   settings: json<InstanceSettings>(r.settings, {}),
   last_seen_at: n(r.last_seen_at),
@@ -138,6 +157,8 @@ const modelFrom = (r: Record<string, unknown>): ModelRow => ({
   capabilities: json<string[]>(r.capabilities, []),
   license: json<ModelRow['license']>(r.license, null),
   evaluation: json<Evaluation | null>(r.evaluation, null),
+  server_instance_id: (r.server_instance_id as string | null) ?? null,
+  server_model: (r.server_model as string | null) ?? null,
   approved_at: n(r.approved_at),
   retire_at: n(r.retire_at),
   created_at: Number(r.created_at),
@@ -203,14 +224,14 @@ export class GatewayRepo {
     return r ? instanceFrom(r) : undefined;
   }
 
-  async createInstance(input: { poolId: string; name: string; url: string; deploy: InstanceRow['deploy']; tls?: InstanceTls | null; settings: InstanceSettings }): Promise<InstanceRow> {
+  async createInstance(input: { poolId: string; name: string; url: string; deploy: InstanceRow['deploy']; tls?: InstanceTls | null; settings: InstanceSettings; kind?: ServerKind; socketPath?: string | null; token?: { ref: string; tenantId: string; ownerId: string } | null }): Promise<InstanceRow> {
     const t = Date.now();
-    const row = { id: ulid(), pool_id: input.poolId, name: input.name, url: input.url, deploy: input.deploy, tls: input.tls ? JSON.stringify(input.tls) : null, settings: JSON.stringify(input.settings), state: 'active', health: 'unknown', health_detail: null, version: null, last_seen_at: null, created_at: t, updated_at: t };
+    const row = { id: ulid(), pool_id: input.poolId, name: input.name, url: input.url, kind: input.kind ?? 'ollama', socket_path: input.socketPath ?? null, token_ref: input.token?.ref ?? null, token_tenant: input.token?.tenantId ?? null, token_owner: input.token?.ownerId ?? null, deploy: input.deploy, tls: input.tls ? JSON.stringify(input.tls) : null, settings: JSON.stringify(input.settings), state: 'active', health: 'unknown', health_detail: null, version: null, last_seen_at: null, created_at: t, updated_at: t };
     await this.db('instances').insert(row);
     return instanceFrom(row);
   }
 
-  async updateInstance(id: string, patch: Partial<{ url: string; tls: InstanceTls | null; settings: InstanceSettings; state: InstanceRow['state']; health: InstanceRow['health']; health_detail: string | null; version: string | null; last_seen_at: number }>): Promise<void> {
+  async updateInstance(id: string, patch: Partial<{ url: string; socket_path: string | null; token_ref: string | null; token_tenant: string | null; token_owner: string | null; tls: InstanceTls | null; settings: InstanceSettings; state: InstanceRow['state']; health: InstanceRow['health']; health_detail: string | null; version: string | null; last_seen_at: number }>): Promise<void> {
     const upd: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(patch)) upd[k] = k === 'tls' || k === 'settings' ? (v == null ? null : JSON.stringify(v)) : v;
     if (!('health' in patch) || Object.keys(patch).some((k) => !['health', 'health_detail', 'version', 'last_seen_at'].includes(k))) upd.updated_at = Date.now();
@@ -237,25 +258,26 @@ export class GatewayRepo {
     return r ? modelFrom(r) : undefined;
   }
 
-  async createModel(input: { name: string; source: string; expectedDigest: string | null; license: ModelRow['license']; label: Label; notes: string | null; requestedBy: string; requestedTenant: string }): Promise<ModelRow> {
+  async createModel(input: { name: string; source: string; expectedDigest: string | null; license: ModelRow['license']; label: Label; notes: string | null; requestedBy: string; requestedTenant: string; server?: { instanceId: string; model: string; capabilities: string[]; contextLength: number | null; family: string | null } }): Promise<ModelRow> {
     const t = Date.now();
     const row = {
       id: ulid(),
       name: input.name,
-      family: null,
+      family: input.server?.family ?? null,
       parameter_size: null,
       quantization: null,
-      format: null,
+      // B-4304: a server-held model is registered, not pulled: nothing to download, no digest to pin.
+      format: input.server ? 'server' : null,
       size_bytes: null,
-      context_length: null,
-      capabilities: '[]',
+      context_length: input.server?.contextLength ?? null,
+      capabilities: JSON.stringify(input.server?.capabilities ?? []),
       source: input.source,
       expected_digest: input.expectedDigest,
       digest: null,
       license: input.license ? JSON.stringify(input.license) : null,
       label: input.label,
       state: 'draft',
-      import_state: 'pending',
+      import_state: input.server ? 'pulled' : 'pending',
       import_error: null,
       evaluation: null,
       requested_by: input.requestedBy,
@@ -264,6 +286,8 @@ export class GatewayRepo {
       approved_at: null,
       retire_at: null,
       notes: input.notes,
+      server_instance_id: input.server?.instanceId ?? null,
+      server_model: input.server?.model ?? null,
       created_at: t,
       updated_at: t
     };
@@ -300,8 +324,9 @@ export class GatewayRepo {
 
   // ---------- model events ----------
 
-  async event(instanceId: string, model: string, event: 'load' | 'unload' | 'evicted' | 'pull', reason: string | null, actor: string | null): Promise<void> {
-    await this.db('model_events').insert({ id: ulid(), instance_id: instanceId, model, event, reason, actor, ts: Date.now() });
+  /** `unsupported`: a load or unload asked of a server that holds its own models; `dropped`: Ollama-only options left out (B-43). */
+  async event(instanceId: string, model: string, event: 'load' | 'unload' | 'evicted' | 'pull' | 'unsupported' | 'dropped', reason: string | null, actor: string | null): Promise<void> {
+    await this.db('model_events').insert({ id: ulid(), instance_id: instanceId, model: model.slice(0, 200), event, reason: reason?.slice(0, 300) ?? null, actor: actor?.slice(0, 200) ?? null, ts: Date.now() });
   }
 
   /** Loads on an instance since a time, and when the oldest of them happened (for the anti-thrash window). */

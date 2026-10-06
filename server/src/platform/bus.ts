@@ -109,7 +109,11 @@ export const TOPICS = {
    * 1.5.0 (B-3302, B-3305): a tenant's custom role definitions changed (`definitions`), or grants of some users were
    * removed (`userIds`): `RolesChangedEvent`. Every instance reloads the definitions and re-decides socket rooms.
    */
-  rolesChanged: 'authz.roles'
+  rolesChanged: 'authz.roles',
+  /** 1.6.0 (B-4206): close every socket of a user on every instance (Social and messaging › Realtime): `{ tenantId, userId }`. */
+  roomsClose: 'rooms.close',
+  /** 1.6.0 (B-4202): an administrator drained a server instance: `{ id }`. Only that instance acts on it. */
+  instanceDrain: 'platform.instance.drain'
 } as const;
 
 /** 1.5.0: see `TOPICS.rolesChanged`. */

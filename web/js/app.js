@@ -26,7 +26,7 @@
     moon: 'M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z', copy: 'M8 8h12v12H8zM4 16V4h12', refresh: 'M4 12a8 8 0 0 1 14-5l2 2M20 4v5h-5M20 12a8 8 0 0 1-14 5l-2-2M4 20v-5h5', edit: 'M4 20h4l11-11-4-4L4 16zM13 7l4 4',
     branch: 'M6 4v8a4 4 0 0 0 4 4h4M6 4a2 2 0 1 0 0 .01M18 16a2 2 0 1 0 0 .01M6 20a2 2 0 1 0 0 .01', flag: 'M5 3v18M5 4h12l-3 4 3 4H5', attach: 'M8 12l7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7l8-8', send: 'M4 12l16-8-6 16-2-6z',
     play: 'M7 5v14l11-7z', stop: 'M6 6h12v12H6z', pause: 'M7 5v14M17 5v14', lock: 'M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3', key: 'M14 10a4 4 0 1 0-3.5 4L12 15.5h2V18h2.5v2.5H20V17l-6-6z',
-    info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01', warn: 'M12 3l10 18H2zM12 10v4M12 17h.01', thumb: 'M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5a2 2 0 0 1 2 2l-1 7a2 2 0 0 1-2 2H7', download: 'M12 4v12M6 10l6 6 6-6M4 20h16',
+    info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01', warn: 'M12 3l10 18H2zM12 10v4M12 17h.01', thumb: 'M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5a2 2 0 0 1 2 2l-1 7a2 2 0 0 1-2 2H7', social: 'M4 4h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM18 8h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1v3l-4-3h-4a1 1 0 0 1-1-1v-1', download: 'M12 4v12M6 10l6 6 6-6M4 20h16',
     filter: 'M4 5h16l-6 8v6l-4-2v-4z', sort: 'M8 4v16M4 8l4-4 4 4M16 20V4M12 16l4 4 4-4', dots: 'M5 12h.01M12 12h.01M19 12h.01', link: 'M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1',
     groups: 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M21 20a6 6 0 0 0-6-6', messages: 'M4 4h12v9H8l-4 3zM20 9v9l-3-2h-7',
     moderation: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4', channels: 'M4 13a8 8 0 0 1 16 0M4 13v4h3v-5H4M20 13v4h-3v-5h3M17 19a4 4 0 0 1-4 2', roles: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16',
@@ -35,8 +35,12 @@
     // Sprint 30 (B-3402 to B-3404, B-3407, B-3408): the trust, apps and files screens
     certificates: 'M12 3l2.5 2 3-.5.5 3 2 2.5-2 2.5-.5 3-3-.5L12 17l-2.5-2-3 .5-.5-3L4 10l2-2.5.5-3 3 .5zM9 17l-1 5 4-2 4 2-1-5', vault: 'M4 4h16v16H4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 10v2M20 8h2M20 16h2',
     plugins: 'M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3', files: 'M3 6h6l2 2h10v11H3z', apps: 'M4 4h16v16H4zM4 9h16M9 9v11',
+    // 1.6.0 (B-4202, B-4203, Q13): the Overview and Jobs and queues screens
+    overview: 'M4 13a8 8 0 0 1 16 0M12 13l4-4M4 17h16', jobs: 'M4 5h16v4H4zM4 11h16v4H4zM4 17h10M18 17h2',
     // Sprint 31 (B-3406): the AT-Protocol screen
-    atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8'
+    atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8',
+    // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration
+    storage: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3', configuration: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4'
   };
   const icon = (name, size, extra) => {
     const d = ICONS[name] || ICONS.info;
@@ -167,10 +171,15 @@
       { id: 'groups', label: 'Groups and events', icon: 'groups', perm: 'groups:read', live: true }, { id: 'messages', label: 'Messages and feed', icon: 'messages', perm: 'messages:read', live: true }
     ] },
     { group: 'Admin', items: [
+      // 1.6.0 (B-4202, Q3): the Overview, first in the Admin group
+      { id: 'overview', label: 'Overview', icon: 'overview', perm: ['platform:manage', 'tenant:manage'], live: true },
       { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },
       { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', live: true }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', live: true }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', live: true },
       { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', live: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', live: true }, 
-      { id: 'moderation', label: 'Moderation', icon: 'moderation', perm: 'moderation:review', live: true }, { id: 'channels', label: 'Channels', icon: 'channels', perm: 'channels:review', live: true }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
+      { id: 'moderation', label: 'Moderation', icon: 'moderation', perm: 'moderation:review', live: true }, { id: 'channels', label: 'Channels', icon: 'channels', perm: 'channels:review', live: true }, 
+      // 1.6.0 (B-4206): Social and messaging, after Channels with the other domain policies (decision Q13: its own icon)
+      { id: 'social', label: 'Social and messaging', icon: 'social', perm: 'social:manage', live: true },
+      { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
       { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true }, { id: 'roles', label: 'Roles and access', icon: 'roles', perm: 'roles:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
       // Sprint 30 (B-3402 to B-3404): the trust screens
@@ -178,7 +187,12 @@
       // Sprint 31 (B-3406): service DID and keys (pki:manage), labels and labelers (labels:manage), firehose and feeds
       // (firehose:manage), DID bindings (identity:manage) and the PDS (pds:manage)
       { id: 'atproto', label: 'AT-Protocol', icon: 'atproto', perm: ['pki:manage', 'labels:manage', 'firehose:manage', 'identity:manage', 'pds:manage'], live: true },
-      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
+      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true },
+      // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration, before Platform (design/platform-admin, Q13)
+      { id: 'storage', label: 'Storage', icon: 'storage', perm: 'platform:manage', live: true }, { id: 'configuration', label: 'Configuration', icon: 'configuration', perm: 'platform:manage', live: true },
+      // 1.6.0 (B-4203): Jobs and queues, beside Platform with the operator's screens
+      { id: 'jobs', label: 'Jobs and queues', icon: 'jobs', perm: ['platform:manage', 'tenant:manage'], live: true },
+      { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));

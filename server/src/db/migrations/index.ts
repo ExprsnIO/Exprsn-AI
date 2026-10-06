@@ -54,6 +54,10 @@ import * as m034c from './034c_workflow_steps.js';
 import * as m036 from './036_chains.js';
 import * as m036b from './036b_profiles.js';
 import * as m036c from './036c_dav_files.js';
+import * as m037 from './037_model_servers.js';
+import * as m037b from './037b_platform_ops.js';
+import * as m037c from './037c_platform_storage.js';
+import * as m037d from './037d_platform_social.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -116,7 +120,11 @@ const MIGRATIONS: Record<string, Migration> = {
   '034c_workflow_steps': m034c,
   '036_chains': m036,
   '036b_profiles': m036b,
-  '036c_dav_files': m036c
+  '036c_dav_files': m036c,
+  '037_model_servers': m037,
+  '037b_platform_ops': m037b,
+  '037c_platform_storage': m037c,
+  '037d_platform_social': m037d
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

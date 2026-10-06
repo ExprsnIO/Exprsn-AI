@@ -10191,6 +10191,370 @@
             "description": "Published or deprecated (a workflow: its published version): it may reach the entry now"
           }
         }
+      },
+      "BlobRun": {
+        "type": "object",
+        "description": "A run of the integrity check ops.blobs.verify (B-4204)",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "checksums": {
+            "type": "boolean"
+          },
+          "store": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "objects": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "orphans": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "orphanBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mismatches": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "references": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "BlobFinding": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "missing",
+              "orphan",
+              "mismatch"
+            ]
+          },
+          "object": {
+            "type": "string"
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "modifiedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "referencedBy": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "table": {
+                  "type": "string"
+                },
+                "column": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "expected": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actual": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "open",
+              "deleted",
+              "accepted",
+              "gone",
+              "superseded"
+            ]
+          },
+          "resolvedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "foundAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "BlobMigration": {
+        "type": "object",
+        "description": "A blob store migration, copy then switch (B-4204, decision Q16); never carries the secret",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "copying",
+              "switched",
+              "retired",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "fs",
+                  "s3"
+                ]
+              },
+              "dir": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "bucket": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "pathStyle": {
+                "type": "boolean"
+              },
+              "accessKeyId": {
+                "type": "string"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "objects": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "copied": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verified": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "switchedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "retiredAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "SettingProposal": {
+        "type": "object",
+        "description": "An override of a setting (or its removal) waiting for, or decided by, a second platform admin (B-4205)",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "set",
+              "clear"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "withdrawn",
+              "superseded"
+            ]
+          },
+          "proposedBy": {
+            "type": "string"
+          },
+          "proposedAt": {
+            "type": "integer"
+          },
+          "decidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     },
     "responses": {
@@ -10923,6 +11287,45 @@
         }
       }
     },
+    "/api/admin/cache": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The tenant cache (B-2102, Q1): the store (memory per instance, or Redis shared), the TTL of each tier, the instances, and per namespace its tier, reads and hits and invalidations (local and from the bus) on the answering instance since it started, and the tenant's live entries (memory store only)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/cache/{ns}/invalidate": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Drops every entry of a namespace for the caller's tenant here and, over the bus, on every instance. 404 for a namespace the server does not use. Audited jobs.cache.invalidated. Answers the cache",
+        "parameters": [
+          {
+            "name": "ns",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/classifiers": {
       "get": {
         "tags": [
@@ -11323,6 +11726,109 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/dead-letters": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The caller's tenant's open dead letters: moderation jobs (with moderation:manage) and workflow runs of the current workspace within clearance (with workflows:manage); source, item, reason, attempts, when, what a redrive queues, and where the domain shows it",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/dead-letters/{source}/{id}/discard": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage, and the domain's permission. Drops a dead letter for good with a reason; for a moderation item the flag stays open for a reviewer. 409 when already redriven or discarded. Audited jobs.deadletter.discarded. Answers the dead letters",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(moderation|workflow)$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/dead-letters/{source}/{id}/redrive": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage, and the domain's permission. Redrives a dead letter: a new job with the original payload (moderation, audited moderation.job.redriven) or a replay of the run from the failed step (workflow, audited workflow.dead_letter.redriven). 201",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(moderation|workflow)$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
             }
           }
         ],
@@ -12664,7 +13170,7 @@
         "tags": [
           "admin/instances"
         ],
-        "summary": "disabled}, DELETE /admin/instances/:id | Edits, removes",
+        "summary": "disabled}, DELETE /admin/instances/:id | Edits, removes. Since 1.6.0 (B-4302): also socketPath (null to drop it, with a url), token or tokenRef (null clears it) on a kind openai instance; the kind does not change; settings.reported is kept",
         "parameters": [
           {
             "name": "id",
@@ -12774,6 +13280,58 @@
         }
       }
     },
+    "/api/admin/instances/{id}/probe": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/instances"
+        ],
+        "summary": "B-4302: starts the instance.probe job on a kind openai instance: a tool call and response_format JSON schema output on its first chat model, recorded in settings.reported (tools, jsonSchema, probedAt). 409 for an Ollama instance. Audit instance.probe.started. pools:manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Probe queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "jobId"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/instances/{id}/undrain": {
       "post": {
         "tags": [
@@ -12837,6 +13395,229 @@
           "admin/integrations"
         ],
         "summary": "Hostnames, *.domain, addresses or CIDR networks. When not empty, workflow HTTP steps and webhooks may only reach hosts on it (on top of the internal-address rules). Audited tenant.hosts.updated",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Jobs, newest first: id, type, domain, tenant and workspace, state, progress, attempts, created, started, finished, duration, node (the instance's worker id), message, error, payload keys (never values), trace id, who started it; and the queued, running and failed counts. A tenant admin sees their tenant's jobs, a system admin every tenant's (Q9)",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "preempted"
+              ]
+            },
+            "description": "One state"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            },
+            "description": "One job type"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ]
+            },
+            "description": "Created within"
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            },
+            "description": "System admins only: one tenant's jobs (default every tenant). Another tenant's id from a tenant admin is 403"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{1,32}$"
+            },
+            "description": "A job id or a trace id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "description": "Default 200"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/retry-failed": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Queues again every failed job in the scope (of one type, when given) created in the window, at most 500, each with its payload and a fresh attempt count. Audited jobs.retried with the count",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+                  },
+                  "window": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "24h",
+                      "7d"
+                    ]
+                  },
+                  "tenant": {
+                    "type": "string",
+                    "pattern": "^[0-9A-Za-z]{26}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. One job in scope, with a timeline built from its timestamps (queued, claimed, progress, retry, finished). 404 outside the scope",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{id}/cancel": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Cancels a queued job at once or a running one at its next step. 409 for any other state. Audited jobs.cancelled with the reason",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{id}/retry": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Queues a failed, cancelled or preempted job again with its payload and a fresh attempt count (the row keeps its id). 409 for any other state. Audited jobs.retried",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            }
+          }
+        ],
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -13129,12 +13910,174 @@
         }
       }
     },
+    "/api/admin/model-servers": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/models"
+        ],
+        "summary": "B-4304: the import picker's server-held models. Every kind openai instance (no URL or token), what it reported (server, contextLength, tools, jsonSchema, embeddings, probe) and the models it lists with available, reason and catalogued {id, state, held}. Polls them first. models:manage",
+        "responses": {
+          "200": {
+            "description": "Chat Completions instances and their models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "instanceId": {
+                        "type": "string"
+                      },
+                      "instance": {
+                        "type": "string"
+                      },
+                      "poolId": {
+                        "type": "string"
+                      },
+                      "pool": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "poolCeiling": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "transport": {
+                        "enum": [
+                          "socket",
+                          "url"
+                        ]
+                      },
+                      "token": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "health": {
+                        "type": "string"
+                      },
+                      "healthDetail": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "reported": {
+                        "type": "object",
+                        "properties": {
+                          "server": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "contextLength": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "tools": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "jsonSchema": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "embeddings": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "probedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "probedModel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "probeDetail": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      },
+                      "models": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "available": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "ownedBy": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "catalogued": {
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/models": {
       "get": {
         "tags": [
           "admin/models"
         ],
-        "summary": "Models with pools: [{placementId, poolId, pool, residency}] and profiles (count)",
+        "summary": "Models with pools: [{placementId, poolId, pool, residency}] and profiles (count). Since 1.6.0 (B-4304): held, serverInstanceId, serverModel, and server {instanceId, instance, model, health, reported} for a server-held model",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -13145,7 +14088,7 @@
         "tags": [
           "admin/models"
         ],
-        "summary": "Import request. Pickle sources are refused (422 Import refused, reason: pickle); with poolId it is placed and pulled",
+        "summary": "Import request. Pickle sources are refused (422 Import refused, reason: pickle); with poolId it is placed and pulled. Since 1.6.0 (B-4304): serverInstanceId and serverModel register a model a kind openai instance lists instead: format server, no expectedDigest (400 with one), import state pulled, placed warm on the instance's pool, no pull job; 409 when the server does not list it or lists it unavailable",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -13236,6 +14179,101 @@
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/overview": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The Overview (B-4202): scope (platform for a system admin, else tenant), open alerts not acknowledged in the tenant (key, kind schema|instance|rpo|drift|certs|pki|ratelimit, tone, title, text, since, open), counters for the window (jobs across every tenant for a system admin; flags, held replies, sign-ins and sign-ins refused by sanction in the tenant; sockets), the next six schedules, the last eight audit events redacted above the reader's clearance (null without audit:read), and for system admins the instances (their /readyz checks, schema, jobs claimed, sockets, runtime, drain) and capacity (database size and pool, vectors, blob store, rate-limit and cache stores) with the metrics URL",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ]
+            },
+            "description": "Counters' window (default 24h)"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/overview/alerts/acknowledge": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. Acknowledges open alerts for every administrator of the tenant (Q15); the condition is unchanged and a new occurrence (a new key) shows again. 409 when none of the keys is open. Audited platform.alert.acknowledged. Answers the alerts still open",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "keys": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                },
+                "required": [
+                  "keys"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/overview/instances/{id}/drain": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage, a browser session and a recent sign-in (401 step_up otherwise). Drains a server instance (Q14): it stops claiming jobs and answers /readyz with 503, checks.shutdown draining, and finishes what it has; it takes the drain from the bus at once or from its row at its next heartbeat. 404 unknown, 409 already draining or not answering. Audited platform.instance.drained",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The instance id (host:pid), URL-encoded"
           }
         ],
         "responses": {
@@ -14005,6 +15043,358 @@
         ],
         "summary": "[{id, mirrorId, kind: oci\\|npm\\|pypi, url, repository, username, hasSecret, state: active\\|disabled, lastPushAt, lastPushOk, lastDetail, updatedAt}]",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. Every setting this build reads (the descriptor generated from config/index.ts), what each live instance reads and where it came from (secrets as set, length, file and a keyed fingerprint only), whether the instances differ, overrides, proposals, history and the instances waiting for a restart",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "build": {
+                      "type": "string"
+                    },
+                    "instance": {
+                      "type": "string"
+                    },
+                    "overridesEnabled": {
+                      "type": "boolean"
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "instances": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "restartRequired": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "instances": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "settings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/export": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. The settings this instance reads as a .env file, secrets masked with a comment naming their file (?changed=true: only those not at their default). Audited platform.settings.exported",
+        "parameters": [
+          {
+            "name": "changed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "1"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "lines": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/proposals/{id}/approve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. A second platform admin approves (the proposer gets 403 step dual-control): a hot setting applies on every instance at once, a restart setting at each instance's next start. Audited platform.setting.approved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "proposal": {
+                      "$ref": "#/components/schemas/SettingProposal"
+                    },
+                    "applies": {
+                      "enum": [
+                        "hot",
+                        "restart"
+                      ]
+                    },
+                    "applied": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/proposals/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. Another platform admin rejects the proposal. Audited platform.setting.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingProposal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/proposals/{id}/withdraw": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. The proposer withdraws the proposal. Audited platform.setting.withdrawn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingProposal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/{name}/proposals": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. Proposes an override (value) or its removal (value null) for a second platform admin (decision Q2); 422 when the value does not pass the field or the configuration's cross-field rules, 409 for a secret or a setting that reaches the database (step not-overridable) or with PLATFORM_SETTINGS_OVERRIDES=false (step overrides-disabled). Audited platform.setting.proposed",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "value": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4000
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "value",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingProposal"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -15001,6 +16391,650 @@
         }
       }
     },
+    "/api/admin/social/policies/{id}": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Changes a workspace's social policy (feed check, held-post approvers, media, group defaults, event capacity, contact rule). feedGuard and feedApprover also need moderation:manage. Audited social.policy.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workspace id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "feedGuard": {
+                    "type": "boolean"
+                  },
+                  "feedApprover": {
+                    "type": "string",
+                    "enum": [
+                      "reviewers",
+                      "feed",
+                      "guardrails",
+                      "moderators"
+                    ]
+                  },
+                  "feedMedia": {
+                    "type": "boolean"
+                  },
+                  "feedMediaMaxBytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "groupCreate": {
+                    "type": "string",
+                    "enum": [
+                      "members",
+                      "admins"
+                    ]
+                  },
+                  "groupVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "private",
+                      "hidden"
+                    ]
+                  },
+                  "groupJoin": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "request",
+                      "invite"
+                    ]
+                  },
+                  "eventCapacity": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "contactRule": {
+                    "type": "string",
+                    "enum": [
+                      "workspace",
+                      "contacts",
+                      "admins"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/settings": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The tenant's weekly digest (profile, weekday and hour UTC, posts, max label) and messaging summary profile; null restores the environment value. Audited social.settings.updated",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "digestProfile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "digestDay": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "digestHour": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "digestTop": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "digestMaxLabel": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "summaryProfile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/feed": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Feed tab: counters, per-workspace approval policy, trending tags with exclusions, digest settings and the last digest",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/trending/exclusions": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Keeps a hashtag out of trending (it still works on posts and hashtag feeds). Audited feed.trending.excluded",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tag": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/trending/exclusions/{tag}": {
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Lets an excluded hashtag trend again. Audited feed.trending.included",
+        "parameters": [
+          {
+            "name": "tag",
+            "in": "path",
+            "required": true,
+            "description": "The hashtag",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/trending/run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Queues the feed.trending job for the tenant now. Audited feed.trending.requested",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/digest/test": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Queues a test digest for the caller alone over the workspaces they administer; nothing is stored or posted. Audited feed.digest.test-requested",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Groups and events tab: defaults by workspace, groups across workspaces with counts, and calendar feeds",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/{id}/members": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "A group's members, for the ownership transfer picker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/{id}/transfer": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Makes a member the owner; the previous owners become moderators. Audited group.ownership.transferred",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/{id}/archive": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Archives a group: read only, requests and reminders cancelled, members told. Audited group.archived",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/calendar-feeds/{id}/revoke": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Revokes a signed calendar feed; its URL answers 404 on the next fetch. Audited calendar.feed.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/messaging": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Messaging tab: retention, limits, search, summary profile, relation counts, legal-hold exports and approvers",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/conversations": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Conversations the caller may ask to export (titles or names, never messages)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Asks for a legal-hold export of a conversation under dual control; needs a recent sign-in and another platform admin as approver. Audited messaging.export.requested",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "approverId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/approve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "A second platform admin approves; the export job runs. Needs a recent sign-in. Audited messaging.export.approved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "A second platform admin rejects. Audited messaging.export.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/withdraw": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The requester withdraws a pending export. Audited messaging.export.withdrawn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/download": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The ready export as CSV, for the requester only. Audited messaging.export.downloaded",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/realtime": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "This instance's realtime counts by room kind, sockets and socket authentication failures (platform:manage)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/people": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "People of the tenant, for the Close rooms picker (platform:manage)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/realtime/close": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Closes every socket of a user on every instance; the session stays (platform:manage). Audited realtime.rooms.closed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/relations": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Relations tab: follow, block, mute and list counts, contact rules by workspace and the most blocked accounts",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/pools": {
       "get": {
         "tags": [
@@ -15074,7 +17108,7 @@
         "tags": [
           "admin/pools"
         ],
-        "summary": "baremetal, tls?: {caFile, certFile, keyFile}, settings} | Registers an Ollama endpoint; settings: memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive",
+        "summary": "baremetal, tls?: {caFile, certFile, keyFile}, settings} | Registers an Ollama endpoint; settings: memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive. Since 1.6.0 (B-4302): kind (ollama | openai), socketPath (an absolute Unix socket path, kind openai only, no URL or TLS), token (stored in the caller's vault at model-servers/<id>, needs secrets:write and secrets:read; never returned) or tokenRef (vault:<path>#<key>); a kind openai instance answers with probeJobId, and its view carries kind, socketPath, tokenRef, supports {load, unload, pull, embed} and reported",
         "parameters": [
           {
             "name": "id",
@@ -15533,6 +17567,99 @@
         }
       }
     },
+    "/api/admin/queues": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. One row per job type (registered on this instance, queued, or paused): domain, description, queued, running, oldest queued, failed and succeeded in 24 h, p50 and p95 durations, eight 3-hour buckets of jobs queued, timeout, paused and by whom; the backend (db or bullmq), JOB_CONCURRENCY, and which instances claim nothing (draining, behind the schema). Counts cover the scope (Q9)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{26}$"
+            },
+            "description": "System admins only: one tenant's jobs (default every tenant). Another tenant's id from a tenant admin is 403"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/queues/{type}/pause": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Pauses a job type on every instance: jobs keep being queued and none is claimed until it is resumed; every instance reads the pause at its next poll. 404 for a type not registered here, 409 when paused. Audited jobs.type.paused. Answers the queues",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/queues/{type}/resume": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Resumes a paused job type; claiming starts at the next poll. 409 when not paused. Audited jobs.type.resumed. Answers the queues",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/quotas": {
       "get": {
         "tags": [
@@ -15886,6 +18013,112 @@
         }
       }
     },
+    "/api/admin/schedules": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "tenant:manage or platform:manage. The schedules registered on the answering instance: name, job type, period and the setting that sets it, targets (platform or a count of tenants), next bucket, paused, and the last five runs (scheduled or run now) with their result and duration",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules/{name}/pause": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Pauses a schedule: no bucket is queued until it is resumed and missed buckets are not caught up. 409 when paused. Audited jobs.schedule.paused",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules/{name}/resume": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Resumes a paused schedule at its next bucket. 409 when not paused. Audited jobs.schedule.resumed",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/schedules/{name}/run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/operations"
+        ],
+        "summary": "platform:manage. Queues one run of a schedule now for each of its targets, outside its bucket; the next bucket is unchanged. 404 unknown. Audited jobs.schedule.run. 202 with the jobs queued",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,99}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/sessions": {
       "get": {
         "tags": [
@@ -16089,6 +18322,774 @@
         }
       }
     },
+    "/api/admin/storage/findings/{id}/accept": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Takes an object's current SHA-256 as the one to compare against (an expected change). Audited platform.blobs.checksum.accepted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobFinding"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/integrity": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. The verification runs, the latest finished one, the one running, and its findings (missing, orphan, mismatch)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BlobRun"
+                      }
+                    },
+                    "last": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BlobRun"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "running": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BlobRun"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BlobFinding"
+                      }
+                    },
+                    "graceHours": {
+                      "type": "integer"
+                    },
+                    "dryRunMinutes": {
+                      "type": "integer"
+                    },
+                    "everyMinutes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/integrity/verify": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Queues ops.blobs.verify (optionally comparing every object's SHA-256); 409 while one runs. The check never changes the store. Audited platform.blobs.verify.started, then platform.blobs.verified",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "checksums": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobRun"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/migrations": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Blob store migrations and the store reads come from now",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "migrations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BlobMigration"
+                      }
+                    },
+                    "active": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage and a recent sign-in. Queues ops.blobs.migrate (decision Q16): every instance copies new writes to the target, every object is copied and its SHA-256 checked, the target is verified, then reads and writes switch; a failure puts every instance back on the old store. The S3 secret is sealed with the platform key. Audited platform.blobs.migration.started and .switched",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "dir",
+                      "reason"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "fs"
+                      },
+                      "dir": {
+                        "type": "string",
+                        "description": "An absolute directory every instance can reach"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "endpoint",
+                      "bucket",
+                      "accessKeyId",
+                      "secretAccessKey",
+                      "reason"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "s3"
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "region": {
+                        "type": "string"
+                      },
+                      "pathStyle": {
+                        "type": "boolean"
+                      },
+                      "accessKeyId": {
+                        "type": "string"
+                      },
+                      "secretAccessKey": {
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobMigration"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/migrations/{id}/retire": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage and a recent sign-in. Stops reading from the old store after a switch (nothing is deleted there). Audited platform.blobs.migration.retired",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobMigration"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/orphans/delete": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Deletes exactly the objects of a dry run still valid (decision Q10: a dry run, then one admin with a reason); 409 step dry-run once used or expired. Audited platform.blobs.orphans.deleted with the reason and the objects",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "dryRun": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "dryRun",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "integer"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "failed": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/orphans/dry-run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Lists the open orphans of the latest run (or those named) that are still orphans against a fresh walk of the references; deletes nothing. Audited platform.blobs.orphans.dry-run",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "minItems": 1,
+                    "maxItems": 10000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "oldest": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "skipped": {
+                      "type": "integer"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    },
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/purges": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Every retention and purge job: the policy and where it is set, the period, the last run and what it removed, the next run",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/quarantine": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Objects waiting for their scan or refused in the last 24 hours (attachments, file versions, knowledge uploads, media), and the ClamAV scanner (PING, VERSION, counts today)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "scanner": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/quarantine/{kind}/{id}/delete": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Deletes the quarantined bytes and refuses the item; nothing was released. Audited file.quarantine.deleted",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/quarantine/{kind}/{id}/rescan": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Queues the item's scan again; 409 when nothing is held or a scan runs, 503 step scanner while ClamAV does not answer. Audited file.quarantine.rescanned",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/stores": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. The stores and their health: the blob store (size and objects from the last verification, capacity from statfs), the database, the vector store, backups, the media work directory, training datasets and model files, with daily growth samples and the migration in progress",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stores": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "migration": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BlobMigration"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "active": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/usage": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Bytes by workspace (files, versions, trash, media, knowledge uploads, attachments, the file quota and what it counts), by user and by kind",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspaces": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "quotaCounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/tenant-templates": {
+      "get": {
+        "tags": [
+          "admin/tenants"
+        ],
+        "summary": "The tenant provisioning templates (enterprise, team, personal) with what each creates: workspaces, custom roles, draft profiles, zone, issuer, adminClearance",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/tenants": {
       "get": {
         "tags": [
@@ -16106,6 +19107,19 @@
           "admin/tenants"
         ],
         "summary": "System admin: creates a tenant with a local user store and its data key",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/tenants/from-template": {
+      "post": {
+        "tags": [
+          "admin/tenants"
+        ],
+        "summary": "System admin: creates a tenant from a template with its first admin in one step; 201 {tenant, applied, admin}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"

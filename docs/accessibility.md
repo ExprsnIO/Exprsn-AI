@@ -151,6 +151,88 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   Retire or Delete is unavailable. `e2e/tests/runs-chain.spec.ts` runs axe-core and the in-page checker on the tree in
   light and dark and the reflow check at 320 and 640 px.
 
+## Screens changed in 1.6.0
+
+- **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
+  Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
+  unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not
+  answer. Register model server is a labelled form: the kind, the transport, the socket path or URL and the bearer
+  token (a password field with `autocomplete="off"`) are each labelled with a hint; choosing Ollama or a URL hides the
+  fields that no longer apply with `hidden`, so they leave the tab order and the accessibility tree. Request import has
+  a named segmented group ("Where the model comes from", pressed-state buttons) that swaps the form inside the same
+  dialog, so focus stays in it. The server-held models are a `fieldset` with a legend ("Models the servers hold") of
+  radio buttons; a model the server reports unavailable (Apple's Private Cloud Compute), already catalogued or on a
+  server that is not answering is a disabled radio whose label says why in text. A held model's inspector and card
+  say "held by the server, no digest" and list what the server reported in words. `e2e/tests/models.spec.ts` runs
+  axe-core and the in-page checker on the register form, the drawer and the picker and checks each at 320 px; the
+  new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
+  `y-reflow-overlays.spec.ts`.
+
+## Screens made live in 1.6.0 (Sprint 35, B-4207)
+
+The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every
+design state (Standard and Enhanced, light and dark), the reflow check at 320 and 640 px, and their dialogs and
+drawers. Each one's own spec also runs those checks on each tab and dialog, so the screen is checked without the full
+suite.
+
+- **Social and messaging** (B-4206, `e2e/tests/social.spec.ts`): five tabs (Feed, Groups and events, Messaging,
+  Realtime for platform admins, Relations) in one tabpanel. Every policy control in a table is named for its
+  workspace (`Approver for Finance Ops`, `Default join mode for Legal`, `Contact rule for Field Sales`); the switches
+  for "Posts pass user-input" and "Media" are `role="switch"` buttons read with their column header, and those the
+  caller may not change are disabled, with the reason in the notice under the table. Exclude, Include, Revoke and
+  Apply buttons in repeated rows carry an accessible name naming the tag, feed or workspace. Groups are
+  keyboard-operable rows that fill a labelled inspector ("Selected group"). The realtime sparklines are decorative
+  (`aria-hidden`), with the current count beside each in text. Transfer ownership, Close a user's rooms and the
+  confirms are dialogs that return focus; the export drawer reports a missing reason or a refusal in a
+  `role="alert"` region, and the step-up check for exports asks in a dialog like the one for sanctions. Long ids,
+  hashtags and reasons wrap rather than scroll sideways; the wide policy tables scroll inside their named table
+  region. The spec checks each tab, the Transfer ownership and Close rooms dialogs, the export drawer and every
+  design state.
+- **Tenants, Create from template** (B-4501, `e2e/tests/tenants-templates.spec.ts`): the template picker is a group of
+  radio cards, each a label for its radio with what the template creates; the enrolment link is shown once in a
+  dialog with a Copy button. Both dialogs pass the checks above.
+
+- **Overview** (B-4202, B-4207, Sprint 35b): the page's sections are `h2` headings (Alerts, the counters' window,
+  Instances); each alert is a notice whose tone is also its words (the title says what is wrong), with an Open and an
+  Acknowledge button whose name includes the alert's title. The window is a labelled segmented group ("Counters
+  window") with `aria-pressed`; the Open flags and Held replies counters are buttons. Instance state, schema and the
+  `/readyz` checks are pills with their word, never colour alone; the instances table is a named sideways scroller at
+  narrow widths and the inspector stacks under it. Drain and Acknowledge go through confirm dialogs; a drain that needs a
+  recent sign-in opens the labelled step-up dialog, whose error is announced (`role="alert"`). The page refreshes at
+  the heartbeat's pace and does not re-render while a dialog is open.
+- **Jobs and queues** (B-4203, B-4207, Sprint 35b): the five tabs are the ARIA tabs pattern with one tab panel; the
+  filters are labelled selects (Domain, Tenant, State, Type) and labelled searches; the window is a labelled
+  segmented group. Row actions name their row (for example "Invalidate plugins", "Redrive job …"). Pause, cancel and
+  discard ask for a reason in a dialog whose field is labelled ("Reason", or "Reason (optional)") and whose refusal is
+  announced; job states are pills with their word and progress meters carry their percentage as text.
+
+Both screens join the screen sweeps (`e2e/tests/support/sweep.ts`). `e2e/tests/overview.spec.ts` and
+`e2e/tests/jobs.spec.ts` run the in-page checker and axe-core in Standard and Enhanced, light and dark, on the screen,
+every tab and every design state, and the reflow check at 320 and 640 px on every tab and on the drain and pause
+dialogs.
+
+- **Storage** (B-4204, Sprint 35c): one tab list (Stores, Usage, Quarantine, Integrity, Purges) with a single
+  tabpanel. Stores, workspaces and quarantined objects are keyboard-operable table rows that update a labelled
+  inspector (`aside` "Details"); each store's settings are buttons that open Configuration on that setting. Health,
+  quarantine states and findings are pills with their word, and the quota and capacity meters carry their numbers in
+  text beside the bar. The quarantine state filter is a menu of `menuitemradio` buttons with `aria-checked`. Every
+  destructive action (deleting from quarantine, deleting orphans, retiring the old store) goes through a dialog whose
+  reason field is labelled and reports a missing reason in a `role="alert"` region; the dry run's result is a notice
+  on the page as well as a toast, so it does not vanish before it is read. The migration dialog's step-up check and its
+  server refusals (an unreachable target, a refused endpoint) are problem panels in the same kind of region. Wide
+  tables (stores, usage, findings, purges) scroll sideways inside their named `.tablewrap`; long keys and paths wrap.
+  `e2e/tests/storage-configuration.spec.ts` deletes an orphan found by the integrity check after a dry run, and runs
+  both checkers on all five tabs and five design states.
+- **Configuration** (B-4205, Sprint 35c): the section list is a labelled navigation region whose current section
+  carries `aria-current`; the filter chips are toggle buttons with `aria-pressed`, and so is Compare instances.
+  Settings are keyboard-operable rows (365 of them) that update a labelled inspector (`aside` "Setting details").
+  Whether instances differ, a value is deprecated or an override is pending is said in a pill with its word, not only
+  in colour; compared values are highlighted and also marked "differs". Secrets are text ("set, 44 characters, from
+  file …"), never a masked field. The override drawer labels its value and reason fields, and a value the server
+  refuses (`422`) shows as a problem panel with the schema's message in a `role="alert"` region. The spec proposes an
+  override as one platform admin and approves it as another in a second browser.
+
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values

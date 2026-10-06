@@ -95,8 +95,8 @@ Pools, instances and the model catalogue are shared by every tenant; profiles be
 | `POST /admin/pools` `{name, accelerator: cuda\|rocm\|metal\|cpu, zone, labelCeiling, description?}` | Creates a pool |
 | `PATCH /admin/pools/:id`, `DELETE /admin/pools/:id` | Edits; deletes an empty pool |
 | `POST /admin/pools/:id/upgrade` `{targetVersion, waitMinutes}` | Rolling Ollama upgrade job (`202 {jobId}`): drains one instance at a time, waits for it to report the target version, reloads pinned models |
-| `POST /admin/pools/:id/instances` `{name, url, deploy: docker\|baremetal, tls?: {caFile, certFile, keyFile}, settings}` | Registers an Ollama endpoint; `settings`: `memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive` |
-| `PATCH /admin/instances/:id` `{url?, tls?, settings?, state?: active\|disabled}`, `DELETE /admin/instances/:id` | Edits, removes |
+| `POST /admin/pools/:id/instances` `{name, url, deploy: docker\|baremetal, tls?: {caFile, certFile, keyFile}, settings}` | Registers an Ollama endpoint; `settings`: `memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive`. Since 1.6.0 also `kind`, `socketPath`, `token`, `tokenRef` for Chat Completions servers (see Sprint 35a below) |
+| `PATCH /admin/instances/:id` `{url?, tls?, settings?, state?: active\|disabled}`, `DELETE /admin/instances/:id` | Edits, removes. Since 1.6.0 also `socketPath`, `token`, `tokenRef` (Sprint 35a) |
 | `GET /admin/instances/:id/plan?model=<name>` | Memory planner: `{fits, resident, needBytes, freeBytes, evict: [names], reason}` |
 | `GET /admin/instances/:id/events` | Load, unload, eviction and pull history `[{model, event, reason, actor, ts}]` ("why is this cold?") |
 | `POST /admin/instances/:id/load` `{model, pinned}` | Loads (evicting warm models if the plan says so). `409 No spare memory` with `plan`; `429` with `limit: anti_thrash` |
@@ -123,7 +123,7 @@ Lifecycle: `draft → evaluated → approved → deprecated → retired`.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/models` | Models with `pools: [{placementId, poolId, pool, residency}]` and `profiles` (count) |
-| `POST /admin/models` `{name, source, expectedDigest?, license?: {name, url?, notes?}, label, notes?, poolId?}` | Import request. Pickle sources are refused (`422 Import refused`, `reason: pickle`); with `poolId` it is placed and pulled |
+| `POST /admin/models` `{name, source, expectedDigest?, license?: {name, url?, notes?}, label, notes?, poolId?}` | Import request. Pickle sources are refused (`422 Import refused`, `reason: pickle`); with `poolId` it is placed and pulled. Since 1.6.0 `{serverInstanceId, serverModel, …}` registers a model a server holds instead (Sprint 35a) |
 | `PATCH /admin/models/:id` `{license?, label?, notes?}` | Records the licence and so on |
 | `POST /admin/models/:id/pull` `{poolId}` | Pulls again (job). A digest mismatch or a non-GGUF/safetensors format deletes the blob and fails the import |
 | `POST /admin/models/:id/evaluate` | Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft → evaluated |
@@ -4132,3 +4132,237 @@ Every socket counts as a connection of its person while it is open; connections 
 `presence_connections` with a 30-second heartbeat, and the rows of an instance that stopped refreshing them for 90
 seconds are swept (its people read offline unless connected elsewhere). `server/src/profiles/` has `s.people`
 (`ProfileService`) and `s.presence` (`PresenceService`: `statuses`, `visibleAmong`, `effective`).
+
+## Sprint 35a (1.6.0): model servers beyond Ollama (B-4301 to B-4307)
+
+An instance has a `kind`: `ollama` (the default, every instance from before) or `openai`, a server speaking the Chat
+Completions API: Apple's `fm serve` (macOS 27, on a port or a Unix socket), `mlx_lm.server`, llama.cpp's
+`llama-server`, vLLM. It joins a pool like an Ollama node. The gateway reaches every server through one interface
+(`server/src/gateway/server.ts`, `ModelServer`: `version`, `models`, `loaded`, `show`, `load`, `unload`, `pull`,
+`delete`, `chat`, `embed`); `OllamaClient` implements it unchanged and `OpenAIServer` (`gateway/openai-server.ts`)
+maps it onto Chat Completions. What a server cannot do throws `Unsupported` and is skipped, never an error: a Chat
+Completions server reports nothing resident (a model it lists counts as ready), cannot load, unload, pull or delete
+(those are recorded as `unsupported` in the instance's events), is skipped by pulls onto a mixed pool and by rolling
+upgrades, and offers embeddings only when its `/v1/embeddings` answers (once it refuses, embedding requests go to
+another instance that has the model, such as an Ollama pool; knowledge, memory and the guard are unchanged).
+
+Health is `GET /health`, or `GET /v1/models` when the server has no `/health`; the models are `/v1/models` (a model
+`fm serve`'s `/health` lists as unavailable, Private Cloud Compute, is not offered); llama.cpp's `/props` gives the
+context length. What the server reported is kept in the instance's `settings.reported`: `server`, `contextLength`,
+`tools` and `jsonSchema` (from the probe), `embeddings`, `models`, `probedAt`, `probedModel`, `probeDetail`.
+
+Chat goes to `/v1/chat/completions`, streamed: messages and the system prompt, tools and tool calls (ids kept and
+each tool result paired with its call), streamed deltas (`reasoning_content` as thinking), `response_format` from a
+JSON schema, stop, temperature, top_p, seed, penalties, max tokens (`num_predict`) and usage (estimated at four
+characters a token when the server does not report it, as `fm serve` does not while streaming). Ollama-only options
+(`num_ctx`, `keep_alive`, `think` and the rest) are not sent and recorded once per client as a `dropped` instance
+event. The server-side tool loop, guardrail checkpoints, labels and metering are unchanged.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/pools/:id/instances` `{name, kind: ollama\|openai, url?, socketPath?, token?, tokenRef?, deploy, tls?, settings?}` | `pools:manage`. `kind openai` with `socketPath` (an absolute path; no URL, no TLS) or a `url` (the egress check and mutual TLS as for Ollama). `token` is written to the caller's vault at `model-servers/<id>#token` (needs `secrets:write` and `secrets:read`, `403` otherwise) and never returned; `tokenRef` names one already there (checked readable). It is read, at use, as the person who saved it, in their tenant. A socket, token or reference on an Ollama instance is `400`. The answer is the instance view below, with `probeJobId` (the `instance.probe` job). Audited `instance.created {kind, url, socket, deploy, mtls, token: <vault reference> \| null, probeJob}` |
+| `PATCH /admin/instances/:id` `{url?, socketPath?, token?, tokenRef?, tls?, settings?, state?}` | The kind does not change. `socketPath: null` drops the socket (give a `url` with it); `tokenRef: null` clears the token. `settings.reported` is kept when `settings` is replaced. Audited `instance.updated` (never the token) |
+| `POST /admin/instances/:id/probe` | `pools:manage`. `202 {jobId}`: the `instance.probe` job asks the server's first chat model for a tool call and for JSON schema output and records `tools`, `jsonSchema`, `probedAt`, `probedModel`, `probeDetail`. `409` for an Ollama instance. Audited `instance.probe.started {job}` |
+| `POST /admin/instances/:id/load`, `.../unload` | On a Chat Completions server: `200 {evicted: [], unsupported: true}` and `{ok: true, unsupported: true}`, nothing sent, an `unsupported` event recorded; audited `model.loaded`/`model.pinned`/`model.unloaded` with `unsupported: true` |
+| `GET /admin/model-servers` | `models:manage`. The import picker: `[{instanceId, instance, poolId, pool, poolCeiling, transport: socket\|url, token, state, health, healthDetail, version, reported, models: [{id, available, reason, ownedBy, catalogued: {id, state, held} \| null}]}]`, after polling each server. No URL, socket path or token |
+| `POST /admin/models` `{serverInstanceId, serverModel, label, license?, notes?}` | `models:manage`. Registers a model the server lists: `name` and `serverModel` the server's model id, `source` `server:<instance>/<model id>`, `format` `server`, no expected digest (`400` with one), `importState` `pulled`, capabilities `completion` (and `tools` when the probe saw a tool call; `embedding` for an id with "embed"), placed warm on the instance's pool, no pull job. `409` when the server does not list it or lists it unavailable (Apple's `pcc`), `403` above the caller's clearance or the pool's ceiling, `422` for a pickle-like id. Audited `model.import.requested {format: server, server, serverModel, pool, …}` |
+| `GET /admin/models` | Each model also has `held`, `serverInstanceId`, `serverModel`, and for a held model `server: {instanceId, instance, model, health, reported: {server, contextLength, tools, jsonSchema, embeddings, probedAt}}` |
+
+Server-held models follow the catalogue's rules: the licence, the conformance run (on the instance it came from when
+that one can serve it; the tool-calling test always runs for them, and passing it gives the `tools` capability), a
+label ceiling, and dual-control approval (`403 step dual-control` for the requester). Placements of a held model, and
+any placement on a pool with a Chat Completions server, are `warm` only (`409` otherwise); a held model is placed only
+on a pool where an instance lists it; an Ollama model cannot be placed on a pool whose instances are all Chat
+Completions servers. `POST /admin/models/:id/pull` on a held model checks that an instance in the pool lists it.
+Retiring a held model deletes nothing on the server. Migration `037_model_servers` adds `instances.kind`,
+`socket_path`, `token_ref`, `token_tenant`, `token_owner` and `models.server_instance_id`, `server_model`.
+
+## Sprint 35d (1.6.0): tenant provisioning templates (B-4501)
+
+A system admin creates a tenant from a template with its first admin in one step (decision Q11). Templates are code
+(`server/src/tenancy/templates.ts`): `enterprise`, `team` and `personal`, exprsn-platform's organisation types. Both
+routes need `tenant:manage`; provisioning also needs the `system-admin` role (`403 step role`) and a clearance that
+reaches the template's highest workspace ceiling (`403 step clearance`). The CLI does the same with `exprsn-ai
+tenant:create --template <id> --slug <slug> --name <name> --admin-username <name> --admin-display-name <name>
+[--admin-email <address>] [--password]` (without `--password` it prints the enrolment link).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/tenant-templates` | `[{id, name, description, workspaces: [{name, description, label, visibility}], roles: [{name, description, permissions}], profiles: [{name, displayName, description, label}], zone, issuer, adminClearance}]` |
+| `POST /api/admin/tenants/from-template` `{template, slug, name, directoryDn?, admin: {username, displayName, email?, password?}}` | `201 {tenant, applied, admin}`. `tenant` as `GET /api/admin/tenants/:tid`; `applied: {template, workspaces: [{id, name, label}], roles: [{id, name}], profiles: [{id, name, poolId}], zone: {id, state: pinned \| no pool in zone, poolId, poolName}, issuer: {state: created \| skipped \| not in template, id, reason}}`; `admin: {id, username, roles: [tenant-admin], clearance, enrolLink, enrolHours}`. A taken slug is `409` with nothing created; a password the policy refuses is `422` (field `admin.password`) before anything is created; an unknown template `400` |
+
+What provisioning makes, in order: the tenant with a Local accounts store and its data key (as `POST
+/api/admin/tenants`); the template's workspaces; its custom roles, built only from member-baseline permissions and
+applied as version 1 (`grantableBy` tenant-admin and identity-admin); its profiles as drafts without a model, pinned
+to the first pool (by name) in the template's zone whose ceiling reaches the profile's label; the tenant's issuing
+intermediate (ECDSA P-256, three years) under the active platform root when the template has an issuer, the root
+exists and the CA's key custody is available, else `skipped` with the reason; then the first admin, `tenant-admin`
+with the clearance of the highest workspace ceiling and a direct member of every workspace, with a single-use
+enrolment link (`PASSWORD_INVITE_HOURS`; `POST /api/auth/password/reset` with its token sets the password and answers
+an `enroll` session) or, with `admin.password`, a password (sign-in with `{tenant, username, password}` then asks for
+the second factor, stage `enroll`). Audited in the new tenant's chain and in the provisioning admin's:
+`tenant.created` (`detail.template`), `workspace.created`, `authz.role.created`, `profile.created`,
+`pki.intermediate.created`, `user.created`, `user.enrol_link.issued`, `workspace.member.added` and the summary
+`tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin: {user, username, enrolLink}}`.
+
+## Sprint 35d (1.6.0): Social and messaging (B-4206)
+
+The administrator's policies and health views for the feed, groups, messaging and relations of every workspace they
+may act in (all of them for a tenant admin), behind the Social and messaging screen (`#/social`). Decisions
+(`design/platform-admin/DECISIONS.md`): `social:manage` governs the feed, group, messaging and relations policies
+(Q4); whether posts pass `user-input` in full and who approves held posts are the moderation-facing parts and also
+need `moderation:manage` (`403 step permission`); exporting another member's conversation is under dual control, a
+second platform admin approving (Q5). Realtime needs `platform:manage`. Every route answers `Cache-Control: no-store`.
+Migration `037d_platform_social`; `server/src/social/admin.ts` is `s.socialAdmin`.
+
+**Workspace policies** apply where they belong. Without a row a workspace has the defaults shown.
+
+| Field | Default | Where it applies |
+| --- | --- | --- |
+| `feedGuard` | `true` | Posting: `false` checks posts labelled internal or below against the platform baseline only (the engine's `meta.baselineOnly`); anything above internal, and every comment, is still checked in full |
+| `feedApprover` | `reviewers` | Deciding a held post (`POST /api/flags/:ref/decide`): `reviewers` is any flag reviewer (`flags:review`), `feed` needs `feed:manage`, `guardrails` `guardrails:manage`, `moderators` `moderation:review` (`403 step approver, permission`) |
+| `feedMedia`, `feedMediaMaxBytes` | `true`, `null` | Posting with media: off is `422 step workspace-policy`; a file larger than the limit too. Turning media off clears the limit |
+| `groupCreate` | `members` | `admins`: creating a group needs `groups:manage` or `social:manage` (`403 step workspace-policy`) |
+| `groupVisibility`, `groupJoin` | `private`, `request` | A new group without them (`visibility` and `joinMode` are now optional on `POST /api/groups`) |
+| `eventCapacity` | `null` | A new event without `capacity` |
+| `contactRule` | `workspace` | Starting a conversation or adding someone: `contacts` needs mutual follows, `admins` needs `social:manage` or `tenant:manage`; one shared workspace that admits the caller is enough, and each person's own contact rule and blocks still apply (the same `403` words) |
+
+**Tenant settings**: the weekly digest's `digestProfile` (before `FEED_DIGEST_PROFILE`; a workspace's own digest
+profile still comes first), `digestDay` (0 Monday to 6 Sunday) and `digestHour` (UTC: the digest week ends at the
+latest such time, Monday 00:00 by default), `digestTop` (before `FEED_DIGEST_TOP`), `digestMaxLabel` (before
+`FEED_DIGEST_MAX_LABEL`, at most the caller's clearance), and `summaryProfile` for messaging summaries (before
+`MESSAGING_SUMMARY_PROFILE`). A profile must resolve through the gateway (`422` with `field`). `null` restores the
+environment's value.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/admin/social/policies/:workspaceId` `{feedGuard?, feedApprover?: reviewers \| feed \| guardrails \| moderators, feedMedia?, feedMediaMaxBytes?: 1024 to 1 GiB \| null, groupCreate?: members \| admins, groupVisibility?, groupJoin?, eventCapacity?: 1 to 100000 \| null, contactRule?: workspace \| contacts \| admins}` | The policy after the change. A workspace the caller does not administer is `404`. Audited `social.policy.updated {changed, before, after, weakened?: feedGuard}` |
+| `PUT /api/admin/social/settings` `{digestProfile?, digestDay?, digestHour?, digestTop?: 1 to 50, digestMaxLabel?, summaryProfile?}` | The settings after the change. Audited `social.settings.updated {changed, before, after}` |
+| `GET /api/admin/social/feed` | `{counters: {postsToday, held, commentsToday, reactionsToday, trendingTags}, workspaces: [{id, name, label, feedGuard, feedApprover, feedMedia, feedMediaMaxBytes, postsToday, held}], trending: {minutes, hours, lastRun, tags: [{tag, posts, people, excluded}]}, digest: {settings, effective: {digestProfile, digestDay, digestHour, digestTop, digestMaxLabel, summaryProfile}, profiles: [name], last: {id, workspaceId, state: ready \| empty \| failed, profile, error, posts, weekStart, createdAt} \| null}, canModerate}`. Counts and tags only at labels the caller is cleared for |
+| `POST /api/admin/social/trending/exclusions` `{tag}` | `201 {tag, excluded: true}` (the tag normalised; already excluded answers the same). An excluded tag leaves `GET /api/feed/trending` at once and the `feed.trending` job leaves it out; it still works on posts and in hashtag feeds. Audited `feed.trending.excluded` |
+| `DELETE /api/admin/social/trending/exclusions/:tag` | `{tag, excluded: false}`. Audited `feed.trending.included` |
+| `POST /api/admin/social/trending/run` | `202 {jobId}`: the `feed.trending` job for the tenant now (requests within the same minute share one job). Audited `feed.trending.requested` |
+| `POST /api/admin/social/digest/test` | `202 {jobId, workspaces}`: the `feed.digest` job in test mode over the workspaces the caller administers that have a digest profile: the last seven days ranked and summarised, sent to the caller alone as a notification (never above their clearance); nothing is stored or posted. No workspace with a profile is `409`. Audited `feed.digest.test-requested` |
+| `GET /api/admin/social/groups` | `{settings: {requestDays, inviteDays, feedPerMinute, feedMaxLabel}, defaults: [{workspaceId, name, groupCreate, groupVisibility, groupJoin, eventCapacity}], groups: [{id, name, workspaceId, workspace, label, visibility, joinMode, state: active \| hidden \| archived, members, pending, upcomingEvents, openReports, feeds, owners: [{userId, displayName}], createdAt}], above, feeds: [{id, kind: event \| group \| user, targetId, name, issuedTo: {userId, username, displayName}, label, createdAt, lastUsedAt, revokedAt, state}]}`. Groups above the caller's clearance are counted in `above`, not listed; feeds of groups and events outside the caller's workspaces or clearance are left out |
+| `GET /api/admin/social/groups/:id/members` | `{id, name, state, members: [{userId, username, displayName, role}]}` (for the transfer picker) |
+| `POST /api/admin/social/groups/:id/transfer` `{userId}` | `{id, owners: [userId], moderators: [previous owners]}`. The new owner must be a member (`422 step member`); an archived group is `409`. The members are told. Audited `group.ownership.transferred {before, after}` |
+| `POST /api/admin/social/groups/:id/archive` | `{id, state: archived, members}`: read only from now on. Members keep reading posts and events; posting, commenting, reacting, reposting, joining, inviting and scheduling answer `409`; pending requests and reminders are cancelled; calendar feeds keep the events. The members are told. Audited `group.archived {members, requestsCancelled, remindersCancelled}` |
+| `POST /api/admin/social/calendar-feeds/:id/revoke` | The feed view with `url: null`: its signed URL answers `404` on its next fetch. Audited `calendar.feed.revoked` (`detail.via: social-admin`) |
+| `GET /api/admin/social/messaging` | `{retention: [{workspaceId, name, days, source: workspace \| tenant \| none}], limits: {maxMembers, attachmentMaxBytes, signalsPerMinute}, search: {keyword, semantic, embedModel}, summary: {profile, effective, maxMessages, profiles}, relations: {blocks, mutedConversations, exported}, exports: [export], approvers: [{userId, displayName, username}], canApprove}` |
+| `GET /api/admin/social/conversations?q=` | Up to 200 conversations the caller may ask to export: group conversations in a workspace they administer and direct ones with a member in one, at labels they are cleared for, most recent first: `[{id, kind, title, workspace, members, label, lastMessageAt}]` (group titles, or the people's names; never a message) |
+| `POST /api/admin/social/exports` `{conversationId, reason: 10 to 2000 characters, approverId}` | `201` export, `state: pending`. Needs a recent sign-in (`401 step_up`). The approver is another platform admin of the tenant (`403 step dual-control` for oneself, `422 field approverId` otherwise); one pending request per conversation (`409`). The reason is sealed; the approver is notified. Audited `messaging.export.requested {reason}` |
+| `POST /api/admin/social/exports/:id/approve` `{note?}` | `platform:manage`, a recent sign-in, and not the requester (`403 step dual-control`). Queues the job `messaging.conversation.export`. Audited `messaging.export.approved` |
+| `POST /api/admin/social/exports/:id/reject` `{note?}` | `platform:manage`, not the requester. Audited `messaging.export.rejected` |
+| `POST /api/admin/social/exports/:id/withdraw` | The requester only, while pending. Audited `messaging.export.withdrawn` |
+| `GET /api/admin/social/exports/:id/download` | The requester only (`404` for anyone else), once `ready`: `text/csv` with `message, sent, author, author_name, thread, reply_to, state, edits, attachments, label, text` (deleted messages as rows without text, attachments as file ids, cells defused against formulas, at most 50 000 messages). Audited `messaging.export.downloaded` |
+| `GET /api/admin/social/realtime` | `platform:manage`. This instance's counts: `{instance, kinds: [{kind: conversation \| group \| feed \| channel, rooms, sockets, signalsPerMinute: [12 numbers, oldest first], refusedLastHour}], sockets, authFailuresLastHour, signalsPerMinuteLimit, redis}` |
+| `GET /api/admin/social/people?q=` | `platform:manage`. Up to 200 active people of the tenant, for the Close rooms picker |
+| `POST /api/admin/social/realtime/close` `{userId}` | `platform:manage`. Every socket of the user closes on every instance (`TOPICS.roomsClose`; the client hears `rooms.closed` first); the session stays. Audited `realtime.rooms.closed` |
+| `GET /api/admin/social/relations` | `{counts: {follows, blocks, mutes, lists}, rules: [{workspaceId, name, contactRule}], mostBlocked: [{userId, displayName, username, blockedBy, workspace, sanction: {kind, endsAt} \| null}]}`: counts only, never who blocked whom |
+
+An export is `{id, conversationId, label, reason (the requester and platform admins only), requestedBy, approver,
+decidedBy, decidedAt, note, state: pending \| approved \| rejected \| withdrawn \| ready \| failed, jobId, file,
+messages, error, downloadedAt, createdAt, mine, canDecide}`. Platform admins see every request of the tenant; others
+their own. The job writes the CSV sealed with the tenant key (`exports/<tenant>/messaging/<id>.sealed`) and audits
+`messaging.conversation.exported {reason, requestedBy, approvedBy, messages, truncated}`; the members are not told.
+
+## Sprint 35b (1.6.0): the Overview and Jobs and queues (B-4202, B-4203)
+
+The two admin screens read and act on what already exists: the instances' readiness, the one `JobQueue`, the
+`Scheduler` and the tenant cache. Reading needs `tenant:manage` or `platform:manage`; what acts on every tenant
+(draining an instance, pausing a job type, running or pausing a schedule) needs `platform:manage`. A system admin sees
+every tenant's jobs and may filter by `tenant`; a tenant admin sees their own tenant's, and another tenant's id is
+`403` (decision Q9). Payloads are listed by key only. Every route answers `Cache-Control: no-store`. Migration
+`037b_platform_ops` adds `platform_instances`, `job_type_pauses`, `schedule_pauses` and `platform_alert_acks`.
+
+- **Instances.** Every server process writes its row of `platform_instances` at start and every 30 seconds: what its
+  `/readyz` answered (the same `checks`: `database`, `migrations`, `schema`, `kms`, `blobs`, `shutdown`), its schema
+  handshake, the jobs it is running, its sockets, its rate-limit store, its tracing counters and its last NTP offset.
+  Its id is the job queue's worker id (`host:pid`), so a job's `node` names it. A row whose beat is older than three
+  intervals reads `not answering`; a clean shutdown removes the row; rows a day old are removed.
+- **Drain** (decision Q14): the instance stops claiming jobs (the job queue's gate, beside the schema handshake) and
+  answers `/readyz` with `503` and `checks.shutdown: draining`, so a load balancer sends it nothing new; it finishes
+  what it has. It takes the drain from `TOPICS.instanceDrain` at once or from its row at its next beat. Nothing is
+  restarted from the console; a restart is a new instance.
+- **Alerts** are computed when asked, never stored: an instance behind the schema (`schema`) or not answering
+  (`instance`), the backup RPO watch (`rpo`), zone drift in the cluster (`drift`), platform certificates expiring within
+  7 days (`certs`) and the rate-limit probe (`ratelimit`) for system admins; the tenant's own certificates expiring
+  within 7 days (`pki`, with `pki:manage`) for everyone on the screen. Each has a `key` naming its occurrence; an
+  acknowledgement (decision Q15) hides that key for every administrator of the tenant.
+- **Pausing a job type** keeps it queuing and stops every instance claiming it: each poll reads `job_type_pauses`
+  again, so the pause holds everywhere within one poll (`JOB_POLL_MS`; in BullMQ mode a dispatch that arrives while
+  paused is left to the 30-second poll after the resume). **Pausing a schedule** makes the `Scheduler` skip its
+  buckets; missed buckets are not caught up. **Run now** queues one run per target outside its bucket, with a dedupe key
+  `<name>:<target>:now:<ms>`, so it is listed with the schedule's last runs.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/overview?window=1h\|24h\|7d` | `{scope: platform \| tenant, window, alerts: [{key, kind, tone, title, text, since, open: {route, params?, label} \| {instance, label}}], counters: {jobsScope, queued, oldestQueuedAt, running, failed, flags: {open, overdue}, heldReplies, signins, refusedBySanction, workspaces, sockets: {total, instances} \| null, runningOn}, schedules: {total, items}, audit: [{id, seq, ts, action, actor, object, label, redacted}] \| null, instances: [instance] \| null, heartbeatSeconds, capacity: {database: {client, bytes, pool: {used, max}}, vectors: {count, store}, blobs: {kind, ok}, rateLimit, cache} \| null, metricsUrl, metricsToken}`. `instances`, `capacity` and `metricsUrl` only for system admins; `audit` needs `audit:read`. An instance: `{id, node, pid, role, version, state: ready \| not ready \| draining \| not answering, checks, schema: {state, detail}, jobsClaimed, sockets, runtime: {rateLimit, tracing, ntpOffsetMs, jobQueue, concurrency, workersEnabled}, drain, drainedBy, drainedAt, startedAt, heartbeatAt, self}` |
+| `POST /api/admin/overview/alerts/acknowledge` `{keys}` | Acknowledges the open alerts named (at most 50) for the tenant; `409` when none is open. Audited `platform.alert.acknowledged {alerts} {titles, kinds}`. `{alerts}` still open |
+| `POST /api/admin/overview/instances/:id/drain` | `platform:manage`, a browser session and a recent sign-in (`401` with `step_up` otherwise). `404` unknown, `409` already draining or not answering. Audited `platform.instance.drained {instance} {node, pid, jobsClaimed, sockets}`. The instance |
+| `GET /api/admin/queues?tenant=` | `{backend: db \| bullmq, concurrency, items: [{type, domain, description, registered, queued, running, oldestQueuedAt, failed24h, succeeded24h, p50Ms, p95Ms, series: [8 three-hour buckets], timeoutMs, paused, pause: {reason, by, byName, at} \| null}], instances: {total, claiming, notClaiming: [{id, state, reason}]}}` |
+| `POST /api/admin/queues/:type/pause` `{reason?}` | `platform:manage`. `404` for a type not registered, `409` when paused. Audited `jobs.type.paused {type} {reason, queued}`. The queues |
+| `POST /api/admin/queues/:type/resume` | `platform:manage`. `409` when not paused. Audited `jobs.type.resumed`. The queues |
+| `GET /api/admin/jobs?state=&type=&window=&tenant=&q=&limit=` | `{items: [{id, type, domain, tenantId, tenantName, workspaceId, workspaceName, state, progress, attempts, maxAttempts, createdAt, runAt, startedAt, finishedAt, durationMs, node, message, error, payloadKeys, traceId, createdBy, createdByName}], counts: {queued, running, failed}, tracing}`. `q` is a job id or a trace id; at most 500 |
+| `GET /api/admin/jobs/:id` | One job in scope with `timeline: [{title, text?, at, tone}]` built from its timestamps; `404` outside the scope |
+| `POST /api/admin/jobs/:id/cancel` `{reason?}` | A queued job at once, a running one at its next step; `409` otherwise. Audited `jobs.cancelled {job, tenant} {type, state, reason}` |
+| `POST /api/admin/jobs/:id/retry` | A failed, cancelled or preempted job queued again with a fresh attempt count (same id); `409` otherwise. Audited `jobs.retried {job, tenant} {type, from, attempts}` |
+| `POST /api/admin/jobs/retry-failed` `{type?, window?, tenant?}` | Every failed job in scope created in the window (default `24h`), at most 500. `{retried}`; audited `jobs.retried {type, scope} {count, types}` when any |
+| `GET /api/admin/schedules` | `{items: [{name, type, everyMs, setting, description, targets: platform \| "<n> tenants", targetCount, nextAt, paused, pause, last, runs: [{job, state, at, manual, result, durationMs}]}]}`: the schedules registered on the answering instance (an instance with `WORKERS_ENABLED=false` registers none) |
+| `POST /api/admin/schedules/:name/run` | `platform:manage`. `202 {queued, jobs}`. Audited `jobs.schedule.run {schedule} {jobs}` |
+| `POST /api/admin/schedules/:name/pause` `{reason?}` / `.../resume` | `platform:manage`. `409` when already in that state. Audited `jobs.schedule.paused` / `jobs.schedule.resumed`. The schedules |
+| `GET /api/admin/dead-letters` | `{items: [{source: moderation \| workflow, id, item, reason, attempts, firstFailedAt, lastFailedAt, redrivesAs, link: {route, params}}], sources}`: the caller's tenant only, moderation jobs with `moderation:manage` and the current workspace's workflow runs within clearance with `workflows:manage` |
+| `POST /api/admin/dead-letters/:source/:id/redrive` | `201 {source, id, jobId, runId}`; needs the domain's permission (`403` otherwise). Audited by the domain: `moderation.job.redriven` or `workflow.dead_letter.redriven` |
+| `POST /api/admin/dead-letters/:source/:id/discard` `{reason}` | The row's state becomes `discarded`; `409` when it is not open. Audited `jobs.deadletter.discarded {source, deadLetter} {reason, type, error}`. The dead letters |
+| `GET /api/admin/cache` | `{store: memory \| redis, instances, ttlSeconds: {short, medium, long}, maxEntries, items: [{ns, tier, description, requests, hits, invalidations: {local, bus}, entries}]}`. Reads and invalidations are this instance's since it started; `entries` is the tenant's live entries in a memory store, `null` in Redis |
+| `POST /api/admin/cache/:ns/invalidate` | Drops the namespace for the caller's tenant here and over the bus on every instance; `404` for a namespace the server does not use. Audited `jobs.cache.invalidated {namespace} {store}`. The cache |
+
+`server/src/ops/instances.ts` has `s.instances` (`InstanceRegistry`: `beat`, `list`, `drain`, and `readiness`, which
+`/readyz` shares), `ops/overview.ts` `s.overview` (`alerts`, `acknowledge`, `counters`, `recentAudit`, `capacity`) and
+`ops/jobs-admin.ts` `s.jobsAdmin`; the routes are `routes/admin/operations.ts`.
+
+## Sprint 35c (1.6.0): Storage and Configuration (B-4204, B-4205)
+
+Both screens are for platform admins (`platform:manage`, an MFA-verified session); changes need a browser session.
+`server/src/ops/storage.ts` (`s.storage`, with `s.storage.integrity` in `ops/blob-integrity.ts`) and
+`server/src/config/settings.ts` (`s.settings`). Migration `037c_platform_storage`.
+
+### Storage (B-4204)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/storage/stores` | `{stores: [{id: blobs \| db \| vectors \| backups \| media \| datasets \| models, name, kind, location, usedBytes \| null, capacityBytes \| null, freeBytes?, objects, health: ok \| failing \| late, checkedAt, detail, settings: [name], growth: [bytes per day], verify?, migrate?, singleNode?, link?: {route, params, label}}], migration \| null, active: {label, migration \| null, mode}}`. The blob store's health is `/readyz`'s check on this instance, its size and object count come from the last verification, its capacity from `statfs` (a filesystem store; S3 reports none). The database row reports the dialect's own size and connections; growth lines are daily samples (`platform_storage_samples`, the `ops.storage.sample` job every 6 h and each verification) |
+| `GET /api/admin/storage/usage` | `{workspaces: [{id, workspace, tenantId, tenant, label, files, versions, trash, media, knowledge, attachments, total, quotaBytes \| null, quotaUsed, users: [{id, name, bytes}] (top five), growth}], users: [{id, name, bytes, workspaces}], kinds: [{kind, bytes}], quotaCounts: [files, versions, trash]}` in bytes. `files` is each file's current version, `versions` the others, `trash` the versions of trashed files; the file quota (B-2403) counts those three (`quotaUsed`). Set a quota with `PUT /api/admin/tenants/:tid/workspaces/:wid/file-quota` (`tenant:manage`) |
+| `GET /api/admin/storage/quarantine` | `{items: [{kind: attachment \| file \| knowledge \| media, id, object, label, workspace, workspaceId, tenantId, size, state, rawState, detail, at, by, holdsBytes, running, canRescan, canDelete}], scanner: {configured, host, reachable, error, engine, signatures: {version, date} \| null, scannedToday, refusedToday: {state: n}, failedToday}}`. Items wait for their scan (`state` scanning, or `scan failed` / `timed out` when the scan job failed) or were refused in the last 24 hours (`infected`, `type mismatch`, `too large`, `above the ceiling`, `refused`, `deleted`). The scanner panel asks clamd `PING` and `VERSION` with a 3-second timeout |
+| `POST /api/admin/storage/quarantine/:kind/:id/rescan` | `202 {job}`: queues the item's scan job again (`attachment.scan`, `file.scan`, `knowledge.scan`, `media.ingest`). `409` when nothing is held any more or a scan is running, `503 step scanner` while `CLAMD_HOST` is set and does not answer. Audited `file.quarantine.rescanned` in the item's tenant |
+| `POST /api/admin/storage/quarantine/:kind/:id/delete` `{reason?}` | `204`: deletes the quarantined bytes and refuses the item ("Deleted from quarantine by an administrator"); nothing was released, so no file, message or record changes. `409` while it is being scanned. Audited `file.quarantine.deleted` |
+| `GET /api/admin/storage/integrity` | `{runs: [Run], last: Run \| null, running: Run \| null, findings: [{id, kind: missing \| orphan \| mismatch, object, size, modifiedAt, referencedBy: [{table, column, id}] \| null, expected, actual, state: open \| deleted \| accepted \| gone, resolvedAt, note, foundAt}], graceHours, dryRunMinutes, everyMinutes}`; a Run is `{id, state, checksums, store, objects, bytes, missing, orphans, orphanBytes, mismatches, references, error, jobId, createdAt, startedAt, finishedAt}`. Findings are those of the latest finished run (at most 10,000 per kind; the counts are exact) |
+| `POST /api/admin/storage/integrity/verify` `{checksums?}` | `202` Run: queues `ops.blobs.verify` (also scheduled every `BLOBS_VERIFY_MINUTES`). `409` while one is queued or running. The job lists the store, walks every row of every table (the backups' B-903 reference walk, plus row ids in derived keys), and reports a `blob_key`, `manifest_key` or `report_key` the store does not have (checked twice) as **missing**, an object older than `BLOBS_ORPHAN_GRACE_HOURS` nothing references as an **orphan** (never backups or mirror files), and, with `checksums`, an object whose SHA-256 changed while its modification time did not as a **mismatch** (mirror files against their name). It never changes the store. Audited `platform.blobs.verify.started` and `platform.blobs.verified` |
+| `POST /api/admin/storage/orphans/dry-run` `{objects?: [key]}` | `{id, count, bytes, oldest, skipped, expiresAt, keys}` (the first 50): the open orphans of the latest run (or the ones named), each looked at again against a fresh walk of the references; nothing is deleted. `409` with no finished run or nothing left to delete. Audited `platform.blobs.orphans.dry-run` |
+| `POST /api/admin/storage/orphans/delete` `{dryRun, reason}` | `{deleted, bytes, failed}`: deletes exactly the dry run's objects (decision Q10: a dry run, then one admin with a reason). A dry run is used once and lasts `BLOBS_DRY_RUN_MINUTES` (`409 step dry-run` after). Audited `platform.blobs.orphans.deleted` with the reason and the list of objects |
+| `POST /api/admin/storage/findings/:id/accept` `{reason}` | The finding: takes an object's current SHA-256 as the one to compare against (a change that was expected). `409` for anything but an open mismatch, or a mirror file. Audited `platform.blobs.checksum.accepted` |
+| `GET /api/admin/storage/purges` | `[{what, policy, where: {route, params, label}, job, everyMinutes, setting, lastRun, lastState, removed, nextRun}]`: file trash, conversation and channel retention, memory purge, backup retention, feed indexes and the PDS trim, with the last finished run of each job and the next bucket |
+| `GET /api/admin/storage/migrations` | `{migrations: [Migration], active: {label, migration}}`; a Migration is `{id, state: queued \| copying \| switched \| retired \| failed \| cancelled, from, to, target: {kind, dir? \| endpoint, bucket, region, pathStyle, accessKeyId}, reason, objects, copied, bytes, verified, error, jobId, createdBy, createdAt, switchedAt, retiredAt}` (never the secret) |
+| `POST /api/admin/storage/migrations` `{kind: fs, dir, reason}` or `{kind: s3, endpoint, bucket, region?, pathStyle?, accessKeyId, secretAccessKey, reason}` | `202` Migration (decision Q16), with a recent sign-in (`401 step_up`). The target must answer its health check (`422`), an S3 endpoint passes the service URL checks, a directory is absolute and neither inside nor around the current one; one migration at a time (`409`). The job `ops.blobs.migrate` puts every instance in `dual` mode (writes and deletes also go to the target) and waits until each live instance reports it, copies every object with a SHA-256 check of the copy, makes a second pass for anything listed late, verifies the target has every object at the same size, then switches: reads and writes go to the target, reads of an object it lacks fall back to the old store. Any failure puts every instance back on the old store. The secret is sealed with the platform key. Audited `platform.blobs.migration.started`, `.switched`, `.failed` |
+| `POST /api/admin/storage/migrations/:id/retire` `{reason}` | Migration: stops reading from the old store (nothing is deleted there). Recent sign-in. Audited `platform.blobs.migration.retired` |
+
+### Configuration (B-4205)
+
+The settings descriptor `server/src/config/settings.generated.ts` is generated from `server/src/config/index.ts` by
+`npm run gen:settings -w server` (the suite fails when it is stale): for each of the environment schema's variables
+its section, type, constraint, default, whether it is a secret (the `<NAME>_FILE` variables, `S3_ACCESS_KEY_ID` and
+`OTEL_EXPORTER_OTLP_HEADERS`), whether a change applies `hot` (read from the live configuration at each use) or at the
+next `restart`, whether it may be overridden, and the description from the comment above it (or `docs/deploy.md`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/platform/settings` | `{build, instance, overridesEnabled, sections, instances: [{instance, host, version, startedAt, reportedAt, live, blobMode, self}], restartRequired: [{name, instances}], pending: [Proposal], settings: [Setting]}`. A Setting is the descriptor plus `{fileForm, file, mode?, chars?, value, source: env \| file \| default \| override, changed, differs, perInstance: [{instance, value, source, chars?, fingerprint?}], since, override: {value, applies, reason, proposedBy, approvedBy, appliedAt, waiting: [instance]} \| null, pending: Proposal \| null, history: [{action, from, to, reason, state, proposedBy, decidedBy, at, note}], deprecated}`. Every instance reports what it reads every `PLATFORM_INSTANCE_REPORT_SECONDS` under `INSTANCE_NAME` (default its host name); instances that reported within three periods are `live`, and a setting `differs` when live instances read different values. For a secret, `value` is `set` or `null` with its length, the file it came from and the file's mode, and a 16-hex fingerprint keyed with `SESSION_SECRET` so that instances can be compared; the value never leaves the server. `DATA_KEY_PREVIOUS` and `KMS_PREVIOUS_PROVIDER` are `deprecated` once a verified `kms:rewrap` is in the audit chain |
+| `GET /api/admin/platform/settings/export?changed=true` | `{text, lines}`: the settings this instance reads as a `.env` file by section, secrets as `********` with a comment naming their file; `changed` keeps only those not at their default. Audited `platform.settings.exported` |
+| `POST /api/admin/platform/settings/:name/proposals` `{value: string \| null, reason}` | `202` Proposal `{id, name, action: set \| clear, value, previous, reason, state, proposedBy, proposedAt, decidedBy, decidedAt, note}`: an override (or, with `value: null`, removing one) for a second platform admin to decide (decision Q2). The value is checked against the field's schema and the configuration's cross-field rules with every other override in force (`422 {setting, errors}`); one pending proposal per setting (`409`); secrets and what reaches the database (`DB_*`, `DATABASE_URL`, `SQLITE_FILENAME`, `NODE_ENV`, `PLATFORM_SETTINGS_OVERRIDES`, `INSTANCE_NAME`) are not overridable (`409 step not-overridable`); with `PLATFORM_SETTINGS_OVERRIDES=false` every proposal is `409 step overrides-disabled`. Audited `platform.setting.proposed` |
+| `POST /api/admin/platform/settings/proposals/:id/approve` `{note?}` | `{proposal, applies, applied}`: a second platform admin approves (the proposer gets `403 step dual-control`); the value is checked again, stored in `platform_setting_overrides` and, for a hot setting, applied to every instance's configuration (at once over the bus, and at each instance's next report). A restart setting is read at the next start of each instance (applied before the services are built; if the stored overrides no longer pass the schema the instance starts with its environment and logs why), and `restartRequired` names the instances still running without it. Audited `platform.setting.approved` |
+| `POST /api/admin/platform/settings/proposals/:id/reject` `{note?}` | The proposal, rejected; the proposer withdraws instead (`409`). Audited `platform.setting.rejected` |
+| `POST /api/admin/platform/settings/proposals/:id/withdraw` | The proposal, withdrawn; only by its proposer (`403`). Audited `platform.setting.withdrawn` |
+
+New settings: `PLATFORM_SETTINGS_OVERRIDES` (default `true`), `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`
+(30), `BLOBS_VERIFY_MINUTES` (1440; 0 turns the schedule off), `BLOBS_ORPHAN_GRACE_HOURS` (24) and
+`BLOBS_DRY_RUN_MINUTES` (60).

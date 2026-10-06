@@ -41,8 +41,8 @@ An admin permission is any permission outside the member baseline: a custom role
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
-| `models:manage` | yes | 5 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `pools:manage` | yes | 17 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `models:manage` | yes | 6 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `profiles:manage` | yes | 20 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
@@ -57,9 +57,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `identity:manage` | yes | 51 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
-| `tenant:manage` | yes | 28 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `tenant:manage` | yes | 44 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `platform:manage` | yes | 50 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `platform:manage` | yes | 95 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `audit:read` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `usage:read` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `webhooks:manage` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -93,7 +93,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |  |
 | `social:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `social:write` | no | 16 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `social:manage` | yes | 1 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `social:manage` | yes | 19 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:read` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -308,6 +308,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `models:manage`
 
+- `GET /api/admin/model-servers`
 - `PATCH /api/admin/models/{id}`
 - `POST /api/admin/models`
 - `POST /api/admin/models/{id}/evaluate`
@@ -327,6 +328,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PATCH /api/admin/pools/{id}`
 - `POST /api/admin/instances/{id}/drain`
 - `POST /api/admin/instances/{id}/load`
+- `POST /api/admin/instances/{id}/probe`
 - `POST /api/admin/instances/{id}/undrain`
 - `POST /api/admin/instances/{id}/unload`
 - `POST /api/admin/placements`
@@ -625,6 +627,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 - `DELETE /api/admin/tenants/{tid}/workspaces/{wid}/members/{uid}`
 - `GET /api/admin/integrations/hosts`
+- `GET /api/admin/tenant-templates`
 - `GET /api/admin/tenants`
 - `GET /api/admin/tenants/{tid}`
 - `GET /api/admin/tenants/{tid}/quota`
@@ -638,6 +641,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PATCH /api/admin/tenants/{tid}/workspaces/{wid}`
 - `POST /api/admin/authz/evaluate`
 - `POST /api/admin/tenants`
+- `POST /api/admin/tenants/from-template`
 - `POST /api/admin/tenants/{tid}/offboard`
 - `POST /api/admin/tenants/{tid}/retention/run`
 - `POST /api/admin/tenants/{tid}/workspaces`
@@ -651,6 +655,20 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/tenants/{tid}/workspaces/{wid}/file-quota`
 - `PUT /api/admin/tenants/{tid}/workspaces/{wid}/quota`
 - `PUT /api/admin/tenants/{tid}/import-quota`
+- `GET /api/admin/cache` (or another permission)
+- `GET /api/admin/dead-letters` (or another permission)
+- `GET /api/admin/jobs` (or another permission)
+- `GET /api/admin/jobs/{id}` (or another permission)
+- `GET /api/admin/overview` (or another permission)
+- `GET /api/admin/queues` (or another permission)
+- `GET /api/admin/schedules` (or another permission)
+- `POST /api/admin/cache/{ns}/invalidate` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/discard` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/redrive` (or another permission)
+- `POST /api/admin/jobs/retry-failed` (or another permission)
+- `POST /api/admin/jobs/{id}/cancel` (or another permission)
+- `POST /api/admin/jobs/{id}/retry` (or another permission)
+- `POST /api/admin/overview/alerts/acknowledge` (or another permission)
 
 ### `zones:manage`
 
@@ -696,6 +714,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/admin/platform/signers`
 - `GET /api/admin/platform/signers/proposals`
 - `GET /api/admin/platform/summary`
+- `GET /api/admin/social/people`
+- `GET /api/admin/social/realtime`
 - `PATCH /api/admin/platform/certificates/{id}`
 - `PATCH /api/admin/platform/mirrors/{id}`
 - `POST /api/admin/platform/backups`
@@ -720,6 +740,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/platform/signers/proposals/{id}/approve`
 - `POST /api/admin/platform/signers/proposals/{id}/reject`
 - `POST /api/admin/platform/signers/proposals/{id}/withdraw`
+- `POST /api/admin/social/exports/{id}/approve`
+- `POST /api/admin/social/exports/{id}/reject`
+- `POST /api/admin/social/realtime/close`
 - `PUT /api/admin/platform/bundles/{id}/transfer`
 - `PUT /api/admin/platform/mirrors/{id}/push-target`
 - `GET /api/admin/pds/tenants`
@@ -727,6 +750,46 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/pds/tenants/{tid}`
 - `GET /api/imports/bundle-requests`
 - `GET /api/imports/proxy-allowlist`
+- `POST /api/admin/overview/instances/{id}/drain`
+- `POST /api/admin/queues/{type}/pause`
+- `POST /api/admin/queues/{type}/resume`
+- `POST /api/admin/schedules/{name}/pause`
+- `POST /api/admin/schedules/{name}/resume`
+- `POST /api/admin/schedules/{name}/run`
+- `GET /api/admin/platform/settings`
+- `GET /api/admin/platform/settings/export`
+- `GET /api/admin/storage/integrity`
+- `GET /api/admin/storage/migrations`
+- `GET /api/admin/storage/purges`
+- `GET /api/admin/storage/quarantine`
+- `GET /api/admin/storage/stores`
+- `GET /api/admin/storage/usage`
+- `POST /api/admin/platform/settings/{name}/proposals`
+- `POST /api/admin/platform/settings/proposals/{id}/approve`
+- `POST /api/admin/platform/settings/proposals/{id}/reject`
+- `POST /api/admin/platform/settings/proposals/{id}/withdraw`
+- `POST /api/admin/storage/findings/{id}/accept`
+- `POST /api/admin/storage/integrity/verify`
+- `POST /api/admin/storage/migrations`
+- `POST /api/admin/storage/migrations/{id}/retire`
+- `POST /api/admin/storage/orphans/delete`
+- `POST /api/admin/storage/orphans/dry-run`
+- `POST /api/admin/storage/quarantine/{kind}/{id}/delete`
+- `POST /api/admin/storage/quarantine/{kind}/{id}/rescan`
+- `GET /api/admin/cache` (or another permission)
+- `GET /api/admin/dead-letters` (or another permission)
+- `GET /api/admin/jobs` (or another permission)
+- `GET /api/admin/jobs/{id}` (or another permission)
+- `GET /api/admin/overview` (or another permission)
+- `GET /api/admin/queues` (or another permission)
+- `GET /api/admin/schedules` (or another permission)
+- `POST /api/admin/cache/{ns}/invalidate` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/discard` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/redrive` (or another permission)
+- `POST /api/admin/jobs/retry-failed` (or another permission)
+- `POST /api/admin/jobs/{id}/cancel` (or another permission)
+- `POST /api/admin/jobs/{id}/retry` (or another permission)
+- `POST /api/admin/overview/alerts/acknowledge` (or another permission)
 
 ### `audit:read`
 
@@ -1245,7 +1308,25 @@ No route requires it directly; handlers and services check it.
 
 ### `social:manage`
 
+- `DELETE /api/admin/social/trending/exclusions/{tag}`
+- `GET /api/admin/social/conversations`
+- `GET /api/admin/social/exports/{id}/download`
+- `GET /api/admin/social/feed`
+- `GET /api/admin/social/groups`
+- `GET /api/admin/social/groups/{id}/members`
+- `GET /api/admin/social/messaging`
+- `GET /api/admin/social/relations`
 - `GET /api/social/admin/users/{id}`
+- `POST /api/admin/social/calendar-feeds/{id}/revoke`
+- `POST /api/admin/social/digest/test`
+- `POST /api/admin/social/exports`
+- `POST /api/admin/social/exports/{id}/withdraw`
+- `POST /api/admin/social/groups/{id}/archive`
+- `POST /api/admin/social/groups/{id}/transfer`
+- `POST /api/admin/social/trending/exclusions`
+- `POST /api/admin/social/trending/run`
+- `PUT /api/admin/social/policies/{id}`
+- `PUT /api/admin/social/settings`
 
 ### `messages:read`
 

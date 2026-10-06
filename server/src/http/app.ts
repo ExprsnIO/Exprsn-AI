@@ -16,6 +16,7 @@ import { identityAdminRoutes } from '../routes/admin/identity.js';
 import { userAdminRoutes } from '../routes/admin/users.js';
 import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
+import { socialAdminRoutes } from '../routes/admin/social.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
@@ -35,6 +36,9 @@ import { connectionAdminRoutes } from '../routes/admin/connections.js';
 import { trainingRoutes } from '../routes/training.js';
 import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
+import { operationsAdminRoutes } from '../routes/admin/operations.js';
+import { platformSettingsRoutes } from '../routes/admin/platform-settings.js';
+import { storageAdminRoutes } from '../routes/admin/storage.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
@@ -240,6 +244,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(trainingRoutes(s));
   api.use('/admin', zoneAdminRoutes(s));
   api.use('/admin', platformAdminRoutes(s));
+  api.use('/admin', operationsAdminRoutes(s)); // 1.6.0 (B-4202, B-4203): Overview, Jobs and queues
+  api.use('/admin', platformSettingsRoutes(s)); // 1.6.0, Sprint 35c (B-4205): Configuration
+  api.use('/admin', storageAdminRoutes(s)); // 1.6.0, Sprint 35c (B-4204): Storage
   api.use('/admin', federationAdminRoutes(s));
   // Sprint 13: integrations.
   api.use(sharingRoutes(s));
@@ -255,6 +262,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
   api.use(eventRoutes(s));
   api.use('/admin', pluginAdminRoutes(s));
+  // 1.6.0 (B-4206): Social and messaging: workspace policies, digests, legal-hold exports, realtime counts.
+  api.use('/admin', socialAdminRoutes(s));
   // 1.4.0, Sprint 25c (B-1704): database leases from the built-in engines.
   api.use(vaultLeaseRoutes(s));
   // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.

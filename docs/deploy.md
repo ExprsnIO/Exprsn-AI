@@ -139,6 +139,8 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `EMAIL_VERIFY_HOURS`, `INVITATION_DAYS`, `SIGNUP_PER_HOUR`, `USER_IMPORT_MAX_BYTES`, `USER_IMPORT_MAX_ROWS` | `48`, `7`, `10`, `2097152`, `5000` | 1.4.0 (B-1801 to B-1805): lifetime of email verification links and of invitations by workspace admins; self-registrations per client address an hour (sign-up itself is closed until a tenant admin opens it with `PUT /api/admin/identity-policy/signup`); the largest CSV and most rows a user import (`POST /api/admin/user-imports`, `exprsn-ai users import`) accepts. Verification and invitations need `SMTP_URL`. GitHub user stores reach GitHub (or GitHub Enterprise Server) through the service URL checks: with `SERVICE_INTERNAL_ONLY` on, name `github.com` and `api.github.com` in `SERVICE_ALLOWED_HOSTS` |
 | `APPS_PUBLIC_FORM_PER_MINUTE`, `APPS_IMPORT_MAX_BYTES`, `APPS_IMPORT_MAX_ROWS`, `APPS_EXPORT_MAX_ROWS`, `APPS_BULK_MAX`, `APPS_TRIGGER_MAX_DEPTH`, `APPS_SCHEDULE_TICK_SECONDS` | `10`, `200000`, `10000`, `100000`, `500`, `3`, `60` | 1.4.0, Sprint 27 (B-2201 to B-2208): low-code apps. Public form submissions per client address a minute (each form also has its own limit, `ratePerMinute`); the largest CSV import (it travels in the JSON body, so at most 250 kB) and its rows; the most records one CSV export writes; operations in one bulk write; how deep a chain of record triggers may go; how often schedule triggers are checked (0 turns them off). AI fields and drafts use the tenant's published profiles through the gateway; app bundles are signed with the KMS key `<OPENBAO_KEY_PREFIX>app-bundles` |
 | `WORKFLOW_EVENT_RATE_PER_MINUTE`, `WORKFLOW_EVENT_MAX_DEPTH`, `WORKFLOW_SCHEDULE_TICK_SECONDS` | `60`, `3`, `60` | 1.5.0, Sprint 32b (B-3903): workflows started by their own triggers. Firings a minute per event trigger (in the shared counter store, so one limit across instances with `REDIS_URL`; events past it are dropped and audited once a minute as `workflow.trigger.throttled`); the longest chain of workflows an event may come from before it is dropped; how often schedule triggers are checked (0 turns them off). Workflow bundles are signed with the KMS key `<OPENBAO_KEY_PREFIX>workflow-bundles` |
+| `PLATFORM_SETTINGS_OVERRIDES`, `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS` | `true`, the host name, `30` | 1.6.0 (B-4205): whether the Configuration screen may override settings from the database (each override needs a second platform admin; hot settings apply at once, restart ones at the next start); the name each instance reports what it reads under, and how often it reports. Give every instance its own `INSTANCE_NAME` when several share a host name (containers) |
+| `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`, `BLOBS_DRY_RUN_MINUTES` | `1440`, `24`, `60` | 1.6.0 (B-4204): how often the blob integrity check `ops.blobs.verify` runs (0: only from Storage); how old an unreferenced object must be before it counts as an orphan; how long a dry run of orphan deletion stays valid |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -186,6 +188,72 @@ credentials, and installs a hardened unit (`ProtectSystem=strict`, no capabiliti
 
 Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forward WebSocket upgrades for
 `/socket.io/`. Preparing Ollama GPU nodes: [deploy/baremetal/ollama-node.md](../deploy/baremetal/ollama-node.md).
+
+### Apple silicon nodes: `fm serve`, MLX and llama.cpp beside Ollama (1.6.0)
+
+Since 1.6.0 (B-43) an instance can be a Chat Completions server instead of Ollama (`kind: openai`). On a Mac with
+macOS 27 that is Apple's on-device Foundation Model through `fm serve`; `mlx_lm.server` and llama.cpp's
+`llama-server` work the same way. They run beside Ollama on the node and join a pool whose accelerator is `metal`.
+They hold their own models: the gateway does not pull, load or unload on them (those requests are skipped and
+recorded), and models are registered from what the server lists, with no digest.
+
+1. Check the model: `fm available` should print "System model available" (Apple Intelligence enabled for the user
+   that runs it). `fm respond 'Say ready'` answers on the device. The Private Cloud Compute model (`pcc`) is listed by
+   `fm serve` but refused outside Apple's own clients, and is never offered for registration.
+2. Run `fm serve` on a Unix socket under launchd, as the user that runs Exprsn AI. A LaunchAgent in that user's
+   session (`~/Library/LaunchAgents/io.exprsn.fm-serve.plist`) is what has been tried; a LaunchDaemon without a login
+   session may not reach the model:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0"><dict>
+     <key>Label</key><string>io.exprsn.fm-serve</string>
+     <key>ProgramArguments</key><array>
+       <string>/usr/bin/fm</string><string>serve</string><string>--socket</string><string>/Users/exprsn/run/fm.sock</string>
+     </array>
+     <key>RunAtLoad</key><true/>
+     <key>KeepAlive</key><true/>
+     <key>StandardErrorPath</key><string>/Users/exprsn/Library/Logs/fm-serve.log</string>
+   </dict></plist>
+   ```
+
+   ```sh
+   mkdir -p ~/run && chmod 700 ~/run
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.exprsn.fm-serve.plist
+   curl --unix-socket ~/run/fm.sock http://localhost/health    # {"status":"fm serve is running","models":[…]}
+   ```
+
+   Keep the socket path under 104 characters (the macOS limit) and in a directory only the service user can open:
+   `fm serve` has no authentication of its own, so the socket's permissions are the access control. A socket works
+   only when the Exprsn AI server runs on the same Mac. For a server elsewhere, run `fm serve --host 127.0.0.1 --port
+   1976` and publish it through a reverse proxy that terminates TLS (with a client certificate, which the instance's
+   mutual TLS settings present) or checks a bearer token; never bind `fm serve` to `0.0.0.0`.
+3. In the console, Admin → Pools: add a pool with accelerator `metal` (for example `apple-silicon`, in the
+   `inference` zone, with the label ceiling the data needs). Then Admin → Models → Model servers → Register model
+   server: the pool, a name (`mac-studio-1-fm`), kind Chat Completions server, transport Unix socket, the socket path.
+   The instance shows healthy with version `fm serve`, and a probe records whether tool calls and JSON schema output
+   work. By API: `POST /api/admin/pools/<pool id>/instances {"name": "mac-studio-1-fm", "kind": "openai",
+   "socketPath": "/Users/exprsn/run/fm.sock", "deploy": "baremetal"}`.
+4. Admin → Models → Request import → Held by a model server: pick `system`, record the licence (Apple's terms for the
+   Foundation Models framework), choose the label. It is registered as a draft, placed warm on the pool, with nothing
+   pulled. Run the evaluation (it runs on that instance), and have a second administrator approve it. A profile on
+   that model and pool then answers in chat, streams, calls read-only tools and is metered like an Ollama model.
+5. Embeddings: `fm serve` has no `/v1/embeddings`. Keep the embedding and guard models (`qwen3-embedding:0.6b`, the
+   guard profile's model) on an Ollama pool in the same zone; knowledge, memory and the guard use those whatever
+   model the chat profile runs on.
+
+Alternatives on the same node, each registered the same way with a URL instead of a socket:
+
+- MLX: `mlx_lm.server --model mlx-community/Qwen3-4B-4bit --host 127.0.0.1 --port 8080`. It has no `/health`; the
+  gateway uses `/v1/models` for health. Its model ids (`mlx-community/Qwen3-4B-4bit`) are the catalogue names.
+- llama.cpp: `llama-server -m qwen2.5-7b-instruct-q4_k_m.gguf --alias qwen2.5-7b-instruct --jinja --host 127.0.0.1
+  --port 8081 --api-key "$TOKEN"` (`--jinja` for tool calls, `--embeddings` on a separate instance to serve an
+  embedding model). Give the token in the form; it is stored in your tenant's vault (you need `secrets:write` and
+  `secrets:read`) and never shown again. The context length comes from its `/props`.
+
+Ollama-only settings (`num_ctx`, `keep_alive`, thinking) are not sent to these servers; the instance's events record
+which were left out. Upgrades of these servers are the operator's: the pool's rolling Ollama upgrade skips them.
 
 ## Kubernetes (Helm)
 

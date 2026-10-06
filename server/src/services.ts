@@ -22,6 +22,9 @@ import { Metrics } from './observability/index.js';
 import { createKms, type Kms } from './platform/kms.js';
 import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
+import { SwitchableBlobStore } from './platform/blob-switch.js';
+import { SettingsService } from './config/settings.js';
+import { StorageService } from './ops/storage.js';
 import { Bus, TOPICS, type MembershipEvent } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
 import { Notifications, type MailTransport } from './platform/notifications.js';
@@ -81,6 +84,9 @@ import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
 import { EventCatalogue } from './events/catalogue.js';
 import { createCacheStore, TenantCache } from './platform/cache.js';
+import { InstanceRegistry } from './ops/instances.js';
+import { JobsAdmin } from './ops/jobs-admin.js';
+import { PlatformOverview } from './ops/overview.js';
 import { RoomRegistry } from './realtime/rooms.js';
 import { PluginService } from './plugins/service.js';
 import { IdentityPolicies } from './identity/policy.js';
@@ -121,6 +127,7 @@ import { ProfileService } from './profiles/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
+import { SocialAdmin } from './social/admin.js';
 import { BuiltinTools } from './registry/builtin/index.js';
 import { WorkflowStepKit } from './workflows/steps/index.js';
 import { CustomRoleService } from './authz/custom-roles.js';
@@ -224,6 +231,12 @@ export interface Services {
   schema: SchemaGuard;
   /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
   zoneCluster: ZoneCluster;
+  /** 1.6.0 (B-4202): this server instance's heartbeat, every instance's readiness, and drain. */
+  instances: InstanceRegistry;
+  /** 1.6.0 (B-4202): the Overview's alerts, counters, recent audit and capacity. */
+  overview: PlatformOverview;
+  /** 1.6.0 (B-4203): Jobs and queues: job types, jobs, schedules, dead letters and the tenant cache. */
+  jobsAdmin: JobsAdmin;
   /** Sprint 24 (B-1701 to B-1703): the tenant secrets vault (KV secrets, transit keys, path policies). */
   vault: VaultService;
   /** Sprint 24 (B-1601 to B-1604): the certificate authority (issuers, profiles, issuance, CRLs, OCSP). */
@@ -282,6 +295,8 @@ export interface Services {
   messagingInsights: MessagingInsights;
   /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
   feed: FeedService;
+  /** 1.6.0 (B-4206): the Social and messaging screen: workspace policies, digest settings, legal-hold exports, realtime counts. */
+  socialAdmin: SocialAdmin;
   /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
   customRoles: CustomRoleService;
   /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
@@ -296,11 +311,17 @@ export interface Services {
   workflowTriggers: WorkflowTriggers;
   workflowDeadLetters: WorkflowDeadLetters;
   workflowBundles: WorkflowBundles;
+  /** 1.6.0, Sprint 35c (B-4205): settings each instance reads, overrides under dual control. */
+  settings: SettingsService;
+  /** 1.6.0, Sprint 35c (B-4204): stores, usage, quarantine, integrity, purges and blob store migration. */
+  storage: StorageService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
 
 export interface ServiceOverrides {
+  /** 1.6.0 (B-4202): this instance's id (default: the job queue's worker id), so tests run two instances in one process. */
+  instanceId?: string;
   kms?: Kms;
   blobs?: BlobStore;
   mediaRunner?: MediaRunner;
@@ -337,7 +358,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
   const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
   const keys = new DataKeys(db, kms, cfg.OPENBAO_KEY_PREFIX, cfg.DATA_KEY, bus);
-  const blobs = overrides.blobs ?? createBlobStore(cfg);
+  // 1.6.0 (B-4204): the store can move to another one while the server runs (ops/storage.ts).
+  const blobs = new SwitchableBlobStore(overrides.blobs ?? createBlobStore(cfg));
   const mode = cfg.JOB_QUEUE === 'auto' ? (cfg.REDIS_URL ? 'bullmq' : 'db') : cfg.JOB_QUEUE;
   const jobs = new JobQueue(db, log, bus, { mode, redisUrl: cfg.REDIS_URL, pollMs: cfg.JOB_POLL_MS, concurrency: cfg.JOB_CONCURRENCY });
   const scheduler = new Scheduler(jobs, log);
@@ -528,6 +550,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
     zoneCluster: new ZoneCluster(() => s),
+    instances: new InstanceRegistry(() => s, bus, { heartbeatMs: 30_000, id: overrides.instanceId ?? jobs.workerId }),
+    overview: new PlatformOverview(() => s),
+    jobsAdmin: new JobsAdmin(() => s),
     vault: new VaultService(() => s, { maxVersions: cfg.VAULT_KV_MAX_VERSIONS }),
     pki: new PkiService(() => s),
     // 1.4.0, Sprint 24c: platform core.
@@ -578,6 +603,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
+    socialAdmin: new SocialAdmin(() => s),
     // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
@@ -590,7 +616,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     workflowTriggers: new WorkflowTriggers(() => s, metrics.registry),
     workflowDeadLetters: new WorkflowDeadLetters(() => s),
     workflowBundles: new WorkflowBundles(() => s),
+    settings: new SettingsService(() => s),
+    storage: new StorageService(() => s),
     close: async () => {
+      s.settings.stop();
+      s.storage.stop();
       s.schema.stop();
       scheduler.stop();
       // B-1908: firehose consumers store their cursors and give their leases back while the database is still open.
@@ -604,6 +634,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await gateway.stop();
       await calc.close();
       siem.close();
+      await s.instances.stop();
       await jobs.stop();
       await chain.close();
       await mcp.close();
@@ -623,7 +654,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
   // checkpoints are spans (checkpoint and outcome only, never the text).
   jobs.tracer = tracer.enabled ? tracer : null;
-  jobs.gate = () => s.schema.refusal();
+  jobs.gate = () => s.schema.refusal() ?? s.instances.drainReason();
+  // 1.6.0 (B-4203): paused job types and schedules, read again by every poll and every scheduler tick.
+  jobs.pausesLoader = async () => ((await db('job_type_pauses').select('type')) as { type: string }[]).map((r) => r.type);
+  scheduler.isPaused = async (name) => !!(await db('schedule_pauses').where({ name }).first('name'));
   if (tracer.enabled) {
     const check = guard.engine.check.bind(guard.engine);
     guard.engine.check = (input) => withSpan('guardrails check', SpanKind.INTERNAL, { 'exprsn.guardrails.checkpoint': input.checkpoint, 'exprsn.label': input.label }, async (span) => {
@@ -639,6 +673,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.training.registerJobs();
   s.zones.registerJobs();
   s.ops.registerJobs();
+  s.storage.registerJobs(); // 1.6.0, Sprint 35c (B-4204): ops.blobs.verify, ops.blobs.migrate, ops.storage.sample
   s.federation.registerJobs();
   s.webhooks.registerJobs();
   s.webhooks.listen();
@@ -657,6 +692,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
     s.connections.vaultResolver = vaultRead;
     s.mcp.vaultResolver = vaultRead;
+    // 1.6.0, Sprint 35a (B-4302): a Chat Completions instance's bearer token, read as the administrator who saved it.
+    s.gateway.tokenResolver = vaultRead;
   }
   s.pds.registerJobs(); // 1.5.0, Sprint 31 (B-2904, B-2905): requestCrawl, the event and blob trim, repos as moderation objects
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
@@ -712,6 +749,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
   s.feed.init();
   s.feed.digests.registerJobs();
+  s.socialAdmin.registerJobs(); // 1.6.0 (B-4206): legal-hold conversation exports
   // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
   s.customRoles.init();
   s.accessReviews.registerJobs();
@@ -769,6 +807,7 @@ export function startSchedules(s: Services): void {
   s.training.schedule(s.scheduler, activeTenants);
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
+  s.storage.schedule(s.scheduler); // 1.6.0, Sprint 35c (B-4204): the integrity check and usage samples
   s.federation.schedule(s.scheduler, activeTenants);
   s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
