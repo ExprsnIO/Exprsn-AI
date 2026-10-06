@@ -268,6 +268,11 @@
         if (n) { st.runId = null; st.run = null; st.sel = n.id; ctx.rerender(); }
         ctx.toast('<span>Authorization takes a vault reference (vault:path#key, optionally after Bearer, Basic or Token). Saving checks that you may read the secret; a secret you cannot read is refused with 403, a literal credential with 400.</span>', '', 8000);
       } },
+      { title: 'Delete refused: still in use', tone: 'danger', text: 'Deleting a workflow a published agent lists, or another published workflow runs, is refused (409 Still in use). The used-by view names every agent, workflow tool and workflow step that references it.', apply(ctx) {
+        const st = ctx.state;
+        if (!App.can('workflows:manage')) { ctx.toast('<span>Deleting workflows is for workflow admins (workflows:manage).</span>', '', 7000); return; }
+        st.openUsedBy = 'delete-blocked'; ctx.rerender();
+      } },
       { title: 'Keyboard operation', tone: 'neutral', text: 'Arrow keys move between nodes, Enter opens the inspector, C starts a connection from the selected port.', apply(ctx) { ctx.state.kbd = true; ctx.rerender(); const c = ctx.$('.wf-canvas'); if (c) c.focus(); } }
     ],
     render(root, ctx) {
@@ -433,9 +438,10 @@
             + UI.kv([['Trigger', esc(trig)], ['Started', esc(when(run.startedAt || run.createdAt))], ['Duration', run.startedAt ? dur((run.finishedAt || Date.now()) - run.startedAt) + (run.finishedAt ? '' : ' so far') : 'queued'], ['Runs as', 'delegated from ' + esc(run.createdByName || 'the person who started it')], ['Engine', 'job queue, ' + run.steps.filter((s) => s.state === 'passed').length + ' checkpoints'], ['Tokens', (run.tokens || 0).toLocaleString()]], 1)
             + (run.error && !pending.length ? UI.notice(esc(run.error), run.state === 'cancelled' ? 'warn' : 'danger') : '')
             + (run.caller || run.chain || (run.children || []).length || (run.items || []).length ? '<div class="eyebrow">Chain</div>' + UI.kv([].concat(run.caller ? [['Called by', run.caller.kind === 'workflow-run' ? '<a href="#" data-openwfrun="' + esc(run.caller.id) + '">workflow run ' + esc(shortId(run.caller.id)) + '</a>' + (run.caller.node ? ', step ' + esc(run.caller.node) : '') : run.caller.kind === 'agent-run' ? '<a href="#" data-goagentrun="' + esc(run.caller.id) + '">agent run ' + esc(String(run.caller.id).slice(-6)) + '</a>' : esc(run.caller.kind + ' ' + run.caller.id)]] : [])
-              .concat(run.chain ? [['Chain', '<span class="mono">' + esc(String(run.chain.id).slice(-8)) + '</span>' + (run.caller ? '' : ', the root')]] : [])
+              .concat(run.chain ? [['Chain', '<span class="mono">' + esc(String(run.chain.id).slice(-8)) + '</span>' + (run.caller ? '' : ', the root') + ' ' + UI.btn('Chain tree', { size: 'xs', kind: 'ghost', icon: 'branch', attrs: 'data-gochain="' + esc(run.chain.id) + '" data-chainnode="' + esc(run.chain.node || '') + '"' })]] : [])
               .concat((run.children || []).map((k) => [esc((byId(k.step) || {}).title || k.step || 'child'), (k.kind === 'workflow-run' ? '<a href="#" data-openwfrun="' + esc(k.id) + '">workflow run ' + esc(shortId(k.id)) + '</a>' : '<a href="#" data-goagentrun="' + esc(k.id) + '">agent ' + esc(k.agent || '') + '</a>') + ' ' + runPill(k.state) + (k.error ? ' <span class="muted">' + esc(k.error) + '</span>' : '')]))
               .concat(Object.keys((run.items || []).reduce((m, i) => { m[i.nodeId] = 1; return m; }, {})).map((id) => { const its = run.items.filter((i) => i.nodeId === id); const ok = its.filter((i) => i.state === 'passed').length; const bad = its.find((i) => i.state === 'failed'); return [esc((byId(id) || {}).title || id), ok + ' of ' + its.length + ' items passed' + (bad ? ', item ' + bad.index + ' failed: ' + esc(bad.error || '') : '')]; })), 1) : '')
+            + (run.held || []).filter((h) => h.at && h.at.run !== run.id).map((h) => UI.notice('<b>Held down the chain, depth ' + esc(String(h.path && h.path.length ? h.path[h.path.length - 1].depth : '')) + '.</b> <span class="mono">' + esc(h.tool || 'a call') + '</span> waits on ' + esc(h.approvers || 'an approver') + '; this run waits with it.<div class="wf-path" style="margin-top:6px;font-size:12px;overflow-wrap:anywhere">' + (h.path || []).map((x) => esc(x.name || x.kind)).join(' › ') + '</div>', 'info', UI.btn(h.canDecide ? 'Decide in the chain tree' : 'Open the chain tree', { size: 'sm', attrs: 'data-gochain="' + esc(run.chain ? run.chain.id : '') + '" data-chainnode="' + esc(h.node) + '"' }))).join('')
             + pending.map((a) => approvalPanel(a, (byId(a.nodeId) || {}).title || a.nodeId)).join('')
             + (retried.length ? UI.notice('The worker stopped during <b>' + esc(retried.map((s) => (byId(s.nodeId) || {}).title || s.nodeId).join(', ')) + '</b>. The run resumed after its last checkpoint; completed steps were not run again.', 'warn') : '')
             + (reused.length ? UI.notice(reused.length + ' step' + (reused.length === 1 ? '' : 's') + ' reused the checkpoints of ' + esc(shortId(run.replayOf)) + '; the rest ran again.', 'info') : '')
@@ -640,7 +646,7 @@
           const vrows = [['draft', UI.pill(st.unsaved ? 'unsaved' : 'draft', st.unsaved ? 'warn' : ''), 'revision ' + wf.draftRev, esc(when(wf.updatedAt)), '']].concat(wf.versions.map((x) => ['v' + x.version, UI.pill(x.state, x.state === 'published' ? 'ok' : 'warn'), esc(x.note || ''), esc(when(x.publishedAt)), UI.btn('Diff against the draft', { size: 'xs', attrs: 'data-diffv="' + x.version + '"' })]));
           return UI.table(['Version', 'State', 'Note', 'Changed', ''], vrows, { clickable: false, minWidth: '640px' }) + (st.diffOut ? UI.notice(st.diffOut, '') : '')
             + UI.notice('Saving the draft sends the revision you loaded; a save after someone else\'s is refused. Runs pin the version they started on; publishing a new version does not change runs in progress.', 'info')
-            + (manage ? '<div class="hstack wrap">' + UI.btn('Export bundle', { size: 'sm', icon: 'download', attrs: 'data-export' }) + UI.btn('Import bundle', { size: 'sm', icon: 'upload', attrs: 'data-import' }) + UI.btn('Delete workflow', { size: 'sm', kind: 'danger', attrs: 'data-delwf' }) + '<span class="muted" style="font-size:12px">exprsn-workflow/1, signed; tool, profile, app, vault and trigger references are re-bound on import.</span></div>' : '');
+            + (manage ? '<div class="hstack wrap">' + UI.btn('Export bundle', { size: 'sm', icon: 'download', attrs: 'data-export' }) + UI.btn('Import bundle', { size: 'sm', icon: 'upload', attrs: 'data-import' }) + UI.btn('Used by', { size: 'sm', attrs: 'data-wfusedby' }) + UI.btn('Delete workflow', { size: 'sm', kind: 'danger', attrs: 'data-delwf' }) + '<span class="muted" style="font-size:12px">exprsn-workflow/1, signed; tool, profile, app, vault and trigger references are re-bound on import.</span></div>' : '');
         }
         if (tab === 'approvals') return UI.table(['Workflow', 'Run', 'Step', 'Role', 'Due', 'Mode', ''], myApprovals.map((a) => ['<b>' + esc(a.workflow || '') + '</b>', '<span class="mono">' + esc(shortId(a.runId)) + '</span>', esc(a.step || a.nodeId) + (a.form ? ' ' + UI.pill('form', 'outline') : ''), '<span class="mono">' + esc(a.role) + '</span>', esc(when(a.dueAt)), a.mode === 'dry' ? UI.pill('dry run', 'outline') : 'run', '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-openapproval="' + esc(a.workflowId) + '|' + esc(a.runId) + '"' }) + (a.canDecide ? UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-approve="' + esc(a.id) + '"' }) : '') + '</span>']), { clickable: false, minWidth: '760px', emptyTitle: 'Nothing waits on you', emptyText: 'Approvals appear here when a run pauses for a role you hold.' })
           + '<div class="muted" style="font-size:12px">Across every workflow you may see. You decide when you hold the role and are cleared for the run\'s label; a dry run\'s approvals wait on whoever started it.</div>';
@@ -949,11 +955,37 @@
         st.diffOut = '<b>v' + esc(x.version) + ' against the draft.</b> ' + esc(parts.length ? 'The draft ' + parts.join('; ') + '.' : 'The draft matches this version, apart from where steps sit on the canvas.');
         ctx.rerender();
       });
-      ctx.on('click', '[data-delwf]', async () => {
-        const ok = await ctx.confirm({ title: 'Delete ' + wf.name, tag: 'delete', tone: 'danger', body: '<p class="fg2" style="margin:0">The workflow, its versions and its run history are deleted. This is refused while a run is queued, running or waiting.</p>', ok: 'Delete workflow' });
-        if (!ok) return;
-        try { await App.del('/api/workflows/' + enc(wf.id)); st.list = list.filter((x) => x.id !== wf.id); st.wfId = null; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.unsaved = false; st.tab = 'runs'; ctx.rerender(); toast(esc(wf.name) + ' deleted. The audit log keeps the record.', 'ok'); } catch (err) { App.fail(err, 'Could not delete the workflow'); }
-      });
+      ctx.on('click', '[data-delwf]', () => wfUsedBy(wf, 'delete'));
+      ctx.on('click', '[data-wfusedby]', () => wfUsedBy(wf, 'view'));
+      ctx.on('click', '[data-gochain]', (e, t) => { e.preventDefault(); if (t.dataset.gochain) ctx.navigate('runs', Object.assign({ chain: t.dataset.gochain }, t.dataset.chainnode ? { node: t.dataset.chainnode } : {})); });
+      /** GET /api/workflows/:id/used-by, then the delete (refused with 409 while a published agent or workflow uses it). */
+      async function wfUsedBy(w, mode) {
+        let u;
+        try { u = await App.get('/api/workflows/' + enc(w.id) + '/used-by'); } catch (err) { App.fail(err, 'Used by could not be loaded'); return; }
+        const VIA = { workflow: 'lists it as a workflow it may start', 'workflow-tool': 'is its workflow tool', 'sub-workflow': 'runs it as a sub-workflow', 'agent-step': 'runs it in an agent step', 'tool-step': 'calls it in a tool step', delegate: 'delegates to it', tool: 'calls it as a tool', skill: 'loads it', 'model-skill': 'loads it in a model step' };
+        const usedBy = u.usedBy || [];
+        const blockers = usedBy.filter((x) => x.live && (x.kind === 'agent' || x.kind === 'workflow'));
+        const blocked = mode === 'delete' && !!u.deleteBlocked;
+        const table = UI.table(['Kind', 'Name', 'Version', 'Status', 'How it references ' + (u.name || w.name), 'Live'], usedBy.map((x) => [esc(x.kind), '<b>' + esc(x.name) + '</b>', '<span class="mono">' + esc(x.version == null ? '' : x.version) + '</span>', UI.pill(String(x.status || '').replace('_', ' ')), esc(VIA[x.via] || x.via) + ' <span class="muted mono">' + esc(x.via) + '</span>', x.live ? UI.pill('live', 'warn') : UI.pill('not live', 'outline')]), { clickable: false, minWidth: '640px', emptyTitle: 'Nothing uses ' + (u.name || w.name), emptyText: 'No agent, workflow tool or other workflow references it.' });
+        const note = mode === 'delete' ? (blocked ? UI.notice('<b>Delete refused (Still in use).</b> ' + esc(w.name) + ' is used by ' + esc(blockers.map((x) => x.kind + ' ' + x.name + (x.version != null ? ' ' + x.version : '')).join('; ')) + '. Remove it from them first. A workflow tool entry does not block the delete; it becomes unavailable.', 'danger') : UI.notice('The workflow, its versions and its run history are deleted. This is refused while a run is queued, running or waiting.' + (usedBy.length ? ' What still references it stops reaching it.' : ''), 'warn'))
+          : UI.notice('Agents that list it, workflow tools, and other workflows\' sub-workflow, map, loop and agent steps. Drafts are listed but not live.' + (u.deleteBlocked ? ' Deleting it is refused while a live agent or workflow uses it.' : ''), 'info');
+        ctx.modal({ cls: 'wide', title: (mode === 'delete' ? 'Delete ' : 'Used by: ') + esc(w.name), body: note + table, actions: UI.btn(mode === 'delete' ? 'Cancel' : 'Close', { attrs: 'data-close' }) + (mode === 'delete' ? UI.btn('Delete workflow', { kind: 'danger', attrs: 'data-ok', disabled: blocked, title: blocked ? 'Refused while a published agent or workflow uses it' : '' }) : ''), onMount(m) {
+          const ok = m.querySelector('[data-ok]'); if (!ok) return;
+          ok.addEventListener('click', async () => {
+            App.closeOverlay();
+            try { await App.del('/api/workflows/' + enc(w.id)); st.list = (st.list || []).filter((x) => x.id !== w.id); if (st.wfId === w.id) { st.wfId = null; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.unsaved = false; st.tab = 'runs'; } ctx.rerender(); toast(esc(w.name) + ' deleted. The audit log keeps the record.', 'ok'); } catch (err) { App.fail(err, 'Could not delete the workflow'); }
+          });
+        } });
+      }
+      if (st.openUsedBy) {
+        const mode = st.openUsedBy; st.openUsedBy = null;
+        setTimeout(async () => {
+          const pool = [wf].concat((st.list || []).filter((x) => x.id !== wf.id)).slice(0, 8);
+          for (const w of pool) { try { const u = await App.get('/api/workflows/' + enc(w.id) + '/used-by'); if (u.deleteBlocked) { wfUsedBy(w, 'delete'); return; } } catch (err) { /* next */ } }
+          toast('No workflow is used by a published agent or workflow yet, so nothing blocks a delete. Its used-by view lists what references it.', '', 7000);
+          wfUsedBy(wf, 'view');
+        }, 30);
+      }
       ctx.on('click', '[data-export]', async () => {
         let bundle;
         try { bundle = await App.get('/api/workflows/' + enc(wf.id) + '/bundle'); } catch (err) { App.fail(err, 'Could not export the workflow'); return; }
