@@ -266,36 +266,38 @@ describe('presence (B-5802)', () => {
     const alice = await personIn(h, 'alice', [ws]);
     const bob = await personIn(h, 'bob', [ws]);
     const b = await connect(bob);
+    // Bob's own sockets also hear his own status; count only Alice's changes.
+    const seen = () => b.got.filter((x) => x.userId === alice.user.id);
     expect((await b.watch([alice.user.id])).statuses).toEqual({ [alice.user.id]: 'offline' });
     const a1 = await connect(alice);
-    await until(() => b.got.some((x) => x.status === 'available'));
+    await until(() => seen().some((x) => x.status === 'available'));
     const a2 = await connect(alice);
     // one socket idle is not enough; both idle reads away
     a1.sock.emit('presence.idle', { idle: true });
     await new Promise((r) => setTimeout(r, 150));
-    expect(b.got.some((x) => x.status === 'away')).toBe(false);
+    expect(seen().some((x) => x.status === 'away')).toBe(false);
     a2.sock.emit('presence.idle', { idle: true });
-    await until(() => b.got.some((x) => x.status === 'away'));
+    await until(() => seen().some((x) => x.status === 'away'));
     a2.sock.emit('presence.idle', { idle: false });
-    await until(() => b.got.filter((x) => x.status === 'available').length === 2);
+    await until(() => seen().filter((x) => x.status === 'available').length === 2);
     // appear offline
     await alice.put('/api/presence/me', { status: 'offline' }).expect(200);
-    await until(() => b.got.some((x) => x.status === 'offline'));
+    await until(() => seen().some((x) => x.status === 'offline'));
     await alice.put('/api/presence/me', { status: 'auto' }).expect(200);
-    await until(() => b.got.filter((x) => x.status === 'available').length === 3);
+    await until(() => seen().filter((x) => x.status === 'available').length === 3);
     // closing every socket reads offline
     a1.sock.close();
     a2.sock.close();
-    await until(() => b.got.filter((x) => x.status === 'offline').length === 2);
+    await until(() => seen().filter((x) => x.status === 'offline').length === 2);
     expect((await alice.get('/api/presence/me').expect(200)).body).toEqual({ status: 'auto', effective: 'offline' });
 
     // an instance that went away: its row expires and the sweep publishes offline
     await h.s.db('presence_connections').insert({ tenant_id: h.tenantId, user_id: alice.user.id, instance_id: 'gone:1', sockets: 1, idle: false, seen_at: Date.now() });
     await h.s.presence.publishIfChanged(h.tenantId, alice.user.id);
-    await until(() => b.got.filter((x) => x.status === 'available').length === 4);
+    await until(() => seen().filter((x) => x.status === 'available').length === 4);
     await h.s.db('presence_connections').where({ instance_id: 'gone:1' }).update({ seen_at: Date.now() - 120_000 });
     await h.s.presence.heartbeat();
-    await until(() => b.got.filter((x) => x.status === 'offline').length === 3);
+    await until(() => seen().filter((x) => x.status === 'offline').length === 3);
     expect(await h.s.db('presence_connections').where({ instance_id: 'gone:1' })).toHaveLength(0);
 
     // watching too many, or a malformed id, is refused

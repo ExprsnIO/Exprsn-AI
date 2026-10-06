@@ -43,30 +43,33 @@ from prototype data to live only when every control on it is backed by the serve
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | **Done** |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | **Done** |
 | 33 | Moved to 1.7.0 on 2026-10-05 as Sprint 38 | — | Moved |
-| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Runs, Registry, Chat, Settings, Files | Next |
-| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | Planned |
-| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Person (new); Runs, Registry, Settings, Messages and feed, Groups and events | **Done** (B-3606 moved to 1.6.0) |
+| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | Next |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; real DAV client traffic (1.6.0) | Groups and events, Storage, Apps, Vault | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
 | 38 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen; release (1.7.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
 
-Current codebase: every sidebar screen is live (Sign in, Settings, User stores, Tenants, Usage and audit, Models, Pools,
-Profiles, Training, Chat, Compare, Guardrails, Flags, Classifiers, Knowledge, Memory, Connections, Registry, MCP
-servers, Runs, Scripts, Workflows, Media, Images, Identity, Zones and Platform), plus the signed-out Shared page for
-anonymous links; twenty-five database migrations (`001_core` to `025_integrations3`); 532 unit and API tests (against a
-fake Ollama, a fake MCP server, fake script, media, image and training workers, a fake ACME directory, a fake upstream
-identity provider, a fake OpenBao, a fake OTLP collector, Kubernetes API, SNTP server and Redis, a fake S3 bucket and
-web site, and fake mail, HIBP range, webhook, Stripe, DNS, Harbor, Verdaccio and devpi endpoints) plus the integration
-suite against PostgreSQL, MySQL, OpenLDAP and Redis; 57 Playwright tests across the console, including axe-core, the
-in-page accessibility checker and the reflow checks for screens, dialogs and drawers; a Helm chart with an optional
-signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, and a streaming load test. The version is
-`1.4.0` (Sprints 24 to 28, the [1.4.0 backlog](Backlog-1.4.0.md), server-only); before it, `1.3.0`: Sprints 20 to 23 delivered the [1.3.0 backlog](Backlog-1.3.0.md), after Sprints 16 to 19 delivered the
-[1.2.0 backlog](Backlog-1.2.0.md) and Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 24 to 28 are
-planned in the [1.4.0 backlog](Backlog-1.4.0.md): exprsn-platform's server features, with AT-Protocol in the CA and
-identity work. Sprints 29 to 34 are planned in the [1.5.0 backlog](Backlog-1.5.0.md): console screens for the 1.4.0
-features, permission matrices and custom roles, CalDAV, CardDAV and WebDAV, model-based memory management, the model
-and dataset import wizard, an AT-Protocol PDS and feed generator, Workflows 2, agents, tools and skills in chat, and chaining them
-with workflows, user profiles and presence. Sprints 35 to 37 are planned in the [1.6.0 backlog](Backlog-1.6.0.md): the
-platform administration screens, groups depth, tenant templates, blob deduplication, vault extras and capability tokens
+Current codebase: every sidebar screen is live (Chat, Compare, Runs, Knowledge, Memory, Workflows, Scripts, Media,
+Images, Files, Apps, Groups and events, Messages and feed, Models, Profiles, Pools, Registry, MCP servers, Guardrails,
+Flags, Classifiers, Moderation, Channels, Connections, Training, Tenants, Roles and access, User stores, Identity,
+Certificates, Vault, Plugins and events, AT-Protocol, Zones, Usage and audit and Platform), plus Sign in, Settings
+(with app passwords for DAV clients and the public profile and status), the Person page (a profile, opened from
+people's names) and the signed-out Shared page for anonymous links; fifty-five database migrations (`001_core` to
+`036c_dav_files`); 985 unit and API tests across 86 files, 1 skipped (against a fake Ollama, a fake MCP server, fake
+script, media, image and training workers, a fake ACME directory, a fake upstream identity provider, a fake OpenBao, a
+fake OTLP collector, Kubernetes API, SNTP server and Redis, a fake S3 bucket and web site, fake mail, HIBP range,
+webhook, Stripe, DNS, Harbor, Verdaccio and devpi endpoints, recorded DAV client exchanges and the AT-Protocol interop
+vectors) plus the integration suite against PostgreSQL, MySQL, OpenLDAP, Redis, MongoDB and GreenMail (IMAP),
+`litmus` for WebDAV and the PDS against the reference AppView in CI; over 100 Playwright tests across the console,
+including axe-core, the in-page accessibility checker and the reflow checks for screens, dialogs and drawers; a Helm
+chart with an optional signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, a streaming load test
+and a platform load test. The version is `1.5.0`: Sprints 29 to 34 delivered the [1.5.0 backlog](Backlog-1.5.0.md)
+(Sprint 33 moved to 1.7.0), after Sprints 24 to 28 delivered the server-only [1.4.0 backlog](Backlog-1.4.0.md),
+Sprints 20 to 23 the [1.3.0 backlog](Backlog-1.3.0.md), Sprints 16 to 19 the [1.2.0 backlog](Backlog-1.2.0.md) and
+Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 35 to 37 are planned in the
+[1.6.0 backlog](Backlog-1.6.0.md): the platform administration screens, model servers beyond Ollama, groups depth,
+tenant templates, blob deduplication, vault extras, capability tokens and the real DAV client capture (B-3606, moved
+from 1.5.0); Sprint 38 in the [1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, and dataset import
 (groomed 2026-10-05 with `design/grooming/groom.mjs`).
 
 ---
@@ -1103,9 +1106,9 @@ refunded with the amount (`server/test/sprint23-knowledge.test.ts`, 6 tests,
 contrast in Enhanced, and each screen's dialogs and drawers open at 320 px without sideways scrolling
 (`e2e/tests/y-accessibility.spec.ts`, `e2e/tests/y-reflow-overlays.spec.ts`).
 
-## Sprint 29: Permission matrices, custom roles and the 1.5.0 boards (in progress)
+## Sprint 29: Permission matrices, custom roles and the 1.5.0 boards (done)
 
-Delivered so far on `sprint-29`:
+Delivered on `sprint-29`:
 
 - **B-3401, prototype boards** in `design/prototype/` for every screen of B-34, built from `docs/api.md` (Sprints 24 to
   28) and `Backlog-1.5.0.md`, each with example data, working filters, sorts, tabs, inspectors, modals and confirms, and
@@ -1141,8 +1144,30 @@ Delivered so far on `sprint-29`:
   - The design-state controls (header "States" button, the strip at the foot of each page) were removed from the
     prototype as from the console; states are applied from the command palette and by the smoke run.
 
-Open on `sprint-29a` and `sprint-29b` (another session): B-3301 to B-3305 (`031_access`) and B-3601; then the live
-screens B-3402 to B-3404, B-3407, B-3408 and B-3413 in `web/`.
+B-3301 to B-3305 (`031_access`) and B-3601 were done on `sprint-29a` and `sprint-29b`; the live screens B-3402 to
+B-3404, B-3407, B-3408 and B-3413 were built in Sprint 30. Sprints 30 to 34 are summarised in
+[Backlog-1.5.0.md](Backlog-1.5.0.md) (Progress) and below.
+
+## Release 1.5.0
+
+The workspace, the server and the chart are versioned `1.5.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
+the backlog in [Backlog-1.5.0.md](Backlog-1.5.0.md). Sprints 29 to 34 gave the 1.4.0 features their screens
+(Certificates, Vault, Plugins and events, Apps, Files, Moderation, Groups and events, Channels, Messages and feed, Roles
+and access and AT-Protocol, with identity additions on Sign in, Settings, Identity and User stores) and added
+permission matrices, custom roles, effective access and access reviews; record queries PostgreSQL answers from an
+index; CalDAV, CardDAV and WebDAV for the file store with DAV-only app passwords managed in Settings; model-based memory
+management; MongoDB connections; an AT-Protocol PDS with feed generators and relay commit verification; import
+repositories and model import; Workflows 2 (sub-workflow, agent, map and loop steps, skills on model steps, event and
+schedule triggers, retries, failure edges and dead letters, signed bundles, domain built-in tools, approval forms,
+notify and webhook steps) on one chain context across chat, agents, workflows, tools, skills, plugins and app
+triggers; chaining agents, skills, tools and workflows with checks at publish, held calls decided from the root and a
+chain view; profiles and presence with the Person page; and the IMAP adapter against GreenMail in CI. Sprint 33 (chat
+invocation and dataset import) moved to 1.7.0. Migrations `031_access` to `036c_dav_files`. The suite at release: 985
+passed and 1 skipped across 86 files; the PostgreSQL and MySQL integration suites, `litmus`, GreenMail and the PDS
+interop job in CI. B-3104 (the DAV conformance run) stays partial and B-3606 (capturing real DAV client traffic) moved
+to 1.6.0: macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host
+certificate trust on the owner's Mac that was not approved. The known gaps of each sprint are in
+[docs/security.md](docs/security.md). Tagging `v1.5.0` and publishing the image and chart remain with the maintainers.
 
 ## Release 1.4.0
 

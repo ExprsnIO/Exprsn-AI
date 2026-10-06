@@ -9,7 +9,8 @@ extras, capability tokens, quote posts) and closes two 1.4.0 known gaps. Rules a
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 27 items, 137 points (1 point ≈ half a day for one engineer, tests included): P1 95, P2 42. At about 78
+**Size.** 28 items, 139 points (1 point ≈ half a day for one engineer, tests included): P1 97, P2 42; B-3606 (2
+points) joined from 1.5.0 on 2026-10-06. At about 78
 points a sprint that is under two sprints of work spread over three, leaving room for what 1.5.0 carries over (Sprint
 31 was accepted at 93 points) and for new requests.
 
@@ -21,8 +22,8 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
-| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | Planned |
-| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies | B-4401–B-4405, B-4601, B-4701, B-4803 | 40 | Planned |
+| 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | Next |
+| 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; real DAV client traffic | B-4401–B-4405, B-4601, B-4701, B-4803, B-3606 | 42 | Planned |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release | B-4901, B-5001, B-4801, B-4802, B-5101 | 21 | Planned |
 
 The order follows the dependencies: the Storage screen (B-4204) before blob deduplication shows its savings (B-4601);
@@ -92,6 +93,17 @@ workspace.
 | B-4404 | Trending groups by job, like trending hashtags (B-2705) | A group with a burst of joins appears in trending within one job run | 3 |
 | B-4405 | Group categories: a tenant-managed category list, managed from Social and messaging, filterable on Groups and discovery (decision Q6) | Removing a category leaves its groups uncategorised, not hidden | 3 |
 
+### B-36 Carried over from 1.5.0 (2 points)
+
+Moved from 1.5.0's Sprint 34 on 2026-10-06 (the owner's default), keeping its ID. B-3104 (the DAV conformance run)
+stays partial in 1.5.0 until this lands. macOS 27 Calendar refuses Basic authentication over plain HTTP, so the
+capture has to run over TLS, which needs a per-host certificate trust on the capturing Mac; that trust was not
+approved in 1.5.0. The capture tool, `server/test/dav-capture/capture.ts`, is on branch `sprint-34e` (not merged).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-3606 | Capture real DAV client traffic (B-3104 is partial): record Apple Calendar and Contacts, Thunderbird and DAVx5 against a test server over TLS (with the owner's approval of the per-host certificate trust) and replace the written fixtures in `server/test/fixtures/dav/` with the captured exchanges, replayed in CI; merge the capture tool from `sprint-34e` (Sprint 36) | Every filter operator in the captured run returns the expected items | 2 |
+
 ## P2
 
 ### B-45 Tenant provisioning templates (5 points)
@@ -160,6 +172,8 @@ workspace.
 - [ ] Group locations (B-4403): is a location visible to every member who can see the group, or only to members?
 - [ ] Model servers (B-43): is Apple's on-device model also offered as a `classify` fallback beside TEV on Apple
   silicon nodes?
+- [ ] DAV capture (B-3606): is the per-host certificate trust on the owner's Mac approved for the capture over TLS,
+  or is the traffic captured from another machine?
 
 ## Risks
 

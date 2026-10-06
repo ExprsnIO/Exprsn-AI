@@ -1,6 +1,70 @@
 # Changelog
 
-## 1.5.0 (in progress)
+## 1.5.0
+
+### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)
+
+- Built on the chain context of Sprint 32 (B-4101): every link is a node of the caller's chain, acts as the chain's
+  principal, runs at the chain's label within the callee's ceiling and is charged to the root's budgets. Migration
+  `036_chains` (`chain_nodes.decision` and `error_type`, two indexes). No new permission.
+- Agents delegate to agents (B-4102): an agent's `definition.agents` (up to 16) lists the agents it may call, each
+  offered to the model as the tool `agent:<name>`. A call passes the dispatcher like any tool call and starts a child
+  run of the published delegate as the same principal, at the chain's label, with budgets no larger than the
+  delegating run has left; the delegating run waits and continues with `{run, agent, answer}`, the answer typed by the
+  delegate's `outputSchema` when it declares one (agents take `inputSchema` and `outputSchema`). Audited
+  `agent.run.delegated`; cancelling a run cancels the runs it delegated to.
+- Skills compose (B-4103): a skill's `definition.skills` lists the skills it builds on; loading a skill loads its
+  closure once each, dependencies first (at most 32), and offers the tools of the whole closure, deduplicated. Every
+  skill of the closure is a `skill-load` node of the chain.
+- Workflows an agent lists (B-4104): `definition.workflows` (up to 16) are offered as `workflow:<name>` and run and
+  awaited as a workflow tool is (B-1006), without publishing one; a workflow the agent does not list is refused.
+  `GET /api/workflows/:id/callers` adds the agents that list the workflow.
+- Chain checks at publish (B-4105): the registry and workflow publish build the reference graph across agents, skills,
+  tools and workflows. A cycle made only of steps that always run is refused (the registry's **Chain references**
+  check; a workflow publish answers `422` with code `chain` and the path); a cycle through a model's choice is a
+  warning; references above the referrer's ceiling and unpublished references fail the check. "Used by" at
+  `GET /api/admin/registry/:id/used-by` and `GET /api/workflows/:id/used-by`; retiring the last callable version of an
+  entry something live uses, or deleting a workflow a published agent or workflow uses, is `409 Still in use`, naming
+  them.
+- Approvals and failures through the chain (B-4106): a call held anywhere pauses the chain. The root's run views list
+  the held calls (`held`, with the path), and `POST /api/chains/:id/held/:node/decision` decides one with the rules of
+  the place where it waits (audited `chain.held.decided`). A model step's skill call that needs approval now pauses the
+  step on an approval (`approverRole`, `approvalTimeoutMs`) instead of being reported to the model. A child's failure
+  reaches its parent typed (`failed`, `budget`, `cancelled`, `rejected`, `chain_limit`, `output`, `label`, `timeout`):
+  an agent sees a tool error starting `child_<type>:`, a workflow's failure edge receives `type`.
+- The chain view (B-4107): `GET /api/chains/:id`, the tree of invocations with timing, tokens, steps, wall and GPU
+  time, labels, guardrail decisions, audit links and held calls; its totals equal what was metered for the chain.
+  `POST /api/chains/:id/nodes/:node/replay` replays an agent-run or workflow-run node from a step as a new chain
+  (audited `chain.node.replayed`); `GET /api/admin/audit` takes a `target` filter.
+
+### The chain tree and registry fields in the console (Sprint 34d, B-4108, B-4109)
+
+- PLACEHOLDER (coordinator: fill in from sprint-34d once it is merged): the prototype boards for the chain tree in
+  Runs, the registry editor's delegates, skill dependencies and workflows fields and the "used by" view (B-4108), and
+  the live screens with their Playwright, axe-core and reflow checks (B-4109).
+
+### Profiles and presence (Sprint 34c, B-5801, B-5802)
+
+- Migration `036b_profiles` (`user_profiles`, `user_presence`, `presence_connections`). Routes `/api/people` and
+  `/api/presence` under `social:read` and `social:write` (an avatar also needs `files:write`), answered with
+  `Cache-Control: no-store`.
+- Profiles (B-5801): pronouns (up to 40 characters) and a bio (up to 500) screened at the `user-input` guardrail; an
+  avatar (PNG, JPEG, WebP or GIF, at most 2 MiB) uploaded into the file store of the caller's current workspace
+  through its quarantine and served only while its pinned version is a ready image, not in the trash, within the
+  viewer's clearance; a version that fails its scan is never shown. A profile is known to people who share a workspace
+  with its owner (anyone else gets `404`); the pronouns, bio and avatar further need the viewer's clearance to reach
+  the profile's label and, when the owner narrowed it, a shared workspace among those named. Two people in a block see
+  each other's name only. Audited `profile.updated` (the fields, never the text), `profile.avatar.set`,
+  `profile.avatar.removed`.
+- Presence (B-5802): available, away, busy or offline, chosen or `auto` (away while every socket the person holds
+  reports idle); without a connected socket a person reads offline. `PUT /api/presence/me` is audited
+  `presence.status.updated`. On the console's socket, `presence.watch`, `presence.unwatch`, `presence.idle` and
+  `presence.changed`: each change is published once and relayed by every instance without the sockets of people in a
+  block with the person, and a new block takes each out of the other's presence room at once. Connections are kept per
+  instance with a 30-second heartbeat and swept after 90 seconds.
+- Console: a Profile page opened from people's names on Messages, the feed and Groups, with a People directory; the
+  public profile (pronouns, bio, picture) and status in Settings; the console reports idle after five minutes without
+  input or while the page is hidden. Fixed: the feed's Post handler matched any click inside a post.
 
 ### The IMAP channel adapter against a real IMAP server (Sprint 34b, B-3605)
 
@@ -21,6 +85,77 @@
   (class 2, exclusive and shared, depth 0 and infinity, lock-null resources, the If header with lock tokens) (B-3202).
 - Quota properties (RFC 4331) and 507 over a limit; the `litmus` suite (basic, copymove, props, locks, http) in CI,
   all passing (B-3203). `JobQueue.runNow` and `FileService.scanNow` run a version's scan job before answering.
+
+### Workflows 2 and the chain context (Sprint 32, B-3901 to B-3910, B-4101)
+
+- Migrations `034_workflows2` (`chains`, `chain_nodes`, `workflow_items`; the chain on agent and workflow runs),
+  `034b_workflow_triggers` (`workflow_triggers`, `workflow_trigger_firings`, `workflow_dead_letters`) and
+  `034c_workflow_steps` (the domain built-in tools, a feed post's source, approval forms and answers). New settings
+  `CHAIN_MAX_DEPTH`, `CHAIN_MAX_TOKENS`, `CHAIN_MAX_STEPS`, `CHAIN_MAX_WALL_SECONDS`, `CHAIN_MAX_GPU_SECONDS`,
+  `WORKFLOW_MAX_DEPTH`, `AGENT_MAX_DEPTH`, `WORKFLOW_EVENT_RATE_PER_MINUTE`, `WORKFLOW_EVENT_MAX_DEPTH`,
+  `WORKFLOW_SCHEDULE_TICK_SECONDS`. No new permission.
+- The chain context (B-4101): every invocation (a chat turn whose answer calls a tool, an agent run, a workflow run, a
+  tool call, a skill load, a plugin action that starts a workflow, an app trigger) is a node of its root's chain. A
+  child acts as the root's principal, its label is at least the chain's high-water mark, and depth is capped by one
+  `CHAIN_MAX_DEPTH` (default 8) across kinds, with `WORKFLOW_MAX_DEPTH` and `AGENT_MAX_DEPTH` (3 each) as per-kind caps;
+  tokens, steps, wall time and GPU time are charged atomically to the root's budgets. Nodes are unique by kind and
+  reference, so a job retried on another instance resumes its node. Refusals are audited `chain.refused`, a budget stop
+  `chain.stopped`; a refused tool call reaches the model as a `chain_limit` tool error. Run views carry `chain` and
+  `caller`, and workflow runs their `children` and map and loop `items`.
+- Sub-workflow, agent, `map` and `loop` steps and skills on model steps (B-3901, B-3902, B-3905): a `sub` step runs a
+  published workflow as a child under the parent's owner and label, and the child's approvals pause the parent; an
+  `agent` step runs a published agent and waits without a worker; `skills` (up to 8) on a `model` step load published
+  skills' instructions and tools through the dispatcher, so every call passes the tool's ceiling, schema, the
+  `tool-call` checkpoint and its rate limit; `map` fans out over up to 200 items (`maxParallel` up to 20) with each
+  item's result checkpointed, and `loop` iterates up to 40 times with an optional `while`. `GET /api/workflow-callees`
+  lists what the new steps may call.
+- Triggers on the workflow itself (B-3903): source `event` (a catalogue event or group, with the plugin fan-out rules:
+  workspace, label, `WORKFLOW_EVENT_RATE_PER_MINUTE`, no loops through the chain of workflows) and source `schedule`
+  (a five-field UTC cron, each due time claimed once across instances). Runs start as the version's publisher with
+  what they hold at that moment, or are skipped with the reason. `GET` and `PATCH /api/workflows/:id/triggers`;
+  audited `workflow.trigger.*`.
+- Failure handling (B-3906): a per-step `retry` (up to 5, fixed or exponential, waiting durably), an on-failure edge
+  (`branch: failure`) whose steps receive `{error, step}`, and dead letters for runs that fail for good, with redrive
+  from the failed step (`/api/workflow-dead-letters`, audited `workflow.run.dead_lettered` and
+  `workflow.dead_letter.redriven`).
+- Bundles (B-3909): signed `exprsn-workflow/1` export (`GET /api/workflows/:id/bundle`) and import
+  (`POST /api/workflows/import`) with tool, profile, app, vault and trigger references re-bound; a bundle changed after
+  signing is refused with `422 Bundle refused`.
+- Domain built-in tools (B-3904): `messages.send`, `feed.post`, `files.write_version`, `groups.create_event` and
+  `channels.answer` (`impl: builtin`, published to every tenant, all `write`), acting as the caller through the domain
+  services and called the same way from chat, agents and workflows; a post made by a built-in or a plugin records its
+  `source`. The plugin broker's `records.read`, `records.write`, `files.read`, `groups.read` and `posts.write` calls are
+  live, acting as the installing user within the plugin's max label.
+- Approval forms (B-3907): an `approval` step names an app form; the approver's answers are validated like a
+  submission, sealed with the approval, become the step's output and are audited with the decision. `notify` and
+  `webhook` steps (B-3908): in-app and email notices to cleared recipients (`workflow.step.notified`); one signed
+  delivery per run and step through the tenant's webhook path, with the endpoint checked against the outbound host rules
+  when the graph is saved (`422 Workflow invalid` otherwise).
+- Console (B-3910): the live Workflows screen edits every step kind the server has, sets event and schedule triggers,
+  per-step retries and failure edges, and has the run history (with chain, caller, children and items), Triggers and
+  callers (`GET /api/workflows/:id/callers`), versions with bundle export and import, approvals and dead letters with
+  redrive; a New workflow button in the toolbar. The event catalogue is also readable with `workflows:manage`.
+
+### App passwords for DAV clients in Settings (Sprint 32, B-3415)
+
+- `GET /api/me/dav`: the CalDAV, CardDAV and WebDAV discovery URLs, the username to type into a client, which scopes
+  the caller's roles make usable, and how long the session's second-factor confirmation still counts for creating an
+  app password. The create response also names the WebDAV URL (`/dav/files/`, B-32).
+- Settings has a panel under Security with each device's app password (scopes, creation, last use with time, address
+  and client, expiry) and Revoke; creating one asks for an authenticator code or a passkey first when the second factor
+  is older than the step-up window (the password does not count), and the password is shown once. The step-up dialog
+  takes a factor-only mode, used whenever the server answers `step_up` with `factor`.
+
+### Console screens for the 1.4.0 domains (Sprints 29 to 31, B-3401 to B-3414)
+
+- Prototype boards in `design/prototype/` for every new screen and the identity additions (B-3401), with the Workflows
+  board realigned on the server's step kinds.
+- Live screens: Certificates (B-3402), Vault (B-3403), Plugins and events (B-3404), Apps (B-3407), Files (B-3408) and
+  the identity additions on Identity, User stores, Settings and Sign in (B-3413); Moderation (B-3405), Groups and events
+  (B-3409), Channels (B-3410), Messages and feed (B-3411) and Roles and access (B-3412); and AT-Protocol (B-3406,
+  Sprint 31), with the read endpoints and fields they need on the server. Each joined the Playwright suite with
+  axe-core (Standard and Enhanced, light and dark) and the reflow checks for its dialogs and drawers, described in
+  `docs/accessibility.md` (B-3414).
 
 ### Custom feed generators, relay commit verification and the RSVP race (Sprint 31b, B-3001 to B-3003, B-3604, B-3603)
 
@@ -120,6 +255,9 @@
   6352 operator and `addressbook-multiget` (B-3103).
 - A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
   replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
+- B-3104 stays partial: the fixtures were written from the clients' documented requests. Capturing real traffic
+  (B-3606) moved to 1.6.0: macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
+  needs a per-host certificate trust on the capturing Mac that was not approved.
 
 ### Import repositories and model import (Sprint 30, B-3801 to B-3803)
 

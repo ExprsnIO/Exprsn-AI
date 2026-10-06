@@ -75,7 +75,7 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   level and value are in the text).
 - **Target size**: the smallest button (`.btn.xs`) is 24 px high (WCAG 2.5.8).
 
-## Screens made live in 1.5.0 (Sprints 30 and 31)
+## Screens made live in 1.5.0 (Sprints 30 to 34)
 
 Each joins the Playwright suite like the others: axe-core and the in-page checker on the screen and every design state
 (Standard and Enhanced, light and dark), the screen reflow at 320 and 640 px, and its dialogs and drawers through
@@ -123,6 +123,29 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   on every tab and on the invite-code drawer, in light and dark, with the data it made (a rotated key, a hosted
   account, a published feed), which the sweep's design states do not all reach. With it the sweeps cover 36 sidebar
   screens and Settings.
+- **Workflows** (B-3910, Sprint 32): the live screen gained the Workflows 2 step kinds, so its step palette is longer
+  than the reflow sweep's 25 controls; the palette's buttons only add a step to the draft, so the sweep skips them and
+  reaches the controls that open dialogs and drawers.
+- **Settings: app passwords for DAV clients** (B-3415, Sprint 32): the devices are a table whose Revoke buttons are
+  named for the device ("Revoke the app password for iPad") and go through a confirm dialog. The create dialog
+  focuses the device name, groups the CalDAV, CardDAV and WebDAV choices in a `fieldset` with a legend (a scope the
+  caller's roles do not allow is disabled and says so in its label), and reports a missing name or scope in a
+  `role="alert"` region. The step-up dialog, in its factor-only mode, asks for an authenticator code or a passkey
+  before the password is made; the new password is shown once in a notice with a Copy button, never in a toast.
+  `e2e/tests/settings.spec.ts` drives it end to end.
+- **Settings: public profile and status** (B-5801, B-5802, Sprint 34): pronouns, label, bio and "Shown in" are labelled
+  fields with their limits in the hint; the picture's file input is named "Profile picture" and opened from a button,
+  the initials that stand in for a missing picture are hidden from assistive technology, and a guardrail refusal shows
+  as a problem panel. The status choice is a labelled segmented group ("Status") and what others see is written out
+  beside it, not only coloured.
+- **Person** (B-5801, B-5802, Sprint 34, the profile page opened from people's names on Messages, the feed and
+  Groups): the directory is a labelled search ("Search people") over a keyboard-operable list, the person's name is the
+  page's `h1`, and the picture has an `alt` naming the person (the initials fallback is `aria-hidden`). Status is a
+  pill with its word, never colour alone, and a name-only view says why in a notice. Block goes through a confirm
+  dialog. The page joins the screen sweeps (`e2e/tests/support/sweep.ts`, opened as a system admin), and
+  `e2e/tests/person.spec.ts` runs both checkers in Standard and Enhanced on a filled-in profile.
+- PLACEHOLDER (coordinator: fill in from sprint-34d once it is merged): the chain tree in Runs and the registry
+  editor's delegates, skill dependencies, workflows and "used by" fields (B-4109).
 
 ## How it was checked
 

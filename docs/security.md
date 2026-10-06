@@ -236,7 +236,9 @@ filter, private `/tmp`, only the state directory writable.
   who share a workspace with the caller (all of them when the caller is in a workspace open to the whole tenant),
   within the caller's clearance (owner's decision, 2026-10-05). The conformance fixtures were written from the
   clients' request formats, not captured from devices, so B-3104 counts as partial until real traffic from Apple
-  Calendar and Contacts, Thunderbird and DAVx5 is captured and replayed (owner's decision, 2026-10-05).
+  Calendar and Contacts, Thunderbird and DAVx5 is captured and replayed (owner's decision, 2026-10-05). That capture
+  (B-3606) moved to 1.6.0 on 2026-10-06: macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing
+  over TLS needs a per-host certificate trust on the capturing Mac that was not approved.
 
 - Import repositories and model import (1.5.0, Sprint 30, B-3801 to B-3803): the allow-list is enforced by the
   platform's own egress (each hop of a redirect checked, credentials never forwarded along one); with
