@@ -8,15 +8,15 @@ repositories with a personal data server (PDS) and custom feed generators. Rules
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 70 items, 385 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 and B-3606 count in 1.6.0): P0 132, P1 193, P2 60.
+**Size.** 70 items, 385 points in 1.5.0 (1 point ≈ half a day for one engineer, tests included; B-4202 to B-4207 count in 1.6.0; B-3606 was dropped): P0 132, P1 193, P2 60.
 At about 78 points a sprint (roughly five engineers) that is Sprints 29 to 34. Groomed by the owner on 2026-10-05 with
 `design/grooming/groom.mjs` (state in `design/grooming/grooming.json`, summary in `design/grooming/GROOMING.md`):
 WebDAV (B-32) moved to Sprint 34, the import wizard split between Sprints 31 and 33, Sprint 31 accepted at 93 points,
 the platform administration live screens (B-4202 to B-4207) moved to 1.6.0, and four 1.4.0 gaps, MongoDB connections,
 user profiles and presence added (B-58). Model servers beyond Ollama (B-43, 34 points), approved after the grooming,
 went to 1.6.0's Sprint 35. Sprint 33 (chat invocation, B-40, and the import wizard's dataset half, B-3804 to
-B-3807) moved to 1.7.0 on 2026-10-05. Capturing real DAV client traffic (B-3606) moved to 1.6.0's Sprint 36 on
-2026-10-06 (the owner's default; see Progress). With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
+B-3807) moved to 1.7.0 on 2026-10-05. Capturing real DAV client traffic (B-3606) was
+dropped by the owner on 2026-10-06 (not needed). With fewer engineers, P2 (the PDS and feed generator) moves to 1.6 first.
 
 **Builds on.** The permission catalogue and built-in roles (`server/src/authz/permissions.ts`) and `policy.explain`;
 B-25 events (B-2502) and their signed iCal feeds (B-2504); the B-24 file store with its quarantine, scan, versions,
@@ -33,7 +33,7 @@ the same policy pipeline.
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `033_pds`, `033b_feeds`, `033c_imports` | **Done** |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2`, `034b_workflow_triggers`, `034c_workflow_steps` | **Done** |
 | 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
-| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3501 | 64 (B-3606 moved to 1.6.0) | `036_chains`, `036b_profiles`, `036c_dav_files` | **Done** |
+| 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3501 | 64 (B-3606 dropped) | `036_chains`, `036b_profiles`, `036c_dav_files` | **Done** |
 
 The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
 
@@ -80,8 +80,7 @@ with a warning and bounded at run time, and a later change elsewhere that closes
 published; a delegate's steps and wall time count only at the root; WebDAV locks are advisory to the console and
 `/api/files`, there are no range requests and MOVE across workspaces is refused; presence follows shared workspaces
 only (not the profile's label or narrowed workspaces), idle is what the console reports, a chosen status has no
-expiry, and the avatar's file stays in the uploader's workspace file tree. **B-3606 moved to 1.6.0** (Sprint 36, the
-owner's default on 2026-10-06): macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
+expiry, and the avatar's file stays in the uploader's workspace file tree. **B-3606 was dropped by the owner on 2026-10-06 (not needed)**; it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
 needs a per-host certificate trust on the owner's Mac that was not approved; the capture tool
 (`server/test/dav-capture/capture.ts`) is on branch `sprint-34e`, not merged. B-3104 stays partial.
 
@@ -146,7 +145,7 @@ suite with axe-core (Standard and Enhanced, light and dark) and the reflow check
 | B-3603 | RSVP capacity race (B-2502 known gap): a conditional update or row lock on the remaining places (Sprint 31) | Fifty concurrent RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL | 2 |
 | B-3604 | Verify relay commit signatures on the firehose (B-1908 known gap) against the repo's DID key; bad commits dropped and audited, as inbound labels are (Sprint 31) | A commit with a bad signature is dropped and audited; a good one becomes a label as before | 5 |
 | B-3605 | The IMAP channel adapter (B-2303) against a containerised IMAP server in CI instead of a mocked fetcher (Sprint 34) | A message delivered to the test mailbox becomes a channel thread in CI | 3 |
-| B-3606 | **Moved to 1.6.0 (Sprint 36) on 2026-10-06** ([Backlog-1.6.0.md](Backlog-1.6.0.md)): capture real DAV client traffic (B-3104 is partial): record Apple Calendar and Contacts, Thunderbird and DAVx5 against a test server and replace the written fixtures with the captured exchanges, replayed in CI. macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host certificate trust that was not approved; the capture tool is on `sprint-34e` | Every filter operator in the captured run returns the expected items | 2 |
+| B-3606 | **Dropped by the owner on 2026-10-06 (not needed)**: capture real DAV client traffic (B-3104 is partial): record Apple Calendar and Contacts, Thunderbird and DAVx5 against a test server and replace the written fixtures with the captured exchanges, replayed in CI. macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host certificate trust that was not approved; the capture tool is on `sprint-34e` | Every filter operator in the captured run returns the expected items | 2 |
 
 ## P1
 
@@ -368,8 +367,8 @@ All six resolved by the owner on 2026-10-05.
 - [x] Model import screen (B-3803): none in 1.5.0; model import is reached through the API until the Import screen
   (B-3807) in 1.7.0 (decided 2026-10-05).
 - [x] DAV conformance (B-3104): partial, because the fixtures were written from the clients' documented requests;
-  real traffic from Apple Calendar and Contacts, Thunderbird and DAVx5 is captured later (B-3606, decided 2026-10-05;
-  moved to 1.6.0 on 2026-10-06).
+  real traffic from Apple Calendar and Contacts, Thunderbird and DAVx5 was to be captured later (B-3606, decided 2026-10-05;
+  dropped by the owner on 2026-10-06 as not needed, so B-3104 stays partial).
 - [x] CardDAV directory (B-3103): people who share a workspace with the caller, within the caller's clearance, as
   messaging and groups scope people; a workspace open to the whole tenant includes everyone (decided 2026-10-05).
 ## Risks

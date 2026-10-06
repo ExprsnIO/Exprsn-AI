@@ -42,7 +42,7 @@ server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1
 custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
 connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
 context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
-33 moved to 1.7.0 and B-3606 (capturing real DAV client traffic) to 1.6.0. Sprints 35 to 37 are planned in
+33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 37 are planned in
 `Backlog-1.6.0.md`, Sprint 38 in `Backlog-1.7.0.md`.
 Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
 `design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
