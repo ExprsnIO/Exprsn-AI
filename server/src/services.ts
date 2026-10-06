@@ -114,6 +114,7 @@ import { SocialService } from './social/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
+import { BuiltinTools } from './registry/builtin/index.js';
 import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
@@ -381,6 +382,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
   const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) } });
   tools.useWorkflows(workflows);
+  tools.useBuiltins(new BuiltinTools(() => s)); // B-3904: the domain built-ins act through the services as the caller
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
     runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),

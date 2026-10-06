@@ -169,7 +169,8 @@ export function registryAdminRoutes(s: Services): Router {
       return res.status(202).json({ runId: run.id });
     }
     const tool = s.tools.toResolved(e);
-    const sandboxed = e.impl === 'builtin' || e.impl === 'script';
+    // B-3904: a domain built-in that writes (posts, messages, file versions) acts on live data: the harness holds it.
+    const sandboxed = (e.impl === 'builtin' && (e.side_effect ?? 'read') === 'read') || e.impl === 'script';
     const outcome = await s.tools.call({ principal: p, label: b.label ?? e.label, source: { kind: 'registry-test', id: e.id }, approved: sandboxed }, tool, b.arguments);
     await audit(req, 'registry.tested', e, { ok: outcome.ok, denied: !!outcome.denied, needsApproval: !!outcome.needsApproval, valid: outcome.valid ?? null });
     res.json({ ...outcome, label: e.label, sandboxed, note: outcome.needsApproval ? `${e.name} is a ${tool.sideEffect} tool; the harness does not run it against a live system.` : null });

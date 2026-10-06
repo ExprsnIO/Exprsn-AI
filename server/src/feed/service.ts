@@ -60,6 +60,15 @@ export interface PostRow {
   updated_at: number;
   published_at: number | null;
   edited_at: number | null;
+  /** B-3904: what made the post when a person did not type it (a workflow run, an agent run, a plugin). */
+  source_kind?: string | null;
+  source_id?: string | null;
+}
+
+/** B-3904: the source a post records (`workflow-run`, `agent-run`, `message`, `plugin`…) and its id. */
+export interface PostSource {
+  kind: string;
+  id: string;
 }
 
 export interface CommentRow {
@@ -300,6 +309,7 @@ export class FeedService {
         label: x.label,
         state: x.state,
         repostOf: x.repost_of,
+        source: x.source_kind && x.source_id ? { kind: x.source_kind, id: x.source_id } : null,
         media: (mediaBy.get(x.id) ?? []).map((m) => ({ fileId: m.file_id, name: m.name, type: m.type, size: m.size == null ? null : Number(m.size), available: m.state === 'ready' && m.trashed_at == null })),
         tags: (tagsBy.get(x.id) ?? []).map((t) => t.tag),
         counts: { comments: commentsBy.get(x.id) ?? 0, reposts: repostsBy.get(x.id) ?? 0, reactions: counts },
@@ -497,7 +507,7 @@ export class FeedService {
     return { ids, label };
   }
 
-  async createPost(ctx: Ctx, input: { workspaceId?: string | undefined; groupId?: string | undefined; body?: string | undefined; media?: string[] | undefined; label?: Label | undefined }) {
+  async createPost(ctx: Ctx, input: { workspaceId?: string | undefined; groupId?: string | undefined; body?: string | undefined; media?: string[] | undefined; label?: Label | undefined; source?: PostSource | undefined }) {
     const s = this.s();
     const p = ctx.p;
     const sc = await this.scope(p);
@@ -512,7 +522,7 @@ export class FeedService {
     const id = ulid();
     const g = body ? await this.guard(p, { id, workspaceId: t.workspaceId, groupId: t.groupId, label }, body, 'post', true) : { text: '', hold: null, action: 'allow' };
     const now = Date.now();
-    const row: PostRow = { id, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: g.text ? await s.keys.seal(p.tenantId, g.text, `feed-post:${id}`) : null, label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null };
+    const row: PostRow = { id, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: g.text ? await s.keys.seal(p.tenantId, g.text, `feed-post:${id}`) : null, label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null, ...(input.source ? { source_kind: input.source.kind.slice(0, 40), source_id: input.source.id.slice(0, 64) } : {}) };
     await this.db.transaction(async (trx) => {
       await trx('feed_posts').insert(row);
       if (m.ids.length) await trx('feed_post_media').insert(m.ids.map((fileId, i) => ({ post_id: id, tenant_id: p.tenantId, file_id: fileId, position: i })));
@@ -552,7 +562,7 @@ export class FeedService {
   /** What follows publishing: hashtags, the audit entry, the catalogue event and the live feeds. */
   private async published(ctx: Ctx | null, x: PostRow, text: string, detail: Record<string, unknown>): Promise<void> {
     await this.indexTags(x, text);
-    if (ctx) await this.audit(ctx, 'feed.post.created', { post: x.id, workspace: x.workspace_id, group: x.group_id, ...(x.repost_of ? { repostOf: x.repost_of } : {}) }, { length: text.length, ...detail }, x.label);
+    if (ctx) await this.audit(ctx, 'feed.post.created', { post: x.id, workspace: x.workspace_id, group: x.group_id, ...(x.repost_of ? { repostOf: x.repost_of } : {}) }, { length: text.length, ...detail, ...(x.source_kind ? { source: { kind: x.source_kind, id: x.source_id } } : {}) }, x.label);
     this.event(x, 'post.created', x.author_id);
     await this.deliver(x, 'feed.post.created');
   }
