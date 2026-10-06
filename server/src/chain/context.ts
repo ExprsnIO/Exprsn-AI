@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ulid } from 'ulid';
+import { monotonicFactory } from 'ulid';
+
+/** Node ids rise within a millisecond too, so the chain view lists siblings in the order they began. */
+const ulid = monotonicFactory();
 import { highest, LABELS, labelRank, type Label } from '../authz/labels.js';
 import { isUniqueViolation, type AuditInput } from '../audit/chain.js';
 import type { Db } from '../db/knex.js';
@@ -69,6 +72,13 @@ export interface ChainLimits {
 
 export type ChainRefusal = 'depth' | 'kind-depth' | 'budget' | 'principal' | 'stopped' | 'missing';
 
+/**
+ * B-4106: how a child ended when it did not succeed, as its caller receives it: an agent sees `<type>` in the tool
+ * error (`child_budget: …`), a workflow step's failure edge reads `{error, step, type}`.
+ */
+export const CHAIN_ERROR_TYPES = ['failed', 'budget', 'cancelled', 'rejected', 'chain_limit', 'output', 'label', 'timeout'] as const;
+export type ChainErrorType = (typeof CHAIN_ERROR_TYPES)[number];
+
 /** Why an invocation may not begin or continue: `code` says which rule. */
 export class ChainLimit extends Error {
   constructor(
@@ -113,6 +123,8 @@ interface ChainRow {
   steps: number;
   wall_ms: number;
   gpu_ms: number;
+  created_at: number;
+  updated_at: number;
 }
 
 interface NodeRow {
@@ -129,6 +141,9 @@ interface NodeRow {
   label: Label;
   state: string;
   error: string | null;
+  /** Sprint 34 (036_chains): the tool-call checkpoint's action, and the typed error a caller received. */
+  decision?: string | null;
+  error_type?: string | null;
   tokens: number;
   steps: number;
   wall_ms: number;
@@ -138,7 +153,7 @@ interface NodeRow {
 }
 
 const num = (v: unknown) => Number(v ?? 0);
-const chainFrom = (r: Record<string, unknown>): ChainRow => ({ ...(r as unknown as ChainRow), budget_tokens: num(r.budget_tokens), budget_steps: num(r.budget_steps), budget_wall_ms: num(r.budget_wall_ms), budget_gpu_ms: num(r.budget_gpu_ms), tokens: num(r.tokens), steps: num(r.steps), wall_ms: num(r.wall_ms), gpu_ms: num(r.gpu_ms) });
+const chainFrom = (r: Record<string, unknown>): ChainRow => ({ ...(r as unknown as ChainRow), budget_tokens: num(r.budget_tokens), budget_steps: num(r.budget_steps), budget_wall_ms: num(r.budget_wall_ms), budget_gpu_ms: num(r.budget_gpu_ms), tokens: num(r.tokens), steps: num(r.steps), wall_ms: num(r.wall_ms), gpu_ms: num(r.gpu_ms), created_at: num(r.created_at), updated_at: num(r.updated_at) });
 const nodeFrom = (r: Record<string, unknown>): NodeRow => ({ ...(r as unknown as NodeRow), depth: num(r.depth), tokens: num(r.tokens), steps: num(r.steps), wall_ms: num(r.wall_ms), gpu_ms: num(r.gpu_ms), created_at: num(r.created_at), finished_at: r.finished_at == null ? null : num(r.finished_at) });
 
 const KIND_NAMES: Record<ChainKind, string> = { 'chat-turn': 'chat turns', 'agent-run': 'agent runs', 'workflow-run': 'workflow runs', 'tool-call': 'tool calls', 'skill-load': 'skill loads', 'plugin-action': 'plugin actions', 'app-trigger': 'app triggers' };
@@ -294,10 +309,14 @@ export class ChainService {
     return null;
   }
 
-  /** Records how the invocation ended. The chain is done when its root ends (unless a budget stopped it). */
-  async finish(ref: ChainRef, state: 'succeeded' | 'failed' | 'refused' | 'waiting' | 'cancelled' | 'running', error: string | null = null): Promise<void> {
+  /**
+   * Records how the invocation ended (with the typed error its caller received, B-4106). The chain is done when its
+   * root ends (unless a budget stopped it).
+   */
+  async finish(ref: ChainRef, state: 'succeeded' | 'failed' | 'refused' | 'waiting' | 'cancelled' | 'running', error: string | null = null, errorType: ChainErrorType | null = null): Promise<void> {
     const t = Date.now();
-    await this.db('chain_nodes').where({ id: ref.node }).update({ state, error: error?.slice(0, 500) ?? null, finished_at: state === 'waiting' || state === 'running' ? null : t });
+    const type = errorType ?? (state === 'failed' ? 'failed' : state === 'cancelled' ? 'cancelled' : state === 'refused' ? 'chain_limit' : null);
+    await this.db('chain_nodes').where({ id: ref.node }).update({ state, error: error?.slice(0, 500) ?? null, error_type: type, finished_at: state === 'waiting' || state === 'running' ? null : t });
     const c = await this.chainRow(ref.chain);
     if (c && c.root_node === ref.node && c.state === 'running' && state !== 'waiting' && state !== 'running') await this.db('chains').where({ id: c.id, state: 'running' }).update({ state: 'done', updated_at: t });
     if (c && c.root_node === ref.node && (state === 'running' || state === 'waiting') && c.state === 'done') await this.db('chains').where({ id: c.id }).update({ state: 'running', updated_at: t });
@@ -321,13 +340,27 @@ export class ChainService {
     return true;
   }
 
+  /** Notes the `tool-call` guardrail checkpoint's action on a node (the chain view shows it, B-4107). */
+  async note(ref: ChainRef, n: { decision?: string | null }): Promise<void> {
+    if (n.decision !== undefined) await this.db('chain_nodes').where({ id: ref.node }).update({ decision: n.decision?.slice(0, 20) ?? null });
+  }
+
+  /** The nodes from the root down to `node` (the path a held call is shown with, B-4106). */
+  async pathTo(chainId: string, node: string): Promise<{ id: string; kind: ChainKind; ref: string; callee: string | null; depth: number }[]> {
+    const rows = ((await this.db('chain_nodes').where({ chain_id: chainId }).select('id', 'parent_id', 'kind', 'ref', 'callee', 'depth')) as { id: string; parent_id: string | null; kind: ChainKind; ref: string; callee: string | null; depth: number }[]);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const out: { id: string; kind: ChainKind; ref: string; callee: string | null; depth: number }[] = [];
+    for (let cur = byId.get(node); cur && out.length <= this.limits.maxDepth + 1; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) out.unshift({ id: cur.id, kind: cur.kind, ref: cur.ref, callee: cur.callee, depth: num(cur.depth) });
+    return out;
+  }
+
   /** Records a refused invocation as a node (so the chain shows where it stopped), without a budget check. */
   async refused(tenantId: string, spec: BeginSpec, reason: string): Promise<void> {
     if (!spec.parent) return;
     const parent = await this.nodeRow(spec.parent.node);
     if (!parent) return;
     const path = [...(JSON.parse(parent.path) as unknown[]), [spec.kind, spec.callee ?? null]];
-    await this.db('chain_nodes').insert({ id: ulid(), tenant_id: tenantId, chain_id: parent.chain_id, parent_id: parent.id, depth: parent.depth + 1, kind: spec.kind, ref: ulid(), callee: spec.callee?.slice(0, 200) ?? null, path: JSON.stringify(path), principal_id: spec.principal, label: spec.label, state: 'refused', error: reason.slice(0, 500), tokens: 0, steps: 0, wall_ms: 0, gpu_ms: 0, created_at: Date.now(), finished_at: Date.now() });
+    await this.db('chain_nodes').insert({ id: ulid(), tenant_id: tenantId, chain_id: parent.chain_id, parent_id: parent.id, depth: parent.depth + 1, kind: spec.kind, ref: ulid(), callee: spec.callee?.slice(0, 200) ?? null, path: JSON.stringify(path), principal_id: spec.principal, label: spec.label, state: 'refused', error: reason.slice(0, 500), error_type: 'chain_limit', tokens: 0, steps: 0, wall_ms: 0, gpu_ms: 0, created_at: Date.now(), finished_at: Date.now() });
   }
 
   /** A chain with its nodes, oldest first (the chain view, B-4107, builds its tree from this). */
@@ -344,7 +377,9 @@ export class ChainService {
       stopReason: c.stop_reason,
       budgets: { tokens: c.budget_tokens, steps: c.budget_steps, wallMs: c.budget_wall_ms, gpuMs: c.budget_gpu_ms },
       used: { tokens: c.tokens, steps: c.steps, wallMs: c.wall_ms, gpuMs: c.gpu_ms },
-      nodes: nodes.map((n) => ({ id: n.id, parent: n.parent_id, depth: n.depth, kind: n.kind, ref: n.ref, callee: n.callee, label: n.label, state: n.state, error: n.error, tokens: n.tokens, steps: n.steps, wallMs: n.wall_ms, gpuMs: n.gpu_ms, createdAt: n.created_at, finishedAt: n.finished_at }))
+      createdAt: c.created_at,
+      updatedAt: c.updated_at,
+      nodes: nodes.map((n) => ({ id: n.id, parent: n.parent_id, depth: n.depth, kind: n.kind, ref: n.ref, callee: n.callee, label: n.label, state: n.state, error: n.error, errorType: n.error_type ?? null, decision: n.decision ?? null, tokens: n.tokens, steps: n.steps, wallMs: n.wall_ms, gpuMs: n.gpu_ms, createdAt: n.created_at, finishedAt: n.finished_at }))
     };
   }
 }
