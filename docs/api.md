@@ -2588,6 +2588,9 @@ for other records) goes through the moderation check (B-1901) as an `atproto-pos
 with the subscription's workspace and label: a verdict of flag or worse raises the post's one flag in that workspace's
 queue, and a verdict of warn or worse becomes signed labels on the post's URI from the tenant's labeler (B-1610; the
 platform's when the tenant has none). Deletes and records without text advance the cursor and are not checked.
+Since 1.5.0 (B-3604) a subscribeRepos commit is believed only when it verifies against the repo's DID key (see
+[Sprint 31](#sprint-31-150-custom-feed-generators-b-3001-to-b-3003-and-relay-commit-verification-b-3604)); posts that pass
+the check also go on to the tenant's feed generators.
 
 The consumer runs on one worker instance at a time: every `FIREHOSE_TICK_MS` each instance claims or renews a lease on
 the running subscriptions, and only the holder connects (a lease lasts three ticks; a stopping instance gives its leases
@@ -2604,7 +2607,7 @@ at every connection. Metrics: `exprsn_firehose_events_total{result}`, `exprsn_fi
 
 A subscription is `{id, name, protocol: jetstream | subscribe-repos, endpoint, collections, dids, sampleRate, workspaceId,
 label, state: running | stopped, status: idle | waiting | connecting | streaming | backoff | error, held, cursor,
-cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed}, reconnects, rev, live,
+cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed, rejected}, reconnects, rev, live,
 createdAt, updatedAt}`. `held` says whether an instance holds its lease now (`waiting`: running but not yet taken);
 `live` is `{connected, paused, queue, pauses, cursor}` when the instance answering is the holder, else null. Counts are
 stored with the cursor. Subscriptions labelled above the caller's clearance are not shown (`404`).
@@ -2828,7 +2831,7 @@ daylight-saving gap moves forward by the gap. Events last at most 31 days. Reade
 | `GET /api/calendar/events/:id` | With `attendance {going, maybe, guests, checkedIn}` and the caller's `myRsvp` |
 | `PATCH /api/calendar/events/:id` | Moderators; the event fields, all optional. A change attendees see moves `sequence`; a new time or reminder list reschedules the reminders |
 | `POST /api/calendar/events/:id/cancel` `{reason?}` | Moderators. Stops the reminders and notifies **every attendee** (going or maybe), in the console (`event.cancelled`) and by email (`event-notice`: the time and a link, never the event's title or the reason). `200` with the event and `notified` |
-| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`) |
+| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`); since 1.5.0 (B-3603) the event row is locked while the places are counted, so simultaneous answers for the last place take turns and only one gets it |
 | `GET /api/calendar/events/:id/attendees` | Readers see who is going or maybe; moderators also the declined and check-ins |
 | `POST /api/calendar/events/:id/check-in` `{userId, checkedIn?: true}` | Moderators. Someone without an RSVP is added as going (if they can read the event) |
 | `GET /api/calendar/events/:id/reminders` | Moderators. `[{id, minutesBefore, fireAt, state: scheduled \| sending \| sent \| cancelled \| skipped, recipients, sentAt}]` |
@@ -3433,3 +3436,282 @@ send a security notice and are audited (`dav.app_password.created`, `dav.app_pas
 | `PUT /dav/:path` | Stores a calendar object or contact, or answers a group event (the caller's `PARTSTAT` becomes their RSVP). `If-Match` with a stale ETag is `412` |
 | `DELETE /dav/:path` | Deletes a personal object or collection; cancels a group event (moderators and owners) |
 | `OPTIONS /dav/:path` | `DAV: 1, 3, calendar-access, addressbook, extended-mkcol` and the methods allowed |
+
+## Sprint 31 (1.5.0): custom feed generators (B-3001 to B-3003) and relay commit verification (B-3604)
+
+### Relay commit verification (B-3604)
+
+A subscribeRepos `#commit` is believed only when it verifies (`server/src/atproto/commit.ts`, over the PDS's repository
+code: the MST walk in `pds/mst.ts`, the CAR reader in `pds/car.ts`, the signed bytes in `pds/repo.ts`): every block used hashes
+to its CID; the commit object (`{did, version: 3, data, rev, prev, sig}`) names the frame's repo and rev; `sig` is a
+compact low-S ECDSA-SHA256 signature over the DAG-CBOR of the commit without `sig`, by the `#atproto` key of the repo's
+DID document (resolved through the service URL checks, cached five minutes; fetched once more, at most once a minute
+per DID, when the signature fails, in case the key rotated); and each operation the subscription uses is proven against
+the signed tree root `data`: a create or update by walking the Merkle search tree to its path and finding exactly the
+operation's CID (with the record block hashing to it), a delete by finding nothing there. A commit that fails is
+dropped whole (none of its posts are checked, labelled or indexed; the cursor moves past it), counted in the
+subscription's `counts.rejected` and `exprsn_firehose_events_total{result="rejected"}`, and audited
+`atproto.firehose.commit.rejected` `{subscription, did}` with `{reason: commit | repo | resolve | document | signature |
+proof | too-big, detail, seq, posts, deletes, more?}`: at most `FIREHOSE_REJECT_AUDITS` a minute per subscription, the
+rest counted in `more` on the next one. Jetstream carries no signatures; a Jetstream endpoint is trusted as the
+operator's choice.
+
+### Feed generators
+
+A tenant's feeds are served by the tenant's own AT-Protocol identity (Sprint 25) as a feed generator: its DID document
+gains a `#bsky_fg` service of type `BskyFeedGenerator` at the identity's endpoint when the first feed is made (computed
+for did:web; for did:plc a signed PLC operation adds it, audited `atproto.identity.service-added`). The platform's
+identity serves no feeds. Each post the tenant's firehose subscriptions take, and that the moderation check passed, is
+indexed by every active feed whose rules all hold:
+
+- `authors`: DIDs (null: anyone); `collections`: NSIDs or `prefix.*` (default `[app.bsky.feed.post]`);
+- `keywords`: any of them, case-insensitive, not inside a longer word (null: any text);
+- `labels`: any of these in force on the post (from the tenant's labeler, its trusted external labelers, or the
+  check's own verdict: block is `!hide`, warn or flag `!warn`); `excludeLabels`: none of these (default `[!hide]`).
+
+Authors, collections and labels are checked again when a page is served, so a post outside the current rules, or
+labelled later, is never served. Narrowing authors or collections deletes what no longer matches; changing the keywords
+or the ranking empties the index (the post text is not kept). A delete seen on the firehose takes the post out of every
+feed.
+
+Ranking (optional) orders a feed by a score instead of newest first, and `minScore` drops posts below it:
+`{kind: embedding, profile, query, minScore?}` is the cosine similarity of the post to `query`, both embedded through
+the gateway by the embedding model the profile routes to (the profile must handle the subscription's label);
+`{kind: classifier, classifier, label, minScore?}` is a guardrail classifier's score for one of its labels. A post whose
+ranking fails is not indexed (`counts.rankFailed`, `lastError`).
+
+The index keeps the post URI, author, collection and a sort key (the time indexed, or the score × 1e9). Pages run by
+(sort, id) descending; the cursor is the last row's `<sort>::<id>` and the next page starts strictly after it, so a
+cursor never repeats a post however many arrive meanwhile. Rows older than `retentionHours` are not served and, with
+anything beyond `maxItems`, are pruned every `FEED_PRUNE_MINUTES` (job `atproto.feeds.prune`).
+
+A feed is `{id, rkey, uri, displayName, description, subscriptionId, rules, ranking, retentionHours, maxItems,
+ratePerMinute, auth: optional | required, state: active | paused, rev, record, published, counts: {indexed, served,
+rankFailed, items?}, lastError, createdAt, updatedAt}`. `uri` is `at://<publisher or generator DID>/app.bsky.feed.generator/<rkey>`;
+`record` is the `app.bsky.feed.generator` record to publish (B-3004): `{$type, did: <the generator's service DID>,
+displayName, description?, createdAt}`; `published` is `{did, uri, cid, at}` once recorded, after which only that URI
+names the feed. The generator is `{ready, reason, did, method, endpoint, serviceId: '#bsky_fg', serviceType:
+'BskyFeedGenerator', advertised}`.
+
+### Feeds (`firehose:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/feeds` | `{generator, feeds: [feed]}` (each with `counts.items`) |
+| `POST /api/atproto/feeds` `{rkey, displayName, description?, subscriptionId?, rules?, ranking?, retentionHours?, maxItems?, ratePerMinute?, auth?, state?}` | B-3002. `rkey` 1 to 15 letters, digits or hyphens; `displayName` at most 24 characters, `description` 300; `retentionHours` 1 to 8760 (72); `maxItems` 10 to `FEED_ITEMS_MAX` (10,000); `ratePerMinute` 1 to 100,000 (300). A ranking whose profile does not route to an embedding model, or whose classifier lacks the label, is `400` with `step: ranking`. Without the tenant's own identity `409` with `step: identity`; a key in use or more than `FEEDS_MAX_PER_TENANT` feeds `409`. Audited `atproto.feed.created`. `201` |
+| `GET /api/atproto/feeds/:id` | The feed |
+| `PATCH /api/atproto/feeds/:id` `{displayName?, description?, subscriptionId?, rules?, ranking?, retentionHours?, maxItems?, ratePerMinute?, auth?, state?}` | Rules are merged field by field. Audited `atproto.feed.updated` (with `removed` when the index shrank) |
+| `DELETE /api/atproto/feeds/:id` | The feed and its index. Audited `atproto.feed.deleted`. `204` |
+| `GET /api/atproto/feeds/:id/skeleton?limit=1-100 (50)&cursor` | A preview page, as getFeedSkeleton serves it (not counted as served) |
+| `PUT /api/atproto/feeds/:id/publication` `{did, uri, cid?}` | B-3004 records where the generator record was published (or an admin who published it from an external account); `uri` must be `at://<did>/app.bsky.feed.generator/<rkey>`. Audited `atproto.feed.published` |
+| `DELETE /api/atproto/feeds/:id/publication` | Forgets it. Audited `atproto.feed.unpublished` |
+
+### Public XRPC (no session; `ATPROTO_PUBLIC_RATE_PER_MINUTE` per address, shared with the labeler routes)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /xrpc/app.bsky.feed.describeFeedGenerator`, `GET /atproto/:key/xrpc/app.bsky.feed.describeFeedGenerator` | `{did, feeds: [{uri}]}`: the active feeds of the tenant identity for this host (or path). `404 NotFound` where no identity is served |
+| `GET /xrpc/app.bsky.feed.getFeedSkeleton`, `GET /atproto/:key/xrpc/app.bsky.feed.getFeedSkeleton` `?feed=<at-uri>&limit=1-100 (50)&cursor` | B-3001, B-3003. `{cursor?, feed: [{post}]}`. `Authorization: Bearer <service JWT>` from the AppView: `alg` ES256K or ES256, signed by the issuer's `#atproto` key (its DID document through the service URL checks), `aud` the generator DID or `<did>#bsky_fg`, `exp` in the future and at most an hour away, `lxm` (when given) `app.bsky.feed.getFeedSkeleton`. A token that does not verify is `401` (`BadJwt`, `BadJwtSignature`, `BadJwtAudience`, `JwtExpired`, `BadJwtLexiconMethod`) whatever the feed; a feed with `auth: required` answers a request without one `401 AuthenticationRequired`. `400 UnknownFeed`, `InvalidRequest`, `BadCursor`; `429 RateLimitExceeded` over the feed's `ratePerMinute` (shared counters, with `Retry-After`). Metric `exprsn_feed_requests_total{method, result}` |
+
+Audit actions are in the event catalogue's `atproto.*` group. Configuration: `FIREHOSE_REJECT_AUDITS` (20),
+`FEEDS_MAX_PER_TENANT` (20), `FEED_ITEMS_MAX` (50,000), `FEED_PRUNE_MINUTES` (15; 0 never).
+
+## Sprint 31 (1.5.0): the AT-Protocol PDS (B-2901 to B-2906, B-3004)
+
+Exprsn-AI hosts AT-Protocol repositories. The protocol endpoints are at `/xrpc` and are described, with hosting,
+accounts, the firehose, migration and how labels apply, in [`docs/pds.md`](pds.md). This section lists the JSON API.
+New permission `pds:manage` (tenant admins): the tenant's hosting settings, its accounts, invite codes and published
+feed generator records. Members manage their own account with `atproto:link`. Turning hosting on or off is
+`platform:manage` with a recent sign-in. Errors from the PDS carry `error` (the XRPC error name) as an extension.
+Every change is audited (`pds.*`; the event catalogue's `pds.*` group, catalogue version 7). Migration `033_pds`.
+
+An account view is `{id, did, handle, state: active|deactivated|takendown, stateReason, takedownAction, migrating,
+userId, username?, email, didMethod: plc|web, signingKey, rotationKey (did:key), custody: signer|openbao, curve:
+secp256k1|p256, rev, commit, records?, createdAt, updatedAt, deactivatedAt, takendownAt}`. A hosting view is
+`{enabled, zone, handleDomain, inviteRequired, blobMaxBytes, blobTypes, enabledBy, enabledAt, updatedAt}`.
+
+### Hosting (platform admins)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/pds/tenants` | Every tenant's hosting view (with `tenantId`, `slug`, `name`) and the service: `{did, endpoint, handleDomain, zone, custody, relays: [{relay, lastAt, lastStatus, lastError}]}` |
+| `PUT /api/admin/pds/tenants/:tid` | `{enabled, zone?}`. Enabling fixes the handle domain `<tenant>.<PDS_HANDLE_DOMAIN>`; refused (`409`) in an air-gapped deployment, a zone without egress, without a signer or OpenBao, or when the domain is not a usable domain. Disabling is refused while active accounts remain. Audited `pds.hosting.enabled` / `pds.hosting.disabled` |
+| `POST /api/admin/pds/crawl` | Sends `com.atproto.sync.requestCrawl` to every relay in `PDS_RELAYS` now: `{host, relays: [{relay, status, error}]}`. Audited `pds.crawl.requested` |
+
+### The tenant's PDS (`pds:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/pds` | The hosting view, `accounts` counted by state, and `service: {did, endpoint, subscribeRepos, seq, custody, curves}` |
+| `PATCH /api/admin/pds/settings` | `{inviteRequired?, blobMaxBytes? (null: the platform's), blobTypes? (null: the platform's)}`, within `PDS_BLOB_MAX_BYTES` and `PDS_BLOB_TYPES`. Audited `pds.settings.updated` |
+| `GET /api/admin/pds/accounts?state&q&limit&before` | `{accounts: [view]}`, newest first; `q` matches part of a handle or a whole DID |
+| `GET /api/admin/pds/accounts/:id` | One account view |
+| `POST /api/admin/pds/accounts/:id/deactivate` | `{reason}`. The repo answers `RepoDeactivated`, sessions end. Audited `pds.account.deactivated` |
+| `POST /api/admin/pds/accounts/:id/activate` | Audited `pds.account.activated` (a migrated account only once its DID names this PDS) |
+| `POST /api/admin/pds/accounts/:id/takedown` | `{reason}`. A moderation action on the `pds-repo` object (B-1903; the owner is told and may appeal): `RepoTakendown`, blobs not served, sessions revoked, `!takedown` published on the DID (B-1610). Answers `{account, action}`. Audited `moderation.action.applied`, `pds.account.takendown` |
+| `POST /api/admin/pds/accounts/:id/restore` | `{reason}`. Reverses that action: the previous state, the label withdrawn. Answers `{account, action, restored}`. Audited `moderation.action.reversed`, `pds.account.restored` |
+| `GET /api/admin/pds/invites` | `{invites: [{id, hint, usesMax, uses, note, createdBy, createdAt, expiresAt, disabledAt, state: active\|expired\|used\|disabled}]}` (never the codes) |
+| `POST /api/admin/pds/invites` | `{usesMax? (1), expiresInDays?, note?}`: `201` with the view and `code` (shown once). Audited `pds.invite.created` |
+| `DELETE /api/admin/pds/invites/:id` | Disables the code (`204`). Audited `pds.invite.disabled` |
+| `GET /api/admin/pds/feed-generators` | `{records: [{id, target: hosted\|external, accountId, repo, rkey, uri, cid, serviceDid, displayName, createdBy, createdAt, updatedAt}]}` (B-3004) |
+| `POST /api/admin/pds/feed-generators` | `{target: {kind: 'hosted', accountId} \| {kind: 'external', identifier, appPassword, pdsUrl?}, serviceDid, rkey, displayName, description?, acceptsInteractions?, contentMode?}`: publishes (or replaces) the `app.bsky.feed.generator` record naming `serviceDid`; the external app password is used once and never stored. `201` with the record view. Audited `pds.feed.published`. Or `{target, feedId}` (no metadata): publishes the record of a feed defined under `/api/atproto/feeds`, built by the feed generator (its rkey, display name and description; `did` the generator's service DID, `409` while the tenant has no AT-Protocol identity, `404` for an unknown feed), and records the publication on the feed (`published`, audited `atproto.feed.published`); the response adds `feedId` |
+| `POST /api/admin/pds/feed-generators/:id/withdraw` | `{identifier?, appPassword?, pdsUrl?}` (needed for an external record): deletes the record (`204`); a feed published as it forgets the publication (`published: null`, audited `atproto.feed.unpublished`). Audited `pds.feed.withdrawn` |
+
+### One's own account (`atproto:link`, a browser session)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/pds` | `{hosting: {enabled, handleDomain, endpoint}, account: view \| null, appPasswords: [{id, name, privileged, createdAt, lastUsedAt, revokedAt, state}]}` |
+| `POST /api/me/pds` | `{handle}` (a name, or the full handle): creates the account (recent sign-in). `201` with the view. Audited `pds.account.created` |
+| `PUT /api/me/pds/handle` | `{handle}` within the tenant's domain (recent sign-in). Audited `pds.account.handle_changed` |
+| `POST /api/me/pds/deactivate`, `POST /api/me/pds/activate` | The account's own state |
+| `POST /api/me/pds/app-passwords` | `{name, privileged?}`: a recent sign-in and, when the user has a second factor, one confirmed within `STEPUP_WINDOW_SECONDS` (`401` with `step_up` and `factor` otherwise). `201` with the view, `password` (`xxxx-xxxx-xxxx-xxxx`, shown once), `identifier` and `server`. At most 50 live. Audited `pds.app_password.created` |
+| `DELETE /api/me/pds/app-passwords/:id` | Revokes it and its sessions at once (`204`). Audited `pds.app_password.revoked` |
+| `POST /api/me/pds/plc-token` | A single-use code for `com.atproto.identity.signPlcOperation` (moving the account to another PDS), valid 15 minutes, shown once (recent sign-in): `201 {token, expiresAt}`. Audited `pds.plc.token_issued` |
+## Sprint 30 (1.5.0): import repositories and model import (B-3801 to B-3803)
+
+The server side of the import wizard (the Import screen is B-3807). New permissions: `imports:run` (browse
+repositories and request imports; model, ML and knowledge admins and tenant admins; a destination also needs its own
+permission, `models:manage` for a draft model), `imports:repositories` (model admins: propose, confirm and change
+repositories) and `imports:review` (the new `legal-review` role, granted only by a system admin: licence exceptions and
+the licence allow-list). Migration `033c_imports`. Audit actions `import.*` (also an event group). Configuration:
+`IMPORT_CONNECTIVITY`, `IMPORT_PROXY_URL`, `IMPORT_ALLOWED_HOSTS`, `IMPORT_TIMEOUT_MS`, `IMPORT_PART_BYTES`,
+`IMPORT_MAX_BYTES`, `IMPORT_HARVEST_MAX_ITEMS`, `IMPORT_HARVEST_TICK_MINUTES`, `IMPORT_BUNDLE_POLL_MINUTES`,
+`IMPORT_BACKOFF_MAX_MINUTES`, `IMPORT_DATASET_QUOTA_GB` (`server/.env.example`).
+
+### Repositories (B-3801)
+
+Types (`GET /api/imports/types`): `hf` (Hugging Face compatible hub), `ollama` (Ollama compatible OCI registry), `ckan`,
+`dcat` (DCAT-AP as JSON-LD), `sdmx` (SDMX 2.1 REST), `openml`, `invenio` (InvenioRDM, Zenodo), `kaggle` and `bundle`
+(model files in promoted signed platform bundles). Model import is implemented for `hf`, `ollama` and `bundle`; the
+others are browsable dataset catalogues until dataset import (B-3804).
+
+A repository is **proposed** by one holder of `imports:repositories` (`state: pending`) and **confirmed** by another
+(`403` `step: dual-control` for the proposer). Until then it is not browsable (`409`), not harvested and its hosts are
+not on the allow-list. Confirming queues the first harvest. The base host and `extraHosts` (redirect and CDN hosts,
+defaulted per type: `*.hf.co`, `cdn-lfs*.huggingface.co` for a hub, `*.r2.cloudflarestorage.com` for the Ollama
+registry) are the repository's part of the staging-proxy allow-list; they cannot be changed afterwards (propose again).
+`https://` only; plain `http://` only for hosts `IMPORT_ALLOWED_HOSTS` names.
+
+The credential is a vault reference (`credentialRef: vault:<path>#<key>`, checked with the saver's vault policy) or a
+value (`credential`) written into the vault at `imports/repositories/<id>` as the caller (they need vault write on that
+path). It is resolved, at use, as the user who saved it (B-1705: they need `secrets:read` and the path policy), sent
+only on the first request to the repository's own host, never along a redirect, and never shown again (the view has
+`credential: {recorded, ref, required, kind}`). Hub and InvenioRDM tokens go as `Bearer`, Kaggle and registry
+credentials (`username:key`) as Basic, CKAN keys as `Authorization`, OpenML keys as `X-API-Key`.
+
+Harvests (`imports.harvest` job) replace the repository's catalogue snapshot in one transaction; `harvestMinutes`
+(at least 15) schedules them (`imports.harvest-due`, every `IMPORT_HARVEST_TICK_MINUTES`). A source answering 429 (or
+503 with `Retry-After`) puts the repository into backoff (the longer of `Retry-After` and one minute doubling per
+failure, capped at `IMPORT_BACKOFF_MAX_MINUTES`): `status: rate limited`, `backoffUntil`; harvests, live search and
+downloads wait for it.
+
+Repository view: `{id, name, type, typeName, protocol, baseUrl, host, extraHosts, region, kinds, options, credential,
+licencePolicy, harvestMinutes, nextHarvestAt, state: pending | active | disabled | rejected, status: unknown |
+reachable | rate limited | unreachable | needs token | disabled, statusDetail, backoffUntil, liveSearch, modelImport,
+snapshotAt, snapshotItems, harvestJob, requestedBy, decidedBy, decidedAt, decisionNote, createdAt, updatedAt}`.
+
+Type options: `hf` `search`, `author`; `ollama` `models` (names to track; a registry answering `/v2/_catalog` needs
+none), `maxTags`; `ckan` `query`, `fq`, `region`; `dcat`, `sdmx` `region`, `licence` (the provider's terms); `openml`
+`detailLimit` (how many descriptions to read for licences); `invenio` `query` (for example `resource_type.type:dataset`);
+`kaggle` `query`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/types` | The types with kinds, protocol, example URL, default hosts, credential, live search and facet keys |
+| `GET /api/imports/repositories` | Repository views |
+| `POST /api/imports/repositories` `{name, type, baseUrl?, region?, kinds?, extraHosts?, options?, credentialRef? \| credential?, licencePolicy?, harvestMinutes?}` | `201` a pending repository; the other repository admins are notified |
+| `GET /api/imports/repositories/:id` | One repository |
+| `PATCH /api/imports/repositories/:id` `{name?, region?, options?, credentialRef?, credential?, licencePolicy?, harvestMinutes?}` | Changes it (not its hosts) |
+| `POST /api/imports/repositories/:id/confirm` `{note?}` | The second admin's confirmation: the view and `harvestJobId` |
+| `POST /api/imports/repositories/:id/reject` `{note?}` | Rejects a proposal |
+| `POST /api/imports/repositories/:id/enable`, `/disable` | Enables or disables it |
+| `POST /api/imports/repositories/:id/harvest` | `202 {jobId}` |
+| `POST /api/imports/repositories/:id/check` | Probes the source (and the credential) and updates `status` |
+| `DELETE /api/imports/repositories/:id` | `204`; `409` while any of its imports is in the queue |
+| `GET /api/imports/proxy-allowlist?format=json\|squid` | `platform:manage`: the hosts of every confirmed repository (system admins: every tenant) plus `IMPORT_ALLOWED_HOSTS`, as `{proxy, hosts: [{host, repositories}]}` or squid `dstdomain` lines |
+
+### Catalogue browse (B-3802)
+
+`GET /api/imports/repositories/:id/catalog?kind&q&facet.<key>=<value>&live=auto|on|off&limit&offset` answers
+`{repository, kind, query, selected, source: live | snapshot, liveReason, snapshotAt, total, limit, offset, items,
+facets: [{key, label, values: [{value, count, selected}]}]}`. Items: `{itemId, name, publisher, description,
+classification, licence, licenceAllowed, formats, gated, sizeBytes, updated, facets, data}`.
+
+Facets come from the source's own taxonomy: models `classification` (the hub's pipeline tag, the registry's model
+family), `format`, `licence`, `parameters`, `access` (open or gated), `library`, `family`, `quantization`; datasets
+`classification` (CKAN groups, DCAT-AP themes, SDMX categorisations, OpenML task types, InvenioRDM resource types,
+Kaggle and hub tags), `domain`, `format`, `licence`, `publisher`, `rows`, `region`, `updates`. Counts are disjunctive:
+a value's count is the number of items matching the search and every other selected facet, which is exactly how many
+rows selecting it returns. A search runs live through the proxy when the type can be searched (`hf`, `ckan`,
+`invenio`, `kaggle`), the repository is reachable and not backing off, and the instance is not air-gapped; otherwise
+(and with no search terms) the snapshot answers, and `liveReason` says why.
+
+### Model import (B-3803)
+
+The select and review steps:
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/repositories/:id/item?id&revision` | The model as the source states it now: `{itemId, name, revision (the commit, or the manifest digest), files: [{name, size, pin: sha256:… \| gitsha1:…, format: gguf \| safetensors \| pickle \| onnx \| metadata \| manifest \| other, mediaType}], variants, gated, access: open \| granted \| gated, gate, licence, licenceSource, classification, family, parameters, capabilities, contextLength, source: live \| snapshot \| bundle}`. Air-gapped: from the snapshot. Rate limited: `503` |
+| `POST /api/imports/repositories/:id/gate` `{item}` | Accepts a gate with the recorded token: `{item, access: granted, account, acceptedBy, acceptedAt}`; `409` `Gate pending` while the publisher has not approved |
+| `POST /api/imports/plan` (the request body below) | `{repository, item, name, revision, mode, source, files (with selected), variants, selected (names), variant, sizeBytes, gated, access, gate, licence: {id, source, allowed, recorded, needsException}, label, tag, conversion: {needed, quantization}, manifestDigest, checks: [{name, result: passed \| refused \| warning \| info \| waiting, detail}], blocked, waiting}`; nothing is written |
+
+Request body (plan and request): `{repositoryId, item, revision?, variants? (one GGUF file, or an Ollama tag),
+files?, target: models, label (default internal), licence? (recorded when the source states none), attribution?, tag?,
+quantization? Q4_K_M | Q5_K_M | Q8_0 | F16, poolId?, notes?, exception?: {reason}}`.
+
+Checks, in the board's order: **Format** (only GGUF and safetensors; a pickle-only repository, a selected pickle,
+ONNX or other weights, two GGUF variants, or GGUF and safetensors together are refused), **Licence** (from the card at
+the pinned commit or the manifest's license layer; on the allow-list, or waiting for an exception), **Access** (the
+gate), **Serving path** (classifier and speech models are refused until B-3806), **Conversion** (safetensors and
+published GGUF go through the GPU training worker; refused without one), **Destination** (a valid, unused tag; the
+caller's clearance; the pool's ceiling), **Size** (`IMPORT_MAX_BYTES`), **Connectivity**.
+
+`POST /api/imports` (`imports:run` and, for a draft model, `models:manage`) answers `201` with the import, or:
+`422 Import refused` (`import` holds the refused queue entry; nothing is downloaded, staged or registered), `409`
+`reason: gate`, `409 reason: licence-unknown` (record `licence`), `409 reason: licence-exception-required` (send
+`exception`). States: `queued`, `waiting on licence` (an exception `EXC-n` is pending; the legal reviewers are
+notified), `queued for bundle` (air-gapped), `running` (`stage`: Pinning, Downloading, Converting, Registering),
+`complete`, `refused`, `failed`, `cancelled`.
+
+The `imports.model` job re-reads the source at the pinned revision (a file whose digest changed under it refuses the
+import), downloads each file in parts of `IMPORT_PART_BYTES` (a retry resumes with `Range` from the stored parts),
+refuses pickle by the first bytes (`\x80` protocol or a zip archive) whatever the name, and checks every file against
+its pin (sha256, or the git blob id for small files). Verified files are kept content-addressed
+(`imports/blobs/sha256/<hex>`). Registration: an Ollama manifest registers as `<name>:<tag>` (another registry's host
+prefixed), `expected_digest` the manifest's digest, which is what the pools report; hub files are sealed as artefacts
+of the import and converted (or packaged, `as-is`, for a published GGUF) by the training worker's `POST /v1/convert`
+(`docs/training-worker.md`), and the digest it returns is pinned on the draft. The draft is an ordinary `draft` model
+(pull, evaluate and dual-control approval on the Models screen); with `poolId` it is placed and pulled. The import's
+`manifest` (`exprsn-import-manifest/1`: source, revision, files with pins and sha256, licence and its status, label,
+attribution, requester, gate, model and expected digest, conversion) is signed with the KMS key `import-manifests`.
+
+Import view: `{id, ref (IMP-2026-41), kind, repository, item, itemName, revision, target, mode, state, stage,
+progress, note, files: [{name, size, pin, format, done, sha256, state}], options, checks, log: [{at, title, meta,
+tone}], manifest, licence, licenceStatus: allowed | exception pending | exception granted | exception refused,
+exception: {id, ref, state, decidedBy, decisionNote}, label, attribution, sizeBytes, storedBytes, jobId, model: {id,
+name, state, expectedDigest}, error, requestedBy, requestedByName, createdAt, startedAt, finishedAt, updatedAt}`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports?state&kind&q&limit&offset` | `{counts: {total, running, waiting, queued}, imports}` within the caller's clearance |
+| `POST /api/imports` | Requests an import (above) |
+| `GET /api/imports/:id` | One import |
+| `POST /api/imports/:id/cancel` | Cancels a queued, waiting or running one (a pending exception is withdrawn, stored parts discarded) |
+| `POST /api/imports/:id/retry` | Retries a failed or cancelled one, resuming the downloads; a refused one is `409` |
+| `GET /api/imports/exceptions?state` | `imports:run` or `imports:review`: `[{id, ref, licence, reason, state, import: {id, ref, item, itemName, state, label}, requestedBy, requestedByName, requestedAt, decidedBy, decidedByName, decidedAt, decisionNote}]` |
+| `POST /api/imports/exceptions/:id/decision` `{decision: grant \| refuse, note?}` | `imports:review`. Whoever requested the import or the exception gets `403 step: dual-control`; an already decided one `409`. Granting queues the import; refusing refuses it |
+| `GET /api/imports/settings` | `{allowedLicences, defaultLicences, updatedBy, updatedAt, connectivity: direct \| bundle, viaProxy, quota}` |
+| `PUT /api/imports/settings/licences` `{allowedLicences}` | `imports:review`: the tenant's licence allow-list (ids are normalised; `unknown` and `other` are never allowed) |
+| `GET /api/imports/quota` | `imports:run` or `usage:read`: `{maxBytes, custom, usedBytes: {datasets, models, total}, appliesTo: datasets, updatedAt}`. The quota (500 GB unless set) applies to dataset imports (B-3804); model imports are metered beside it |
+| `PUT /api/admin/tenants/:tid/import-quota` `{maxBytes}` | `tenant:manage` and the system-admin role; `null` restores the default |
+| `GET /api/imports/bundle-requests` | `platform:manage`: `{format: exprsn-import-requests/1, generatedAt, requests: [{id, ref, tenant, repository: {type, baseUrl, name}, item, revision, variant, manifestDigest, files, licence, path, requestedAt}]}`, what staging fetches for the next bundle |
+
+**Bundle mode.** With `IMPORT_CONNECTIVITY=bundle` requests are planned from the snapshot and wait as
+`queued for bundle`. Staging reads `GET /api/imports/bundle-requests`, fetches and scans, and ships the files in a
+signed platform bundle under `imports/<import id>/` (the `models` mirror; Ollama layers as `<kind>-<12 hex>` beside
+`manifest.json`; an optional `import.json` `{licence, source, item, revision}`). Once the bundle is verified and
+promoted, `imports.bundle-match` (every `IMPORT_BUNDLE_POLL_MINUTES`) continues each request from the bundle's files with
+the same checks; a pin recorded at request time must still match. A `bundle` repository browses and imports promoted
+bundle files directly.

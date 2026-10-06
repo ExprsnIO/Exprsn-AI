@@ -100,6 +100,8 @@ import { FileService } from './files/service.js';
 import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
 import { ModerationService } from './moderation/service.js';
 import { FirehoseService } from './atproto/firehose.js';
+import { FeedGenerators } from './atproto/feeds.js';
+import { PdsService } from './atproto/pds/service.js';
 import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
@@ -115,6 +117,7 @@ import { FeedService } from './feed/service.js';
 import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
+import { ImportService } from './imports/service.js';
 
 export interface Services {
   cfg: Config;
@@ -242,6 +245,10 @@ export interface Services {
   userImports: UserImportService;
   /** 1.4.0, Sprint 27 (B-1908): AT-Protocol firehose subscriptions and their single-instance consumers. */
   firehose: FirehoseService;
+  /** 1.5.0, Sprint 31 (B-3001 to B-3003): custom feed generators over the firehose, served under the tenant's DID. */
+  feedGenerators: FeedGenerators;
+  /** 1.5.0, Sprint 31 (B-2901 to B-2906, B-3004): the AT-Protocol personal data server. */
+  pds: PdsService;
   /** 1.4.0, Sprint 27 (B-2201 to B-2208): low-code apps: entities, sealed records, forms, triggers, AI fields, bundles. */
   apps: AppService;
   /** 1.4.0, Sprint 27c (B-2501, B-2505): groups in workspaces, members, requests, invitations, posts and their moderation. */
@@ -266,6 +273,8 @@ export interface Services {
   accessReviews: AccessReviewService;
   /** 1.5.0, Sprint 30 (B-31): DAV app passwords, personal calendars and address books, dead properties. */
   dav: DavService;
+  /** 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, the catalogue and model import. */
+  imports: ImportService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -510,7 +519,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     signup: new SignupService(() => s),
     userImports: new UserImportService(() => s),
     // 1.4.0, Sprint 27: the firehose.
-    firehose: new FirehoseService(() => s, { tickMs: cfg.FIREHOSE_TICK_MS, checkpointMs: cfg.FIREHOSE_CHECKPOINT_MS, queueMax: cfg.FIREHOSE_QUEUE_MAX, backoffMaxMs: cfg.FIREHOSE_BACKOFF_MAX_MS, idleMs: cfg.FIREHOSE_IDLE_MS, maxPerTenant: cfg.FIREHOSE_MAX_PER_TENANT }),
+    firehose: new FirehoseService(() => s, { tickMs: cfg.FIREHOSE_TICK_MS, checkpointMs: cfg.FIREHOSE_CHECKPOINT_MS, queueMax: cfg.FIREHOSE_QUEUE_MAX, backoffMaxMs: cfg.FIREHOSE_BACKOFF_MAX_MS, idleMs: cfg.FIREHOSE_IDLE_MS, maxPerTenant: cfg.FIREHOSE_MAX_PER_TENANT, rejectAudits: cfg.FIREHOSE_REJECT_AUDITS }),
+    feedGenerators: new FeedGenerators(() => s, { maxPerTenant: cfg.FEEDS_MAX_PER_TENANT, itemsMax: cfg.FEED_ITEMS_MAX }),
+    // 1.5.0, Sprint 31: the PDS.
+    pds: new PdsService(() => s),
     apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH }),
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
@@ -532,6 +544,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     accessReviews: new AccessReviewService(() => s),
     // 1.5.0, Sprint 30: CalDAV and CardDAV.
     dav: new DavService(() => s, db, cfg.SESSION_SECRET),
+    // 1.5.0, Sprint 30: the import wizard's server side.
+    imports: new ImportService(() => s, cfg),
     close: async () => {
       s.schema.stop();
       scheduler.stop();
@@ -599,7 +613,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.connections.vaultResolver = vaultRead;
     s.mcp.vaultResolver = vaultRead;
   }
+  s.pds.registerJobs(); // 1.5.0, Sprint 31 (B-2904, B-2905): requestCrawl, the event and blob trim, repos as moderation objects
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
+  s.feedGenerators.registerJobs(); // Sprint 31 (B-3003): feed index retention; feed caches dropped on a change
   // Sprint 26d (B-2401 to B-2405): quarantine scans, previews and the trash purge; folders as knowledge sources.
   s.files.registerJobs();
   s.knowledge.folders = s.files.folderSource();
@@ -653,6 +669,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
   s.customRoles.init();
   s.accessReviews.registerJobs();
+  s.imports.registerJobs(); // 1.5.0, Sprint 30 (B-3801 to B-3803): harvests, model imports, bundle matching
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -709,11 +726,14 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
+  s.feedGenerators.schedule(s.scheduler); // Sprint 31 (B-3003): feed indexes pruned to their retention
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
+  s.pds.schedule(); // 1.5.0, Sprint 31 (B-2904): events past the backfill window and unused blobs
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation
+  s.imports.schedule(s.scheduler, activeTenants); // 1.5.0, Sprint 30 (B-3801, B-3803): due harvests, promoted bundles
 }

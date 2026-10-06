@@ -119,6 +119,46 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Feed generators and relay commit verification (1.5.0, Sprint 31, B-3001 to B-3003, B-3604). Relay commits are
+  verified one at a time in the consumer's order: each repo DID new to the cache costs a DID resolution (up to five
+  seconds), so a subscription to the whole network over subscribeRepos falls behind where a Jetstream would not; use
+  author allow-lists. A DID that cannot be resolved, a `tooBig` commit and an operation whose tree nodes are missing
+  from the CAR are dropped, not retried. Commit `rev` order and `prev`/`prevData` chaining are not checked (a relay
+  could replay an old, validly signed commit), and `#sync` and `#account` frames are not acted on (a deactivated or
+  taken-down repo's posts are still taken until its relay stops sending them). Feeds index only what the firehose
+  subscriptions take (their collections, authors and sample) and what passed the moderation check; a post without text
+  is never indexed. Keyword matching is on the post text at ingest only; changing keywords or the ranking empties the
+  index, which refills from new posts (there is no backfill). A ranked feed orders by score alone, so an old post with
+  a high score stays at the top until its retention runs out. Rankings call the gateway for every post that passes the
+  rules (two embeddings per post: the query's is cached per feed version), without tenant quota metering. The service
+  JWT's `jti` is not remembered, so a captured token can be replayed until it expires (at most an hour); the viewer's
+  DID is not used for personalisation and not stored. A feed's rules and index are not labelled: feeds are built from
+  public AT-Protocol posts and served publicly, and any `firehose:manage` holder manages every feed of the tenant. A
+  feed is named, until B-3004 records its publication, by any `at://` authority with its record key. The feed
+  generator needs the tenant's own identity; the platform identity serves none.
+
+- The AT-Protocol PDS (1.5.0, Sprint 31, `docs/pds.md`): what a hosted repository holds is public by protocol and
+  served to anyone, including relays and AppViews that keep copies Exprsn-AI cannot withdraw; a takedown stops this
+  PDS serving the repo and publishes `!takedown`, but copies elsewhere remain until their operators act on the label
+  or the `#account` event. Hosting is off by default and enabled per tenant by a platform admin. Each commit rebuilds
+  the repo's Merkle search tree from its record list (canonical by construction, and checked against the interop
+  vectors), so the cost of a write grows with the repo's size; very large repos (hundreds of thousands of records)
+  write slowly. The repo's blocks are stored as base64 in the database, not in the blob store. Record content is not
+  sealed at rest (it is public, and the commit signature covers its exact bytes); blobs are sealed like files. Records
+  are not run through the guardrails or the moderation check when written: moderation acts on reports and on the
+  repo as a whole (`pds-repo`), not record by record, and labels from other labelers are not applied to what the PDS
+  serves. Sessions come from app passwords only; the Exprsn-AI password is never accepted over XRPC, and there is no
+  OAuth sign-in to the PDS, no email confirmation or password reset over XRPC, no `app.bsky.*` proxying to an AppView
+  and no preferences, so Bluesky clients that read timelines through their PDS need the AppView configured on their
+  side. Access tokens are HS256 under a key derived from `SESSION_SECRET` (rotating it ends every PDS session). Handles
+  live only under the tenant's subdomain of `PDS_HANDLE_DOMAIN`, resolved over HTTPS (the operator's wildcard DNS); a
+  tenant's own domain waits for 1.6. `createAccount` creates the Exprsn-AI user before the AT-Protocol account, so a
+  PLC directory that fails at that moment leaves a user without a PDS account (they create it from the console). The
+  move code for `signPlcOperation` is shown in the console instead of emailed. Blobs are typed from their first bytes
+  (PNG, JPEG, WebP, GIF, MP4) and scanned by ClamAV when configured; a video's content is not otherwise inspected. The
+  interop run against the reference AppView (`interop/run.ts`, the CI `interop` job) uses `@atproto/dev-env`, which
+  has no separate relay: the AppView reads the PDS directly, and the relay side is covered by the relay double.
+
 - Model-based memory management (1.5.0, Sprint 30): the tenant's memory profile reads the user's chat messages and
   agent runs' tasks and answers (through the gateway, within the profile's label and the pool's ceiling). The text is
   sent as JSON data with an instruction to treat it as such, and only a strictly valid JSON answer is used, but a
@@ -145,6 +185,24 @@ filter, private `/tmp`, only the state directory writable.
   within the caller's clearance (owner's decision, 2026-10-05). The conformance fixtures were written from the
   clients' request formats, not captured from devices, so B-3104 counts as partial until real traffic from Apple
   Calendar and Contacts, Thunderbird and DAVx5 is captured and replayed (owner's decision, 2026-10-05).
+
+- Import repositories and model import (1.5.0, Sprint 30, B-3801 to B-3803): the allow-list is enforced by the
+  platform's own egress (each hop of a redirect checked, credentials never forwarded along one); with
+  `IMPORT_PROXY_URL` the connection is the proxy's, and the proxy must enforce the exported allow-list itself
+  (`GET /api/imports/proxy-allowlist`): the platform cannot check the addresses the proxy dials. Hugging Face gates that
+  the publisher approves by hand stay pending; the platform only sends the access request with the recorded token and
+  records the acceptance once a file is readable. The licence is read from the model card at the pinned commit or the
+  Ollama license layer and recognised from a fixed list; a card that misstates its licence is recorded as stated (legal
+  review sees the source in the manifest). Staged weights are kept unsealed and content-addressed under
+  `imports/blobs/` (public repository content; the copies handed to the training worker are sealed per tenant), and
+  nothing expires them yet. Ollama registry imports pin the manifest digest and stage the layers, but the pools still
+  pull the tag from the registry their Ollama is configured for (the registry itself, or an internal mirror): the
+  platform does not serve the staged layers to Ollama, and on an air-gapped instance the pools need the bundle's
+  models in that mirror. Classifier engines, speech and other non-Ollama models are refused until B-3806. Repository
+  credentials resolve as the user who saved them (B-1705), so that user needs `secrets:read` and the vault path; a
+  model admin without vault access records repositories without credentials. DCAT-AP, SDMX and OpenML have no search
+  API, so they browse their snapshot only; OpenML licences are read for the first `detailLimit` datasets of a harvest.
+  Dataset import (B-3804) is not built: its quota check (`admitDataset`) exists but nothing calls it yet.
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another
@@ -616,9 +674,10 @@ filter, private `/tmp`, only the state directory writable.
   zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
   rules. Notices carry the moderator's reason, not the moderated content.
 - Firehose ingest (1.4.0, Sprint 27, B-1908): tested against a local Jetstream and relay double only, not yet against
-  the public Jetstream or a live relay. Records from subscribeRepos are read from the commit's CAR blocks without
-  verifying the commit signature or the repository's Merkle tree against the author's DID document, so a relay could
-  hand over records an author never wrote; Jetstream carries no proofs at all. Trust the endpoint you subscribe to.
+  the public Jetstream or a live relay. Since 1.5.0 (B-3604) a subscribeRepos commit is verified against the repo's
+  DID key and each record used is proven against its signed Merkle tree, and a commit that fails is dropped and
+  audited (see the Sprint 31 entry above); Jetstream still carries no proofs at all, so trust a Jetstream endpoint you
+  subscribe to.
   Ingested posts are an unregistered moderation type (`atproto-post`): they are checked with their text and get a flag
   and labels, but cannot be reported, hidden or appealed through the object registry (Exprsn-AI does not store them),
   and a deleted post's labels are not withdrawn. Images and video are not fetched; only text and alt text are checked.
@@ -637,8 +696,9 @@ filter, private `/tmp`, only the state directory writable.
   per-feed key rotation other than revoking and creating a new one). Feed fetches are not audited one by one (they
   record `lastUsedAt`); creation and revocation are. Events have no recurrence and no VTIMEZONE (times are UTC, which
   RFC 5545 allows); a wall-clock time in a daylight-saving gap moves forward by the gap. Reminders go to attendees
-  who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
-  default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
+  who said going or maybe, not to every member. Capacity is checked under a lock on the event row (since 1.5.0,
+  B-3603), so simultaneous RSVPs for the last place take turns; a check-in at the door still adds an attendee past the
+  capacity, on purpose. Group posts are small discussion content
   (no edit, no attachments, no threads); the workspace feed is B-27.
 - Customer-service channels (1.4.0, Sprint 28a, B-23). Customer sessions are public by design: the channel's public
   key is not a secret, so anyone can start an anonymous session on a chat channel that allows them, limited per client

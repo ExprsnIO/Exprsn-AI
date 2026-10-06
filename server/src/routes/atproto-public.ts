@@ -12,7 +12,8 @@ import type { Services } from '../services.js';
  * (ATPROTO_PUBLIC_RATE_PER_MINUTE, shared with subscribeLabels).
  *
  *   GET /.well-known/did.json                      the did:web document of the identity on this host
- *   GET /.well-known/atproto-did                   the DID whose handle is this host (text/plain)
+ *   GET /.well-known/atproto-did                   the DID whose handle is this host (text/plain): a labeler
+ *                                                  identity or, since 1.5.0, an account the PDS hosts
  *   GET /atproto/<key>/did.json                    a tenant's path-form did:web document
  *   GET /xrpc/com.atproto.label.queryLabels        labels of the identity on this host
  *   GET /atproto/<key>/xrpc/com.atproto.label.queryLabels
@@ -64,8 +65,14 @@ export function atprotoPublicRoutes(s: Services): Router {
     await sendDocument(res, KEY_RE.test(key) ? await s.atproto.identityByPathKey(key) : undefined);
   });
 
+  // 1.5.0 (B-2901): a handle hosted by the PDS resolves here too (its tenant's wildcard DNS points at this server).
+  const pdsAccount = async (host: string): Promise<{ did: string } | undefined> => {
+    const a = host ? await s.pds.accountByHandle(host) : undefined;
+    return a && a.state !== 'takendown' && (await s.pds.hosting(a.tenant_id))?.enabled ? { did: a.did } : undefined;
+  };
+
   r.get('/.well-known/atproto-did', async (req, res) => {
-    const identity = await s.atproto.identityByHandle(req.hostname ?? '');
+    const identity = (await s.atproto.identityByHandle(req.hostname ?? '')) ?? (await pdsAccount(req.hostname ?? ''));
     if (!identity) {
       res.status(404).type('text/plain').send('No AT-Protocol handle here.');
       return;

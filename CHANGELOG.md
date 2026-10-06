@@ -2,6 +2,62 @@
 
 ## 1.5.0 (in progress)
 
+### Custom feed generators, relay commit verification and the RSVP race (Sprint 31b, B-3001 to B-3003, B-3604, B-3603)
+
+- Feed generators (B-3001): a tenant's feeds are served by its own AT-Protocol identity, whose DID document gains a
+  `#bsky_fg` `BskyFeedGenerator` service (did:web computed; did:plc through a signed PLC operation, audited
+  `atproto.identity.service-added`). Public XRPC `app.bsky.feed.describeFeedGenerator` and
+  `app.bsky.feed.getFeedSkeleton` at `/xrpc/…` and `/atproto/<key>/xrpc/…`; an inter-service JWT (ES256K or ES256)
+  is verified against the issuer's `#atproto` key, its audience, expiry and `lxm`, and a bad one is refused with `401`.
+- Feeds as rules over the firehose (B-3002) under `/api/atproto/feeds` (`firehose:manage`, audited
+  `atproto.feed.*`): authors, collections, keywords and labels (in force from the tenant's labeler and trusted
+  labelers, or the check's verdict; `!hide` excluded by default), checked again when served; optional ranking by
+  embedding similarity through a gateway profile or by a classifier's score. Posts reach the feeds after the
+  moderation check; deletes leave them.
+- The feed index (B-3003): keyset cursor pagination by (sort, id), retention and a size cap pruned by
+  `atproto.feeds.prune` every `FEED_PRUNE_MINUTES`, and a per-feed rate limit on getFeedSkeleton. Migration
+  `033b_feeds` (`atproto_feeds`, `atproto_feed_items`, `firehose_subscriptions.rejected`). New settings
+  `FEEDS_MAX_PER_TENANT`, `FEED_ITEMS_MAX`, `FEED_PRUNE_MINUTES`, `FIREHOSE_REJECT_AUDITS`.
+- B-3004 (publishing the `app.bsky.feed.generator` record) has its interface: the feed view's `record` (naming the
+  generator's service DID) and `PUT`/`DELETE /api/atproto/feeds/{id}/publication`.
+- Relay commit verification (B-3604): subscribeRepos commits are checked against the repo's `#atproto` key (DID
+  documents through the service URL checks, cached, refreshed once on a failed signature) and each record used is
+  proven against the signed Merkle search tree; a commit that fails is dropped, counted (`counts.rejected`) and
+  audited `atproto.firehose.commit.rejected` (rate-limited). Tested against the AT-Protocol interop vectors (MST key
+  layers, commit proofs, signature fixtures) in `server/test/fixtures/atproto/`.
+- RSVP capacity (B-3603): the event row is locked (`SELECT … FOR UPDATE` on PostgreSQL and MySQL) while the places are
+  counted; fifty simultaneous RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL.
+
+### The AT-Protocol personal data server (Sprint 31, B-2901 to B-2906, B-3004)
+
+- Exprsn-AI hosts AT-Protocol repositories, described in `docs/pds.md`. Hosting is off until a platform admin enables
+  it per tenant (`PUT /api/admin/pds/tenants/{tid}`), and is refused in an air-gapped deployment or a PDS zone without
+  egress: repositories are public by protocol. New permission `pds:manage` (tenant admins); members keep their own
+  account under `atproto:link`. Migration `033_pds`; new settings `PDS_*`; the event catalogue (version 7) lists a
+  `pds.*` group.
+- Accounts are tied to Exprsn-AI users: a did:plc whose repo and rotation keys live in the signer or OpenBao, a handle
+  `<name>.<tenant>.<PDS_HANDLE_DOMAIN>` that resolves to it (`/.well-known/atproto-did`, `resolveHandle`), created from
+  the console or by `com.atproto.server.createAccount`, which follows the tenant's sign-up policy with invite codes
+  for closed and approval policies (B-1801). Bluesky clients sign in with app passwords made in the console; the
+  Exprsn-AI password never works over XRPC. Sessions are refresh-once token pairs (B-2901).
+- Repositories: the Merkle search tree, signed version 3 commits, DAG-CBOR and CAR, matched byte for byte against the
+  AT-Protocol interop fixtures and the reference implementation; `com.atproto.repo` writes (`createRecord`,
+  `putRecord`, `deleteRecord`, `applyWrites`) validated against the bundled Bluesky lexicons; reads and the
+  `com.atproto.sync` exports (`getRepo`, `getRecord`, `getBlocks`, `listBlobs`, `getBlob`, `getLatestCommit`,
+  `getRepoStatus`, `listRepos`) (B-2902).
+- Blobs stream through the attachment quarantine, typed from their bytes, limited per tenant, scanned by ClamAV and
+  sealed at rest; a blob that fails the scan is never served (B-2903).
+- The firehose: a sequencer whose seq is taken in each commit's transaction, `com.atproto.sync.subscribeRepos` with
+  cursors, a backfill window and sync 1.1 commit proofs, and `requestCrawl` to the relays in `PDS_RELAYS` (B-2904).
+- Deactivation, takedowns as moderation actions on `pds-repo` objects (`RepoTakendown`, `!takedown` published by the
+  tenant's labeler, appealable), and account migration into and out of Exprsn-AI with signed PLC operations (B-2905).
+- Interop: `interop/run.ts` and the CI `interop` job run the PDS against the reference development environment's PLC
+  directory and Bluesky AppView; a post written to Exprsn-AI's PDS appears in the AppView (B-2906).
+- `app.bsky.feed.generator` records published to a hosted repo or an external account
+  (`POST /api/admin/pds/feed-generators`), naming the feed generator's service DID (B-3004).
+- Moderation gains `takeDown` and `reverse` for direct admin actions; self-registration takes an AT-Protocol invite
+  code in place of an invitation.
+
 ### Model-based memory management (Sprint 30, B-3701 to B-3703)
 
 - Per-tenant memory settings under `GET`/`PUT /api/memory/settings` (`knowledge:manage`, audited as
@@ -44,6 +100,26 @@
   6352 operator and `addressbook-multiget` (B-3103).
 - A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
   replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
+
+### Import repositories and model import (Sprint 30, B-3801 to B-3803)
+
+- New permissions `imports:run`, `imports:repositories` and `imports:review`, and a fourteenth built-in role,
+  `legal-review` (granted only by a system admin), which decides licence exceptions and keeps the tenant's licence
+  allow-list; tenant admins can request exceptions but not decide them. Migration `033c_imports`.
+- Repository registry under `/api/imports/repositories`: Hugging Face compatible hubs, Ollama compatible registries,
+  CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle and the signed bundle share. A repository is proposed by one admin
+  and confirmed by another before its hosts join the staging-proxy allow-list and it is harvested; credentials are
+  vault references sent only to the repository's own host; harvests run on a schedule and back off when the source
+  rate-limits. `GET /api/imports/proxy-allowlist` exports the allow-list for the staging proxy (B-3801).
+- Catalogue browse with classification, licence, format and other facets from each source's own taxonomy; a facet's
+  count is exactly what its filter returns; live search through the proxy when the source can be searched, the
+  snapshot otherwise and while a source backs off (B-3802).
+- Model import: plan (every check, nothing written), gate acceptance with the recorded token, format and pickle checks
+  by name and by content, digests pinned at request time and checked after resumable downloads, licence policy with
+  exceptions, GGUF conversion or packaging on the training pool (`POST /v1/convert` gains `source`), draft registration
+  with the digest pinned and a signed import manifest; air-gapped instances queue requests for the weekly bundle and
+  continue them when a promoted bundle carries the files. The Imports queue with cancel and resumable retry; a 500 GB
+  dataset import quota per tenant, metered beside model imports (B-3803).
 
 ### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
 

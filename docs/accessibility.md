@@ -75,7 +75,7 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   level and value are in the text).
 - **Target size**: the smallest button (`.btn.xs`) is 24 px high (WCAG 2.5.8).
 
-## Screens made live in 1.5.0 (Sprint 30)
+## Screens made live in 1.5.0 (Sprints 30 and 31)
 
 Each joins the Playwright suite like the others: axe-core and the in-page checker on the screen and every design state
 (Standard and Enhanced, light and dark), the screen reflow at 320 and 640 px, and its dialogs and drawers through
@@ -111,6 +111,18 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   (for example "Explain Sam Rivera, chat:read: deny at clearance"); the outcome is in the name and an icon as well as
   colour. Enter or a click opens the `explain` drawer with the policy steps in order, and focus returns to the cell when
   it closes. In the role matrix, granted and not-granted cells carry text for screen readers.
+
+- **AT-Protocol** (B-3406, Sprint 31): one tab list (Identity and keys, Labels, Trusted labelers, Firehose, Accounts,
+  PDS and feeds) with a single tabpanel; a tab shows only when the user holds its permission (`pki:manage`,
+  `labels:manage`, `firehose:manage`, `identity:manage`, `pds:manage`), and the sidebar entry needs any one of them.
+  Labelers and subscriptions are keyboard-operable table rows that update a labelled inspector (`aside` "Selected
+  labeler" or "Selected subscription"). Long DIDs, keys and at:// URIs wrap instead of scrolling sideways; the DID
+  document is a named code region. Errors from the server (refused DIDs, endpoints, handles, feed rules) are problem
+  panels in a `role="alert"` region of the dialog, and the hosting switch's step-up dialog reports errors the same way.
+  The account check writes its steps into a polite live region. `e2e/tests/atproto.spec.ts` also runs both checkers
+  on every tab and on the invite-code drawer, in light and dark, with the data it made (a rotated key, a hosted
+  account, a published feed), which the sweep's design states do not all reach. With it the sweeps cover 36 sidebar
+  screens and Settings.
 
 ## How it was checked
 
@@ -170,7 +182,7 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   when the page, the overlay or the dialog scrolls sideways or anything in it sticks out past its edge, other than
   tables and code in a named scroller. Fixed on the way: at 640 px and below a long breadcrumb with its label (a
   connection's) overlapped the header tools and pushed the page 2 px sideways; the breadcrumb now shrinks and clips.
-- **Sprint 30 screens** (B-3414): Certificates, Vault, Plugins and events, Apps and Files, and the identity additions
+- **Sprint 30 and 31 screens** (B-3414): Certificates, Vault, Plugins and events, AT-Protocol (Sprint 31), Apps and Files, and the identity additions
   on Identity, User stores, Settings and Sign in, joined the sweeps above (every design state, Standard and Enhanced,
   light and dark, reflow at 320 and 640 px for the screens and their dialogs and drawers). Each opens a dialog from its
   own controls (New profile, Add grant, Upload, New folder, the Grants dialog…), Vault and Plugins also a drawer.
