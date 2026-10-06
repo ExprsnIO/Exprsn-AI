@@ -249,7 +249,7 @@ export class CustomRoleService {
       .catch((err: unknown) => s.log.warn({ err }, 'role approval notice failed'));
   }
 
-  private versionRow(roleId: string, version: number, tenantId: string, def: RoleDefinition, dual: boolean, by: string): Record<string, unknown> {
+  private versionRow(roleId: string, version: number, tenantId: string, def: RoleDefinition, dual: boolean, by: string | null): Record<string, unknown> {
     return {
       role_id: roleId,
       version,
@@ -285,6 +285,25 @@ export class CustomRoleService {
     if (dual) await this.askApprovers(ctx, role, version);
     else await this.changed(ctx.p.tenantId);
     return { role, version };
+  }
+
+  /**
+   * 1.6.0 (B-4501): a role a tenant template brings, made in a tenant being provisioned. Only member-baseline
+   * permissions (anything else would bypass dual control), applied at once as version 1, audited by the caller.
+   */
+  async seed(tenantId: string, def: RoleDefinition, by: string | null): Promise<CustomRoleRow> {
+    const beyond = def.permissions.filter(isAdminPermission);
+    if (beyond.length) throw new Error(`A template role holds only member permissions, not ${beyond.join(', ')}`);
+    const id = `${CUSTOM_ROLE_PREFIX}${ulid().toLowerCase()}`;
+    const t = Date.now();
+    const permissions = ordered(def.permissions);
+    const clean: RoleDefinition = { ...def, permissions };
+    await this.s().db.transaction(async (trx) => {
+      await trx('custom_roles').insert({ id, tenant_id: tenantId, name: def.name, description: def.description, permissions: JSON.stringify(permissions), requires_mfa: def.requiresMfa, grantable_by: JSON.stringify(def.grantableBy), state: 'active', current_version: 1, created_by: by, created_at: t, updated_at: t });
+      await trx('custom_role_versions').insert(this.versionRow(id, 1, tenantId, clean, false, by));
+    });
+    await this.changed(tenantId);
+    return this.get(tenantId, id);
   }
 
   /** A new version of a role. Under dual control it waits for approval and the version in force stays as it was. */

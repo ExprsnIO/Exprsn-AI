@@ -7,6 +7,7 @@ import { createLogger } from './observability/index.js';
 import { createServices, type Services } from './services.js';
 import { bootstrap } from './bootstrap.js';
 import { createAdmin } from './identity/admin-create.js';
+import { provisionTenant, TEMPLATE_IDS, type TemplateId } from './tenancy/templates.js';
 import { createKms } from './platform/kms.js';
 import { FsBlobStore } from './platform/blob.js';
 import { createPreviousKms, rewrapAll } from './platform/rewrap.js';
@@ -36,6 +37,15 @@ Commands:
                                one step, so the account is never usable with a password alone
     Without --enrol-link the password is read from EXPRSN_ADMIN_PASSWORD or prompted for. Admin roles must enrol a
     second factor at first sign-in.
+  tenant:create                1.6.0: create a tenant from a template (workspaces, custom roles, draft profiles, a zone,
+      --template <id>          an issuing CA) with its first admin in one step. Templates: enterprise, team, personal
+      --slug <slug>            required
+      --name <name>            required
+      --admin-username <name>  required: the first admin (tenant-admin, cleared for the highest workspace ceiling,
+      --admin-display-name <n> a member of every workspace)
+      [--admin-email <address>]
+      [--password]             read the admin's password from EXPRSN_ADMIN_PASSWORD or a prompt; without it a
+                               single-use enrolment link is printed (PASSWORD_INVITE_HOURS)
   audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
   kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
   kms:rewrap                   Re-wrap every data key (and re-sign checkpoints, backup manifests, image provenance and
@@ -128,6 +138,38 @@ async function adminCreate(s: Services, argv: string[]): Promise<void> {
   }
   process.stdout.write(`Created ${username} in tenant ${out.tenantSlug} with ${out.roles.join(', ')}. The account has no usable password yet.\n`);
   process.stdout.write(`Give this single-use enrolment link to ${username} over a trusted channel. It works once, for ${out.enrol.hours} hours, and sets the password and the second factor together:\n\n  ${out.enrol.link}\n\n`);
+}
+
+async function tenantCreate(s: Services, argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      template: { type: 'string' },
+      slug: { type: 'string' },
+      name: { type: 'string' },
+      'admin-username': { type: 'string' },
+      'admin-display-name': { type: 'string' },
+      'admin-email': { type: 'string' },
+      password: { type: 'boolean' }
+    }
+  });
+  const template = values.template as TemplateId | undefined;
+  if (!template || !(TEMPLATE_IDS as readonly string[]).includes(template)) throw new Error(`--template is one of ${TEMPLATE_IDS.join(', ')}`);
+  const slug = values.slug?.trim().toLowerCase();
+  if (!slug || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug)) throw new Error('--slug is required: lower-case letters, digits and dashes');
+  if (!values.name?.trim()) throw new Error('--name is required');
+  const username = values['admin-username']?.trim().toLowerCase();
+  if (!username || !values['admin-display-name']?.trim()) throw new Error('--admin-username and --admin-display-name are required');
+  const password = values.password ? await readPassword(`Password for ${username}: `) : null;
+  const out = await provisionTenant(s, { tenantId: null, userId: null, actor: { service: 'cli' } }, { template, slug, name: values.name.trim(), admin: { username, displayName: values['admin-display-name'].trim(), email: values['admin-email'] ?? null, password } });
+  const a = out.applied;
+  process.stdout.write(`Created tenant ${out.tenant.slug} (${out.tenant.name}) from the ${template} template.\n`);
+  process.stdout.write(`  Workspaces: ${a.workspaces.map((w) => `${w.name} (${w.label})`).join(', ')}\n`);
+  process.stdout.write(`  Custom roles: ${a.roles.length ? a.roles.map((r) => r.name).join(', ') : 'none'}\n`);
+  process.stdout.write(`  Draft profiles: ${a.profiles.map((p) => p.name).join(', ')}; zone ${a.zone.id}: ${a.zone.state}${a.zone.poolName ? ` (pool ${a.zone.poolName})` : ''}\n`);
+  process.stdout.write(`  Issuing CA: ${a.issuer.state}${a.issuer.reason ? ` (${a.issuer.reason})` : ''}\n`);
+  process.stdout.write(`  First admin: ${out.admin.username} (tenant-admin, cleared for ${out.admin.clearance}). A second factor is required at first sign-in.\n`);
+  if (out.admin.enrolLink) process.stdout.write(`\nGive this single-use enrolment link to ${username} over a trusted channel. It works once, for ${out.admin.enrolHours} hours, and sets the password and the second factor together:\n\n  ${out.admin.enrolLink}\n\n`);
 }
 
 async function readLine(prompt: string): Promise<string> {
@@ -302,6 +344,9 @@ async function main(): Promise<void> {
     switch (cmd) {
       case 'admin:create':
         await adminCreate(s, rest);
+        break;
+      case 'tenant:create':
+        await tenantCreate(s, rest);
         break;
       case 'audit:verify': {
         const { values } = parseArgs({ args: rest, options: { tenant: { type: 'string' } } });

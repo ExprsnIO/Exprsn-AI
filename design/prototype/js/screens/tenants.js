@@ -11,6 +11,14 @@
     { id: 'platform-lab', type: 'workspace', tenant: 'contoso', name: 'Platform lab', sub: 'workspace, 9 members', members: 9, label: 'public' }
   ];
 
+  // 1.6.0 (B-4501): the provisioning templates, exprsn-platform's organisation types.
+  const TEMPLATES = [
+    { id: 'enterprise', name: 'Enterprise', description: 'An organisation with departments: a workspace per function up to confidential, reader and contributor roles, three draft profiles and its own issuing CA.', workspaces: [['General', 'internal'], ['Finance', 'confidential'], ['People', 'confidential'], ['Engineering', 'internal'], ['Legal', 'confidential']], roles: ['Reader', 'Contributor'], profiles: ['assistant', 'analyst', 'summariser'], zone: 'inference', issuer: true, clearance: 'confidential' },
+    { id: 'team', name: 'Team', description: 'A small team: a shared workspace and a projects workspace, a contributor role, one draft profile and its own issuing CA.', workspaces: [['Team', 'internal'], ['Projects', 'internal']], roles: ['Contributor'], profiles: ['assistant'], zone: 'inference', issuer: true, clearance: 'internal' },
+    { id: 'personal', name: 'Personal', description: 'One person: a private confidential workspace and one draft profile. No custom roles and no CA.', workspaces: [['Personal', 'confidential']], roles: [], profiles: ['assistant'], zone: 'inference', issuer: false, clearance: 'confidential' }
+  ];
+  const ENROL_LINK = 'https://ai.northwind.example/#/signin?reset=Qm9vdHN0cmFwLWxpbmstZXhhbXBsZS1vbmx5LTAx&tenant=fabrikam';
+
   const ROLES = [
     ['system admin', 'Everything, including platform imports, zones and other tenants'], ['tenant admin', 'Workspaces, mappings, quotas and offboarding for this tenant'], ['identity admin', 'OIDC clients, SAML providers, keys and sessions'],
     ['model admin', 'Model catalog, imports, approvals and placement'], ['guardrail admin', 'Guardrail profiles and rules'], ['tool admin', 'MCP servers, tools and egress allow-lists'],
@@ -82,12 +90,14 @@
     crumb(st) { const n = TREE.find((t) => t.id === (st.node || 'finance-ops')) || TREE[1]; return n.type === 'tenant' ? ['Admin', 'Tenants', n.name] : ['Admin', 'Tenants', (TREE.find((t) => t.id === n.tenant) || {}).name, n.name]; },
     commands: [
       { label: 'Add a group mapping', sub: 'Tenants', run(app) { app.stateFor('tenants').openMapping = true; app.render(); } },
-      { label: 'Create a service account', sub: 'Tenants', run(app) { app.stateFor('tenants').openService = true; app.render(); } }
+      { label: 'Create a service account', sub: 'Tenants', run(app) { app.stateFor('tenants').openService = true; app.render(); } },
+      { label: 'Create a tenant from a template', sub: 'Tenants', run(app) { app.stateFor('tenants').openTemplate = true; app.render(); } }
     ],
     states: [
       { title: 'Offboarding', tone: 'danger', text: 'Three explicit steps: export on request, destroy the tenant key, run the deletion job for derived data. Requires typing the tenant name.', apply(ctx) { ctx.state.node = 'contoso'; ctx.state.openOffboard = true; ctx.rerender(); } },
       { title: 'Disabled by sync', tone: 'warn', text: 'The user was removed from the directory. Sessions and refresh tokens were revoked within one sync interval.', apply(ctx) { ctx.state.node = 'finance-ops'; ctx.state.tab = 'members'; ctx.state.member = 'j.lindqvist'; ctx.rerender(); } },
       { title: 'Thirteen roles', tone: 'neutral', text: 'Role picker lists all built-in roles with a one-line description of what each can change.', apply(ctx) { ctx.state.node = 'finance-ops'; ctx.state.tab = 'mappings'; ctx.state.openMapping = true; ctx.rerender(); } },
+      { title: 'Created from the team template', tone: 'ok', text: 'Fabrikam was created from the team template in one step: two workspaces, a Contributor role, a draft assistant profile pinned in zone inference, its issuing CA and its first admin, whose single-use enrolment link is shown once.', apply(ctx) { ctx.state.created = true; ctx.state.showCreated = true; ctx.rerender(); } },
       { title: 'Quota reached', tone: 'warn', text: 'Requests return 429 with a reset time. The console shows who can raise the limit.', apply(ctx) { ctx.state.node = 'field-sales'; ctx.state.tab = 'quotas'; ctx.state.quotaHit = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -102,7 +112,8 @@
       // ----- left pane -----
       const left = '<div class="leftpane"><div class="eyebrow" style="padding:4px 8px">Tenants and workspaces</div>'
         + TREE.map((t) => UI.listItem(esc(t.name) + (st.offboarded[t.id] ? ' ' + UI.pill('offboarding', 'danger') : ''), esc(t.sub), { active: t.id === node.id, attrs: 'data-node="' + t.id + '"' + (t.type === 'workspace' ? ' style="padding-left:22px"' : '')})).join('')
-        + '<div class="divider"></div>' + UI.btn('New workspace', { size: 'sm', icon: 'plus', cls: 'block', attrs: 'data-newws' }) + '</div>';
+        + (st.created ? UI.listItem('Fabrikam ' + UI.pill('new', 'ok'), 'tenant, from the team template') + UI.listItem('Team', 'workspace, 1 member', { attrs: 'style="padding-left:22px"' }) + UI.listItem('Projects', 'workspace, 1 member', { attrs: 'style="padding-left:22px"' }) : '')
+        + '<div class="divider"></div>' + UI.btn('New workspace', { size: 'sm', icon: 'plus', cls: 'block', attrs: 'data-newws' }) + UI.btn('Create from template', { size: 'sm', kind: 'ghost', icon: 'plus', cls: 'block', attrs: 'data-fromtemplate' }) + '</div>';
 
       let head, body;
       if (node.type === 'tenant') {
@@ -222,12 +233,39 @@
         ctx.confirm({ title: 'Revoke session', tag: 'signs out', tone: 'danger', body: '<p style="margin:0" class="fg2">Ends the session and its refresh tokens now. ' + esc(u) + ' is signed out on the next request and must sign in again.</p>', kv: [['User', esc(u)], ['Workspace', esc(node.name)]], ok: 'Revoke' }).then((ok) => { if (!ok) return; st.revoked[u] = true; ctx.rerender(); ctx.toast('Session for ' + esc(u) + ' revoked. Audit event written.', 'ok'); });
       });
       ctx.on('click', '[data-raise]', () => ctx.modal({ title: 'Raise limits, ' + esc(node.name), body: '<div class="formgrid">' + UI.field('Tokens per day', UI.input(node.id === 'field-sales' ? '2,000,000' : '5,000,000', { attrs: 'data-rt' })) + UI.field('GPU-seconds per month', UI.input(node.id === 'field-sales' ? '6,000' : '18,000')) + '</div>' + UI.notice('You hold tenant admin through cn=ai-admins. The change is written to the audit chain.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-rgo' }), onMount(m) { m.querySelector('[data-rgo]').addEventListener('click', () => { App.closeOverlay(); st.quotaHit = false; ctx.rerender(); ctx.toast('Limits raised for ' + esc(node.name) + '. Requests are admitted again.', 'ok'); }); } }));
+      const what = (x) => [x.workspaces.length + (x.workspaces.length === 1 ? ' workspace' : ' workspaces') + ' up to ' + x.clearance, x.roles.length ? x.roles.join(' and ') + (x.roles.length === 1 ? ' role' : ' roles') : 'no custom roles', x.profiles.length + ' draft ' + (x.profiles.length === 1 ? 'profile' : 'profiles') + ' in zone ' + x.zone, x.issuer ? 'its own issuing CA' : 'no CA'].join(', ');
+      const createdModal = () => ctx.modal({
+        title: 'Fabrikam is ready',
+        body: UI.kv([['Workspaces', 'Team, Projects'], ['Custom roles', 'Contributor'], ['Draft profiles', '<span class="mono">assistant</span>'], ['Zone', '<span class="mono">inference</span>, pinned (pool gpu-a)'], ['Issuer', 'issuing CA created under the Northwind platform root'], ['First admin', '<span class="mono">ada</span>, tenant-admin, cleared for internal']], 1)
+          + UI.notice('<b>Copy the enrolment link now; it is not shown again.</b> It works once, for 72 hours, and sets the password and the second factor together. Give it to ada over a trusted channel.', 'warn') + UI.code(ENROL_LINK),
+        actions: UI.btn('Copy link', { attrs: 'data-cplink' }) + UI.btn('Done', { kind: 'primary', attrs: 'data-close' }),
+        onMount(m) { m.querySelector('[data-cplink]').addEventListener('click', () => { try { navigator.clipboard && navigator.clipboard.writeText(ENROL_LINK); } catch (err) { /* clipboard unavailable from file:// */ } ctx.toast('Enrolment link copied.'); }); }
+      });
+      const templateModal = () => {
+        const local = { pick: 'team' };
+        const detail = () => { const x = TEMPLATES.find((t) => t.id === local.pick); return UI.kv([['Workspaces', x.workspaces.map((w) => esc(w[0]) + ' ' + UI.label(w[1], { sm: true })).join(', ')], ['Roles', x.roles.length ? x.roles.map(esc).join(', ') : 'none'], ['Profiles', x.profiles.map((p) => '<span class="mono">' + esc(p) + '</span>').join(', ') + ' (drafts)'], ['Zone', '<span class="mono">' + esc(x.zone) + '</span>'], ['Issuer', x.issuer ? 'an intermediate under the platform root, when there is one' : 'none'], ['First admin', 'tenant-admin, cleared for ' + esc(x.clearance) + ', a member of every workspace']], 1); };
+        ctx.modal({
+          title: 'Create a tenant from a template',
+          body: '<fieldset class="tn-tpls"><legend class="eyebrow">Template</legend>' + TEMPLATES.map((x) => '<label class="tn-tpl' + (x.id === local.pick ? ' on' : '') + '"><input type="radio" name="tn-tpl" value="' + x.id + '"' + (x.id === local.pick ? ' checked' : '') + ' data-tpl><span><b>' + esc(x.name) + '</b><span class="fg2">' + esc(x.description) + '</span><span class="muted">' + esc(what(x)) + '</span></span></label>').join('') + '</fieldset>'
+            + '<div data-tpldetail>' + detail() + '</div>'
+            + '<div class="formgrid">' + UI.field('Slug', UI.input('fabrikam', { attrs: 'data-fslug' }), 'Lowercase letters, digits and hyphens.') + UI.field('Name', UI.input('Fabrikam')) + UI.field('First admin username', UI.input('ada')) + UI.field('First admin display name', UI.input('Ada Brennan')) + UI.field('First admin email', UI.input('ada@fabrikam.example'), 'Optional.') + '</div>'
+            + '<fieldset class="tn-tpls"><legend class="eyebrow">How the first admin signs in</legend><label class="tn-role"><input type="radio" name="tn-mode" checked><span>Single-use enrolment link: it sets the password and the second factor together</span></label><label class="tn-role"><input type="radio" name="tn-mode"><span>Set a password now; the second factor is enrolled at first sign-in</span></label></fieldset>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create tenant', { kind: 'primary', attrs: 'data-fsave' }),
+          onMount(m) {
+            m.querySelectorAll('[data-tpl]').forEach((r) => r.addEventListener('change', () => { local.pick = r.value; m.querySelectorAll('.tn-tpl').forEach((c) => c.classList.toggle('on', c.querySelector('input').checked)); m.querySelector('[data-tpldetail]').innerHTML = detail(); }));
+            m.querySelector('[data-fsave]').addEventListener('click', () => { App.closeOverlay(); st.created = true; ctx.rerender(); ctx.toast('Tenant Fabrikam created from the ' + esc(local.pick) + ' template. Audit events written.', 'ok', 5000); setTimeout(createdModal, 50); });
+          }
+        });
+      };
+      ctx.on('click', '[data-fromtemplate]', () => templateModal());
+      if (st.openTemplate) { st.openTemplate = false; setTimeout(templateModal, 50); }
+      if (st.showCreated) { st.showCreated = false; setTimeout(createdModal, 50); }
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
       ctx.on('click', '[data-goclient]', (e, t) => ctx.navigate('identity', { client: t.dataset.goclient }));
       ctx.on('click', '[data-audit]', (e, t) => ctx.navigate('usage-audit', { event: t.dataset.audit }));
 
       const style = document.createElement('style');
-      style.textContent = '.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.tn-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;max-height:260px;overflow:auto;padding:4px 0}.tn-role{display:flex;gap:8px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px}.tn-role:hover{background:var(--sel)}.tn-role input{margin:3px 0 0;accent-color:var(--accent)}';
+      style.textContent = '.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.tn-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;max-height:260px;overflow:auto;padding:4px 0}.tn-role{display:flex;gap:8px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px}.tn-role:hover{background:var(--sel)}.tn-role input{margin:3px 0 0;accent-color:var(--accent)}.tn-tpls{border:0;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}.tn-tpl{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px}.tn-tpl > span{display:flex;flex-direction:column;gap:2px;min-width:0}.tn-tpl.on{border-color:var(--accent);background:var(--sel)}.tn-tpl input{margin:3px 0 0;accent-color:var(--accent)}';
       root.prepend(style);
     }
   });
