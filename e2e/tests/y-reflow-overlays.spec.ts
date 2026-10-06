@@ -62,7 +62,9 @@ function measure(page: Page): Promise<{ kind: 'modal' | 'drawer' | null; problem
 /**
  * Candidate controls on the screen that may open a dialog or a drawer, most likely first: actions named like a form
  * ("New", "Add", "Edit"…), then other buttons, then clickable rows and cards (which open detail drawers). Controls
- * whose name reads like a change (remove, revoke, approve…) are left out; tabs, segments and design-state cards too.
+ * whose name reads like a change (remove, revoke, approve…) are left out; tabs, segments and design-state cards too,
+ * and the Workflows step palette, whose buttons add a step to the draft (Workflows 2 made it longer than the sweep's
+ * 25 controls).
  */
 async function candidates(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -74,7 +76,7 @@ async function candidates(page: Page): Promise<string[]> {
     const els = Array.from(document.querySelectorAll('#main button, #main a[href="#"], #main tr[tabindex], #main tr.row, #main [role="button"], #main .listlink, #main [data-open], #main [data-doc], #main [data-src]'));
     for (const el of els) {
       if (!(el instanceof HTMLElement) || !el.getClientRects().length) continue;
-      if (el.matches(':disabled,[aria-disabled="true"],[role="tab"],.state-card,[data-state],[data-tab],[data-seg],.seg button,.tabs *') || el.closest('.states,.seg,.tabs,[role="tablist"]')) continue;
+      if (el.matches(':disabled,[aria-disabled="true"],[role="tab"],.state-card,[data-state],[data-tab],[data-seg],.seg button,.tabs *') || el.closest('.states,.seg,.tabs,[role="tablist"],[aria-label="Step palette"]')) continue;
       const name = (el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ');
       if (risky.test(name)) continue;
       const key = el.tagName + '|' + name.slice(0, 40) + '|' + Array.from(el.attributes).filter((a) => a.name.startsWith('data-')).map((a) => a.name).join(',');
