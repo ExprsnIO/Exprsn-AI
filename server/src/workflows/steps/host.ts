@@ -1,6 +1,6 @@
 import type { Label } from '../../authz/labels.js';
 import type { Principal } from '../../authz/policy.js';
-import type { ChainRef, ChainService } from '../../chain/context.js';
+import type { ChainErrorType, ChainRef, ChainService } from '../../chain/context.js';
 import type { ToolDispatcher } from '../../registry/dispatch.js';
 import type { AgentBudgets, RegistryService } from '../../registry/service.js';
 import type { TemplateScope, WfNode } from '../graph.js';
@@ -13,8 +13,18 @@ import type { TemplateScope, WfNode } from '../graph.js';
 
 /** A step that cannot run with the data it would receive (label ceiling, unavailable kind): it is blocked, the run goes on. */
 export class StepBlocked extends Error {}
-/** A step that failed; the run stops. */
-export class StepFailed extends Error {}
+/**
+ * A step that failed; the run stops unless a failure edge takes it. B-4106: `type` is the typed error a failure edge
+ * reads (`{error, step, type}`): a child agent stopped at its budget is `budget`, a refused call `chain_limit`, and so on.
+ */
+export class StepFailed extends Error {
+  constructor(
+    message: string,
+    readonly type: ChainErrorType = 'failed'
+  ) {
+    super(message);
+  }
+}
 /** A step paused (approval, wait, a child run); the run resumes when it is decided, due or done. */
 export const WAIT = Symbol('wait');
 
@@ -111,6 +121,13 @@ export interface StepHost {
   wait(c: StepCall, detail: Record<string, unknown>): Promise<typeof WAIT>;
   /** Merges into the step's detail (a checkpoint of what the step started). */
   note(c: StepCall, detail: Record<string, unknown>): Promise<void>;
+  /**
+   * B-4106: pauses the step on an approval for a call it holds (a write tool a skill offered): `state` (sealed) is what
+   * the step needs to continue, `shown` what the approver sees. The step runs again once someone decides.
+   */
+  hold(c: StepCall, state: unknown, shown: Record<string, unknown>, o: { role: string; timeoutMs: number }): Promise<typeof WAIT>;
+  /** The decided hold the step resumes from (once: it is cleared), or null. */
+  takeHold<T>(c: StepCall): Promise<{ state: T; decision: 'approved' | 'rejected'; by: string | null; note: string | null } | null>;
   /** Per-item checkpoints of a map or loop. */
   items: {
     list(c: StepCall): Promise<{ idx: number; state: string; output: unknown; error: string | null; childRun: string | null }[]>;

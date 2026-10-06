@@ -93,6 +93,12 @@ export function runChecks(e: CheckInput): CheckResult[] {
     out.push({ name: 'Schema valid', ok: !problems.length, detail: problems.length ? problems.slice(0, 5).join(' ') : `Input${e.outputSchema == null ? '' : ' and output'} schema compile as JSON Schema.` });
   }
 
+  // B-4102: an agent may type its answer with an output schema (a delegating agent receives it parsed and checked).
+  if (e.kind === 'agent' && (e.outputSchema != null || e.inputSchema != null)) {
+    const problems = [...(e.inputSchema == null ? [] : schemaProblems(e.inputSchema, 'input')), ...(e.outputSchema == null ? [] : schemaProblems(e.outputSchema, 'output'))];
+    out.push({ name: 'Schema valid', ok: !problems.length, detail: problems.length ? problems.slice(0, 5).join(' ') : 'The task and answer schemas compile as JSON Schema.' });
+  }
+
   const dp = descriptionProblem(e.name, e.description);
   out.push({ name: 'Description quality', ok: !dp, detail: dp ?? 'Specific enough for a model to choose the tool and for a reviewer to judge it.' });
 

@@ -88,6 +88,8 @@ export interface AuditQuery {
   /** Username or user id of the actor. */
   actor?: string;
   corrects?: string;
+  /** Sprint 34 (B-4107): an id the target names (a run, a chain, a registry entry), matched as a whole value. */
+  target?: string;
 }
 
 export class AuditLog {
@@ -187,6 +189,10 @@ export class AuditLog {
     if (opts.to) q.andWhere('ts', '<', opts.to);
     if (opts.label) q.andWhere({ label: opts.label });
     if (opts.corrects) q.andWhere({ corrects: opts.corrects });
+    if (opts.target) {
+      const v = JSON.stringify(opts.target).replace(/[%_!]/g, '!$&');
+      q.andWhereRaw("target LIKE ? ESCAPE '!'", [`%:${v}%`]);
+    }
     if (opts.actor) {
       // The actor is stored as canonical JSON; match its user or username field exactly.
       const v = JSON.stringify(opts.actor).replace(/[%_!]/g, '!$&');

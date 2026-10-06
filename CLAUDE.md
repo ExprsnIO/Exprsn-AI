@@ -166,7 +166,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
   step; since Sprint 32 `steps/`: the Workflows 2 kinds, `kinds.ts` their publish-time definitions registered in
   `STEP_KINDS`, `registry.ts` their runners in `STEP_RUNNERS`, `host.ts` what a runner gets from the service), **`chain/`**
-  (`context.ts`: the chain context, B-4101, `s.chains`), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
+  (`context.ts`: the chain context, B-4101, `s.chains`; since Sprint 34a `refs.ts`, the reference graph checked at
+  publish and "used by", `s.chainRefs`, B-4105, and `view.ts`, the chain tree, held calls and replay from a node behind
+  `routes/chains.ts`, B-4106, B-4107; delegation to agents is `AgentService.runAsTool`, B-4102, and a skill's closure
+  `registry/skills.ts`, B-4103), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
   URLs on `MEDIA_ORIGIN`), **`images/`** (`ImageBackend` for ComfyUI and diffusers, safety classifier, signed
   provenance in the PNG).
 - **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a

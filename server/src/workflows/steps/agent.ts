@@ -27,7 +27,7 @@ export async function runAgent(c: StepCall, host: StepHost): Promise<StepResult 
       const started = await host.agents.startForStep(c.p, { agent: cfg.agent, input: task, label: c.label, ...(cfg.budgets ? { budgets: cfg.budgets } : {}) }, { runId: c.run.id, node: c.n.id, chain: host.chainOf(c.run) });
       runId = started.id;
     } catch (err) {
-      if (err instanceof ChainLimit) throw new StepFailed(err.message);
+      if (err instanceof ChainLimit) throw new StepFailed(err.message, 'chain_limit');
       if (err instanceof HttpProblem && err.status === 403 && (err.extensions as { step?: string } | undefined)?.step === 'zone') throw new StepBlocked(`Blocked by label ceiling: ${err.detail ?? err.title}`);
       if (err instanceof HttpProblem) throw new StepFailed(err.detail ?? err.title);
       throw err;
@@ -37,6 +37,7 @@ export async function runAgent(c: StepCall, host: StepHost): Promise<StepResult 
   const st = await host.agents.stateForStep(c.run.tenant_id, runId);
   if (!st) throw new StepFailed(`The agent run behind ${c.n.title} no longer exists.`);
   if (!DONE.includes(st.state)) return host.wait(c, { agentRun: runId, agent: cfg.agent, agentState: st.state });
-  if (st.state !== 'succeeded') throw new StepFailed(`${cfg.agent} run ${runId} ${st.state === 'budget' ? 'stopped at its budget' : st.state}${st.error ? `: ${st.error}` : ''}`);
+  // B-4106: a typed error the step's failure edge can take; a budget-stopped run has ended for this step.
+  if (st.state !== 'succeeded') throw new StepFailed(`${cfg.agent} run ${runId} ${st.state === 'budget' ? 'stopped at its budget' : st.state}${st.error ? `: ${st.error}` : ''}`, st.state === 'budget' ? 'budget' : st.state === 'cancelled' ? 'cancelled' : 'failed');
   return { output: { run: runId, text: st.output ?? '' }, label: st.label, detail: { agentRun: runId, agent: cfg.agent, agentTokens: st.tokens } };
 }

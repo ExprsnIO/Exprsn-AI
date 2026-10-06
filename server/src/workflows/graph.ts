@@ -134,7 +134,8 @@ export const CONFIGS = {
   // Sprint 32b (B-3903): also `event`, and `schedule` with its own `cron` (trigger-config.ts).
   trigger: triggerConfigSchema,
   // Sprint 32 (B-3902): `skills` loads published skills' instructions and tools into the step.
-  model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text'), skills: z.array(z.string().trim().min(1).max(120)).max(8).optional() }).strict(),
+  // Sprint 34 (B-4106): `approverRole` and `approvalTimeoutMs` for a call a skill's tool holds (default workflow-admin, 24 h).
+  model: z.object({ profile: z.string().min(1).max(63), prompt: template.min(1), think: THINK.optional(), format: z.enum(['text', 'json']).default('text'), skills: z.array(z.string().trim().min(1).max(120)).max(8).optional(), approverRole: z.string().max(63).optional(), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).optional() }).strict(),
   transform: z.object({ fields: z.record(propName, template).refine((f) => Object.keys(f).length > 0 && Object.keys(f).length <= 50, 'Between 1 and 50 fields') }).strict(),
   branch: z.object({ left: template.min(1), op: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists']), right: z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]).optional() }).strict(),
   guardrail: z.object({ checkpoint: z.enum(CHECKPOINTS).default('context'), text: template.min(1), approverRole: z.string().max(63).default('workflow-admin'), approvalTimeoutMs: z.number().int().min(60_000).max(LIMITS.maxApprovalMs).default(24 * 3_600_000) }).strict(),
@@ -521,7 +522,7 @@ export function ancestors(g: WfGraph, id: string): Set<string> {
 
 // ---------- validation ----------
 
-export type IssueCode = 'structure' | 'cycle' | 'config' | 'schema' | 'label' | 'limit' | 'reference' | 'unavailable' | 'unreachable';
+export type IssueCode = 'structure' | 'cycle' | 'config' | 'schema' | 'label' | 'limit' | 'reference' | 'unavailable' | 'unreachable' | 'chain';
 
 export interface Issue {
   code: IssueCode;
@@ -531,6 +532,8 @@ export interface Issue {
   /** For schema mismatches: what the step expects and what arrives. */
   expected?: PortSchema;
   actual?: PortSchema;
+  /** Sprint 34 (B-4105, code `chain`): the references around a cycle across workflows, agents and skills. */
+  path?: string[];
 }
 
 export interface ValidationEnv {
@@ -621,6 +624,7 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
       errors.push(...t.errors);
       warnings.push(...t.warnings);
     }
+    if (n.kind === 'model' && n.config.approverRole !== undefined && !isRole(String(n.config.approverRole))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.approverRole)}.` });
     if (n.kind === 'approval' && !isRole(String(n.config.role))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.role)}.` });
     if (n.kind === 'guardrail' && !isRole(String((r.data as { approverRole: string }).approverRole))) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${String(n.config.approverRole)}.` });
     if (n.kind === 'notify') for (const role of (r.data as { roles: string[] }).roles) if (!isRole(role)) errors.push({ code: 'config', nodeId: n.id, message: `${n.title}: there is no role ${role}.` });

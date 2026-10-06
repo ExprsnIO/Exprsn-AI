@@ -9185,6 +9185,774 @@
             "type": "string"
           }
         }
+      },
+      "ChainHeldCall": {
+        "type": "object",
+        "description": "B-4106: a call held somewhere in a chain, decided where it waits with that place's rules",
+        "required": [
+          "node",
+          "path",
+          "at",
+          "tool",
+          "sideEffect",
+          "since",
+          "approvers",
+          "canDecide"
+        ],
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The chain node of the run that holds it"
+          },
+          "path": {
+            "type": "array",
+            "description": "From the root down to that node",
+            "items": {
+              "type": "object",
+              "required": [
+                "node",
+                "kind",
+                "ref",
+                "name",
+                "depth"
+              ],
+              "properties": {
+                "node": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "chat-turn",
+                    "agent-run",
+                    "workflow-run",
+                    "tool-call",
+                    "skill-load",
+                    "plugin-action",
+                    "app-trigger"
+                  ]
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "depth": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "at": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "run",
+                  "step"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "agent-run"
+                  },
+                  "run": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "type": "integer"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "run",
+                  "approval",
+                  "step"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "workflow-run"
+                  },
+                  "run": {
+                    "type": "string"
+                  },
+                  "approval": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "type": "string",
+                    "description": "The workflow step (node id) that waits"
+                  }
+                }
+              }
+            ],
+            "description": "Where the call waits: an agent run's step, or a workflow run's approval"
+          },
+          "tool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sideEffect": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "approvers": {
+            "type": "string",
+            "description": "Who may decide, in words"
+          },
+          "canDecide": {
+            "type": "boolean",
+            "description": "Whether the caller may decide it"
+          }
+        }
+      },
+      "ChainNode": {
+        "type": "object",
+        "description": "B-4107: one invocation of a chain with its children",
+        "required": [
+          "id",
+          "parent",
+          "depth",
+          "kind",
+          "ref",
+          "callee",
+          "name",
+          "label",
+          "state",
+          "error",
+          "errorType",
+          "decision",
+          "usage",
+          "subtree",
+          "createdAt",
+          "finishedAt",
+          "durationMs",
+          "links",
+          "guardrails",
+          "replay",
+          "held",
+          "children"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depth": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "chat-turn",
+              "agent-run",
+              "workflow-run",
+              "tool-call",
+              "skill-load",
+              "plugin-action",
+              "app-trigger"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "description": "The run id for runs; a generated id for tool calls and skill loads"
+          },
+          "callee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What was invoked: an agent name, a workflow id, `name@version` of a tool or skill"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The callee as shown: the workflow's name for workflow runs"
+          },
+          "label": {
+            "$ref": "#/components/schemas/Label"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "refused",
+              "waiting",
+              "cancelled"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "failed",
+              "budget",
+              "cancelled",
+              "rejected",
+              "chain_limit",
+              "output",
+              "label",
+              "timeout",
+              null
+            ],
+            "description": "The typed error the caller received"
+          },
+          "decision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Tool calls: the tool-call guardrail checkpoint's action"
+          },
+          "usage": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "steps",
+              "wallMs",
+              "gpuMs"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "integer"
+              },
+              "wallMs": {
+                "type": "integer"
+              },
+              "gpuMs": {
+                "type": "integer"
+              }
+            }
+          },
+          "subtree": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "steps",
+              "wallMs",
+              "gpuMs",
+              "nodes"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "integer"
+              },
+              "wallMs": {
+                "type": "integer"
+              },
+              "gpuMs": {
+                "type": "integer"
+              },
+              "nodes": {
+                "type": "integer"
+              }
+            }
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "links": {
+            "type": "object",
+            "required": [
+              "run",
+              "audit"
+            ],
+            "properties": {
+              "run": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "audit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "audit": {
+            "type": "array",
+            "description": "Only for holders of audit:read: the run's audit entries (newest 20)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "seq",
+                "action",
+                "ts"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "seq": {
+                  "type": "integer"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "guardrails": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "checkpoint",
+                "action",
+                "label",
+                "at"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "checkpoint": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/components/schemas/Label"
+                },
+                "at": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "replay": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "href"
+                ],
+                "properties": {
+                  "href": {
+                    "type": "string"
+                  },
+                  "fromStep": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "fromNode": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "at",
+                "tool",
+                "sideEffect",
+                "since",
+                "approvers",
+                "canDecide"
+              ],
+              "properties": {
+                "at": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "run",
+                        "step"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "agent-run"
+                        },
+                        "run": {
+                          "type": "string"
+                        },
+                        "step": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "run",
+                        "approval",
+                        "step"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "workflow-run"
+                        },
+                        "run": {
+                          "type": "string"
+                        },
+                        "approval": {
+                          "type": "string"
+                        },
+                        "step": {
+                          "type": "string",
+                          "description": "The workflow step (node id) that waits"
+                        }
+                      }
+                    }
+                  ],
+                  "description": "Where the call waits: an agent run's step, or a workflow run's approval"
+                },
+                "tool": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sideEffect": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "since": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "approvers": {
+                  "type": "string"
+                },
+                "canDecide": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainNode"
+            }
+          }
+        }
+      },
+      "ChainView": {
+        "type": "object",
+        "required": [
+          "id",
+          "state",
+          "stopReason",
+          "label",
+          "principal",
+          "budgets",
+          "used",
+          "totals",
+          "createdAt",
+          "updatedAt",
+          "nodes",
+          "maxDepth",
+          "limits",
+          "links",
+          "held",
+          "root"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "done",
+              "stopped"
+            ]
+          },
+          "stopReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "$ref": "#/components/schemas/Label"
+          },
+          "principal": {
+            "type": "object",
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "budgets": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "steps",
+              "wallMs",
+              "gpuMs"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "integer"
+              },
+              "wallMs": {
+                "type": "integer"
+              },
+              "gpuMs": {
+                "type": "integer"
+              }
+            }
+          },
+          "used": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "steps",
+              "wallMs",
+              "gpuMs"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "integer"
+              },
+              "wallMs": {
+                "type": "integer"
+              },
+              "gpuMs": {
+                "type": "integer"
+              }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "steps",
+              "wallMs",
+              "gpuMs"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "integer"
+              },
+              "wallMs": {
+                "type": "integer"
+              },
+              "gpuMs": {
+                "type": "integer"
+              }
+            },
+            "description": "The sum over the nodes; equals `used`"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "nodes": {
+            "type": "integer"
+          },
+          "maxDepth": {
+            "type": "integer"
+          },
+          "limits": {
+            "type": "object",
+            "required": [
+              "maxDepth",
+              "kindCaps"
+            ],
+            "properties": {
+              "maxDepth": {
+                "type": "integer"
+              },
+              "kindCaps": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "links": {
+            "type": "object",
+            "required": [
+              "audit"
+            ],
+            "properties": {
+              "audit": {
+                "type": "string"
+              }
+            }
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainHeldCall"
+            }
+          },
+          "root": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChainNode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RefUsedBy": {
+        "type": "object",
+        "description": "B-4105: something that references a registry entry or a workflow",
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "version",
+          "status",
+          "via",
+          "live"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "skill",
+              "tool",
+              "workflow"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "delegate",
+              "workflow",
+              "tool",
+              "skill",
+              "sub-skill",
+              "skill-tool",
+              "sub-workflow",
+              "agent-step",
+              "model-skill",
+              "tool-step",
+              "workflow-tool"
+            ]
+          },
+          "live": {
+            "type": "boolean",
+            "description": "Published or deprecated (a workflow: its published version): it may reach the entry now"
+          }
+        }
       }
     },
     "responses": {
@@ -14636,7 +15404,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "retired\\|published, replacement?} | Deprecate (still callable, with a warning), retire (from deprecated or draft; returns referencedBy), or restore a deprecated entry",
+        "summary": "retired\\|published, replacement?} | Deprecate (still callable, with a warning), retire (from deprecated or draft; returns referencedBy), or restore a deprecated entry; B-4105: retiring the last callable version of a name a published agent, skill or workflow uses is 409 (`usedBy`); referencedBy lists every kind's referrers",
         "parameters": [
           {
             "name": "id",
@@ -14740,6 +15508,104 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/registry/{id}/used-by": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "admin/registry"
+        ],
+        "summary": "tools:manage or agents:manage. B-4105: what references the entry's name (agents, skills, workflow tools, workflows) and whether retiring it now is refused",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The registry entry id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "kind",
+                    "name",
+                    "version",
+                    "status",
+                    "usedBy",
+                    "otherVersions",
+                    "retireBlocked"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "tool",
+                        "skill",
+                        "agent"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "usedBy": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RefUsedBy"
+                      }
+                    },
+                    "otherVersions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "version",
+                          "status"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "retireBlocked": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -19162,6 +20028,293 @@
         ],
         "summary": "The exact-calculation worker: {fraction, decimal, exact}",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/chains/{id}": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "chains"
+        ],
+        "summary": "agents:run, agents:manage, tools:manage or workflows:manage. B-4107: the chain as a tree of invocations with timing, usage, labels, typed errors, guardrail decisions, audit links, replay and held calls (its principal or an admin, within clearance)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The chain id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainView"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/chains/{id}/held/{node}/decision": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "chains"
+        ],
+        "summary": "B-4106: decides a call held at a node of the chain, where it waits (an agent run's step or a workflow approval) with that place's rules",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The chain id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "description": "A node of the chain",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 1000
+                  },
+                  "step": {
+                    "type": "integer",
+                    "description": "When the node holds more than one agent step"
+                  },
+                  "approval": {
+                    "type": "string",
+                    "description": "When the node holds more than one workflow approval"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "chain",
+                    "node",
+                    "at",
+                    "path",
+                    "decision"
+                  ],
+                  "properties": {
+                    "chain": {
+                      "type": "string"
+                    },
+                    "node": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "run",
+                            "step"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "agent-run"
+                            },
+                            "run": {
+                              "type": "string"
+                            },
+                            "step": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "run",
+                            "approval",
+                            "step"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "const": "workflow-run"
+                            },
+                            "run": {
+                              "type": "string"
+                            },
+                            "approval": {
+                              "type": "string"
+                            },
+                            "step": {
+                              "type": "string",
+                              "description": "The workflow step (node id) that waits"
+                            }
+                          }
+                        }
+                      ],
+                      "description": "Where the call waits: an agent run's step, or a workflow run's approval"
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "decision": {
+                      "type": "string",
+                      "enum": [
+                        "approved",
+                        "rejected"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/chains/{id}/nodes/{node}/replay": {
+      "post": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "chains"
+        ],
+        "summary": "agents:run or agents:manage. B-4107: replays an agent-run node from a step or a workflow-run node from a step, as a new chain; 202",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The chain id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "description": "A node of the chain",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "fromStep": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "fromNode": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "run",
+                    "chain",
+                    "label"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent-run",
+                        "workflow-run"
+                      ]
+                    },
+                    "run": {
+                      "type": "string"
+                    },
+                    "chain": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "$ref": "#/components/schemas/Label"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -28762,7 +29915,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "agents:run. What else starts the workflow: app triggers, registry tools, other workflows' sub, map and loop steps, plugins granted call:workflow, and the last run of each kind of start",
+        "summary": "agents:run. What else starts the workflow: app triggers, registry tools, other workflows' sub, map and loop steps, plugins granted call:workflow, agents that list it, and the last run of each kind of start",
         "parameters": [
           {
             "name": "id",
@@ -28786,6 +29939,7 @@
                     "appTriggers",
                     "workflows",
                     "tools",
+                    "agents",
                     "plugins",
                     "lastRuns"
                   ],
@@ -29039,6 +30193,95 @@
                           }
                         }
                       }
+                    },
+                    "agents": {
+                      "type": "array",
+                      "description": "B-4104: agents (not retired) that list the workflow",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "version",
+                          "status",
+                          "label"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "$ref": "#/components/schemas/Label"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/used-by": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "agents:run. B-4105: what references the workflow (agents that list it, workflow tools, other workflows' steps) and whether deleting it is refused",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workflow id or name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name",
+                    "usedBy",
+                    "deleteBlocked"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "usedBy": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RefUsedBy"
+                      }
+                    },
+                    "deleteBlocked": {
+                      "type": "boolean"
                     }
                   }
                 }

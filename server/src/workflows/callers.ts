@@ -7,8 +7,8 @@ import { emptyGraph, graphSchema, type WfGraph } from './graph.js';
  * Sprint 32e (B-3910): what starts a workflow, for the console's "Triggers and callers" tab. One read over what
  * already exists elsewhere: the app triggers that name the workflow (1.4.0, B-2206), the registry tools it is
  * published as (B-1006), the other workflows whose sub, map or loop steps run it (B-3901, B-3905), the plugins granted
- * `call:workflow` (B-2003), and when each kind of start last happened, from the run history the caller may see. The
- * workflow's own event or schedule trigger is `GET /workflows/:id/triggers` (B-3903).
+ * `call:workflow` (B-2003), the agents that list it (B-4104), and when each kind of start last happened, from the run
+ * history the caller may see. The workflow's own event or schedule trigger is `GET /workflows/:id/triggers` (B-3903).
  */
 
 type Json = Record<string, unknown>;
@@ -69,6 +69,11 @@ export async function workflowCallers(s: Services, p: Principal, ref: string) {
   // Registry tools the workflow is published as (agents and chat call them).
   const tools = (await s.registry.workflowEntries(p.tenantId, w.id)).map((e) => ({ id: e.id, name: e.name, version: e.version, status: e.status, sideEffect: e.side_effect, label: e.label, workflowVersion: Number(e.definition.version) }));
 
+  // Sprint 34 (B-4104): agents that list the workflow (by name or id) among the workflows they may start.
+  const agents = (await s.registry.list(p.tenantId, { kind: 'agent' }))
+    .filter((e) => e.tenant_id === p.tenantId && e.status !== 'retired' && Array.isArray(e.definition.workflows) && (e.definition.workflows as unknown[]).some((x) => x === w.name || x === w.id))
+    .map((e) => ({ id: e.id, name: e.name, version: e.version, status: e.status, label: e.label }));
+
   // Plugins that may start any published workflow of the tenant.
   const plugins = ((await db('plugins').where({ tenant_id: p.tenantId }).whereIn('state', ['installed', 'enabled']).select('id', 'plugin_key', 'name', 'version', 'state', 'max_label', 'installed_by', 'granted')) as Json[])
     .filter((x) => parse<string[]>(x.granted, []).includes('call:workflow'))
@@ -110,6 +115,7 @@ export async function workflowCallers(s: Services, p: Principal, ref: string) {
     })),
     workflows,
     tools,
+    agents,
     plugins: plugins.map((x) => ({ ...x, installedByName: x.installedBy ? (names.get(x.installedBy) ?? null) : null })),
     lastRuns: last
   };

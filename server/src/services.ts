@@ -46,6 +46,7 @@ import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
+import { ChainRefs } from './chain/refs.js';
 import { ChainService } from './chain/context.js';
 import { WorkflowBundles } from './workflows/bundles.js';
 import { WorkflowDeadLetters } from './workflows/dead-letters.js';
@@ -172,6 +173,8 @@ export interface Services {
   workflows: WorkflowService;
   /** Sprint 32 (B-4101): the chain context every invocation records itself in. */
   chains: ChainService;
+  /** Sprint 34 (B-4105): the reference graph across agents, skills, tools and workflows. */
+  chainRefs: ChainRefs;
   /** Media assets, presets and ffmpeg jobs (Sprint 8). */
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
@@ -381,6 +384,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
   guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
+  const chainRefs = new ChainRefs(db, registry);
+  registry.useRefs(chainRefs);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
@@ -397,8 +402,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
   tools.useWorkflows(workflows);
+  // Sprint 34 (B-4102): agents delegate to agents through the dispatcher.
+  tools.useAgents(agents);
   // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
   agents.chains = chains;
   agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : undefined);
@@ -481,6 +488,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     agents,
     workflows,
     chains,
+    chainRefs,
     media,
     images,
     imageSafety: overrides.imageSafety ?? (cfg.IMAGE_SAFETY_URL ? new HttpSafety(cfg.IMAGE_SAFETY_URL) : noSafety),

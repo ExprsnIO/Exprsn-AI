@@ -5,7 +5,7 @@ import type { GuardAction, Guardrails } from '../guardrails/types.js';
 import type { CalcWorker } from '../chat/calc.js';
 import type { McpService } from '../mcp/service.js';
 import type { ScriptService } from '../scripts/service.js';
-import { ChainLimit, chainScope, type ChainCtx, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
+import { ChainLimit, chainScope, type ChainCtx, type ChainErrorType, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
 import { functionName, validateAgainst } from './schema.js';
 import type { EntryRow, RegistryService, SideEffect } from './service.js';
 
@@ -61,8 +61,26 @@ export interface WorkflowToolRunner {
   unavailable(entry: EntryRow): Promise<string | null>;
   runAsTool(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown>;
   /** The result of a run that paused (B-1006): still pending, its output, or why it did not succeed. */
-  toolResult(ctx: ToolCallContext, entry: EntryRow, runId: string): Promise<{ state: 'pending' } | { state: 'done'; result: unknown } | { state: 'failed'; error: string }>;
+  toolResult(ctx: ToolCallContext, entry: EntryRow, runId: string): Promise<CalleeResult>;
+  /**
+   * B-4104: a workflow an agent lists (`workflows`), as the tool `workflow:<name>` it is offered as: the published
+   * version in the caller's workspace with the trigger's schema as input, or why it cannot be offered.
+   */
+  asCallee(p: Principal, name: string): Promise<EntryRow | { missing: string }>;
 }
+
+/** What an awaited callee (a workflow run, a delegated agent run) came to. */
+export type CalleeResult = { state: 'pending' } | { state: 'done'; result: unknown } | { state: 'failed'; error: string; type?: ChainErrorType };
+
+/** B-4102: agents an agent delegates to (`agent:<name>`), run by the agent service as child runs. */
+export interface AgentToolRunner {
+  /** Starts the child run and throws `ToolPending` for it: the calling run awaits its answer. */
+  runAsTool(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown>;
+  toolResult(ctx: ToolCallContext, entry: EntryRow, runId: string): Promise<CalleeResult>;
+}
+
+/** The task schema a delegate is offered with when its entry declares no input schema. */
+export const DELEGATE_INPUT = { type: 'object', properties: { task: { type: 'string', description: 'What the agent should do, in full: it sees nothing else of this conversation.' } }, required: ['task'] } as const;
 
 /** B-3904: the domain built-ins (`registry/builtin`), installed once the services exist. */
 export interface BuiltinRunner {
@@ -71,7 +89,7 @@ export interface BuiltinRunner {
 
 /** A pending tool result (B-1006): the call started something that finishes later, which the caller can await. */
 export interface PendingResult {
-  kind: 'workflow-run';
+  kind: 'workflow-run' | 'agent-run';
   id: string;
 }
 
@@ -103,6 +121,8 @@ export interface ToolOutcome {
   pending?: PendingResult;
   /** When the tool declares an output schema: did the result match it? */
   valid?: boolean | null;
+  /** B-4106: how an awaited callee failed (`budget`, `cancelled`, …), as the error's prefix tells the model. */
+  errorType?: ChainErrorType;
   durationMs: number;
 }
 
@@ -118,6 +138,7 @@ export class ToolDispatcher {
   private workflows: WorkflowToolRunner | null = null;
   private chains: ChainService | null = null;
   private builtins: BuiltinRunner | null = null;
+  private agents: AgentToolRunner | null = null;
 
   constructor(
     private readonly registry: RegistryService,
@@ -146,6 +167,11 @@ export class ToolDispatcher {
     return this.chains.begin(p.tenantId, { kind: 'tool-call', callee: `${tool.entry.name}@${tool.entry.version}`, principal: p.userId, label: ctx.label, parent });
   }
 
+  /** B-4102: delegated agents run through this runner. */
+  useAgents(runner: AgentToolRunner): void {
+    this.agents = runner;
+  }
+
   /** B-3904: the domain built-ins run through this runner. */
   useBuiltins(runner: BuiltinRunner): void {
     this.builtins = runner;
@@ -169,6 +195,53 @@ export class ToolDispatcher {
       tools.push(this.toResolved(entry));
     }
     return { tools, hidden };
+  }
+
+  /**
+   * B-4102, B-4104: an agent's delegates and the workflows it lists, as tools: `agent:<name>` (the delegate's input
+   * schema, or a `task`) and `workflow:<name>` (the trigger's schema). Each is checked against the data's label like a
+   * tool's ceiling; a name that clashes with a tool already offered is hidden.
+   */
+  async resolveCallees(p: Principal, c: { agents?: string[]; workflows?: string[] }, label: Label, taken: string[] = []): Promise<{ tools: ResolvedTool[]; hidden: { name: string; reason: string }[] }> {
+    const tools: ResolvedTool[] = [];
+    const hidden: { name: string; reason: string }[] = [];
+    const fns = new Set(taken);
+    const add = (t: ResolvedTool) => {
+      if (fns.has(t.fn)) return hidden.push({ name: t.entry.name, reason: `its function name ${t.fn} is already offered` });
+      fns.add(t.fn);
+      tools.push(t);
+    };
+    for (const name of [...new Set(c.agents ?? [])]) {
+      const entry = await this.registry.resolve(p, name, 'agent');
+      if (!entry) hidden.push({ name: `agent:${name}`, reason: 'not published to this workspace' });
+      else if (!this.agents) hidden.push({ name: `agent:${name}`, reason: 'agents cannot be delegated to on this instance' });
+      else if (labelRank(label) > labelRank(entry.label)) hidden.push({ name: `agent:${name}`, reason: `its ceiling is ${entry.label}; the data is ${label}` });
+      else add(this.agentTool(entry));
+    }
+    for (const name of [...new Set(c.workflows ?? [])]) {
+      if (!this.workflows) {
+        hidden.push({ name: `workflow:${name}`, reason: 'workflows are not running on this instance' });
+        continue;
+      }
+      const entry = await this.workflows.asCallee(p, name);
+      if ('missing' in entry) hidden.push({ name: `workflow:${name}`, reason: entry.missing });
+      else if (labelRank(label) > labelRank(entry.label)) hidden.push({ name: entry.name, reason: `its workspace's ceiling is ${entry.label}; the data is ${label}` });
+      else add(this.toResolved(entry));
+    }
+    return { tools, hidden };
+  }
+
+  /** A delegate as a tool: the agent's own registry entry, called as `agent:<name>`. */
+  agentTool(entry: EntryRow): ResolvedTool {
+    const fn = functionName(`agent:${entry.name}`);
+    return {
+      entry,
+      fn,
+      def: { type: 'function', function: { name: fn, description: `Delegate to the agent ${entry.name}, which works on its own and answers. ${entry.description ?? ''}`.trim(), parameters: entry.input_schema ?? (DELEGATE_INPUT as unknown as Record<string, unknown>) } },
+      sideEffect: 'read',
+      confirm: 'never',
+      warning: entry.status === 'deprecated' ? `${entry.name} ${entry.version} is deprecated${entry.replacement ? `; use ${entry.replacement}` : ''}.` : null
+    };
   }
 
   toResolved(entry: EntryRow): ResolvedTool {
@@ -208,7 +281,7 @@ export class ToolDispatcher {
     let args = rawArgs;
     const out = (o: Partial<ToolOutcome>): ToolOutcome => ({ name: tool.entry.name, arguments: args, ok: false, decision: null, durationMs: Date.now() - started, ...o });
 
-    const invalid = validateAgainst(tool.entry.input_schema, args);
+    const invalid = validateAgainst(tool.entry.kind === 'agent' ? (tool.entry.input_schema ?? (DELEGATE_INPUT as unknown as Record<string, unknown>)) : tool.entry.input_schema, args);
     if (invalid.length) return out({ error: `The arguments do not match the tool's input schema: ${invalid.slice(0, 3).join('; ')}.` });
     const why = await this.unavailable(p, tool.entry, ctx.label);
     if (why) return out({ denied: true, error: `tool_unavailable: ${tool.entry.name}: ${why}.` });
@@ -254,6 +327,7 @@ export class ToolDispatcher {
       await this.chains!.finish(node, 'refused', 'above the ceiling');
       return out({ decision: d.action, denied: true, error: `tool_unavailable: ${tool.entry.name}: its ceiling is ${tool.entry.label}; the chain carries ${node.label} data.` });
     }
+    if (node) await this.chains!.note(node, { decision: d.action });
     const cctx: ToolCallContext = node ? { ...ctx, label: node.label, chain: { chain: node.chain, node: node.node } } : ctx;
     const run = () => this.execute(cctx, tool.entry, args);
     try {
@@ -279,13 +353,14 @@ export class ToolDispatcher {
   async awaitResult(ctx: ToolCallContext, tool: ResolvedTool, args: Record<string, unknown>, pending: PendingResult): Promise<ToolOutcome> {
     const started = Date.now();
     const out = (o: Partial<ToolOutcome>): ToolOutcome => ({ name: tool.entry.name, arguments: args, ok: false, decision: null, durationMs: Date.now() - started, ...o });
-    if (pending.kind !== 'workflow-run' || !this.workflows) return out({ error: 'The pending result can no longer be read on this instance.' });
-    const r = await this.workflows.toolResult(ctx, tool.entry, pending.id);
-    if (r.state === 'pending') return out({ pending, error: `${tool.entry.name} is still waiting.` });
-    // The call's node (the parent of the workflow run's) ends with the run.
-    const runNode = this.chains ? await this.chains.find('workflow-run', pending.id) : undefined;
-    if (runNode?.parent) await this.chains!.finish({ chain: runNode.chain, node: runNode.parent }, r.state === 'done' ? 'succeeded' : 'failed', r.state === 'failed' ? r.error : null);
-    if (r.state === 'failed') return out({ error: r.error.slice(0, 1000) });
+    const runner = pending.kind === 'agent-run' ? this.agents : this.workflows;
+    if (!runner) return out({ error: 'The pending result can no longer be read on this instance.' });
+    const r = await runner.toolResult(ctx, tool.entry, pending.id);
+    if (r.state === 'pending') return out({ pending, error: `${tool.entry.name} is still ${pending.kind === 'agent-run' ? 'working' : 'waiting'}.` });
+    // The call's node (the parent of the run's) ends with the run, with the typed error its caller gets (B-4106).
+    const runNode = this.chains ? await this.chains.find(pending.kind, pending.id) : undefined;
+    if (runNode?.parent) await this.chains!.finish({ chain: runNode.chain, node: runNode.parent }, r.state === 'done' ? 'succeeded' : 'failed', r.state === 'failed' ? r.error : null, r.state === 'failed' ? (r.type ?? 'failed') : null);
+    if (r.state === 'failed') return out({ error: r.error.slice(0, 1000), errorType: r.type ?? 'failed' });
     return this.finishResult(ctx, tool, r.result, out, null);
   }
 
@@ -332,6 +407,9 @@ export class ToolDispatcher {
       case 'workflow':
         if (!this.workflows) throw new Error('Workflows are not running on this instance.');
         return this.workflows.runAsTool(ctx, entry, args);
+      case 'agent':
+        if (entry.kind !== 'agent' || !this.agents) throw new Error(`${entry.name} cannot be delegated to on this instance.`);
+        return this.agents.runAsTool(ctx, entry, args);
       default:
         throw new Error(`${entry.name} cannot be called (${entry.impl}).`);
     }

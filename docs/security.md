@@ -129,12 +129,26 @@ filter, private `/tmp`, only the state directory writable.
   metered as GPU time; chains are not priced against the price books. Wall time is charged for leaf work only, so time a
   run spends waiting on an approval is not counted, and a child executed inside its parent's step counts its own steps;
   budgets are checked before each step, so the step that crosses a budget completes. A pending workflow tool's call node
-  stays `waiting` until the awaiting agent picks its result up. Cycles across kinds (A → B → A) are bounded by depth at
-  run time only; the publish-time reference graph is B-4105. Skills on a model step: write and destructive tools run
-  only behind an Approval step on every path (a held call is reported to the model, not paused for), and at most six
-  rounds of tool calls. Map items never pause one by one; a write tool in a map or loop needs an Approval step before
-  it. A child workflow runs inside its parent's step while it can, so a long child counts against the parent's step
-  timeout; a budget-stopped agent run fails its workflow step even if its owner resumes it later.
+  stays `waiting` until the awaiting agent picks its result up. Skills on a model step: at most six rounds of tool
+  calls. Map items never pause one by one; a write tool in a map or loop needs an Approval step before it. A child
+  workflow runs inside its parent's step while it can, so a long child counts against the parent's step timeout.
+- Chaining across kinds (1.5.0, Sprint 34a, B-4102 to B-4107). Cross-kind cycles are now checked at publish (B-4105),
+  but only a cycle made entirely of steps that always run (sub-workflows, map and loop workflows, agent steps, skill
+  loads, a workflow tool's workflow) is refused; a cycle through a model's choice (an agent's delegates, listed
+  workflows or tools, which includes an agent delegating to itself) is published with a warning and bounded at run time
+  by `CHAIN_MAX_DEPTH`, `AGENT_MAX_DEPTH` and the root's budgets. Branches are not followed, so a sub-workflow cycle
+  behind a branch that would end is refused too. The graph is built from what is published now and checked when
+  something is published, from it: a later change elsewhere that closes a cycle is caught when that change is
+  published. References resolve tenant-wide (a workflow in the entry's own workspace); an entry published only to
+  other workspaces passes the check and is hidden at run time. A delegate's budgets are clamped to what the delegating
+  run has left when it starts, and its tokens are added to the delegating run's afterwards; its steps and wall time
+  count only at the root. A held call is decided where it waits with that place's rules; the chain view itself is for
+  the chain's principal and agent, tool and workflow admins, so another approver decides from the place, or through
+  `POST /api/chains/:id/held/:node/decision`, which answers `404` unless they may decide the call. A model step's held
+  call keeps the conversation so far sealed in the step until it is decided; the approved call passes the `tool-call`
+  checkpoint again when it runs. The audit `target` filter is a `LIKE` over the target JSON within the tenant (no index
+  of its own). The chain view lists at most 50 guardrail decisions and 20 audit entries per run. A replay from a node
+  is a new chain, not a branch of the old one.
 - Feed generators and relay commit verification (1.5.0, Sprint 31, B-3001 to B-3003, B-3604). Relay commits are
   verified one at a time in the consumer's order: each repo DID new to the cache costs a DID resolution (up to five
   seconds), so a subscription to the whole network over subscribeRepos falls behind where a Jetstream would not; use

@@ -36,7 +36,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 25 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
@@ -44,10 +44,10 @@ An admin permission is any permission outside the member baseline: a custom role
 | `models:manage` | yes | 5 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 17 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `profiles:manage` | yes | 20 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `tools:manage` | yes | 15 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `agents:manage` | yes | 19 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `workflows:manage` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
+| `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -229,6 +229,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/workflow-runs/{id}/replay`
 - `POST /api/workflows/{id}/runs`
 - `POST /api/workflows/{id}/validate`
+- `GET /api/workflows/{id}/used-by`
 - `DELETE /api/agent-schedules/{id}` (or another permission)
 - `GET /api/agent-schedules` (or another permission)
 - `GET /api/agent-schedules/{id}` (or another permission)
@@ -240,6 +241,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
 - `POST /api/runs/{id}/steps/{n}/decision` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
+- `POST /api/chains/{id}/nodes/{node}/replay` (or another permission)
 
 ### `scripts:run`
 
@@ -370,6 +374,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/registry/{id}/versions` (or another permission)
 - `POST /api/runs/{id}/steps/{n}/decision` (or another permission)
 - `POST /api/scripts/{id}/promote` (or another permission)
+- `GET /api/admin/registry/{id}/used-by` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
 
 ### `agents:manage`
 
@@ -392,6 +399,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/cancel` (or another permission)
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
+- `GET /api/admin/registry/{id}/used-by` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
+- `POST /api/chains/{id}/nodes/{node}/replay` (or another permission)
 
 ### `mcp:manage`
 
@@ -422,6 +433,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/workflows/{id}/draft`
 - `GET /api/events/catalogue` (or another permission)
 - `POST /api/scripts/{id}/promote` (or another permission)
+- `GET /api/chains/{id}` (or another permission)
+- `POST /api/chains/{id}/held/{node}/decision` (or another permission)
 
 ### `guardrails:manage`
 
