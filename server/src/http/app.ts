@@ -23,6 +23,7 @@ import { guardrailRoutes } from '../routes/guardrails.js';
 import { registryAdminRoutes } from '../routes/admin/registry.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
+import { chainRoutes } from '../routes/chains.js';
 import { scriptRoutes } from '../routes/scripts.js';
 import { workflowRoutes } from '../routes/workflows.js';
 import { workflowOperationRoutes } from '../routes/workflow-operations.js';
@@ -226,6 +227,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', registryAdminRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
   api.use(agentRoutes(s));
+  api.use(chainRoutes(s));
   api.use(scriptRoutes(s));
   api.use(workflowOperationRoutes(s)); // 1.5.0, Sprint 32b: triggers, dead letters, bundles (before :id routes)
   api.use(workflowRoutes(s));

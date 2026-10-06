@@ -5,6 +5,7 @@ import { LABELS, type Label } from '../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import { entryView, SIDE_EFFECTS } from '../registry/service.js';
 import { graphSchema } from '../workflows/graph.js';
+import { rootHeld } from '../chain/view.js';
 import type { Services } from '../services.js';
 
 const name = z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens');
@@ -99,6 +100,13 @@ export function workflowRoutes(s: Services): Router {
     res.status(201).json(entryView(entry));
   });
 
+  /** B-4105: what references the workflow (agents that list it, workflow tools, other workflows), before deleting it. */
+  r.get('/workflows/:id/used-by', run, async (req, res) => {
+    const w = await wf.workflow(principalOf(req), String(req.params.id));
+    const usedBy = await wf.usedBy(w);
+    res.json({ id: w.id, name: w.name, usedBy, deleteBlocked: usedBy.some((u) => u.live && u.kind !== 'tool') });
+  });
+
   r.delete('/workflows/:id', manage, async (req, res) => {
     const w = await wf.remove(principalOf(req), String(req.params.id));
     await audit(req, 'workflow.deleted', { workflow: w.id, name: w.name }, w.label);
@@ -129,7 +137,10 @@ export function workflowRoutes(s: Services): Router {
 
   // Run owners, workflow admins and approvers of the run may read it; the service decides which.
   r.get('/workflow-runs/:id', async (req, res) => {
-    res.json(await wf.runView(principalOf(req), String(req.params.id)));
+    const p = principalOf(req);
+    const v = await wf.runView(p, String(req.params.id));
+    // B-4106: a chain's root shows every call held below it, with its path, to decide from here.
+    res.json({ ...v, held: await rootHeld(s, p, v.chain) });
   });
 
   r.post('/workflow-runs/:id/replay', run, async (req, res) => {

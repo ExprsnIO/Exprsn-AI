@@ -1156,6 +1156,11 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/imports/repositories/{id}/reject', 'imports:repositories'],
   ['PUT /api/admin/tenants/{tid}/import-quota', 'tenant:manage'],
   ['PUT /api/imports/settings/licences', 'imports:review'],
+  ['GET /api/admin/registry/{id}/used-by', { anyOf: ['agents:manage', 'tools:manage'] }],
+  ['GET /api/chains/{id}', { anyOf: ['agents:manage', 'agents:run', 'tools:manage', 'workflows:manage'] }],
+  ['GET /api/workflows/{id}/used-by', 'agents:run'],
+  ['POST /api/chains/{id}/held/{node}/decision', { anyOf: ['agents:manage', 'agents:run', 'tools:manage', 'workflows:manage'] }],
+  ['POST /api/chains/{id}/nodes/{node}/replay', { anyOf: ['agents:manage', 'agents:run'] }],
   // ---- end of routes ----
 ];
 
