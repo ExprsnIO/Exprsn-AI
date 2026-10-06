@@ -95,8 +95,8 @@ Pools, instances and the model catalogue are shared by every tenant; profiles be
 | `POST /admin/pools` `{name, accelerator: cuda\|rocm\|metal\|cpu, zone, labelCeiling, description?}` | Creates a pool |
 | `PATCH /admin/pools/:id`, `DELETE /admin/pools/:id` | Edits; deletes an empty pool |
 | `POST /admin/pools/:id/upgrade` `{targetVersion, waitMinutes}` | Rolling Ollama upgrade job (`202 {jobId}`): drains one instance at a time, waits for it to report the target version, reloads pinned models |
-| `POST /admin/pools/:id/instances` `{name, url, deploy: docker\|baremetal, tls?: {caFile, certFile, keyFile}, settings}` | Registers an Ollama endpoint; `settings`: `memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive` |
-| `PATCH /admin/instances/:id` `{url?, tls?, settings?, state?: active\|disabled}`, `DELETE /admin/instances/:id` | Edits, removes |
+| `POST /admin/pools/:id/instances` `{name, url, deploy: docker\|baremetal, tls?: {caFile, certFile, keyFile}, settings}` | Registers an Ollama endpoint; `settings`: `memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive`. Since 1.6.0 also `kind`, `socketPath`, `token`, `tokenRef` for Chat Completions servers (see Sprint 35a below) |
+| `PATCH /admin/instances/:id` `{url?, tls?, settings?, state?: active\|disabled}`, `DELETE /admin/instances/:id` | Edits, removes. Since 1.6.0 also `socketPath`, `token`, `tokenRef` (Sprint 35a) |
 | `GET /admin/instances/:id/plan?model=<name>` | Memory planner: `{fits, resident, needBytes, freeBytes, evict: [names], reason}` |
 | `GET /admin/instances/:id/events` | Load, unload, eviction and pull history `[{model, event, reason, actor, ts}]` ("why is this cold?") |
 | `POST /admin/instances/:id/load` `{model, pinned}` | Loads (evicting warm models if the plan says so). `409 No spare memory` with `plan`; `429` with `limit: anti_thrash` |
@@ -123,7 +123,7 @@ Lifecycle: `draft → evaluated → approved → deprecated → retired`.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/models` | Models with `pools: [{placementId, poolId, pool, residency}]` and `profiles` (count) |
-| `POST /admin/models` `{name, source, expectedDigest?, license?: {name, url?, notes?}, label, notes?, poolId?}` | Import request. Pickle sources are refused (`422 Import refused`, `reason: pickle`); with `poolId` it is placed and pulled |
+| `POST /admin/models` `{name, source, expectedDigest?, license?: {name, url?, notes?}, label, notes?, poolId?}` | Import request. Pickle sources are refused (`422 Import refused`, `reason: pickle`); with `poolId` it is placed and pulled. Since 1.6.0 `{serverInstanceId, serverModel, …}` registers a model a server holds instead (Sprint 35a) |
 | `PATCH /admin/models/:id` `{license?, label?, notes?}` | Records the licence and so on |
 | `POST /admin/models/:id/pull` `{poolId}` | Pulls again (job). A digest mismatch or a non-GGUF/safetensors format deletes the blob and fails the import |
 | `POST /admin/models/:id/evaluate` | Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft → evaluated |
@@ -4132,3 +4132,48 @@ Every socket counts as a connection of its person while it is open; connections 
 `presence_connections` with a 30-second heartbeat, and the rows of an instance that stopped refreshing them for 90
 seconds are swept (its people read offline unless connected elsewhere). `server/src/profiles/` has `s.people`
 (`ProfileService`) and `s.presence` (`PresenceService`: `statuses`, `visibleAmong`, `effective`).
+
+## Sprint 35a (1.6.0): model servers beyond Ollama (B-4301 to B-4307)
+
+An instance has a `kind`: `ollama` (the default, every instance from before) or `openai`, a server speaking the Chat
+Completions API: Apple's `fm serve` (macOS 27, on a port or a Unix socket), `mlx_lm.server`, llama.cpp's
+`llama-server`, vLLM. It joins a pool like an Ollama node. The gateway reaches every server through one interface
+(`server/src/gateway/server.ts`, `ModelServer`: `version`, `models`, `loaded`, `show`, `load`, `unload`, `pull`,
+`delete`, `chat`, `embed`); `OllamaClient` implements it unchanged and `OpenAIServer` (`gateway/openai-server.ts`)
+maps it onto Chat Completions. What a server cannot do throws `Unsupported` and is skipped, never an error: a Chat
+Completions server reports nothing resident (a model it lists counts as ready), cannot load, unload, pull or delete
+(those are recorded as `unsupported` in the instance's events), is skipped by pulls onto a mixed pool and by rolling
+upgrades, and offers embeddings only when its `/v1/embeddings` answers (once it refuses, embedding requests go to
+another instance that has the model, such as an Ollama pool; knowledge, memory and the guard are unchanged).
+
+Health is `GET /health`, or `GET /v1/models` when the server has no `/health`; the models are `/v1/models` (a model
+`fm serve`'s `/health` lists as unavailable, Private Cloud Compute, is not offered); llama.cpp's `/props` gives the
+context length. What the server reported is kept in the instance's `settings.reported`: `server`, `contextLength`,
+`tools` and `jsonSchema` (from the probe), `embeddings`, `models`, `probedAt`, `probedModel`, `probeDetail`.
+
+Chat goes to `/v1/chat/completions`, streamed: messages and the system prompt, tools and tool calls (ids kept and
+each tool result paired with its call), streamed deltas (`reasoning_content` as thinking), `response_format` from a
+JSON schema, stop, temperature, top_p, seed, penalties, max tokens (`num_predict`) and usage (estimated at four
+characters a token when the server does not report it, as `fm serve` does not while streaming). Ollama-only options
+(`num_ctx`, `keep_alive`, `think` and the rest) are not sent and recorded once per client as a `dropped` instance
+event. The server-side tool loop, guardrail checkpoints, labels and metering are unchanged.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/pools/:id/instances` `{name, kind: ollama\|openai, url?, socketPath?, token?, tokenRef?, deploy, tls?, settings?}` | `pools:manage`. `kind openai` with `socketPath` (an absolute path; no URL, no TLS) or a `url` (the egress check and mutual TLS as for Ollama). `token` is written to the caller's vault at `model-servers/<id>#token` (needs `secrets:write` and `secrets:read`, `403` otherwise) and never returned; `tokenRef` names one already there (checked readable). It is read, at use, as the person who saved it, in their tenant. A socket, token or reference on an Ollama instance is `400`. The answer is the instance view below, with `probeJobId` (the `instance.probe` job). Audited `instance.created {kind, url, socket, deploy, mtls, token: <vault reference> \| null, probeJob}` |
+| `PATCH /admin/instances/:id` `{url?, socketPath?, token?, tokenRef?, tls?, settings?, state?}` | The kind does not change. `socketPath: null` drops the socket (give a `url` with it); `tokenRef: null` clears the token. `settings.reported` is kept when `settings` is replaced. Audited `instance.updated` (never the token) |
+| `POST /admin/instances/:id/probe` | `pools:manage`. `202 {jobId}`: the `instance.probe` job asks the server's first chat model for a tool call and for JSON schema output and records `tools`, `jsonSchema`, `probedAt`, `probedModel`, `probeDetail`. `409` for an Ollama instance. Audited `instance.probe.started {job}` |
+| `POST /admin/instances/:id/load`, `.../unload` | On a Chat Completions server: `200 {evicted: [], unsupported: true}` and `{ok: true, unsupported: true}`, nothing sent, an `unsupported` event recorded; audited `model.loaded`/`model.pinned`/`model.unloaded` with `unsupported: true` |
+| `GET /admin/model-servers` | `models:manage`. The import picker: `[{instanceId, instance, poolId, pool, poolCeiling, transport: socket\|url, token, state, health, healthDetail, version, reported, models: [{id, available, reason, ownedBy, catalogued: {id, state, held} \| null}]}]`, after polling each server. No URL, socket path or token |
+| `POST /admin/models` `{serverInstanceId, serverModel, label, license?, notes?}` | `models:manage`. Registers a model the server lists: `name` and `serverModel` the server's model id, `source` `server:<instance>/<model id>`, `format` `server`, no expected digest (`400` with one), `importState` `pulled`, capabilities `completion` (and `tools` when the probe saw a tool call; `embedding` for an id with "embed"), placed warm on the instance's pool, no pull job. `409` when the server does not list it or lists it unavailable (Apple's `pcc`), `403` above the caller's clearance or the pool's ceiling, `422` for a pickle-like id. Audited `model.import.requested {format: server, server, serverModel, pool, …}` |
+| `GET /admin/models` | Each model also has `held`, `serverInstanceId`, `serverModel`, and for a held model `server: {instanceId, instance, model, health, reported: {server, contextLength, tools, jsonSchema, embeddings, probedAt}}` |
+
+Server-held models follow the catalogue's rules: the licence, the conformance run (on the instance it came from when
+that one can serve it; the tool-calling test always runs for them, and passing it gives the `tools` capability), a
+label ceiling, and dual-control approval (`403 step dual-control` for the requester). Placements of a held model, and
+any placement on a pool with a Chat Completions server, are `warm` only (`409` otherwise); a held model is placed only
+on a pool where an instance lists it; an Ollama model cannot be placed on a pool whose instances are all Chat
+Completions servers. `POST /admin/models/:id/pull` on a held model checks that an instance in the pool lists it.
+Retiring a held model deletes nothing on the server. Migration `037_model_servers` adds `instances.kind`,
+`socket_path`, `token_ref`, `token_tenant`, `token_owner` and `models.server_instance_id`, `server_model`.
+

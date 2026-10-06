@@ -110,6 +110,11 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   classified for payment cards, IBANs, national identifiers, emails and phone numbers before a chat can use them;
   a file classified above its owner's clearance or the workspace ceiling is rejected.
 - Model output is rendered as text in the console, never as HTML.
+- Since 1.6.0 (B-43) an instance may be a Chat Completions server (`kind: openai`: Apple's `fm serve`,
+  `mlx_lm.server`, `llama-server`) on a URL, under the same egress check and mutual TLS, or on a Unix socket on the
+  server's host. Its bearer token is a vault secret read as the administrator who saved it. Its models are registered
+  from its `/v1/models` listing with `format: server` and no digest; the licence, the conformance run, the label
+  ceiling and dual-control approval apply as to a pulled model.
 
 ## Deployment hardening
 
@@ -118,6 +123,25 @@ the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, emp
 filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
+
+- Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
+  server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers
+  behind the model id the server lists, that the file is GGUF or safetensors, or that it stays the same between the
+  conformance run and later requests; an operator who swaps the model behind the same id (an `mlx_lm.server` or
+  `llama-server` restarted on another file with the same alias) is not noticed. None of the servers targeted here
+  exposes a file hash in `/v1/models`, so the backlog's "where the server exposes it, the file's hash" is not
+  implemented; the model id is the only identity, and approval should be read as approval of the server's operator
+  as much as of the model. The probe and the evaluation trust what the server answers. A Unix socket is not checked
+  against the egress policy: its file permissions are the only access control, and `fm serve` itself has no
+  authentication (run it on a socket only the service user can open, or on loopback, never on `0.0.0.0`). A bearer
+  token is read from the vault once per client and kept in memory until the instance's address or token reference
+  changes or the server restarts, so a token rotated in the vault reaches the gateway only then; it resolves as the
+  person who saved it, and stops resolving when they lose `secrets:read` or leave. Chat Completions servers report no
+  residency, so the memory planner, the anti-thrash limit and pinned residency do not apply to them, and usage is
+  estimated at four characters a token when the server reports none (`fm serve` while streaming). When a server
+  refuses `/v1/embeddings`, embedding requests go to any other instance the embedding model is placed on, not
+  specifically one in the same zone. The Pools screen's own instance form still edits only Ollama settings; kind,
+  socket and token are set from the Models screen's Model servers.
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or

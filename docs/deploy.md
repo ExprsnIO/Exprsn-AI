@@ -187,6 +187,72 @@ credentials, and installs a hardened unit (`ProtectSystem=strict`, no capabiliti
 Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forward WebSocket upgrades for
 `/socket.io/`. Preparing Ollama GPU nodes: [deploy/baremetal/ollama-node.md](../deploy/baremetal/ollama-node.md).
 
+### Apple silicon nodes: `fm serve`, MLX and llama.cpp beside Ollama (1.6.0)
+
+Since 1.6.0 (B-43) an instance can be a Chat Completions server instead of Ollama (`kind: openai`). On a Mac with
+macOS 27 that is Apple's on-device Foundation Model through `fm serve`; `mlx_lm.server` and llama.cpp's
+`llama-server` work the same way. They run beside Ollama on the node and join a pool whose accelerator is `metal`.
+They hold their own models: the gateway does not pull, load or unload on them (those requests are skipped and
+recorded), and models are registered from what the server lists, with no digest.
+
+1. Check the model: `fm available` should print "System model available" (Apple Intelligence enabled for the user
+   that runs it). `fm respond 'Say ready'` answers on the device. The Private Cloud Compute model (`pcc`) is listed by
+   `fm serve` but refused outside Apple's own clients, and is never offered for registration.
+2. Run `fm serve` on a Unix socket under launchd, as the user that runs Exprsn AI. A LaunchAgent in that user's
+   session (`~/Library/LaunchAgents/io.exprsn.fm-serve.plist`) is what has been tried; a LaunchDaemon without a login
+   session may not reach the model:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0"><dict>
+     <key>Label</key><string>io.exprsn.fm-serve</string>
+     <key>ProgramArguments</key><array>
+       <string>/usr/bin/fm</string><string>serve</string><string>--socket</string><string>/Users/exprsn/run/fm.sock</string>
+     </array>
+     <key>RunAtLoad</key><true/>
+     <key>KeepAlive</key><true/>
+     <key>StandardErrorPath</key><string>/Users/exprsn/Library/Logs/fm-serve.log</string>
+   </dict></plist>
+   ```
+
+   ```sh
+   mkdir -p ~/run && chmod 700 ~/run
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.exprsn.fm-serve.plist
+   curl --unix-socket ~/run/fm.sock http://localhost/health    # {"status":"fm serve is running","models":[…]}
+   ```
+
+   Keep the socket path under 104 characters (the macOS limit) and in a directory only the service user can open:
+   `fm serve` has no authentication of its own, so the socket's permissions are the access control. A socket works
+   only when the Exprsn AI server runs on the same Mac. For a server elsewhere, run `fm serve --host 127.0.0.1 --port
+   1976` and publish it through a reverse proxy that terminates TLS (with a client certificate, which the instance's
+   mutual TLS settings present) or checks a bearer token; never bind `fm serve` to `0.0.0.0`.
+3. In the console, Admin → Pools: add a pool with accelerator `metal` (for example `apple-silicon`, in the
+   `inference` zone, with the label ceiling the data needs). Then Admin → Models → Model servers → Register model
+   server: the pool, a name (`mac-studio-1-fm`), kind Chat Completions server, transport Unix socket, the socket path.
+   The instance shows healthy with version `fm serve`, and a probe records whether tool calls and JSON schema output
+   work. By API: `POST /api/admin/pools/<pool id>/instances {"name": "mac-studio-1-fm", "kind": "openai",
+   "socketPath": "/Users/exprsn/run/fm.sock", "deploy": "baremetal"}`.
+4. Admin → Models → Request import → Held by a model server: pick `system`, record the licence (Apple's terms for the
+   Foundation Models framework), choose the label. It is registered as a draft, placed warm on the pool, with nothing
+   pulled. Run the evaluation (it runs on that instance), and have a second administrator approve it. A profile on
+   that model and pool then answers in chat, streams, calls read-only tools and is metered like an Ollama model.
+5. Embeddings: `fm serve` has no `/v1/embeddings`. Keep the embedding and guard models (`qwen3-embedding:0.6b`, the
+   guard profile's model) on an Ollama pool in the same zone; knowledge, memory and the guard use those whatever
+   model the chat profile runs on.
+
+Alternatives on the same node, each registered the same way with a URL instead of a socket:
+
+- MLX: `mlx_lm.server --model mlx-community/Qwen3-4B-4bit --host 127.0.0.1 --port 8080`. It has no `/health`; the
+  gateway uses `/v1/models` for health. Its model ids (`mlx-community/Qwen3-4B-4bit`) are the catalogue names.
+- llama.cpp: `llama-server -m qwen2.5-7b-instruct-q4_k_m.gguf --alias qwen2.5-7b-instruct --jinja --host 127.0.0.1
+  --port 8081 --api-key "$TOKEN"` (`--jinja` for tool calls, `--embeddings` on a separate instance to serve an
+  embedding model). Give the token in the form; it is stored in your tenant's vault (you need `secrets:write` and
+  `secrets:read`) and never shown again. The context length comes from its `/props`.
+
+Ollama-only settings (`num_ctx`, `keep_alive`, thinking) are not sent to these servers; the instance's events record
+which were left out. Upgrades of these servers are the operator's: the pool's rolling Ollama upgrade skips them.
+
 ## Kubernetes (Helm)
 
 The chart in [deploy/helm/exprsn-ai](../deploy/helm/exprsn-ai/README.md) runs the application server as a Deployment

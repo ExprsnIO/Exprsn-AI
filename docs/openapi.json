@@ -12664,7 +12664,7 @@
         "tags": [
           "admin/instances"
         ],
-        "summary": "disabled}, DELETE /admin/instances/:id | Edits, removes",
+        "summary": "disabled}, DELETE /admin/instances/:id | Edits, removes. Since 1.6.0 (B-4302): also socketPath (null to drop it, with a url), token or tokenRef (null clears it) on a kind openai instance; the kind does not change; settings.reported is kept",
         "parameters": [
           {
             "name": "id",
@@ -12768,6 +12768,58 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/instances/{id}/probe": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/instances"
+        ],
+        "summary": "B-4302: starts the instance.probe job on a kind openai instance: a tool call and response_format JSON schema output on its first chat model, recorded in settings.reported (tools, jsonSchema, probedAt). 409 for an Ollama instance. Audit instance.probe.started. pools:manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Probe queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "jobId"
+                  ]
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -13129,12 +13181,174 @@
         }
       }
     },
+    "/api/admin/model-servers": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/models"
+        ],
+        "summary": "B-4304: the import picker's server-held models. Every kind openai instance (no URL or token), what it reported (server, contextLength, tools, jsonSchema, embeddings, probe) and the models it lists with available, reason and catalogued {id, state, held}. Polls them first. models:manage",
+        "responses": {
+          "200": {
+            "description": "Chat Completions instances and their models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "instanceId": {
+                        "type": "string"
+                      },
+                      "instance": {
+                        "type": "string"
+                      },
+                      "poolId": {
+                        "type": "string"
+                      },
+                      "pool": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "poolCeiling": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "transport": {
+                        "enum": [
+                          "socket",
+                          "url"
+                        ]
+                      },
+                      "token": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "health": {
+                        "type": "string"
+                      },
+                      "healthDetail": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "reported": {
+                        "type": "object",
+                        "properties": {
+                          "server": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "contextLength": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "tools": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "jsonSchema": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "embeddings": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "probedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "probedModel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "probeDetail": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      },
+                      "models": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "available": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "ownedBy": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "catalogued": {
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/models": {
       "get": {
         "tags": [
           "admin/models"
         ],
-        "summary": "Models with pools: [{placementId, poolId, pool, residency}] and profiles (count)",
+        "summary": "Models with pools: [{placementId, poolId, pool, residency}] and profiles (count). Since 1.6.0 (B-4304): held, serverInstanceId, serverModel, and server {instanceId, instance, model, health, reported} for a server-held model",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -13145,7 +13359,7 @@
         "tags": [
           "admin/models"
         ],
-        "summary": "Import request. Pickle sources are refused (422 Import refused, reason: pickle); with poolId it is placed and pulled",
+        "summary": "Import request. Pickle sources are refused (422 Import refused, reason: pickle); with poolId it is placed and pulled. Since 1.6.0 (B-4304): serverInstanceId and serverModel register a model a kind openai instance lists instead: format server, no expectedDigest (400 with one), import state pulled, placed warm on the instance's pool, no pull job; 409 when the server does not list it or lists it unavailable",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -15074,7 +15288,7 @@
         "tags": [
           "admin/pools"
         ],
-        "summary": "baremetal, tls?: {caFile, certFile, keyFile}, settings} | Registers an Ollama endpoint; settings: memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive",
+        "summary": "baremetal, tls?: {caFile, certFile, keyFile}, settings} | Registers an Ollama endpoint; settings: memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive. Since 1.6.0 (B-4302): kind (ollama | openai), socketPath (an absolute Unix socket path, kind openai only, no URL or TLS), token (stored in the caller's vault at model-servers/<id>, needs secrets:write and secrets:read; never returned) or tokenRef (vault:<path>#<key>); a kind openai instance answers with probeJobId, and its view carries kind, socketPath, tokenRef, supports {load, unload, pull, embed} and reported",
         "parameters": [
           {
             "name": "id",
