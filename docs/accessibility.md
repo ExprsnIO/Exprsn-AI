@@ -144,8 +144,12 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   pill with its word, never colour alone, and a name-only view says why in a notice. Block goes through a confirm
   dialog. The page joins the screen sweeps (`e2e/tests/support/sweep.ts`, opened as a system admin), and
   `e2e/tests/person.spec.ts` runs both checkers in Standard and Enhanced on a filled-in profile.
-- PLACEHOLDER (coordinator: fill in from sprint-34d once it is merged): the chain tree in Runs and the registry
-  editor's delegates, skill dependencies, workflows and "used by" fields (B-4109).
+- **Runs chain tree and registry chaining fields** (B-4108, B-4109, Sprint 34): the chain tree in Runs is a
+  labelled nested list ("Chain tree") of buttons, one per invocation, reached with Tab and opened with Enter, whose
+  text names the node; a held call shows its path and is approved or rejected from the root run. The registry editor's delegates,
+  workflows and skill-dependency fields are labelled lists, and the "used by" view is a dialog that says in text why
+  Retire or Delete is unavailable. `e2e/tests/runs-chain.spec.ts` runs axe-core and the in-page checker on the tree in
+  light and dark and the reflow check at 320 and 640 px.
 
 ## How it was checked
 
