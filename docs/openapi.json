@@ -21333,6 +21333,9 @@
                             },
                             "carddav": {
                               "type": "string"
+                            },
+                            "webdav": {
+                              "type": "string"
                             }
                           }
                         },
@@ -21377,6 +21380,118 @@
         "responses": {
           "204": {
             "description": "Revoked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/dav": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The DAV discovery URLs, the username a client signs in with, the DAV scopes the caller's roles can use, and whether the session's second factor is fresh enough to create an app password (Settings, B-3415)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "username",
+                    "usernameWithTenant",
+                    "server",
+                    "scopes",
+                    "stepUp"
+                  ],
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "usernameWithTenant": {
+                      "type": "string",
+                      "description": "username@tenant-slug, also accepted by /dav"
+                    },
+                    "server": {
+                      "type": "object",
+                      "required": [
+                        "url",
+                        "caldav",
+                        "carddav",
+                        "webdav"
+                      ],
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "caldav": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "carddav": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "webdav": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      }
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "scope",
+                          "available"
+                        ],
+                        "properties": {
+                          "scope": {
+                            "enum": [
+                              "caldav",
+                              "carddav",
+                              "webdav"
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    },
+                    "stepUp": {
+                      "type": "object",
+                      "required": [
+                        "hasFactor",
+                        "windowSeconds",
+                        "freshUntil"
+                      ],
+                      "properties": {
+                        "hasFactor": {
+                          "type": "boolean"
+                        },
+                        "windowSeconds": {
+                          "type": "integer"
+                        },
+                        "freshUntil": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Epoch ms until which creating an app password needs no step-up; null when a step-up with a code or a passkey is needed first"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Default"

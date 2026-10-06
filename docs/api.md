@@ -3424,8 +3424,9 @@ send a security notice and are audited (`dav.app_password.created`, `dav.app_pas
 | Method and path | What it does |
 | --- | --- |
 | `GET /api/me/app-passwords` | The caller's app passwords: `[{id, name, prefix, scopes, state, createdAt, expiresAt, lastUsedAt, lastUsedIp, lastUsedAgent, revokedAt}]`; `state` is active, expired or revoked (kept listed 30 days) |
-| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`). At most 50 active per user |
+| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`, `webdav`). At most 50 active per user |
 | `DELETE /api/me/app-passwords/:id` | Revokes it: the next DAV request with it is refused (`204`) |
+| `GET /api/me/dav` | For Settings (Sprint 32, B-3415): `{username, usernameWithTenant, server: {url, caldav, carddav, webdav}, scopes: [{scope, available}], stepUp: {hasFactor, windowSeconds, freshUntil}}`. `available` is whether the caller's roles grant any permission of the scope now; `freshUntil` is when the session's second-factor confirmation stops counting for creating an app password (null when it already has). The WebDAV file store answers under the same `/dav/` from B-32 |
 
 ### DAV endpoints
 

@@ -1032,6 +1032,7 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['GET /.well-known/caldav', 'public'],
   ['GET /.well-known/carddav', 'public'],
   ['GET /api/me/app-passwords', 'authenticated'],
+  ['GET /api/me/dav', 'authenticated'],
   ['GET /dav', { anyOf: ['calendars:read', 'contacts:read', 'groups:read'] }],
   ['GET /dav/{path}', { anyOf: ['calendars:read', 'contacts:read', 'groups:read'] }],
   ['HEAD /.well-known/caldav', 'public'],
