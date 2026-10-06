@@ -70,7 +70,7 @@ ships in 1.5.0. The epic's description, sources and permissions are in [Backlog-
 
 | ID | Item | Pts |
 | --- | --- | --- |
-| B-5901 | Version `1.7.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands (Sprint 38) | — |
+| B-5901 | Version `1.7.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands; the full Playwright suite run locally at the end of the release, its findings fixed and the cross-screen sweeps (`a-first-look`, `zz-every-screen`, `y-accessibility`, `y-reflow`, `y-reflow-overlays`) green (owner, 2026-10-06: sprints run only the specs of the screens they change) (Sprint 38) | The full Playwright suite passes locally and in CI |
 
 ## Still deferred
 
