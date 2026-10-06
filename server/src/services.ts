@@ -81,6 +81,9 @@ import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
 import { EventCatalogue } from './events/catalogue.js';
 import { createCacheStore, TenantCache } from './platform/cache.js';
+import { InstanceRegistry } from './ops/instances.js';
+import { JobsAdmin } from './ops/jobs-admin.js';
+import { PlatformOverview } from './ops/overview.js';
 import { RoomRegistry } from './realtime/rooms.js';
 import { PluginService } from './plugins/service.js';
 import { IdentityPolicies } from './identity/policy.js';
@@ -224,6 +227,12 @@ export interface Services {
   schema: SchemaGuard;
   /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
   zoneCluster: ZoneCluster;
+  /** 1.6.0 (B-4202): this server instance's heartbeat, every instance's readiness, and drain. */
+  instances: InstanceRegistry;
+  /** 1.6.0 (B-4202): the Overview's alerts, counters, recent audit and capacity. */
+  overview: PlatformOverview;
+  /** 1.6.0 (B-4203): Jobs and queues: job types, jobs, schedules, dead letters and the tenant cache. */
+  jobsAdmin: JobsAdmin;
   /** Sprint 24 (B-1701 to B-1703): the tenant secrets vault (KV secrets, transit keys, path policies). */
   vault: VaultService;
   /** Sprint 24 (B-1601 to B-1604): the certificate authority (issuers, profiles, issuance, CRLs, OCSP). */
@@ -301,6 +310,8 @@ export interface Services {
 }
 
 export interface ServiceOverrides {
+  /** 1.6.0 (B-4202): this instance's id (default: the job queue's worker id), so tests run two instances in one process. */
+  instanceId?: string;
   kms?: Kms;
   blobs?: BlobStore;
   mediaRunner?: MediaRunner;
@@ -528,6 +539,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
     zoneCluster: new ZoneCluster(() => s),
+    instances: new InstanceRegistry(() => s, bus, { heartbeatMs: 30_000, id: overrides.instanceId ?? jobs.workerId }),
+    overview: new PlatformOverview(() => s),
+    jobsAdmin: new JobsAdmin(() => s),
     vault: new VaultService(() => s, { maxVersions: cfg.VAULT_KV_MAX_VERSIONS }),
     pki: new PkiService(() => s),
     // 1.4.0, Sprint 24c: platform core.
@@ -604,6 +618,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await gateway.stop();
       await calc.close();
       siem.close();
+      await s.instances.stop();
       await jobs.stop();
       await chain.close();
       await mcp.close();
@@ -623,7 +638,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
   // checkpoints are spans (checkpoint and outcome only, never the text).
   jobs.tracer = tracer.enabled ? tracer : null;
-  jobs.gate = () => s.schema.refusal();
+  jobs.gate = () => s.schema.refusal() ?? s.instances.drainReason();
+  // 1.6.0 (B-4203): paused job types and schedules, read again by every poll and every scheduler tick.
+  jobs.pausesLoader = async () => ((await db('job_type_pauses').select('type')) as { type: string }[]).map((r) => r.type);
+  scheduler.isPaused = async (name) => !!(await db('schedule_pauses').where({ name }).first('name'));
   if (tracer.enabled) {
     const check = guard.engine.check.bind(guard.engine);
     guard.engine.check = (input) => withSpan('guardrails check', SpanKind.INTERNAL, { 'exprsn.guardrails.checkpoint': input.checkpoint, 'exprsn.label': input.label }, async (span) => {

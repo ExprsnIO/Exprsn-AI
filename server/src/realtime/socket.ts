@@ -79,6 +79,8 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     pingInterval: 25_000,
     pingTimeout: 20_000
   });
+  // 1.6.0 (B-4202): the Overview counts the sockets of every instance through its heartbeat.
+  s.instances.sockets = () => io.engine.clientsCount;
 
   // More than one instance: rooms and broadcasts span instances through Redis.
   let pub: Redis | null = null;

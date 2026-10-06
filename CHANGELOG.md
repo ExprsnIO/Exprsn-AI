@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.0 (in progress)
+
+### Overview and Jobs and queues live (Sprint 35b, B-4202, B-4203, with B-4207)
+
+- The Overview screen is live, first in the Admin group (Q3): open alerts computed from the existing watches (an
+  instance behind the schema or not answering, the backup RPO, zone drift in the cluster, platform certificates and the
+  tenant's own certificates expiring within 7 days, the rate-limit probe), acknowledged tenant-wide and audited
+  `platform.alert.acknowledged` (Q15); counters for 1 h, 24 h or 7 d; every server instance with its `/readyz` checks,
+  schema, claimed jobs, sockets, rate-limit store, tracing and NTP offset; the next schedules; the recent audit; and
+  capacity (database size and pool, vectors, blob store). `GET /api/admin/overview`.
+- Instances register themselves: each server process beats into `platform_instances` every 30 seconds (migration
+  `037b_platform_ops`) with what `/readyz` answers, which now shares that code. Draining an instance from the screen
+  (Q14: a confirm and a recent sign-in, `platform:manage`) stops it claiming jobs and makes `/readyz` answer 503 with
+  `checks.shutdown: draining`; audited `platform.instance.drained`.
+- The Jobs and queues screen is live, with five tabs: Queues (every job type with queued, running, oldest, failed,
+  p50 and p95, and pause by type, which every instance honours within one poll: `jobs.type.paused`,
+  `jobs.type.resumed`), Jobs (filters by state, type, window, job id or trace id; cancel and retry, retry every failed
+  job: `jobs.cancelled`, `jobs.retried`), Schedules (last runs, run now, pause: `jobs.schedule.*`), Dead letters
+  (moderation jobs and workflow runs, redriven or discarded with a reason: `jobs.deadletter.discarded`) and Cache (the
+  tenant cache's namespaces with reads, hits and invalidations, and invalidate: `jobs.cache.invalidated`, Q1). System
+  admins see every tenant's jobs with a tenant filter, tenant admins their own (Q9). `JobQueue` gains pause by type
+  and `requeue`; `Scheduler` lists its schedules, runs one now and skips a paused one.
+- Both screens are in the accessibility and reflow checks (axe-core, Standard and Enhanced, light and dark, 320 and
+  640 px) through their own Playwright spec; `docs/accessibility.md` lists them.
+
 ## 1.5.0
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)

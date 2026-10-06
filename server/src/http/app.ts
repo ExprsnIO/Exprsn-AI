@@ -35,6 +35,7 @@ import { connectionAdminRoutes } from '../routes/admin/connections.js';
 import { trainingRoutes } from '../routes/training.js';
 import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
+import { operationsAdminRoutes } from '../routes/admin/operations.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
@@ -240,6 +241,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(trainingRoutes(s));
   api.use('/admin', zoneAdminRoutes(s));
   api.use('/admin', platformAdminRoutes(s));
+  api.use('/admin', operationsAdminRoutes(s)); // 1.6.0 (B-4202, B-4203): Overview, Jobs and queues
   api.use('/admin', federationAdminRoutes(s));
   // Sprint 13: integrations.
   api.use(sharingRoutes(s));

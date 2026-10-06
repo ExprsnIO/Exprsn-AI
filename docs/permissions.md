@@ -57,9 +57,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `identity:manage` | yes | 51 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
-| `tenant:manage` | yes | 28 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `tenant:manage` | yes | 42 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `platform:manage` | yes | 50 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `platform:manage` | yes | 70 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `audit:read` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `usage:read` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `webhooks:manage` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -651,6 +651,20 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/tenants/{tid}/workspaces/{wid}/file-quota`
 - `PUT /api/admin/tenants/{tid}/workspaces/{wid}/quota`
 - `PUT /api/admin/tenants/{tid}/import-quota`
+- `GET /api/admin/cache` (or another permission)
+- `GET /api/admin/dead-letters` (or another permission)
+- `GET /api/admin/jobs` (or another permission)
+- `GET /api/admin/jobs/{id}` (or another permission)
+- `GET /api/admin/overview` (or another permission)
+- `GET /api/admin/queues` (or another permission)
+- `GET /api/admin/schedules` (or another permission)
+- `POST /api/admin/cache/{ns}/invalidate` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/discard` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/redrive` (or another permission)
+- `POST /api/admin/jobs/retry-failed` (or another permission)
+- `POST /api/admin/jobs/{id}/cancel` (or another permission)
+- `POST /api/admin/jobs/{id}/retry` (or another permission)
+- `POST /api/admin/overview/alerts/acknowledge` (or another permission)
 
 ### `zones:manage`
 
@@ -727,6 +741,26 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/pds/tenants/{tid}`
 - `GET /api/imports/bundle-requests`
 - `GET /api/imports/proxy-allowlist`
+- `POST /api/admin/overview/instances/{id}/drain`
+- `POST /api/admin/queues/{type}/pause`
+- `POST /api/admin/queues/{type}/resume`
+- `POST /api/admin/schedules/{name}/pause`
+- `POST /api/admin/schedules/{name}/resume`
+- `POST /api/admin/schedules/{name}/run`
+- `GET /api/admin/cache` (or another permission)
+- `GET /api/admin/dead-letters` (or another permission)
+- `GET /api/admin/jobs` (or another permission)
+- `GET /api/admin/jobs/{id}` (or another permission)
+- `GET /api/admin/overview` (or another permission)
+- `GET /api/admin/queues` (or another permission)
+- `GET /api/admin/schedules` (or another permission)
+- `POST /api/admin/cache/{ns}/invalidate` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/discard` (or another permission)
+- `POST /api/admin/dead-letters/{source}/{id}/redrive` (or another permission)
+- `POST /api/admin/jobs/retry-failed` (or another permission)
+- `POST /api/admin/jobs/{id}/cancel` (or another permission)
+- `POST /api/admin/jobs/{id}/retry` (or another permission)
+- `POST /api/admin/overview/alerts/acknowledge` (or another permission)
 
 ### `audit:read`
 

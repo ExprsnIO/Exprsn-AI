@@ -151,6 +151,27 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   Retire or Delete is unavailable. `e2e/tests/runs-chain.spec.ts` runs axe-core and the in-page checker on the tree in
   light and dark and the reflow check at 320 and 640 px.
 
+## Screens made live in 1.6.0 (Sprint 35)
+
+- **Overview** (B-4202, B-4207, Sprint 35b): the page's sections are `h2` headings (Alerts, the counters' window,
+  Instances); each alert is a notice whose tone is also its words (the title says what is wrong), with an Open and an
+  Acknowledge button whose name includes the alert's title. The window is a labelled segmented group ("Counters
+  window") with `aria-pressed`; the Open flags and Held replies counters are buttons. Instance state, schema and the
+  `/readyz` checks are pills with their word, never colour alone; the instances table is a named sideways scroller at
+  narrow widths and the inspector stacks under it. Drain and Acknowledge go through confirm dialogs; a drain that needs a
+  recent sign-in opens the labelled step-up dialog, whose error is announced (`role="alert"`). The page refreshes at
+  the heartbeat's pace and does not re-render while a dialog is open.
+- **Jobs and queues** (B-4203, B-4207, Sprint 35b): the five tabs are the ARIA tabs pattern with one tab panel; the
+  filters are labelled selects (Domain, Tenant, State, Type) and labelled searches; the window is a labelled
+  segmented group. Row actions name their row (for example "Invalidate plugins", "Redrive job …"). Pause, cancel and
+  discard ask for a reason in a dialog whose field is labelled ("Reason", or "Reason (optional)") and whose refusal is
+  announced; job states are pills with their word and progress meters carry their percentage as text.
+
+Both screens join the screen sweeps (`e2e/tests/support/sweep.ts`). `e2e/tests/overview.spec.ts` and
+`e2e/tests/jobs.spec.ts` run the in-page checker and axe-core in Standard and Enhanced, light and dark, on the screen,
+every tab and every design state, and the reflow check at 320 and 640 px on every tab and on the drain and pause
+dialogs.
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values

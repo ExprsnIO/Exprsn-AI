@@ -4132,3 +4132,58 @@ Every socket counts as a connection of its person while it is open; connections 
 `presence_connections` with a 30-second heartbeat, and the rows of an instance that stopped refreshing them for 90
 seconds are swept (its people read offline unless connected elsewhere). `server/src/profiles/` has `s.people`
 (`ProfileService`) and `s.presence` (`PresenceService`: `statuses`, `visibleAmong`, `effective`).
+
+## Sprint 35b (1.6.0): the Overview and Jobs and queues (B-4202, B-4203)
+
+The two admin screens read and act on what already exists: the instances' readiness, the one `JobQueue`, the
+`Scheduler` and the tenant cache. Reading needs `tenant:manage` or `platform:manage`; what acts on every tenant
+(draining an instance, pausing a job type, running or pausing a schedule) needs `platform:manage`. A system admin sees
+every tenant's jobs and may filter by `tenant`; a tenant admin sees their own tenant's, and another tenant's id is
+`403` (decision Q9). Payloads are listed by key only. Every route answers `Cache-Control: no-store`. Migration
+`037b_platform_ops` adds `platform_instances`, `job_type_pauses`, `schedule_pauses` and `platform_alert_acks`.
+
+- **Instances.** Every server process writes its row of `platform_instances` at start and every 30 seconds: what its
+  `/readyz` answered (the same `checks`: `database`, `migrations`, `schema`, `kms`, `blobs`, `shutdown`), its schema
+  handshake, the jobs it is running, its sockets, its rate-limit store, its tracing counters and its last NTP offset.
+  Its id is the job queue's worker id (`host:pid`), so a job's `node` names it. A row whose beat is older than three
+  intervals reads `not answering`; a clean shutdown removes the row; rows a day old are removed.
+- **Drain** (decision Q14): the instance stops claiming jobs (the job queue's gate, beside the schema handshake) and
+  answers `/readyz` with `503` and `checks.shutdown: draining`, so a load balancer sends it nothing new; it finishes
+  what it has. It takes the drain from `TOPICS.instanceDrain` at once or from its row at its next beat. Nothing is
+  restarted from the console; a restart is a new instance.
+- **Alerts** are computed when asked, never stored: an instance behind the schema (`schema`) or not answering
+  (`instance`), the backup RPO watch (`rpo`), zone drift in the cluster (`drift`), platform certificates expiring within
+  7 days (`certs`) and the rate-limit probe (`ratelimit`) for system admins; the tenant's own certificates expiring
+  within 7 days (`pki`, with `pki:manage`) for everyone on the screen. Each has a `key` naming its occurrence; an
+  acknowledgement (decision Q15) hides that key for every administrator of the tenant.
+- **Pausing a job type** keeps it queuing and stops every instance claiming it: each poll reads `job_type_pauses`
+  again, so the pause holds everywhere within one poll (`JOB_POLL_MS`; in BullMQ mode a dispatch that arrives while
+  paused is left to the 30-second poll after the resume). **Pausing a schedule** makes the `Scheduler` skip its
+  buckets; missed buckets are not caught up. **Run now** queues one run per target outside its bucket, with a dedupe key
+  `<name>:<target>:now:<ms>`, so it is listed with the schedule's last runs.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/overview?window=1h\|24h\|7d` | `{scope: platform \| tenant, window, alerts: [{key, kind, tone, title, text, since, open: {route, params?, label} \| {instance, label}}], counters: {jobsScope, queued, oldestQueuedAt, running, failed, flags: {open, overdue}, heldReplies, signins, refusedBySanction, workspaces, sockets: {total, instances} \| null, runningOn}, schedules: {total, items}, audit: [{id, seq, ts, action, actor, object, label, redacted}] \| null, instances: [instance] \| null, heartbeatSeconds, capacity: {database: {client, bytes, pool: {used, max}}, vectors: {count, store}, blobs: {kind, ok}, rateLimit, cache} \| null, metricsUrl, metricsToken}`. `instances`, `capacity` and `metricsUrl` only for system admins; `audit` needs `audit:read`. An instance: `{id, node, pid, role, version, state: ready \| not ready \| draining \| not answering, checks, schema: {state, detail}, jobsClaimed, sockets, runtime: {rateLimit, tracing, ntpOffsetMs, jobQueue, concurrency, workersEnabled}, drain, drainedBy, drainedAt, startedAt, heartbeatAt, self}` |
+| `POST /api/admin/overview/alerts/acknowledge` `{keys}` | Acknowledges the open alerts named (at most 50) for the tenant; `409` when none is open. Audited `platform.alert.acknowledged {alerts} {titles, kinds}`. `{alerts}` still open |
+| `POST /api/admin/overview/instances/:id/drain` | `platform:manage`, a browser session and a recent sign-in (`401` with `step_up` otherwise). `404` unknown, `409` already draining or not answering. Audited `platform.instance.drained {instance} {node, pid, jobsClaimed, sockets}`. The instance |
+| `GET /api/admin/queues?tenant=` | `{backend: db \| bullmq, concurrency, items: [{type, domain, description, registered, queued, running, oldestQueuedAt, failed24h, succeeded24h, p50Ms, p95Ms, series: [8 three-hour buckets], timeoutMs, paused, pause: {reason, by, byName, at} \| null}], instances: {total, claiming, notClaiming: [{id, state, reason}]}}` |
+| `POST /api/admin/queues/:type/pause` `{reason?}` | `platform:manage`. `404` for a type not registered, `409` when paused. Audited `jobs.type.paused {type} {reason, queued}`. The queues |
+| `POST /api/admin/queues/:type/resume` | `platform:manage`. `409` when not paused. Audited `jobs.type.resumed`. The queues |
+| `GET /api/admin/jobs?state=&type=&window=&tenant=&q=&limit=` | `{items: [{id, type, domain, tenantId, tenantName, workspaceId, workspaceName, state, progress, attempts, maxAttempts, createdAt, runAt, startedAt, finishedAt, durationMs, node, message, error, payloadKeys, traceId, createdBy, createdByName}], counts: {queued, running, failed}, tracing}`. `q` is a job id or a trace id; at most 500 |
+| `GET /api/admin/jobs/:id` | One job in scope with `timeline: [{title, text?, at, tone}]` built from its timestamps; `404` outside the scope |
+| `POST /api/admin/jobs/:id/cancel` `{reason?}` | A queued job at once, a running one at its next step; `409` otherwise. Audited `jobs.cancelled {job, tenant} {type, state, reason}` |
+| `POST /api/admin/jobs/:id/retry` | A failed, cancelled or preempted job queued again with a fresh attempt count (same id); `409` otherwise. Audited `jobs.retried {job, tenant} {type, from, attempts}` |
+| `POST /api/admin/jobs/retry-failed` `{type?, window?, tenant?}` | Every failed job in scope created in the window (default `24h`), at most 500. `{retried}`; audited `jobs.retried {type, scope} {count, types}` when any |
+| `GET /api/admin/schedules` | `{items: [{name, type, everyMs, setting, description, targets: platform \| "<n> tenants", targetCount, nextAt, paused, pause, last, runs: [{job, state, at, manual, result, durationMs}]}]}`: the schedules registered on the answering instance (an instance with `WORKERS_ENABLED=false` registers none) |
+| `POST /api/admin/schedules/:name/run` | `platform:manage`. `202 {queued, jobs}`. Audited `jobs.schedule.run {schedule} {jobs}` |
+| `POST /api/admin/schedules/:name/pause` `{reason?}` / `.../resume` | `platform:manage`. `409` when already in that state. Audited `jobs.schedule.paused` / `jobs.schedule.resumed`. The schedules |
+| `GET /api/admin/dead-letters` | `{items: [{source: moderation \| workflow, id, item, reason, attempts, firstFailedAt, lastFailedAt, redrivesAs, link: {route, params}}], sources}`: the caller's tenant only, moderation jobs with `moderation:manage` and the current workspace's workflow runs within clearance with `workflows:manage` |
+| `POST /api/admin/dead-letters/:source/:id/redrive` | `201 {source, id, jobId, runId}`; needs the domain's permission (`403` otherwise). Audited by the domain: `moderation.job.redriven` or `workflow.dead_letter.redriven` |
+| `POST /api/admin/dead-letters/:source/:id/discard` `{reason}` | The row's state becomes `discarded`; `409` when it is not open. Audited `jobs.deadletter.discarded {source, deadLetter} {reason, type, error}`. The dead letters |
+| `GET /api/admin/cache` | `{store: memory \| redis, instances, ttlSeconds: {short, medium, long}, maxEntries, items: [{ns, tier, description, requests, hits, invalidations: {local, bus}, entries}]}`. Reads and invalidations are this instance's since it started; `entries` is the tenant's live entries in a memory store, `null` in Redis |
+| `POST /api/admin/cache/:ns/invalidate` | Drops the namespace for the caller's tenant here and over the bus on every instance; `404` for a namespace the server does not use. Audited `jobs.cache.invalidated {namespace} {store}`. The cache |
+
+`server/src/ops/instances.ts` has `s.instances` (`InstanceRegistry`: `beat`, `list`, `drain`, and `readiness`, which
+`/readyz` shares), `ops/overview.ts` `s.overview` (`alerts`, `acknowledge`, `counters`, `recentAudit`, `capacity`) and
+`ops/jobs-admin.ts` `s.jobsAdmin`; the routes are `routes/admin/operations.ts`.

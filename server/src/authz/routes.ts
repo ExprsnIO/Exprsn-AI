@@ -1174,6 +1174,27 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['LOCK /dav/{path}', { anyOf: ['calendars:read', 'contacts:read', 'files:read', 'groups:read'] }],
   ['UNLOCK /dav', { anyOf: ['calendars:read', 'contacts:read', 'files:read', 'groups:read'] }],
   ['UNLOCK /dav/{path}', { anyOf: ['calendars:read', 'contacts:read', 'files:read', 'groups:read'] }],
+  // 1.6.0, Sprint 35b (B-4202, B-4203): the Overview and Jobs and queues screens
+  ['GET /api/admin/cache', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['GET /api/admin/dead-letters', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['GET /api/admin/jobs', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['GET /api/admin/jobs/{id}', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['GET /api/admin/overview', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['GET /api/admin/queues', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['GET /api/admin/schedules', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/cache/{ns}/invalidate', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/dead-letters/{source}/{id}/discard', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/dead-letters/{source}/{id}/redrive', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/jobs/retry-failed', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/jobs/{id}/cancel', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/jobs/{id}/retry', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/overview/alerts/acknowledge', { anyOf: ['platform:manage', 'tenant:manage'] }],
+  ['POST /api/admin/overview/instances/{id}/drain', 'platform:manage'],
+  ['POST /api/admin/queues/{type}/pause', 'platform:manage'],
+  ['POST /api/admin/queues/{type}/resume', 'platform:manage'],
+  ['POST /api/admin/schedules/{name}/pause', 'platform:manage'],
+  ['POST /api/admin/schedules/{name}/resume', 'platform:manage'],
+  ['POST /api/admin/schedules/{name}/run', 'platform:manage'],
   // ---- end of routes ----
 ];
 

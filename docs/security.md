@@ -119,6 +119,22 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Overview and Jobs and queues (1.6.0, Sprint 35b, B-4202, B-4203). Reading needs `tenant:manage` or
+  `platform:manage`; a tenant admin sees and acts on their own tenant's jobs only (another tenant's id is `403`, its
+  jobs `404`), a system admin every tenant's (Q9). Draining an instance, pausing a job type and running or pausing a
+  schedule act on every tenant and need `platform:manage`; a drain also needs a browser session and a sign-in within
+  `STEPUP_WINDOW_SECONDS`. Every change is audited in the actor's tenant (`platform.alert.acknowledged`,
+  `platform.instance.drained`, `jobs.*`), including a system admin's cancel or retry of another tenant's job, which
+  that tenant's chain does not record. Payloads are shown as keys only; error messages and progress messages are shown
+  as the job wrote them, so a handler that puts tenant content in an error would show it to the tenant's admins (and
+  to system admins). Dead letters are the caller's own tenant only and need the domain's permission to redrive or
+  discard. Gaps: a drain lasts for the life of the process (a restart is a new, undrained instance) and does not end
+  open chat streams or sockets, which finish or move on their own; instance rows are written by the instances
+  themselves, so a process that can write the database can report any state for itself; the cache statistics are the
+  answering instance's since it started; the schedules listed are those registered on the answering instance (an
+  API-only instance lists none); signer and worker processes (training, images) are not instances here, their
+  health stays on their own screens.
+
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
   CardDAV-only password gets `403` there. A PUT waits for its scan (run in the request on the database queue, up to 30

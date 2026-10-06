@@ -234,6 +234,11 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   clearance; `presence.ts` `s.presence`: chosen or derived status, connection rows per instance with a heartbeat, one
   publish per change on `TOPICS.presence`), with `routes/people.ts` (`/api/people`, `/api/presence`) and
   `realtime/presence.ts` (`presence.watch`, `presence.idle`, `presence.changed` on the console's socket).
+- 1.6.0 Sprint 35b: `ops/instances.ts` (`s.instances`: every server process's heartbeat row in `platform_instances`, the
+  `readiness` checks `/readyz` shares, drain), `ops/overview.ts` (`s.overview`: computed alerts, acknowledgements,
+  counters, recent audit, capacity) and `ops/jobs-admin.ts` (`s.jobsAdmin`: job types, jobs, schedules, dead letters,
+  the cache), behind `routes/admin/operations.ts`; `JobQueue` pauses by type (`pausesLoader`) and `requeue`s, and the
+  `Scheduler` lists its schedules, runs one now and skips a paused one (`isPaused`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
