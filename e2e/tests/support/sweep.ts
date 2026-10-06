@@ -2,7 +2,7 @@ import { test, expect, ready, expectLive, type Page } from './fixtures';
 
 // Every sidebar screen, in the order of the NAV table in web/js/app.js, plus Settings (opened from the avatar) and,
 // since 1.5.0 (B-5801), the Profile page (opened from people's names).
-export const SCREENS = ['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'scripts', 'media', 'images', 'files', 'apps', 'groups', 'messages', 'models', 'profiles', 'pools', 'registry', 'mcp-servers', 'guardrails', 'flags', 'classifiers', 'moderation', 'channels', 'connections', 'training', 'tenants', 'roles', 'directories', 'identity', 'certificates', 'vault', 'plugins', 'atproto', 'zones', 'usage-audit', 'platform'];
+export const SCREENS = ['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'scripts', 'media', 'images', 'files', 'apps', 'groups', 'messages', 'models', 'profiles', 'pools', 'registry', 'mcp-servers', 'guardrails', 'flags', 'classifiers', 'moderation', 'channels', 'social', 'connections', 'training', 'tenants', 'roles', 'directories', 'identity', 'certificates', 'vault', 'plugins', 'atproto', 'zones', 'usage-audit', 'platform'];
 
 /** The routes the accessibility and reflow specs walk: every screen and Settings, or only E2E_ONLY (comma-separated)
  *  while writing a screen. */

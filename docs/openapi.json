@@ -15001,6 +15001,650 @@
         }
       }
     },
+    "/api/admin/social/policies/{id}": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Changes a workspace's social policy (feed check, held-post approvers, media, group defaults, event capacity, contact rule). feedGuard and feedApprover also need moderation:manage. Audited social.policy.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workspace id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "feedGuard": {
+                    "type": "boolean"
+                  },
+                  "feedApprover": {
+                    "type": "string",
+                    "enum": [
+                      "reviewers",
+                      "feed",
+                      "guardrails",
+                      "moderators"
+                    ]
+                  },
+                  "feedMedia": {
+                    "type": "boolean"
+                  },
+                  "feedMediaMaxBytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "groupCreate": {
+                    "type": "string",
+                    "enum": [
+                      "members",
+                      "admins"
+                    ]
+                  },
+                  "groupVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "private",
+                      "hidden"
+                    ]
+                  },
+                  "groupJoin": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "request",
+                      "invite"
+                    ]
+                  },
+                  "eventCapacity": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "contactRule": {
+                    "type": "string",
+                    "enum": [
+                      "workspace",
+                      "contacts",
+                      "admins"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/settings": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The tenant's weekly digest (profile, weekday and hour UTC, posts, max label) and messaging summary profile; null restores the environment value. Audited social.settings.updated",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "digestProfile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "digestDay": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "digestHour": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "digestTop": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "digestMaxLabel": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "summaryProfile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/feed": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Feed tab: counters, per-workspace approval policy, trending tags with exclusions, digest settings and the last digest",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/trending/exclusions": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Keeps a hashtag out of trending (it still works on posts and hashtag feeds). Audited feed.trending.excluded",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tag": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/trending/exclusions/{tag}": {
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Lets an excluded hashtag trend again. Audited feed.trending.included",
+        "parameters": [
+          {
+            "name": "tag",
+            "in": "path",
+            "required": true,
+            "description": "The hashtag",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/trending/run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Queues the feed.trending job for the tenant now. Audited feed.trending.requested",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/digest/test": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Queues a test digest for the caller alone over the workspaces they administer; nothing is stored or posted. Audited feed.digest.test-requested",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Groups and events tab: defaults by workspace, groups across workspaces with counts, and calendar feeds",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/{id}/members": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "A group's members, for the ownership transfer picker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/{id}/transfer": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Makes a member the owner; the previous owners become moderators. Audited group.ownership.transferred",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/{id}/archive": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Archives a group: read only, requests and reminders cancelled, members told. Audited group.archived",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/calendar-feeds/{id}/revoke": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Revokes a signed calendar feed; its URL answers 404 on the next fetch. Audited calendar.feed.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/messaging": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Messaging tab: retention, limits, search, summary profile, relation counts, legal-hold exports and approvers",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/conversations": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Conversations the caller may ask to export (titles or names, never messages)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Asks for a legal-hold export of a conversation under dual control; needs a recent sign-in and another platform admin as approver. Audited messaging.export.requested",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "approverId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/approve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "A second platform admin approves; the export job runs. Needs a recent sign-in. Audited messaging.export.approved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "A second platform admin rejects. Audited messaging.export.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/withdraw": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The requester withdraws a pending export. Audited messaging.export.withdrawn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/exports/{id}/download": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The ready export as CSV, for the requester only. Audited messaging.export.downloaded",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id (ULID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/realtime": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "This instance's realtime counts by room kind, sockets and socket authentication failures (platform:manage)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/people": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "People of the tenant, for the Close rooms picker (platform:manage)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/realtime/close": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "Closes every socket of a user on every instance; the session stays (platform:manage). Audited realtime.rooms.closed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/relations": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "The Relations tab: follow, block, mute and list counts, contact rules by workspace and the most blocked accounts",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/pools": {
       "get": {
         "tags": [
@@ -16089,6 +16733,19 @@
         }
       }
     },
+    "/api/admin/tenant-templates": {
+      "get": {
+        "tags": [
+          "admin/tenants"
+        ],
+        "summary": "The tenant provisioning templates (enterprise, team, personal) with what each creates: workspaces, custom roles, draft profiles, zone, issuer, adminClearance",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/tenants": {
       "get": {
         "tags": [
@@ -16106,6 +16763,19 @@
           "admin/tenants"
         ],
         "summary": "System admin: creates a tenant with a local user store and its data key",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/tenants/from-template": {
+      "post": {
+        "tags": [
+          "admin/tenants"
+        ],
+        "summary": "System admin: creates a tenant from a template with its first admin in one step; 201 {tenant, applied, admin}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"

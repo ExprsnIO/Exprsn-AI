@@ -95,9 +95,15 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     try {
       const token = sessionTokenFrom(socket.handshake.headers.cookie, s.cfg.COOKIE_SECURE);
       const session = token ? await s.sessions.resolve(token) : null;
-      if (!token || !session || session.stage !== 'active') return next(new Error('unauthorized'));
+      if (!token || !session || session.stage !== 'active') {
+        s.rooms.stats.authFailed();
+        return next(new Error('unauthorized'));
+      }
       const principal = await loadPrincipal(s, session.tenant_id, session.user_id, { session });
-      if (!principal) return next(new Error('unauthorized'));
+      if (!principal) {
+        s.rooms.stats.authFailed();
+        return next(new Error('unauthorized'));
+      }
       socket.data = { principal, sessionId: session.id, token };
       next();
     } catch (err) {
@@ -246,6 +252,17 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     s.bus.on<RolesChangedEvent>(TOPICS.rolesChanged, (e) => regrant(e)),
     ...domainRooms.offs,
     ...presence.offs,
+    // 1.6.0 (B-4206): an admin closed a user's rooms: their sockets here disconnect; the session stays.
+    s.bus.on<{ tenantId: string; userId: string }>(TOPICS.roomsClose, (e) => {
+      for (const sid of io.of('/').adapter.rooms.get(rooms.user(e.userId)) ?? []) {
+        const socket = io.of('/').sockets.get(sid);
+        const d = socket?.data as SocketData | undefined;
+        if (socket && d?.principal.tenantId === e.tenantId) {
+          (socket as unknown as Socket).emit('rooms.closed');
+          socket.disconnect(true);
+        }
+      }
+    }),
     s.bus.on<string[]>(TOPICS.sessionsRevoked, (ids) => {
       for (const id of ids) {
         io.local.to(rooms.session(id)).emit('session.revoked' as never);

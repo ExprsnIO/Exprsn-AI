@@ -36,6 +36,15 @@ export function weekStartOf(t: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - day * 24 * 3_600_000;
 }
 
+/**
+ * 1.6.0 (B-4206): the end of the last digest week: the latest `weekday` (0 Monday … 6 Sunday) at `hour`:00 UTC at or
+ * before `t`. Monday 00:00 is `weekStartOf`.
+ */
+export function digestWeekEnd(t: number, weekday = 0, hour = 0): number {
+  const mark = weekStartOf(t) + weekday * 24 * 3_600_000 + hour * 3_600_000;
+  return mark <= t ? mark : mark - WEEK;
+}
+
 interface DigestPost {
   id: string;
   score: number;
@@ -78,7 +87,12 @@ export class FeedDigests {
   registerJobs(): void {
     const jobs = this.s().jobs;
     jobs.register(TRENDING_JOB, async (p, ctx) => this.trendingJob(String(p.tenantId ?? ctx.job.tenant_id)));
-    jobs.register(DIGEST_JOB, async (p, ctx) => this.digestJob(String(p.tenantId ?? ctx.job.tenant_id), { workspaceId: (p.workspaceId as string | undefined) ?? null, weekEnd: typeof p.weekEnd === 'number' ? p.weekEnd : null, by: (p.by as string | undefined) ?? null }, ctx), { timeoutMs: 30 * 60_000 });
+    jobs.register(DIGEST_JOB, async (p, ctx) => {
+      const tenantId = String(p.tenantId ?? ctx.job.tenant_id);
+      // 1.6.0 (B-4206): a test digest for one person (Social and messaging): nothing is kept or posted.
+      if (p.test === true) return this.testJob(tenantId, String(p.by ?? ''), Array.isArray(p.workspaceIds) ? p.workspaceIds.map(String) : []);
+      return this.digestJob(tenantId, { workspaceId: (p.workspaceId as string | undefined) ?? null, weekEnd: typeof p.weekEnd === 'number' ? p.weekEnd : null, by: (p.by as string | undefined) ?? null }, ctx);
+    }, { timeoutMs: 30 * 60_000 });
   }
 
   schedule(scheduler: Scheduler, targets: () => Promise<{ tenantId: string; payload?: Record<string, unknown> }[]>): void {
@@ -101,8 +115,10 @@ export class FeedDigests {
       .select('h.workspace_id', 'h.tag', 'x.label')
       .count({ posts: '*' })
       .countDistinct({ people: 'x.author_id' })) as { workspace_id: string; tag: string; label: string; posts: number | string; people: number | string }[];
+    // 1.6.0 (B-4206): the tenant's excluded tags never trend (they still work on posts and in hashtag feeds).
+    const excluded = await this.s().socialAdmin.exclusions(tenantId);
     const byWorkspace = new Map<string, typeof rows>();
-    for (const r of rows) byWorkspace.set(r.workspace_id, [...(byWorkspace.get(r.workspace_id) ?? []), r]);
+    for (const r of rows) if (!excluded.has(r.tag)) byWorkspace.set(r.workspace_id, [...(byWorkspace.get(r.workspace_id) ?? []), r]);
     const keep: Record<string, unknown>[] = [];
     for (const [ws, list] of byWorkspace) {
       list.sort((a, b) => Number(b.posts) - Number(a.posts) || Number(b.people) - Number(a.people) || a.tag.localeCompare(b.tag));
@@ -120,8 +136,10 @@ export class FeedDigests {
     if (!workspaces.length) return { tags: [], computedAt: null, windowStart: null };
     const labels = LABELS.filter((l) => clears(p.clearance, l));
     const rows = (await this.db('feed_trending').where({ tenant_id: p.tenantId }).whereIn('workspace_id', workspaces).whereIn('label', labels)) as { tag: string; posts: number | string; people: number | string; computed_at: number | string; window_start: number | string }[];
+    const excluded = await this.s().socialAdmin.exclusions(p.tenantId);
     const by = new Map<string, { tag: string; posts: number; people: number }>();
     for (const r of rows) {
+      if (excluded.has(r.tag)) continue; // excluded since the last run
       const e = by.get(r.tag) ?? { tag: r.tag, posts: 0, people: 0 };
       e.posts += Number(r.posts);
       e.people = Math.max(e.people, Number(r.people));
@@ -136,7 +154,8 @@ export class FeedDigests {
 
   async settings(tenantId: string, workspaceId: string): Promise<{ digestEnabled: boolean; digestProfile: string | null; effectiveProfile: string | null; updatedBy: string | null; updatedAt: number | null }> {
     const r = (await this.db('feed_settings').where({ tenant_id: tenantId, workspace_id: workspaceId }).first()) as { digest_enabled: number | boolean; digest_profile: string | null; updated_by: string | null; updated_at: number | string } | undefined;
-    const fallback = this.s().cfg.FEED_DIGEST_PROFILE ?? null;
+    // 1.6.0 (B-4206): the tenant's digest profile (Social and messaging) before FEED_DIGEST_PROFILE.
+    const fallback = (await this.s().socialAdmin.tenantSettings(tenantId)).digestProfile ?? this.s().cfg.FEED_DIGEST_PROFILE ?? null;
     const enabled = r ? !!r.digest_enabled : true;
     const profile = r?.digest_profile ?? null;
     return { digestEnabled: enabled, digestProfile: profile, effectiveProfile: enabled ? (profile ?? fallback) : null, updatedBy: r?.updated_by ?? null, updatedAt: r ? Number(r.updated_at) : null };
@@ -176,7 +195,8 @@ export class FeedDigests {
 
   async digestJob(tenantId: string, o: { workspaceId: string | null; weekEnd: number | null; by: string | null }, ctx?: JobContext) {
     const now = Date.now();
-    const weekEnd = o.weekEnd ?? weekStartOf(now);
+    const t = await this.s().socialAdmin.tenantSettings(tenantId);
+    const weekEnd = o.weekEnd ?? digestWeekEnd(now, t.digestDay ?? 0, t.digestHour ?? 0);
     const weekStart = weekEnd - WEEK;
     const workspaces = ((await this.db('workspaces').where({ tenant_id: tenantId, state: 'active' }).modify((q) => (o.workspaceId ? q.andWhere({ id: o.workspaceId }) : q)).select('id', 'name')) as { id: string; name: string }[]);
     const written: string[] = [];
@@ -192,11 +212,57 @@ export class FeedDigests {
     return { weekStart, weekEnd, digests: written.length };
   }
 
+  /**
+   * 1.6.0 (B-4206): a test digest of the last seven days for the requester alone, over the workspaces named (those
+   * they may act in now with a digest profile). Nothing is stored and nobody else is told; the result is a notification
+   * to the requester saying what the digest would hold, or that the model failed and the ranked list would be sent.
+   */
+  async testJob(tenantId: string, userId: string, workspaceIds: string[]) {
+    const s = this.s();
+    const now = Date.now();
+    const out: { workspaceId: string; posts: number; state: string }[] = [];
+    const ws = (await this.db('workspaces').where({ tenant_id: tenantId, state: 'active' }).whereIn('id', workspaceIds).select('id', 'name')) as { id: string; name: string }[];
+    const me = (await this.db('users').where({ tenant_id: tenantId, id: userId }).first('clearance')) as { clearance: string } | undefined;
+    if (!me || !isLabel(me.clearance)) return { test: true, workspaces: out };
+    for (const w of ws) {
+      const st = await this.settings(tenantId, w.id);
+      if (!st.effectiveProfile) continue;
+      const r = await this.rank(tenantId, w, st.effectiveProfile, now - WEEK, now, userId, true);
+      out.push({ workspaceId: w.id, posts: r.posts.length, state: r.state });
+      if (!clears(me.clearance, r.label)) continue; // never above the requester's clearance
+      const body = r.state === 'failed' ? `The model failed (${(r.error ?? '').slice(0, 120)}); members would receive the ranked list of ${r.posts.length} posts.` : r.state === 'empty' ? 'No posts this week; no digest would be sent.' : `${r.posts.length} posts, summarised by ${st.effectiveProfile}: ${(r.summary ?? '').slice(0, 220)}`;
+      await s.notifications.notify({ tenantId, userIds: [userId], kind: 'feed', title: `Test digest for ${w.name}`, body, route: 'social?tab=feed', label: r.label });
+    }
+    return { test: true, workspaces: out };
+  }
+
   /** Ranks the week's workspace posts and has the profile write the summary. */
   private async write(tenantId: string, w: { id: string; name: string }, profile: string, weekStart: number, weekEnd: number, by: string | null): Promise<DigestRow | null> {
     const s = this.s();
+    const { id, label, state, posts, summary, error } = await this.rank(tenantId, w, profile, weekStart, weekEnd, by, false);
+    const row = { id, tenant_id: tenantId, workspace_id: w.id, week_start: weekStart, week_end: weekEnd, label, state, posts: JSON.stringify(posts), summary: summary ? await s.keys.seal(tenantId, summary, `feed-digest:${id}`) : null, profile, error, created_at: Date.now() };
+    try {
+      await this.db('feed_digests').insert(row);
+    } catch {
+      // Another instance wrote this week's digest meanwhile.
+      return null;
+    }
+    await s.audit.append({ tenantId, action: 'feed.digest.created', kind: 'system', actor: { service: 'feed' }, target: { workspace: w.id, digest: id }, detail: { state, posts: posts.length, profile, weekStart: new Date(weekStart).toISOString(), error }, label });
+    if (state === 'ready') {
+      const members = (await s.tenants.members(w.id)).filter((m) => m.state === 'active' && isLabel(m.clearance) && clears(m.clearance, label)).map((m) => m.user_id);
+      await s.notifications.notify({ tenantId, userIds: members, kind: 'feed', title: `This week in ${w.name}`, body: `The ${posts.length} most discussed posts of the week`, route: `feed?digest=${id}`, label });
+    }
+    return digestFrom(row);
+  }
+
+  /** The week's ranked posts and the profile's summary (fail soft: a model failure keeps the ranked list). */
+  private async rank(tenantId: string, w: { id: string; name: string }, profile: string, weekStart: number, weekEnd: number, by: string | null, test: boolean): Promise<{ id: string; label: Label; state: DigestRow['state']; posts: DigestPost[]; summary: string | null; error: string | null }> {
+    const s = this.s();
     const cfg = s.cfg;
-    const labels = LABELS.filter((l) => labelRank(l) <= labelRank(cfg.FEED_DIGEST_MAX_LABEL));
+    const t = await s.socialAdmin.tenantSettings(tenantId);
+    const maxLabel = t.digestMaxLabel ?? cfg.FEED_DIGEST_MAX_LABEL;
+    const top = t.digestTop ?? cfg.FEED_DIGEST_TOP;
+    const labels = LABELS.filter((l) => labelRank(l) <= labelRank(maxLabel));
     const candidates = ((await this.db('feed_posts').where({ tenant_id: tenantId, workspace_id: w.id, state: 'published' }).whereNull('group_id').whereNotNull('body').whereIn('label', labels).andWhere('published_at', '>=', weekStart).andWhere('published_at', '<', weekEnd).orderBy('published_at', 'desc').limit(2000)) as Record<string, unknown>[]).map(postFrom);
     const ids = candidates.map((x) => x.id);
     const count = async (table: string, col: string, extra: Record<string, unknown> = {}) => {
@@ -216,7 +282,7 @@ export class FeedDigests {
         return { x, post: { id: x.id, score: r + 2 * c + 3 * rp, reactions: r, comments: c, reposts: rp } };
       })
       .sort((a, b) => b.post.score - a.post.score || (b.x.published_at ?? 0) - (a.x.published_at ?? 0))
-      .slice(0, cfg.FEED_DIGEST_TOP);
+      .slice(0, top);
     const id = ulid();
     const label = ranked.length ? highest(...ranked.map((r) => r.x.label)) : 'public';
     let state: DigestRow['state'] = ranked.length ? 'ready' : 'empty';
@@ -224,25 +290,13 @@ export class FeedDigests {
     let error: string | null = null;
     if (ranked.length) {
       try {
-        summary = (await generate(s, { tenantId, workspaceId: w.id, profile, system: DIGEST_SYSTEM, prompt: await this.prompt(tenantId, w.name, ranked.map((r) => r.x), ranked.map((r) => r.post)), label, principal: null, userId: by, source: { kind: 'feed-digest', id } })).trim();
+        summary = (await generate(s, { tenantId, workspaceId: w.id, profile, system: DIGEST_SYSTEM, prompt: await this.prompt(tenantId, w.name, ranked.map((r) => r.x), ranked.map((r) => r.post)), label, principal: null, userId: by, source: { kind: test ? 'feed-digest-test' : 'feed-digest', id } })).trim();
       } catch (err) {
         state = 'failed';
         error = (err as Error).message.slice(0, 500);
       }
     }
-    const row = { id, tenant_id: tenantId, workspace_id: w.id, week_start: weekStart, week_end: weekEnd, label, state, posts: JSON.stringify(ranked.map((r) => r.post)), summary: summary ? await s.keys.seal(tenantId, summary, `feed-digest:${id}`) : null, profile, error, created_at: Date.now() };
-    try {
-      await this.db('feed_digests').insert(row);
-    } catch {
-      // Another instance wrote this week's digest meanwhile.
-      return null;
-    }
-    await s.audit.append({ tenantId, action: 'feed.digest.created', kind: 'system', actor: { service: 'feed' }, target: { workspace: w.id, digest: id }, detail: { state, posts: ranked.length, profile, weekStart: new Date(weekStart).toISOString(), error }, label });
-    if (state === 'ready') {
-      const members = (await s.tenants.members(w.id)).filter((m) => m.state === 'active' && isLabel(m.clearance) && clears(m.clearance, label)).map((m) => m.user_id);
-      await s.notifications.notify({ tenantId, userIds: members, kind: 'feed', title: `This week in ${w.name}`, body: `The ${ranked.length} most discussed posts of the week`, route: `feed?digest=${id}`, label });
-    }
-    return digestFrom(row);
+    return { id, label, state, posts: ranked.map((r) => r.post), summary, error };
   }
 
   private async prompt(tenantId: string, workspace: string, posts: PostRow[], ranked: DigestPost[]): Promise<string> {

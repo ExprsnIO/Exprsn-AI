@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.6.0 (in progress)
+
+### Social and messaging live (Sprint 35d, B-4206, with B-4207)
+
+- The Social and messaging screen is live (`#/social`, after Channels, its own sidebar icon; decision Q13), over
+  `GET`/`PUT` routes under `/api/admin/social/` (`docs/api.md`). Migration `037d_platform_social`
+  (`social_workspace_policies`, `social_tenant_settings`, `feed_trending_exclusions`, `messaging_exports`) and the
+  group state `archived`. `social:manage` now also governs these policies (decision Q4); held content stays under
+  `moderation:manage`.
+- Feed: per-workspace approval policy (whether posts pass `user-input` in full, with the platform baseline always
+  kept; who approves held posts; media allowed and their largest size), a per-tenant trending exclusion list honoured
+  at once and by the `feed.trending` job, Run trending now, and the weekly digest's profile, weekday and hour (UTC),
+  size and highest label per tenant, with a test digest sent to the requester alone.
+- Groups and events: per-workspace defaults (who may create groups, visibility, join mode, event capacity), groups
+  across workspaces with members, pending requests, upcoming events, open reports and feeds, Transfer ownership and
+  Archive (read only), and the tenant's calendar feeds with Revoke: a revoked feed answers 404 on its next fetch
+  (the item's "done when").
+- Messaging: retention, limits, search and the tenant's summary profile; legal-hold export of a conversation under
+  dual control (decision Q5): requested with a reason and a recent sign-in, approved by a second platform admin, then
+  written by the job `messaging.conversation.export` as a sealed CSV only the requester downloads. Audited
+  `messaging.export.*` and `messaging.conversation.exported`.
+- Realtime (`platform:manage`): this instance's rooms and sockets by kind, signals per minute and those refused by
+  `ROOM_SIGNALS_PER_MINUTE`, socket authentication failures, and Close a user's rooms on every instance
+  (`TOPICS.roomsClose`, audited `realtime.rooms.closed`).
+- Relations: follow, block, mute and list counts, the most blocked accounts (counts only), and contact rules per
+  workspace (anyone in the workspace, contacts only, admins only) enforced when a conversation is started or someone
+  added, on top of each person's own rule.
+- Accessibility and reflow for the screen and its dialogs (B-4207's share): `docs/accessibility.md`,
+  `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
+  refused signals instead of a backlog, as the server reports them.
+
+### Tenant provisioning templates (Sprint 35d, B-4501)
+
+- Tenants are created from a template (decision Q11): **Create from template** on the Tenants screen (system
+  admins), `POST /api/admin/tenants/from-template` and `exprsn-ai tenant:create --template <id>`. The first
+  templates are exprsn-platform's organisation types: **enterprise** (General, Finance, People, Engineering and Legal
+  workspaces up to confidential; Reader and Contributor roles; assistant, analyst and summariser profiles; an issuing
+  CA), **team** (Team and Projects workspaces; a Contributor role; an assistant profile; an issuing CA) and
+  **personal** (one confidential workspace; an assistant profile). `GET /api/admin/tenant-templates` lists what each
+  creates. No new permission (`tenant:manage` and the system-admin role) and no migration.
+- One step: the tenant, its local user store and data key, the workspaces, the custom roles (member-baseline
+  permissions only, version 1 applied), draft gateway profiles pinned to a pool in the template's zone (`inference`)
+  when one may process their label, the tenant's intermediate CA under the platform root when there is one (reported
+  as skipped otherwise), and the first admin: `tenant-admin`, cleared for the highest workspace ceiling, a member of
+  every workspace, with a single-use enrolment link by default or a password. Audited in both chains: the parts' own
+  events and `tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin}`.
+- `admin:create`'s `createAdmin` takes the audit actor, so the first admin's `user.created` names the provisioning
+  admin rather than the CLI.
+
 ## 1.5.0
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)

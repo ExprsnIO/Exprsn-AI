@@ -121,6 +121,7 @@ import { ProfileService } from './profiles/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
+import { SocialAdmin } from './social/admin.js';
 import { BuiltinTools } from './registry/builtin/index.js';
 import { WorkflowStepKit } from './workflows/steps/index.js';
 import { CustomRoleService } from './authz/custom-roles.js';
@@ -282,6 +283,8 @@ export interface Services {
   messagingInsights: MessagingInsights;
   /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
   feed: FeedService;
+  /** 1.6.0 (B-4206): the Social and messaging screen: workspace policies, digest settings, legal-hold exports, realtime counts. */
+  socialAdmin: SocialAdmin;
   /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
   customRoles: CustomRoleService;
   /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
@@ -578,6 +581,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
+    socialAdmin: new SocialAdmin(() => s),
     // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
@@ -712,6 +716,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
   s.feed.init();
   s.feed.digests.registerJobs();
+  s.socialAdmin.registerJobs(); // 1.6.0 (B-4206): legal-hold conversation exports
   // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
   s.customRoles.init();
   s.accessReviews.registerJobs();
