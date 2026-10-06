@@ -27,14 +27,34 @@ the same policy pipeline.
 
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
-| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | In progress (B-3401 done) |
-| 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3701–B-3703, B-3602 | 76 | `032_dav`, `032c_memory` | Planned |
-| 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `033_pds`, `033b_feeds`, `033c_imports` | Planned |
-| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Planned |
+| 29 | Permission matrices and custom roles; prototype boards; trust, identity, apps and files screens; record queries on PostgreSQL | B-3301–B-3305, B-3401–B-3404, B-3407, B-3408, B-3413, B-3601 | 76 | `031_access` | **Done** (its six screens shipped in Sprint 30) |
+| 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3701–B-3703, B-3602 | 76 | `032_dav`, `032c_memory` | **Done** (B-3104 partial) |
+| 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `033_pds`, `033b_feeds`, `033c_imports` | **Done** |
+| 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2` | Next |
 | 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3606, B-3501 | 66 | `036_chains`, `036b_profiles` | Planned |
 
 The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
+
+### Progress
+
+**Sprint 29: done** (PR #40 and the boards in #43): permission matrices, custom roles, effective access with
+`explain`, a route permission registry over every route, and access reviews with reviewers assigned per item (B-3301
+to B-3305); record queries PostgreSQL answers from an index, p95 704 to 65 ms (B-3601); the prototype boards (B-3401).
+Its six live screens (B-3402 to B-3404, B-3407, B-3408, B-3413) were built in Sprint 30, once the boards had landed.
+
+**Sprint 30: done** (PR #46): CalDAV and CardDAV with DAV-only app passwords (B-3101 to B-3103), model-based memory
+management (B-3701 to B-3703), MongoDB connections (B-3602), and eleven live screens with their accessibility and
+reflow checks (B-3405, B-3409 to B-3412, B-3414, and Sprint 29's six). Unit suite 851 passed, Playwright 96 passed.
+**B-3104 is partial**: the conformance fixtures were written from the clients' documented requests; B-3606 captures
+real traffic in Sprint 34. Built ahead and parked: WebDAV for the file store (B-32, Sprint 34).
+
+**Sprint 31: done** (this PR): the AT-Protocol PDS with a post written to it appearing in the reference AppView in
+CI (B-2901 to B-2906), feed generators and their published records (B-3001 to B-3004), relay commit signatures
+verified (B-3604), the RSVP race closed on all three databases (B-3603), import repositories, browse and model import
+(B-3801 to B-3803), and the live AT-Protocol screen (B-3406). The imports migration was built as `032b_imports` and
+renamed `033c_imports` so it runs after the Sprint 30 migrations. Unit suite 935 passed, the PostgreSQL and MySQL
+integration suites passed, Playwright 99 passed.
 
 The order follows the dependencies: the permission matrix (B-3301) and custom roles (B-3302) before the roles screen
 (B-3412); the prototype boards (B-3401) before any live screen; the WebDAV core (B-3101) before CalDAV, CardDAV and
