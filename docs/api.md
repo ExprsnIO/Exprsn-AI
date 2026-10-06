@@ -1894,7 +1894,7 @@ The complete route list, with request and response schemas for the routes below,
 no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes with their summary from this
 file.
 
-### Event catalogue (`webhooks:manage` or `plugins:manage`)
+### Event catalogue (`webhooks:manage`, `plugins:manage` or, since 1.5.0, `workflows:manage`)
 
 | Route | Notes |
 | --- | --- |
@@ -3921,3 +3921,15 @@ Two new step kinds, both writes (a workflow offered as a tool with one is at lea
   the webhook path's retries and breaker. One delivery per run and step (a retried job does not send twice; a replay is
   a new run and sends again). Audited `workflow.step.webhook` `{host, event, delivery}`.
 
+
+## Sprint 32e (1.5.0): the live Workflows screen (B-3910)
+
+The console's Workflows screen now edits every step kind the server has (the 1.4.0 `record` step, `notify`,
+`webhook`, `sub`, `agent`, `map`, `loop`, skills on model steps, approval forms, vault references in HTTP headers,
+per-step retries and failure edges), sets the trigger's `event` and `schedule` sources, and shows the triggers and
+callers, dead letters and bundles of Sprint 32b. Two server changes back it:
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/callers` | `agents:run`. What else starts the workflow, for the Triggers and callers tab: `{workflowId, appTriggers: [{id, kind: record \| schedule, app, appName, appTitle, entity, entityTitle, events, cron, ownerId, ownerName, enabled, nextRunAt, lastRunAt, lastRunId, lastResult}] (apps the caller is cleared for), workflows: [{workflowId, workflow, label, publishedVersion, step, stepTitle, kind: sub \| map \| loop, version, in: draft \| published \| published and draft}] (other workflows of the workspace that run it), tools: [{id, name, version, status, sideEffect, label, workflowVersion}], plugins: [{id, key, name, version, state, maxLabel, installedBy, installedByName}] (granted call:workflow), lastRuns: {<kind>: {runId, at, state, trigger, count}}}`. `lastRuns` counts the last 500 runs (not dry runs) by kind of start (`manual`, `api`, `record`, `schedule`, `event`, `plugin`, `workflow`, `tool`, `replay`), the caller's own unless they hold `workflows:manage`. The workflow's own event or schedule trigger is `GET /workflows/:id/triggers` |
+| `GET /api/events/catalogue` | Also readable with `workflows:manage` (besides `webhooks:manage` and `plugins:manage`): the editor picks an event trigger's type from it |

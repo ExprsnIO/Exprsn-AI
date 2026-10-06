@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import type { Services } from '../services.js';
 import { bindingsSchema } from '../workflows/bundles.js';
+import { workflowCallers } from '../workflows/callers.js';
 
 const name = z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens');
 const id26 = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'An id');
@@ -13,6 +14,7 @@ const id26 = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'An id');
  * - B-3903: the trigger a workflow's published version starts runs with (event or schedule) and its recent firings
  *   (`agents:run`, as reading a workflow); turning it off and on again (`workflows:manage`).
  * - B-3906: the dead-letter view of failed runs and their redrive (`workflows:manage`).
+ * - B-3910: the callers of a workflow (app triggers, tools, other workflows, plugins) for the console.
  * - B-3909: signed export and import of a workflow (`exprsn-workflow/1`, `workflows:manage`); a bundle changed after
  *   signing is refused with `422 Bundle refused`.
  */
@@ -46,6 +48,11 @@ export function workflowOperationRoutes(s: Services): Router {
   r.patch('/workflows/:id/triggers', manage, async (req, res) => {
     const body = parseBody(z.object({ enabled: z.boolean() }).strict(), req.body);
     res.json(await s.workflowTriggers.setEnabled(principalOf(req), String(req.params.id), body.enabled, ctx(req)));
+  });
+
+  // Sprint 32e (B-3910): everything else that starts the workflow, for the console's Triggers and callers tab.
+  r.get('/workflows/:id/callers', run, async (req, res) => {
+    res.json(await workflowCallers(s, principalOf(req), String(req.params.id)));
   });
 
   // ---------- B-3906: dead letters ----------

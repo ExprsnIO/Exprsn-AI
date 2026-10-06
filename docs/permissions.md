@@ -36,7 +36,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 24 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 25 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
@@ -47,7 +47,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `tools:manage` | yes | 15 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `agents:manage` | yes | 19 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `workflows:manage` | yes | 12 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
+| `workflows:manage` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -220,6 +220,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/workflow-callees`
 - `GET /api/workflows`
 - `GET /api/workflows/{id}`
+- `GET /api/workflows/{id}/callers`
 - `GET /api/workflows/{id}/runs`
 - `GET /api/workflows/{id}/triggers`
 - `POST /api/agent-schedules`
@@ -419,6 +420,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/workflows/{id}/publish`
 - `POST /api/workflows/{id}/tool`
 - `PUT /api/workflows/{id}/draft`
+- `GET /api/events/catalogue` (or another permission)
 - `POST /api/scripts/{id}/promote` (or another permission)
 
 ### `guardrails:manage`

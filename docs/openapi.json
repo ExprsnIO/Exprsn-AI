@@ -28756,6 +28756,301 @@
         }
       }
     },
+    "/api/workflows/{id}/callers": {
+      "get": {
+        "x-exprsn-since": "1.5.0",
+        "tags": [
+          "workflows"
+        ],
+        "summary": "agents:run. What else starts the workflow: app triggers, registry tools, other workflows' sub, map and loop steps, plugins granted call:workflow, and the last run of each kind of start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The workflow id or name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "workflowId",
+                    "appTriggers",
+                    "workflows",
+                    "tools",
+                    "plugins",
+                    "lastRuns"
+                  ],
+                  "properties": {
+                    "workflowId": {
+                      "type": "string"
+                    },
+                    "appTriggers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "kind",
+                          "app",
+                          "appName",
+                          "events",
+                          "enabled"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "record",
+                              "schedule"
+                            ]
+                          },
+                          "app": {
+                            "type": "string"
+                          },
+                          "appName": {
+                            "type": "string"
+                          },
+                          "appTitle": {
+                            "type": "string"
+                          },
+                          "entity": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "entityTitle": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "events": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "cron": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ownerId": {
+                            "type": "string"
+                          },
+                          "ownerName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "nextRunAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "lastRunAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "lastRunId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastResult": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "workflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "workflowId",
+                          "workflow",
+                          "step",
+                          "kind",
+                          "in"
+                        ],
+                        "properties": {
+                          "workflowId": {
+                            "type": "string"
+                          },
+                          "workflow": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "publishedVersion": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "step": {
+                            "type": "string"
+                          },
+                          "stepTitle": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "sub",
+                              "map",
+                              "loop"
+                            ]
+                          },
+                          "version": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "in": {
+                            "type": "string",
+                            "enum": [
+                              "draft",
+                              "published",
+                              "published and draft"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "sideEffect": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "workflowVersion": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "maxLabel": {
+                            "type": "string"
+                          },
+                          "installedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "installedByName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "lastRuns": {
+                      "type": "object",
+                      "description": "By kind of start (manual, api, record, schedule, event, plugin, workflow, tool, replay)",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "runId": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "integer"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "trigger": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/workflows/{id}/triggers": {
       "get": {
         "x-exprsn-since": "1.5.0",
