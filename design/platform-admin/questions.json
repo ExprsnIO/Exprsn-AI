@@ -115,11 +115,11 @@
     {
       "id": "Q12", "kind": "question", "screen": "Planning",
       "title": "Which sprint takes B-4202 to B-4207?",
-      "context": "The live screens are 34 points after this design's boards. Sprint 31 holds the PDS, the feed generator and the release at 65 points; Sprint 30 holds the domain screens and DAV at 73.",
+      "context": "The live screens are 34 points after this design's boards. 1.5.0 now runs to Sprint 34 (Workflows 2, chat invocation, chaining) and is full at the 78-point pace once the import and memory epics are counted; the grooming menu (design/grooming/groom.mjs) shows the capacity.",
       "options": [
-        { "key": "s31", "label": "Sprint 31, beside the release", "default": true },
-        { "key": "s30", "label": "Sprint 30, moving WebDAV (B-32) to Sprint 31" },
-        { "key": "1.6", "label": "1.6; the boards alone ship in 1.5.0" }
+        { "key": "s35", "label": "Sprint 35, the first of 1.6.0", "default": true },
+        { "key": "s34", "label": "Sprint 34, beside the 1.5.0 release, displacing WebDAV (B-32)" },
+        { "key": "later", "label": "Later in 1.6.0; the boards alone ship in 1.5.0" }
       ]
     },
     {
