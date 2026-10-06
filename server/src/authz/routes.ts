@@ -1222,6 +1222,27 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/admin/schedules/{name}/pause', 'platform:manage'],
   ['POST /api/admin/schedules/{name}/resume', 'platform:manage'],
   ['POST /api/admin/schedules/{name}/run', 'platform:manage'],
+  // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration
+  ['GET /api/admin/platform/settings', 'platform:manage'],
+  ['GET /api/admin/platform/settings/export', 'platform:manage'],
+  ['GET /api/admin/storage/integrity', 'platform:manage'],
+  ['GET /api/admin/storage/migrations', 'platform:manage'],
+  ['GET /api/admin/storage/purges', 'platform:manage'],
+  ['GET /api/admin/storage/quarantine', 'platform:manage'],
+  ['GET /api/admin/storage/stores', 'platform:manage'],
+  ['GET /api/admin/storage/usage', 'platform:manage'],
+  ['POST /api/admin/platform/settings/{name}/proposals', 'platform:manage'],
+  ['POST /api/admin/platform/settings/proposals/{id}/approve', 'platform:manage'],
+  ['POST /api/admin/platform/settings/proposals/{id}/reject', 'platform:manage'],
+  ['POST /api/admin/platform/settings/proposals/{id}/withdraw', 'platform:manage'],
+  ['POST /api/admin/storage/findings/{id}/accept', 'platform:manage'],
+  ['POST /api/admin/storage/integrity/verify', 'platform:manage'],
+  ['POST /api/admin/storage/migrations', 'platform:manage'],
+  ['POST /api/admin/storage/migrations/{id}/retire', 'platform:manage'],
+  ['POST /api/admin/storage/orphans/delete', 'platform:manage'],
+  ['POST /api/admin/storage/orphans/dry-run', 'platform:manage'],
+  ['POST /api/admin/storage/quarantine/{kind}/{id}/delete', 'platform:manage'],
+  ['POST /api/admin/storage/quarantine/{kind}/{id}/rescan', 'platform:manage'],
   // ---- end of routes ----
 ];
 

@@ -16,6 +16,8 @@ export interface ServerState {
   totp: Record<string, string>;
   fakes: { ollama: string; mcp: string; acme: string; fmSocket: string };
   users: User[];
+  /** The server's BLOB_DIR (filesystem blob store). */
+  blobDir: string;
 }
 
 let cached: ServerState | null = null;

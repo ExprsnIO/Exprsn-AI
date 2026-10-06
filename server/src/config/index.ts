@@ -727,8 +727,30 @@ const base = z.object({
     IMPORT_HARVEST_TICK_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(5),
     IMPORT_BUNDLE_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
     IMPORT_BACKOFF_MAX_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(360),
-    IMPORT_DATASET_QUOTA_GB: z.coerce.number().int().min(0).max(1_000_000).default(500)
+    IMPORT_DATASET_QUOTA_GB: z.coerce.number().int().min(0).max(1_000_000).default(500),
+    // --- 1.6.0, Sprint 35c: storage and configuration (edit only inside this block) ---
+    /**
+     * B-4205: settings the Configuration screen may override from the database, each only after a second platform
+     * admin approves (off: settings are managed in the environment only). Every instance reports the values it reads
+     * every PLATFORM_INSTANCE_REPORT_SECONDS under INSTANCE_NAME (default the host name), so instances that disagree
+     * show as differing.
+     */
+    PLATFORM_SETTINGS_OVERRIDES: bool.default(true),
+    INSTANCE_NAME: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
+    PLATFORM_INSTANCE_REPORT_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+    /**
+     * B-4204: the blob integrity check (ops.blobs.verify) runs every BLOBS_VERIFY_MINUTES (0 turns the schedule off;
+     * it can still be started from Storage). An object younger than BLOBS_ORPHAN_GRACE_HOURS is never an orphan (an
+     * upload may still be writing its row), and a dry run of orphan deletion stays valid for BLOBS_DRY_RUN_MINUTES.
+     */
+    BLOBS_VERIFY_MINUTES: z.coerce.number().int().min(0).max(30 * 24 * 60).default(24 * 60),
+    BLOBS_ORPHAN_GRACE_HOURS: z.coerce.number().int().min(1).max(24 * 365).default(24),
+    BLOBS_DRY_RUN_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(60)
+    // --- end Sprint 35c ---
   });
+
+/** B-4205: the fields of the environment schema, for the settings descriptor and for checking an override's value. */
+export const CONFIG_FIELDS = base.shape;
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
 export const SERVER_ENV_NAMES: ReadonlySet<string> = new Set([...Object.keys(base.shape), ...FILE_VARS.map((n) => `${n}_FILE`)]);
@@ -867,6 +889,19 @@ function inlineKeyProblems(env: NodeJS.ProcessEnv): string[] {
   return out;
 }
 
+const CONFIG_ENV = Symbol.for('exprsn.config.env');
+
+/**
+ * B-4205: the configuration the environment gives with `overrides` (database overrides, as strings) on top, checked
+ * by the same schema and cross-field rules as at start. Errors are the schema's messages, one per problem.
+ */
+export function parseConfigWith(env: NodeJS.ProcessEnv, overrides: Record<string, string>): { ok: true; config: Config } | { ok: false; errors: string[] } {
+  const merged = { ...readEnv(env), ...overrides };
+  const parsed = schema.safeParse(merged);
+  if (parsed.success) return { ok: true, config: parsed.data };
+  return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`) };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(readEnv(env));
   const inline = inlineKeyProblems(env);
@@ -874,5 +909,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const lines = [...inline, ...(parsed.success ? [] : parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`))];
     throw new Error(`Invalid configuration:\n${lines.join('\n')}`);
   }
+  // B-4205: the environment the configuration came from, for the Configuration screen's sources and overrides.
+  Object.defineProperty(parsed.data, CONFIG_ENV, { value: env, enumerable: false });
   return parsed.data;
 }
+
+/** The environment a configuration was loaded from (process.env when it was not loaded by loadConfig). */
+export const envOf = (c: Config): NodeJS.ProcessEnv => ((c as unknown as Record<symbol, NodeJS.ProcessEnv>)[CONFIG_ENV] ?? process.env);

@@ -189,6 +189,37 @@ filter, private `/tmp`, only the state directory writable.
   answering instance's since it started; the schedules listed are those registered on the answering instance (an
   API-only instance lists none); signer and worker processes (training, images) are not instances here, their
   health stays on their own screens.
+- Configuration (1.6.0, Sprint 35c, B-4205). The screen never receives a secret's value: instances report a secret
+  as set or unset, its length, the `<NAME>_FILE` path and mode, and an HMAC-SHA256 fingerprint keyed with
+  `SESSION_SECRET` (16 hex), stored in `platform_instance_settings` so that instances can be compared. Anyone who can
+  read that table and already knows `SESSION_SECRET` can confirm a guess of a secret; nobody else learns anything.
+  Plain values are scrubbed of URL credentials and `key=value` secrets before they are stored, but a credential in a
+  setting the descriptor does not mark as a secret and that the scrubber does not recognise would be shown to platform
+  admins; the secret list is `FILE_VARS`, `S3_ACCESS_KEY_ID` and `OTEL_EXPORTER_OTLP_HEADERS`. Overrides are dual
+  control (a second platform admin, never the proposer) and audited, but they move part of the configuration from the
+  deployment into the database: whoever can write `platform_setting_overrides` directly (a database admin) changes
+  the next start of every instance. Secrets, the database settings, `NODE_ENV`, `PLATFORM_SETTINGS_OVERRIDES` and
+  `INSTANCE_NAME` cannot be overridden; set `PLATFORM_SETTINGS_OVERRIDES=false` to keep every setting in the
+  environment. Hot settings are those the generator lists after reading their callers; one wrongly listed would need
+  a restart to take effect although the screen says it applied. An instance that is down or not yet reporting cannot
+  be compared, and stale rows age out after 24 hours.
+
+- Storage (1.6.0, Sprint 35c, B-4204). The integrity check treats an object as referenced when any row anywhere names
+  it, owns its directory, or has an id that appears in its key; that errs towards keeping objects, so a deleted row
+  whose id is still in another row leaves its objects in place (they are not found as orphans). Objects younger than
+  `BLOBS_ORPHAN_GRACE_HOURS`, backups and mirror files are never orphans. A dry run walks the references again and a
+  deletion removes only the dry run's objects, within `BLOBS_DRY_RUN_MINUTES`; a row that starts naming one of them
+  in that window (none of the server's writers reuse an old key) would lose its object. Checksums are first-seen
+  baselines, not a manifest sealed at write time: an object changed before its first checked run is not detected,
+  and a change through the store (which moves the modification time) is taken as legitimate, as is a change by
+  someone who also resets the time. Missing objects are restored from a backup by hand (Platform › Backups); there is
+  no per-object restore yet. Blob store migration copies with a SHA-256 check and dual writes while the copy runs, and
+  waits for every live instance to confirm dual writes before copying; an instance that is not reporting (stopped,
+  or started from an older build) would write only to the old store, so the migration fails rather than copy when a live instance
+  has not confirmed in time, and an instance started later reads the shared mode before it serves. The `exprsn-ai`
+  command line follows the shared mode too, but a restore into an empty database has no mode to follow and uses the
+  store the environment names, so after a migration update `BLOB_STORE` and its settings in the environment. The quarantine's Rescan re-queues the existing scan jobs and Delete removes held
+  bytes; neither releases anything without a clean scan.
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or

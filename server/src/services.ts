@@ -22,6 +22,9 @@ import { Metrics } from './observability/index.js';
 import { createKms, type Kms } from './platform/kms.js';
 import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
+import { SwitchableBlobStore } from './platform/blob-switch.js';
+import { SettingsService } from './config/settings.js';
+import { StorageService } from './ops/storage.js';
 import { Bus, TOPICS, type MembershipEvent } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
 import { Notifications, type MailTransport } from './platform/notifications.js';
@@ -308,6 +311,10 @@ export interface Services {
   workflowTriggers: WorkflowTriggers;
   workflowDeadLetters: WorkflowDeadLetters;
   workflowBundles: WorkflowBundles;
+  /** 1.6.0, Sprint 35c (B-4205): settings each instance reads, overrides under dual control. */
+  settings: SettingsService;
+  /** 1.6.0, Sprint 35c (B-4204): stores, usage, quarantine, integrity, purges and blob store migration. */
+  storage: StorageService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
@@ -351,7 +358,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
   const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
   const keys = new DataKeys(db, kms, cfg.OPENBAO_KEY_PREFIX, cfg.DATA_KEY, bus);
-  const blobs = overrides.blobs ?? createBlobStore(cfg);
+  // 1.6.0 (B-4204): the store can move to another one while the server runs (ops/storage.ts).
+  const blobs = new SwitchableBlobStore(overrides.blobs ?? createBlobStore(cfg));
   const mode = cfg.JOB_QUEUE === 'auto' ? (cfg.REDIS_URL ? 'bullmq' : 'db') : cfg.JOB_QUEUE;
   const jobs = new JobQueue(db, log, bus, { mode, redisUrl: cfg.REDIS_URL, pollMs: cfg.JOB_POLL_MS, concurrency: cfg.JOB_CONCURRENCY });
   const scheduler = new Scheduler(jobs, log);
@@ -608,7 +616,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     workflowTriggers: new WorkflowTriggers(() => s, metrics.registry),
     workflowDeadLetters: new WorkflowDeadLetters(() => s),
     workflowBundles: new WorkflowBundles(() => s),
+    settings: new SettingsService(() => s),
+    storage: new StorageService(() => s),
     close: async () => {
+      s.settings.stop();
+      s.storage.stop();
       s.schema.stop();
       scheduler.stop();
       // B-1908: firehose consumers store their cursors and give their leases back while the database is still open.
@@ -661,6 +673,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.training.registerJobs();
   s.zones.registerJobs();
   s.ops.registerJobs();
+  s.storage.registerJobs(); // 1.6.0, Sprint 35c (B-4204): ops.blobs.verify, ops.blobs.migrate, ops.storage.sample
   s.federation.registerJobs();
   s.webhooks.registerJobs();
   s.webhooks.listen();
@@ -794,6 +807,7 @@ export function startSchedules(s: Services): void {
   s.training.schedule(s.scheduler, activeTenants);
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
+  s.storage.schedule(s.scheduler); // 1.6.0, Sprint 35c (B-4204): the integrity check and usage samples
   s.federation.schedule(s.scheduler, activeTenants);
   s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);

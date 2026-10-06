@@ -211,6 +211,28 @@ Both screens join the screen sweeps (`e2e/tests/support/sweep.ts`). `e2e/tests/o
 every tab and every design state, and the reflow check at 320 and 640 px on every tab and on the drain and pause
 dialogs.
 
+- **Storage** (B-4204, Sprint 35c): one tab list (Stores, Usage, Quarantine, Integrity, Purges) with a single
+  tabpanel. Stores, workspaces and quarantined objects are keyboard-operable table rows that update a labelled
+  inspector (`aside` "Details"); each store's settings are buttons that open Configuration on that setting. Health,
+  quarantine states and findings are pills with their word, and the quota and capacity meters carry their numbers in
+  text beside the bar. The quarantine state filter is a menu of `menuitemradio` buttons with `aria-checked`. Every
+  destructive action (deleting from quarantine, deleting orphans, retiring the old store) goes through a dialog whose
+  reason field is labelled and reports a missing reason in a `role="alert"` region; the dry run's result is a notice
+  on the page as well as a toast, so it does not vanish before it is read. The migration dialog's step-up check and its
+  server refusals (an unreachable target, a refused endpoint) are problem panels in the same kind of region. Wide
+  tables (stores, usage, findings, purges) scroll sideways inside their named `.tablewrap`; long keys and paths wrap.
+  `e2e/tests/storage-configuration.spec.ts` deletes an orphan found by the integrity check after a dry run, and runs
+  both checkers on all five tabs and five design states.
+- **Configuration** (B-4205, Sprint 35c): the section list is a labelled navigation region whose current section
+  carries `aria-current`; the filter chips are toggle buttons with `aria-pressed`, and so is Compare instances.
+  Settings are keyboard-operable rows (365 of them) that update a labelled inspector (`aside` "Setting details").
+  Whether instances differ, a value is deprecated or an override is pending is said in a pill with its word, not only
+  in colour; compared values are highlighted and also marked "differs". Secrets are text ("set, 44 characters, from
+  file …"), never a masked field. The override drawer labels its value and reason fields, and a value the server
+  refuses (`422`) shows as a problem panel with the schema's message in a `role="alert"` region. The spec proposes an
+  override as one platform admin and approves it as another in a second browser.
+
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values

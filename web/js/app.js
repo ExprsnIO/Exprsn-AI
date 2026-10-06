@@ -38,7 +38,9 @@
     // 1.6.0 (B-4202, B-4203, Q13): the Overview and Jobs and queues screens
     overview: 'M4 13a8 8 0 0 1 16 0M12 13l4-4M4 17h16', jobs: 'M4 5h16v4H4zM4 11h16v4H4zM4 17h10M18 17h2',
     // Sprint 31 (B-3406): the AT-Protocol screen
-    atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8'
+    atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8',
+    // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration
+    storage: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3', configuration: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4'
   };
   const icon = (name, size, extra) => {
     const d = ICONS[name] || ICONS.info;
@@ -186,8 +188,11 @@
       // (firehose:manage), DID bindings (identity:manage) and the PDS (pds:manage)
       { id: 'atproto', label: 'AT-Protocol', icon: 'atproto', perm: ['pki:manage', 'labels:manage', 'firehose:manage', 'identity:manage', 'pds:manage'], live: true },
       { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true },
+      // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration, before Platform (design/platform-admin, Q13)
+      { id: 'storage', label: 'Storage', icon: 'storage', perm: 'platform:manage', live: true }, { id: 'configuration', label: 'Configuration', icon: 'configuration', perm: 'platform:manage', live: true },
       // 1.6.0 (B-4203): Jobs and queues, beside Platform with the operator's screens
-      { id: 'jobs', label: 'Jobs and queues', icon: 'jobs', perm: ['platform:manage', 'tenant:manage'], live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
+      { id: 'jobs', label: 'Jobs and queues', icon: 'jobs', perm: ['platform:manage', 'tenant:manage'], live: true },
+      { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));

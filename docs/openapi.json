@@ -10191,6 +10191,370 @@
             "description": "Published or deprecated (a workflow: its published version): it may reach the entry now"
           }
         }
+      },
+      "BlobRun": {
+        "type": "object",
+        "description": "A run of the integrity check ops.blobs.verify (B-4204)",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "checksums": {
+            "type": "boolean"
+          },
+          "store": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "objects": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "orphans": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "orphanBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mismatches": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "references": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "BlobFinding": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "missing",
+              "orphan",
+              "mismatch"
+            ]
+          },
+          "object": {
+            "type": "string"
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "modifiedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "referencedBy": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "table": {
+                  "type": "string"
+                },
+                "column": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "expected": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actual": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "open",
+              "deleted",
+              "accepted",
+              "gone",
+              "superseded"
+            ]
+          },
+          "resolvedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "foundAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "BlobMigration": {
+        "type": "object",
+        "description": "A blob store migration, copy then switch (B-4204, decision Q16); never carries the secret",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "copying",
+              "switched",
+              "retired",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "fs",
+                  "s3"
+                ]
+              },
+              "dir": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "bucket": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "pathStyle": {
+                "type": "boolean"
+              },
+              "accessKeyId": {
+                "type": "string"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "objects": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "copied": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verified": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "switchedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "retiredAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "SettingProposal": {
+        "type": "object",
+        "description": "An override of a setting (or its removal) waiting for, or decided by, a second platform admin (B-4205)",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "set",
+              "clear"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "withdrawn",
+              "superseded"
+            ]
+          },
+          "proposedBy": {
+            "type": "string"
+          },
+          "proposedAt": {
+            "type": "integer"
+          },
+          "decidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     },
     "responses": {
@@ -14685,6 +15049,358 @@
         }
       }
     },
+    "/api/admin/platform/settings": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. Every setting this build reads (the descriptor generated from config/index.ts), what each live instance reads and where it came from (secrets as set, length, file and a keyed fingerprint only), whether the instances differ, overrides, proposals, history and the instances waiting for a restart",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "build": {
+                      "type": "string"
+                    },
+                    "instance": {
+                      "type": "string"
+                    },
+                    "overridesEnabled": {
+                      "type": "boolean"
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "instances": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "restartRequired": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "instances": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "settings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/export": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. The settings this instance reads as a .env file, secrets masked with a comment naming their file (?changed=true: only those not at their default). Audited platform.settings.exported",
+        "parameters": [
+          {
+            "name": "changed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "1"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "lines": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/proposals/{id}/approve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. A second platform admin approves (the proposer gets 403 step dual-control): a hot setting applies on every instance at once, a restart setting at each instance's next start. Audited platform.setting.approved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "proposal": {
+                      "$ref": "#/components/schemas/SettingProposal"
+                    },
+                    "applies": {
+                      "enum": [
+                        "hot",
+                        "restart"
+                      ]
+                    },
+                    "applied": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/proposals/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. Another platform admin rejects the proposal. Audited platform.setting.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingProposal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/proposals/{id}/withdraw": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. The proposer withdraws the proposal. Audited platform.setting.withdrawn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingProposal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/platform/settings/{name}/proposals": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/platform"
+        ],
+        "summary": "platform:manage. Proposes an override (value) or its removal (value null) for a second platform admin (decision Q2); 422 when the value does not pass the field or the configuration's cross-field rules, 409 for a secret or a setting that reaches the database (step not-overridable) or with PLATFORM_SETTINGS_OVERRIDES=false (step overrides-disabled). Audited platform.setting.proposed",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "value": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4000
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "value",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingProposal"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/platform/signers": {
       "get": {
         "tags": [
@@ -17602,6 +18318,761 @@
                 "additionalProperties": false
               }
             }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/findings/{id}/accept": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Takes an object's current SHA-256 as the one to compare against (an expected change). Audited platform.blobs.checksum.accepted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobFinding"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/integrity": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. The verification runs, the latest finished one, the one running, and its findings (missing, orphan, mismatch)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BlobRun"
+                      }
+                    },
+                    "last": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BlobRun"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "running": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BlobRun"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BlobFinding"
+                      }
+                    },
+                    "graceHours": {
+                      "type": "integer"
+                    },
+                    "dryRunMinutes": {
+                      "type": "integer"
+                    },
+                    "everyMinutes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/integrity/verify": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Queues ops.blobs.verify (optionally comparing every object's SHA-256); 409 while one runs. The check never changes the store. Audited platform.blobs.verify.started, then platform.blobs.verified",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "checksums": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobRun"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/migrations": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Blob store migrations and the store reads come from now",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "migrations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BlobMigration"
+                      }
+                    },
+                    "active": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage and a recent sign-in. Queues ops.blobs.migrate (decision Q16): every instance copies new writes to the target, every object is copied and its SHA-256 checked, the target is verified, then reads and writes switch; a failure puts every instance back on the old store. The S3 secret is sealed with the platform key. Audited platform.blobs.migration.started and .switched",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "dir",
+                      "reason"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "fs"
+                      },
+                      "dir": {
+                        "type": "string",
+                        "description": "An absolute directory every instance can reach"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "endpoint",
+                      "bucket",
+                      "accessKeyId",
+                      "secretAccessKey",
+                      "reason"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "s3"
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "region": {
+                        "type": "string"
+                      },
+                      "pathStyle": {
+                        "type": "boolean"
+                      },
+                      "accessKeyId": {
+                        "type": "string"
+                      },
+                      "secretAccessKey": {
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobMigration"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/migrations/{id}/retire": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage and a recent sign-in. Stops reading from the old store after a switch (nothing is deleted there). Audited platform.blobs.migration.retired",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobMigration"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/orphans/delete": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Deletes exactly the objects of a dry run still valid (decision Q10: a dry run, then one admin with a reason); 409 step dry-run once used or expired. Audited platform.blobs.orphans.deleted with the reason and the objects",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "dryRun": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "dryRun",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "integer"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "failed": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/orphans/dry-run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Lists the open orphans of the latest run (or those named) that are still orphans against a fresh walk of the references; deletes nothing. Audited platform.blobs.orphans.dry-run",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "minItems": 1,
+                    "maxItems": 10000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "oldest": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "skipped": {
+                      "type": "integer"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    },
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/purges": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Every retention and purge job: the policy and where it is set, the period, the last run and what it removed, the next run",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/quarantine": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Objects waiting for their scan or refused in the last 24 hours (attachments, file versions, knowledge uploads, media), and the ClamAV scanner (PING, VERSION, counts today)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "scanner": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/quarantine/{kind}/{id}/delete": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Deletes the quarantined bytes and refuses the item; nothing was released. Audited file.quarantine.deleted",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/quarantine/{kind}/{id}/rescan": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Queues the item's scan again; 409 when nothing is held or a scan runs, 503 step scanner while ClamAV does not answer. Audited file.quarantine.rescanned",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/stores": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. The stores and their health: the blob store (size and objects from the last verification, capacity from statfs), the database, the vector store, backups, the media work directory, training datasets and model files, with daily growth samples and the migration in progress",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stores": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "migration": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BlobMigration"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "active": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/storage/usage": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/storage"
+        ],
+        "summary": "platform:manage. Bytes by workspace (files, versions, trash, media, knowledge uploads, attachments, the file quota and what it counts), by user and by kind",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspaces": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "quotaCounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
           }
         }
       }
