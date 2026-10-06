@@ -63,6 +63,8 @@ test.describe('Settings: app passwords for DAV clients (B-3415)', () => {
     await expect(panel).toContainText(`${url}/.well-known/caldav`);
     await expect(panel).toContainText(`${url}/.well-known/carddav`);
     await expect(panel).toContainText(`${url}/dav/`);
+    // B-32 (Sprint 34): the WebDAV row is the file store's collection, and it answers.
+    await expect(panel).toContainText(`${url}/dav/files/`);
     await expect(panel).toContainText('root');
 
     await panel.locator('[data-davcreate]').click();
@@ -79,6 +81,7 @@ test.describe('Settings: app passwords for DAV clients (B-3415)', () => {
     await expect(modal.getByRole('heading', { name: 'Create an app password' })).toBeVisible();
     await modal.locator('[data-davname]').fill('e2e calendar');
     await expect(modal.locator('[data-davscope="caldav"]')).toBeChecked();
+    await modal.locator('[data-davscope="webdav"]').check();
     await modal.locator('[data-davgo]').click();
     await toast(page, 'App password created.');
     const secret = (await panel.locator('[data-davsecret]').innerText()).trim();
@@ -87,6 +90,7 @@ test.describe('Settings: app passwords for DAV clients (B-3415)', () => {
     // A DAV client signs in with the username and the app password; the API never accepts it.
     const basic = { authorization: 'Basic ' + Buffer.from(`root:${secret}`).toString('base64'), depth: '0' };
     expect((await request.fetch(`${url}/dav/`, { method: 'PROPFIND', headers: basic })).status()).toBe(207);
+    expect((await request.fetch(`${url}/dav/files/`, { method: 'PROPFIND', headers: { ...basic, depth: '1' } })).status()).toBe(207);
     expect((await request.get(`${url}/api/me`, { headers: { authorization: `Bearer ${secret}` } })).status()).toBe(401);
 
     await panel.locator('[data-davdone]').click();
