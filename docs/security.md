@@ -128,6 +128,19 @@ filter, private `/tmp`, only the state directory writable.
   are not supported (whole files only). MOVE across workspaces is refused. Real client traffic (Finder, Windows,
   DAVx5) is not yet replayed in CI; litmus is.
 
+- Profiles and presence (1.5.0, Sprint 34c, B-5801, B-5802). A profile is known only to people who share a workspace
+  with its owner; pronouns, bio and avatar further need the viewer's clearance to reach the profile's label and, when
+  the owner narrowed it, a shared workspace among those named. Two people in a block see each other's name only, the
+  same view a narrowed profile gives, and no presence. Pronouns and bio pass the `user-input` guardrail. An avatar is a
+  file-store upload and goes through its quarantine; only a ready image version that is not in the trash and whose
+  label the viewer clears is served, with the sandbox CSP and `nosniff`. Presence is decided by the server: a socket
+  asks to watch people and joins only the presence rooms of those it may see; each change is published with everyone
+  in a block with the person left out, so every instance relays the same filtered event, and a new block takes each
+  person out of the other's room at once. Gaps: presence visibility follows shared workspaces only (not the profile's
+  label or narrowed workspaces), so someone who sees a name-only profile still sees the status; idle is what the
+  console reports (a client could keep reporting active); the bio is stored as written (after the guardrail), not
+  sealed, like the display name; a chosen status has no expiry; the avatar's file stays in the uploader's workspace
+  file tree, where workspace members can see it as a file like any other upload.
 - The chain context and Workflows 2's sub-workflow, agent, map and loop steps (1.5.0, Sprint 32, B-4101, B-3901,
   B-3902, B-3905). The chain covers what runs on this server; what leaves it (a webhook receiver or an MCP server that
   calls the API back) starts a new chain, bounded only by its own rate limits. A chat turn is a chain node only when its

@@ -26,11 +26,15 @@
   const blockedIds = (st) => new Set(((st.social && st.social.blocks) || []).map((b) => b.userId));
   const traceOf = (err) => (err && err.problem && err.problem.trace_id) || false;
   const feedKeyOf = (st) => st.feedSeg + '|' + (st.groupSel || '') + '|' + (st.tag || '') + '|' + (st.listFeed ? st.listFeed.id : '');
+  // Sprint 34 (B-5801): a person's name opens their profile; (B-5802) their status, watched over the socket.
+  const STATUS_KIND = { available: 'ok', away: 'warn', busy: 'danger', offline: 'outline' };
+  const who = (id, name) => (id && App.can('social:read') ? '<a class="messages-who" href="#/person?user=' + enc(id) + '">' + esc(name) + '</a>' : esc(name));
+  const statusPill = (st, id) => { const v = id && st.presence && st.presence[id]; return v && !blockedIds(st).has(id) ? UI.pill(v, STATUS_KIND[v]) : ''; };
 
   // ---------------- realtime ----------------
   // The screen joins the rooms of the conversations it lists (ids-only events: it fetches through the API, which
   // leaves out people in a block with the reader) and the feed rooms of the current workspace and of the user's home.
-  const live = { sock: null, handlers: [], rooms: new Map(), timers: {}, ctx: null, pending: false, typingAt: 0 };
+  const live = { sock: null, handlers: [], rooms: new Map(), timers: {}, ctx: null, pending: false, typingAt: 0, watched: '' };
   function throttle(name, ms, fn) { if (live.timers[name]) return; live.timers[name] = setTimeout(() => { live.timers[name] = null; fn(); }, ms); }
   function paint() {
     if (App.state.route !== ID || !live.ctx) return;
@@ -44,8 +48,8 @@
     live.sock.emit('room.join', { kind, id }, () => undefined);
   }
   function detach() {
-    if (live.sock) { live.rooms.forEach((r) => live.sock.emit('room.leave', r)); live.handlers.forEach((h) => live.sock.off(h[0], h[1])); }
-    live.rooms.clear(); live.sock = null; live.handlers = [];
+    if (live.sock) { live.rooms.forEach((r) => live.sock.emit('room.leave', r)); live.handlers.forEach((h) => live.sock.off(h[0], h[1])); if (live.watched) live.sock.emit('presence.unwatch'); }
+    live.rooms.clear(); live.sock = null; live.handlers = []; live.watched = '';
     Object.keys(live.timers).forEach((k) => { clearTimeout(live.timers[k]); live.timers[k] = null; });
   }
   function attach() {
@@ -68,7 +72,20 @@
     // A conversation someone else started arrives as a notification to this user's room.
     on('notification', () => throttle('list', 800, () => loadList(S()).then(paint)));
     on('room.closed', () => throttle('list', 300, () => loadList(S()).then(paint)));
-    on('connect', () => { const rooms = Array.from(live.rooms.values()); live.rooms.clear(); rooms.forEach((r) => join(r.kind, r.id)); });
+    on('connect', () => { const rooms = Array.from(live.rooms.values()); live.rooms.clear(); rooms.forEach((r) => join(r.kind, r.id)); live.watched = ''; watchPresence(S()); });
+    on('presence.changed', (d) => { const st = S(); if (!d.userId || blockedIds(st).has(d.userId)) return; st.presence = st.presence || {}; if (st.presence[d.userId] === d.status) return; st.presence[d.userId] = d.status; throttle('presence', 400, paint); });
+  }
+  /** Watches the statuses of the people on screen: the open conversation's and, on People, the directory. */
+  function watchPresence(st) {
+    if (!live.sock || !live.sock.connected || !App.can('social:read')) return;
+    const ids = [];
+    ((st.detail && st.detail.people) || []).forEach((p) => ids.push(p.userId));
+    if (st.view === 'people' && st.people) st.people.forEach((p) => ids.push(p.userId));
+    const uniq = ids.filter((v, i, a) => v && v !== meId() && a.indexOf(v) === i).slice(0, 200);
+    const key = uniq.join(',');
+    if (!uniq.length || key === live.watched) return;
+    live.watched = key;
+    live.sock.emit('presence.watch', { userIds: uniq }, (r) => { if (r && r.ok) { st.presence = Object.assign({}, st.presence || {}, r.statuses || {}); paint(); } });
   }
   window.addEventListener('hashchange', () => { if (App.parse().route !== ID) detach(); });
 
@@ -218,6 +235,9 @@
         st.listLoading = true; loadListDetail(st).finally(() => { st.listLoading = false; paint(); });
       }
 
+      if (st.view === 'people' && st.peopleTab === 'directory' && !st.people && !st.peopleLoading) { st.peopleLoading = true; people(st).catch((err) => App.fail(err, 'People not loaded')).finally(() => { st.peopleLoading = false; paint(); }); }
+      watchPresence(st);
+
       const segs = [{ id: 'messages', label: 'Messages' }].concat(App.can('feed:read') ? [{ id: 'feed', label: 'Feed' }] : []).concat(App.can('social:read') ? [{ id: 'people', label: 'People' }] : []);
       const nav = '<div class="hstack" style="margin-bottom:4px">' + UI.seg(segs, st.view, 'data-view aria-label="View"') + '</div>';
       const demo = st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-demook' })) : '';
@@ -238,6 +258,7 @@
         + '#main .messages-post{display:flex;flex-direction:column;gap:8px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}#main .messages-post.held{border-color:var(--warn-fg)}#main .messages-post .pactions{display:flex;gap:4px;flex-wrap:wrap;align-items:center}'
         + '#main .messages-comment{padding:6px 10px;border-left:2px solid var(--line);font-size:13px;overflow-wrap:anywhere}#main .messages-comment.reply{margin-left:18px}'
         + '#main .messages-tag{color:var(--accent);text-decoration:underline;font-weight:600}'
+        + '#main .messages-who{color:inherit;text-decoration:underline;text-decoration-color:var(--line2);text-underline-offset:2px}#main .messages-who:hover{text-decoration-color:currentColor}'
         + '#main .messages-presence{font-size:12px;color:var(--muted);min-height:16px}'
         + '</style>' + body.replace('%NAV%', nav + demo);
 
@@ -300,7 +321,7 @@
     return '<div class="messages-msg' + (mine ? ' mine' : '') + '" data-msg="' + esc(m.id) + '">'
       + (quoted ? '<div class="messages-quote">' + esc(quoted.authorName || '') + ': ' + esc((quoted.body || '').slice(0, 90)) + (quoted.body && quoted.body.length > 90 ? '…' : '') + '</div>' : m.replyTo ? '<div class="messages-quote">Replying to an earlier message</div>' : '')
       + (m.forwardedFrom ? '<div class="muted" style="font-size:11px">Forwarded</div>' : '')
-      + '<div class="messages-meta"><b style="color:var(--fg)">' + esc(author) + '</b><span>' + esc(when(m.createdAt)) + '</span>' + (m.edited ? '<span>edited ' + esc(when(m.editedAt)) + '</span>' : '') + (m.pinned ? UI.pill('pinned', 'accent') : '') + (LEVEL[m.label] > LEVEL[c.label] ? UI.label(m.label, { sm: true }) : '') + '</div>'
+      + '<div class="messages-meta"><b style="color:var(--fg)">' + who(m.authorId, author) + '</b><span>' + esc(when(m.createdAt)) + '</span>' + (m.edited ? '<span>edited ' + esc(when(m.editedAt)) + '</span>' : '') + (m.pinned ? UI.pill('pinned', 'accent') : '') + (LEVEL[m.label] > LEVEL[c.label] ? UI.label(m.label, { sm: true }) : '') + '</div>'
       + '<div class="messages-body">' + esc(m.body) + '</div>'
       + ((m.attachments || []).length ? '<div class="hstack wrap gap6">' + m.attachments.map((a) => (a.state === 'gone' || a.state === 'trashed' ? '<span class="messages-att">' + UI.icon('attach', 12) + esc(a.name || 'File') + ' ' + UI.pill(a.state === 'trashed' ? 'in trash' : 'unavailable', 'warn') + '</span>' : '<a class="messages-att" href="/api/files/' + esc(a.fileId) + '/content" download>' + UI.icon('attach', 12) + esc(a.name) + ' <span class="muted">' + esc(a.type || '') + (a.size != null ? ', ' + esc(sizeText(a.size)) : '') + '</span>' + (a.state !== 'ready' ? UI.pill('scanning', 'warn') : '') + '</a>')).join('') + '</div>' : '')
       + '<div class="hstack wrap gap6">' + (m.reactions || []).filter((r) => r.count).map((r) => UI.chip(esc(reactName(r.emoji)) + ' ' + r.count, r.mine, 'data-react="' + esc(m.id) + '" data-kind="' + esc(r.emoji) + '"' + (canWrite ? '' : ' disabled'))).join('') + (m.replyCount ? UI.btn(m.replyCount + (m.replyCount === 1 ? ' reply' : ' replies'), { kind: 'ghost', size: 'xs', attrs: 'data-thread="' + esc(m.id) + '"' }) : '') + '</div>'
@@ -316,7 +337,7 @@
     let body = '';
     if (st.inspTab === 'people') {
       const following = new Set(((st.social && st.social.following) || []).map((f) => f.userId));
-      body = '<div class="vstack gap6">' + (d.people || []).map((p) => { const me = p.userId === meId(); return '<div class="hstack" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="grow"><b>' + esc(p.displayName || p.username) + '</b>' + (me ? ' <span class="muted">(you)</span>' : '') + '<br><span class="muted" style="font-size:12px">' + esc(p.username || '') + (p.lastSeenAt ? ', last seen ' + esc(when(p.lastSeenAt)) : '') + '</span></span>' + UI.pill(p.role, p.role === 'owner' ? 'accent' : p.role === 'admin' ? 'info' : 'outline') + (!me && manager ? '<span class="relative">' + UI.iconbtn('dots', 'Member actions for ' + (p.displayName || p.username), { attrs: 'data-member="' + esc(p.userId) + '"', cls: 'sm ghost' }) + '</span>' : '') + '</div>'; }).join('') + '</div>'
+      body = '<div class="vstack gap6">' + (d.people || []).map((p) => { const me = p.userId === meId(); return '<div class="hstack" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="grow"><b>' + who(p.userId, p.displayName || p.username) + '</b>' + (me ? ' <span class="muted">(you)</span>' : ' ' + statusPill(st, p.userId)) + '<br><span class="muted" style="font-size:12px">' + esc(p.username || '') + (p.lastSeenAt ? ', last seen ' + esc(when(p.lastSeenAt)) : '') + '</span></span>' + UI.pill(p.role, p.role === 'owner' ? 'accent' : p.role === 'admin' ? 'info' : 'outline') + (!me && manager ? '<span class="relative">' + UI.iconbtn('dots', 'Member actions for ' + (p.displayName || p.username), { attrs: 'data-member="' + esc(p.userId) + '"', cls: 'sm ghost' }) + '</span>' : '') + '</div>'; }).join('') + '</div>'
         + (manager ? '<div style="margin-top:8px">' + UI.btn('Add member', { size: 'sm', icon: 'plus', attrs: 'data-addmember' }) + '</div><div class="muted" style="font-size:12px;margin-top:6px">Everyone must be a member of ' + esc(wsName(c.workspaceId)) + ' now and cleared for ' + esc(c.label) + '. A conversation keeps at least one owner.</div>'
           : c.kind === 'direct' && c.with ? '<div class="muted" style="font-size:12px;margin-top:8px">One direct conversation per pair. Either of you may pin. Relation: ' + (App.can('social:read') ? '<a href="#" data-gopeople>' + (following.has(c.with.userId) ? 'following' : 'not following') + '</a>' : 'not shown') + '.</div>' : '');
     } else if (st.inspTab === 'pins') {
@@ -394,10 +415,10 @@
     const comments = st.comments && st.comments[p.id];
     const bl = blockedIds(st);
     return '<article class="messages-post' + (p.state === 'held' ? ' held' : '') + '" data-post="' + esc(p.id) + '"' + focus + ' aria-label="Post by ' + esc(authorName(p.author)) + '">'
-      + '<div class="messages-meta"><b style="color:var(--fg)">' + esc(authorName(p.author)) + '</b><span>' + esc(when(p.publishedAt || p.createdAt)) + '</span>' + (p.groupId ? UI.pill(groupName(st, p.groupId), 'outline') : '') + UI.label(p.label, { sm: true }) + (p.state === 'held' ? UI.pill('held for review', 'warn') : p.state === 'rejected' ? UI.pill('rejected', 'danger') : '') + (p.editedAt ? '<span>edited</span>' : '') + '</div>'
+      + '<div class="messages-meta"><b style="color:var(--fg)">' + who(p.author && p.author.id, authorName(p.author)) + '</b><span>' + esc(when(p.publishedAt || p.createdAt)) + '</span>' + (p.groupId ? UI.pill(groupName(st, p.groupId), 'outline') : '') + UI.label(p.label, { sm: true }) + (p.state === 'held' ? UI.pill('held for review', 'warn') : p.state === 'rejected' ? UI.pill('rejected', 'danger') : '') + (p.editedAt ? '<span>edited</span>' : '') + '</div>'
       + (p.state === 'held' ? UI.notice('<b>Held for review (202).</b> A require-approval rule held this post at user-input. Only you can see it until a reviewer decides its hold flag in the Flags queue; approved publishes it, rejected withdraws it. It takes no comments or reactions while it waits (409).', 'warn') : '')
       + (p.body ? '<div class="messages-body">' + body(p.body) + '</div>' : '')
-      + (orig ? '<div class="messages-quote"><b>' + esc(authorName(orig.author)) + '</b>, ' + esc(when(orig.publishedAt || orig.createdAt)) + ' ' + UI.label(orig.label, { sm: true }) + '<br>' + body(orig.body || '') + '</div>' : p.repostOf ? '<div class="messages-tomb">The original is blocked, gone or out of reach.</div>' : '')
+      + (orig ? '<div class="messages-quote"><b>' + who(orig.author && orig.author.id, authorName(orig.author)) + '</b>, ' + esc(when(orig.publishedAt || orig.createdAt)) + ' ' + UI.label(orig.label, { sm: true }) + '<br>' + body(orig.body || '') + '</div>' : p.repostOf ? '<div class="messages-tomb">The original is blocked, gone or out of reach.</div>' : '')
       + ((p.media || []).length ? '<div class="hstack wrap gap6">' + p.media.map((m) => (m.available ? '<a class="messages-att" href="/api/files/' + esc(m.fileId) + '/content" download>' + UI.icon('images', 12) + esc(m.name) + '</a>' : '<span class="messages-att">' + UI.icon('images', 12) + esc(m.name || 'File') + UI.pill('unavailable', 'warn') + '</span>')).join('') + '</div>' : '')
       + (p.state === 'published' ? '<div class="pactions">' + REACTIONS.map((k) => UI.chip(esc(k) + (reactions[k] ? ' ' + reactions[k] : ''), (p.mine.reactions || []).indexOf(k) >= 0, 'data-preact="' + esc(p.id) + '" data-kind="' + k + '"' + (w ? '' : ' disabled'))).join('') + '<span class="muted" style="font-size:12px">' + total + ' reactions, ' + p.counts.comments + ' comments, ' + p.counts.reposts + ' reposts</span></div>'
         + '<div class="pactions">' + (w ? UI.btn('Comment', { kind: 'ghost', size: 'xs', attrs: 'data-pcomment="' + esc(p.id) + '"' }) + '<span class="relative">' + UI.btn(p.mine.reposted ? 'Reposted' : 'Repost', { kind: 'ghost', size: 'xs', attrs: 'data-prepost="' + esc(p.id) + '"', cls: p.mine.reposted ? 'active' : '' }) + '</span>' + UI.btn(p.mine.bookmarked ? 'Bookmarked' : 'Bookmark', { kind: 'ghost', size: 'xs', attrs: 'data-pbookmark="' + esc(p.id) + '" aria-pressed="' + (p.mine.bookmarked ? 'true' : 'false') + '"', cls: p.mine.bookmarked ? 'active' : '' }) : '')
@@ -405,7 +426,7 @@
         + (mine && w ? UI.btn('Edit', { kind: 'ghost', size: 'xs', attrs: 'data-pedit="' + esc(p.id) + '"' }) : !mine && App.can('moderation:report') ? UI.btn('Report', { kind: 'ghost', size: 'xs', attrs: 'data-preport="' + esc(p.id) + '"' }) : '')
         + ((mine && w) || App.can('feed:manage') ? UI.btn('Delete', { kind: 'ghost', size: 'xs', attrs: 'data-pdel="' + esc(p.id) + '"', title: mine ? 'Your post' : 'feed:manage' }) : '') + '</div>'
         : mine ? '<div class="pactions">' + UI.btn('Delete', { kind: 'ghost', size: 'xs', attrs: 'data-pdel="' + esc(p.id) + '"' }) + '</div>' : '')
-      + (comments ? '<div class="vstack gap4">' + comments.filter((cm) => !(cm.author && bl.has(cm.author.id))).map((cm) => '<div class="messages-comment' + (cm.parentId ? ' reply' : '') + '"><b>' + esc(authorName(cm.author)) + '</b> <span class="muted" style="font-size:12px">' + esc(when(cm.createdAt)) + '</span> ' + (w && p.state === 'published' ? UI.btn('Reply', { kind: 'ghost', size: 'xs', attrs: 'data-pcomment="' + esc(p.id) + '" data-parent="' + esc(cm.id) + '"' }) : '') + '<br>' + (cm.body == null ? '<span class="muted">Comment removed.</span>' : esc(cm.body)) + '</div>').join('') + '</div>' : '')
+      + (comments ? '<div class="vstack gap4">' + comments.filter((cm) => !(cm.author && bl.has(cm.author.id))).map((cm) => '<div class="messages-comment' + (cm.parentId ? ' reply' : '') + '"><b>' + who(cm.author && cm.author.id, authorName(cm.author)) + '</b> <span class="muted" style="font-size:12px">' + esc(when(cm.createdAt)) + '</span> ' + (w && p.state === 'published' ? UI.btn('Reply', { kind: 'ghost', size: 'xs', attrs: 'data-pcomment="' + esc(p.id) + '" data-parent="' + esc(cm.id) + '"' }) : '') + '<br>' + (cm.body == null ? '<span class="muted">Comment removed.</span>' : esc(cm.body)) + '</div>').join('') + '</div>' : '')
       + '</article>';
   }
 
@@ -413,7 +434,7 @@
   function renderPeople(st) {
     const s = st.social;
     const w = App.can('social:write');
-    const tabs = UI.tabs([{ id: 'blocks', label: 'Blocks', count: s.blocks.length }, { id: 'mutes', label: 'Mutes', count: s.mutes.length }, { id: 'following', label: 'Following', count: s.following.length }, { id: 'followers', label: 'Followers', count: s.followers.length }, { id: 'lists', label: 'Lists', count: s.lists.length }], st.peopleTab, 'data-ptabs aria-label="Relations"');
+    const tabs = UI.tabs([{ id: 'blocks', label: 'Blocks', count: s.blocks.length }, { id: 'mutes', label: 'Mutes', count: s.mutes.length }, { id: 'following', label: 'Following', count: s.following.length }, { id: 'followers', label: 'Followers', count: s.followers.length }, { id: 'lists', label: 'Lists', count: s.lists.length }, { id: 'directory', label: 'Directory', count: st.people ? st.people.length : undefined }], st.peopleTab, 'data-ptabs aria-label="Relations"');
     const name = (x) => esc(x.displayName || x.username || 'Someone');
     const following = new Set(s.following.map((f) => f.userId));
     let body;
@@ -421,6 +442,8 @@
     else if (st.peopleTab === 'mutes') body = UI.notice('A mute is one-way and private: the muted person\'s posts leave your home feed and their messages notify you of nothing.', 'info') + UI.table(['Person', 'Until', 'Muted', { label: '', right: true }], s.mutes.map((m) => [name(m), esc(m.expiresAt ? when(m.expiresAt) : 'you unmute'), esc(when(m.createdAt)), w ? UI.btn('Unmute', { size: 'sm', attrs: 'data-unmute="' + esc(m.userId) + '" aria-label="Unmute ' + name(m) + '"' }) : '']), { clickable: false, minWidth: '0', emptyTitle: 'Nobody muted' }) + (w ? '<div>' + UI.btn('Mute someone', { size: 'sm', attrs: 'data-mutesomeone' }) + '</div>' : '');
     else if (st.peopleTab === 'following') body = UI.table(['Person', 'Username', 'Since', { label: '', right: true }], s.following.map((f) => [name(f), '<span class="mono">' + esc(f.username || '') + '</span>', esc(when(f.since)), w ? UI.btn('Unfollow', { size: 'sm', attrs: 'data-unfollow="' + esc(f.userId) + '" aria-label="Unfollow ' + name(f) + '"' }) : '']), { clickable: false, minWidth: '0', emptyTitle: 'You follow nobody yet' }) + (w ? '<div>' + UI.btn('Follow someone', { size: 'sm', attrs: 'data-follow' }) + '</div>' : '') + '<div class="muted" style="font-size:12px">Follows must share a workspace with you (else 404, as if unknown). Someone in a block with you cannot be followed.</div>';
     else if (st.peopleTab === 'followers') body = UI.table(['Person', 'Username', 'Follows you since', { label: '', right: true }], s.followers.map((f) => [name(f), '<span class="mono">' + esc(f.username || '') + '</span>', esc(when(f.since)), following.has(f.userId) ? UI.pill('mutual', 'ok') : w ? UI.btn('Follow back', { size: 'sm', attrs: 'data-followid="' + esc(f.userId) + '" aria-label="Follow ' + name(f) + ' back"' }) : '']), { clickable: false, minWidth: '0', emptyTitle: 'No followers yet' });
+    else if (st.peopleTab === 'directory') body = UI.notice('Everyone who shares a workspace with you. A name opens the profile; the status is live over the socket and left out for people in a block with you.', 'info')
+      + (!st.people ? UI.notice('Loading…', 'info') : UI.table(['Person', 'Workspaces', 'Status'], st.people.filter((p) => !blockedIds(st).has(p.userId)).map((p) => [who(p.userId, p.displayName || p.username) + ' <span class="muted mono">' + esc(p.username) + '</span>', esc(p.workspaces.map((w) => w.name).join(', ')), statusPill(st, p.userId) || '<span class="muted">not shown</span>']), { clickable: false, minWidth: '0', emptyTitle: 'Nobody else yet', emptyText: 'People who share a workspace with you appear here.' }));
     else {
       const d = st.listDetail;
       body = '<div class="cols"><div style="flex:1;min-width:0">' + UI.table(['List', 'People', 'Description'], s.lists.map((l) => ({ cells: [esc(l.name), String(l.members), esc(l.description || '')], attrs: 'data-list="' + esc(l.id) + '"', selected: d && d.id === l.id })), { minWidth: '0', emptyTitle: 'No lists', emptyText: 'Lists group people; open one as a feed.' }) + (w ? '<div>' + UI.btn('New list', { size: 'sm', icon: 'plus', attrs: 'data-newlist' }) + '</div>' : '') + '</div>'
@@ -723,7 +746,7 @@
     ctx.on('change', '[data-ptarget]', (e, t) => { st.postTarget = t.value; ctx.rerender(); });
     ctx.on('click', '[data-unmedia]', (e, t) => { st.pendingMedia = (st.pendingMedia || []).filter((m) => m.id !== t.dataset.unmedia); ctx.rerender(); });
     ctx.on('click', '[data-pmedia]', () => openFilePicker(ctx, st, 'post'));
-    ctx.on('click', '[data-post]', (e, t) => {
+    ctx.on('click', 'button[data-post]', (e, t) => {
       const text = (st.postDraft || '').trim(); const media = (st.pendingMedia || []).map((m) => m.id);
       if (!text && !media.length) { ctx.toast('Text or media are needed.', 'warn'); return; }
       const target = (ctx.$('[data-ptarget]') || {}).value || 'ws';

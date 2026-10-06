@@ -329,6 +329,23 @@
         App.renderHeader(); App.toast('<b>' + esc(n.title) + '</b>' + (n.body ? ' ' + esc(n.body) : ''), 'warn', 6000);
       });
       App.socket = sock;
+      App.watchIdle(sock);
+    },
+    /**
+     * Presence (B-5802): tells the server when this console goes idle (five minutes without input, or the page hidden)
+     * and when it is used again, so an automatic status reads away while every console of the person is idle.
+     */
+    watchIdle(sock) {
+      const IDLE_MS = 5 * 60 * 1000;
+      let idle = false; let last = Date.now(); let timer = null;
+      const send = (v) => { if (idle === v) return; idle = v; if (sock.connected) sock.emit('presence.idle', { idle: v }); };
+      const arm = () => { clearTimeout(timer); timer = setTimeout(() => send(true), Math.max(1000, IDLE_MS - (Date.now() - last))); };
+      const active = () => { last = Date.now(); if (document.hidden) return; send(false); arm(); };
+      ['keydown', 'pointerdown', 'pointermove', 'wheel', 'focus'].forEach((ev) => window.addEventListener(ev, () => { if (Date.now() - last > 5000 || idle) active(); }, { passive: true }));
+      document.addEventListener('visibilitychange', () => { if (document.hidden) send(true); else active(); });
+      // A reconnected socket is a new connection on the server: it starts active, so say again if it is not.
+      sock.on('connect', () => { const was = idle; idle = false; if (was || document.hidden) send(true); });
+      arm();
     },
     /** Asks the server whether this browser already has a session, then renders. */
     async boot() {
