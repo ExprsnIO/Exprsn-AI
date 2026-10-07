@@ -322,6 +322,16 @@ describe('Sprint 37b: the MCP server and its authorization (B-7101, B-7102)', ()
     expect(page.dynamicRegistration).toBe(true);
     expect(page.clients.map((x: { clientId: string }) => x.clientId)).toContain(ok.body.client_id);
     expect(await h.s.db('audit_events').where({ action: 'oidc.client.registered' }).count({ n: '*' }).first()).toMatchObject({ n: 2 });
+    // Another tenant's metadata, at the path-inserted addresses MCP clients try first.
+    const acme = await h.s.tenants.create({ slug: 'acme', name: 'Acme' });
+    for (const path of ['/.well-known/oauth-authorization-server/t/acme', '/t/acme/.well-known/oauth-authorization-server', '/.well-known/openid-configuration/t/acme']) {
+      const m = await request(h.app).get(path).expect(200);
+      expect(m.body.issuer).toBe('http://localhost:8080/t/acme');
+      expect(m.body.registration_endpoint).toBeUndefined();
+    }
+    await h.s.mcpServer.setDynamicRegistration(acme.id, true, 'x');
+    expect((await request(h.app).get('/.well-known/oauth-authorization-server/t/acme').expect(200)).body.registration_endpoint).toBe('http://localhost:8080/t/acme/oauth/register');
+    expect((await request(h.app).post('/t/acme/oauth/register').send(reg).expect(201)).body.client_id).toMatch(/^c_/);
   });
 });
 
