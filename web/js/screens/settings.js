@@ -68,7 +68,7 @@
   };
 
   App.register({
-    id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, security (email, factors, trusted devices), app passwords for DAV clients, API keys, connected applications, sessions, AT-Protocol account', crumb: ['Settings'], live: true,
+    id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, security (email, factors, trusted devices), app passwords for DAV clients, MCP access (server URLs, held calls, MCP servers connected by OAuth), API keys, connected applications, sessions, AT-Protocol account', crumb: ['Settings'], live: true,
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     // B-3413: the account's own verification, trusted devices, email codes and DID. States open what the user would see
     // (a dialog or a notice); none of them changes anything.
@@ -85,6 +85,9 @@
       { title: 'Picture in quarantine', tone: 'info', text: 'A new picture is stored in the file store of your current workspace and scanned like any upload. Until the scan passes, others see your initials.', apply(ctx) { ctx.state.avatarNote = 'quarantine'; ctx.rerender(); } },
       { title: 'Picture refused by the scan', tone: 'danger', text: 'A picture that fails the scan (malware, or bytes that are not an image) is never shown; upload another one.', apply(ctx) { ctx.state.avatarNote = 'rejected'; ctx.rerender(); } },
       { title: 'Bio blocked by a guardrail', tone: 'danger', text: 'Pronouns and the bio are screened at user-input like a post. A blocking rule refuses the change with 422 and the old text stays.', apply(ctx) { ctx.state.bioNote = true; ctx.rerender(); } },
+      // 1.6.0 (B-7101, B-7103): MCP access. States explain; none of them changes anything.
+      { title: 'MCP call held for approval', tone: 'warn', text: 'An MCP client asked to change data. Nothing runs until you approve here; the client then calls again with the same arguments within 15 minutes, once.', apply(ctx) { ctx.state.mcpNote = 'held'; ctx.rerender(); } },
+      { title: 'Connected through OAuth', tone: 'ok', text: 'Back from an MCP server\'s authorization server: the code was exchanged with the PKCE verifier and the tokens are sealed with the tenant key. Tools from that server now act as you.', apply(ctx) { ctx.state.mcpNote = 'connected'; ctx.rerender(); } },
       { title: 'Status set to busy', tone: 'ok', text: 'A chosen status is published at once over the socket: people who share a workspace with you see it within five seconds, people in a block with you never do.', apply(ctx) { ctx.state.statusNote = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -92,14 +95,19 @@
       const me = App.me;
       // Back from the AT-Protocol OAuth flow in "link" mode (B-1807): the callback bound the DID.
       if (ctx.params.atproto === 'linked') { st.linkedNote = true; delete ctx.params.atproto; st.loaded = false; try { history.replaceState(null, '', location.pathname + location.search + '#/settings'); } catch (e) { /* history unavailable */ } }
+      // Back from an MCP server's authorization server (B-7103): the callback stored the tokens, or says why not.
+      if (ctx.params.result && ctx.params.tab === 'mcp') { st.mcpBack = { result: ctx.params.result, reason: ctx.params.reason || '', server: ctx.params.server || '' }; delete ctx.params.result; delete ctx.params.reason; st.loaded = false; try { history.replaceState(null, '', location.pathname + location.search + '#/settings'); } catch (e) { /* history unavailable */ } }
       if (!st.loaded && !st.loading) {
         st.loading = true;
         // Trusted devices and the DID are extras: a failure there leaves their panel saying so.
         const soft = (p) => p.catch((err) => ({ error: err }));
         // B-3415: app passwords for DAV clients and the discovery URLs (a browser session's; soft like the extras).
         const davLoad = me.credential === 'api_key' ? Promise.resolve(null) : soft(Promise.all([App.get('/api/me/dav'), App.get('/api/me/app-passwords')]).then(([info, list]) => ({ info, list })));
-        Promise.all([App.get('/api/me/api-keys'), App.get('/api/me/sessions'), App.get('/api/me/mfa'), App.get('/api/me'), App.get('/api/me/grants'), soft(App.get('/api/me/trusted-devices')), App.can('atproto:link') && me.credential !== 'api_key' ? soft(App.get('/api/me/atproto')) : Promise.resolve(null), davLoad])
-          .then(([keys, sessions, mfa, fresh, grants, trusted, atproto, dav]) => { st.keys = keys; st.sessions = sessions; st.mfa = mfa; st.grants = grants; st.trusted = trusted; st.atproto = atproto; st.dav = dav; App.setMe(fresh); st.loaded = true; })
+        // B-7101, B-7103: MCP access (soft like the extras): the servers of one's workspaces with held calls, and the
+        // MCP servers that act with one's own token.
+        const mcpLoad = soft(Promise.all([App.get('/api/me/mcp-server'), App.can('tools:invoke') ? App.get('/api/mcp/servers') : Promise.resolve([])]).then(([access, servers]) => ({ access, servers })));
+        Promise.all([App.get('/api/me/api-keys'), App.get('/api/me/sessions'), App.get('/api/me/mfa'), App.get('/api/me'), App.get('/api/me/grants'), soft(App.get('/api/me/trusted-devices')), App.can('atproto:link') && me.credential !== 'api_key' ? soft(App.get('/api/me/atproto')) : Promise.resolve(null), davLoad, mcpLoad])
+          .then(([keys, sessions, mfa, fresh, grants, trusted, atproto, dav, mcp]) => { st.keys = keys; st.sessions = sessions; st.mfa = mfa; st.grants = grants; st.trusted = trusted; st.atproto = atproto; st.dav = dav; st.mcp = mcp; App.setMe(fresh); st.loaded = true; })
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (App.state.route === 'settings') ctx.rerender(); });
       }
@@ -232,11 +240,30 @@
             + '<div class="hstack wrap gap6">' + (atb.challengePending ? UI.btn('Verify now', { kind: 'primary', size: 'sm', attrs: 'data-atverify' }) : '') + (!atb.verified ? UI.btn('Link an account', { size: 'sm', attrs: 'data-atlink' }) : UI.btn('Change handle', { size: 'sm', attrs: 'data-athandle' })) + UI.btn('Remove', { kind: 'ghost', size: 'sm', attrs: 'data-atremove' }) + '</div>')
         + '<span class="muted" style="font-size:12px">A bound DID signs in as you through the tenant\'s <span class="mono">atproto</span> store. The handle counts only while its DID document names it back.</span>');
 
+      // B-7101, B-7103: MCP access.
+      const mcp = st.mcp;
+      const mcpPanel = !mcp ? '' : mcp.error ? UI.panel('MCP access', UI.problem('MCP access could not be loaded', mcp.error.message, mcp.error.problem && mcp.error.problem.trace_id)) : (() => {
+        const holds = mcp.access.holds || [];
+        const pending = holds.filter((h) => h.state === 'pending');
+        const back = st.mcpBack;
+        const servers = mcp.servers || [];
+        return UI.panel('MCP access', (back ? (back.result === 'connected' ? UI.notice('<b>Connected through OAuth.</b> The tokens are sealed with your tenant\'s key and refreshed when they expire; tools from that server now act as you.', 'ok') : UI.notice('<b>Not connected.</b> ' + esc(back.reason || 'The authorization did not finish.'), 'danger')) : st.mcpNote === 'connected' ? UI.notice('<b>After an OAuth connection</b> you come back here: the code was exchanged with the PKCE verifier and the tokens sealed with your tenant\'s key.', 'ok') : '')
+          + '<div class="fg2" style="font-size:12px">Add a URL to an MCP client such as Claude Desktop. It signs you in here and acts as you: your roles, your clearance (at most the label shown), guardrails and approvals apply.</div>'
+          + UI.table(['Workspace', 'Connection URL', 'Tool groups', 'Label', { label: '', right: true }], mcp.access.servers.map((m) => [esc(m.workspace), '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(m.url) + '</span>' + (m.requireDpop ? '<div class="muted" style="font-size:11px">DPoP-bound tokens only</div>' : ''), esc(m.groups.join(', ')), UI.label(m.label, { sm: true }), '<span class="hstack" style="justify-content:flex-end">' + UI.iconbtn('copy', 'Copy the URL for ' + m.workspace, { attrs: 'data-mcpcopy="' + esc(m.url) + '"', cls: 'sm ghost' }) + '</span>']), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No MCP servers', emptyText: 'None of your workspaces publishes one. An identity admin publishes them under Identity, MCP server.' })
+          + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Calls waiting for your approval</div>' + (pending.length ? UI.pill(pending.length + ' waiting', 'warn') : '') + '</div>'
+          + (st.mcpNote === 'held' ? UI.notice('<b>When an MCP client asks to change data,</b> nothing runs until you approve the call here. Approve only calls you asked for: an approval covers one call with exactly those arguments, for 15 minutes.', 'warn') : '')
+          + UI.table(['Tool', 'Client', 'Arguments', 'Asked', { label: '', right: true }], holds.map((h) => ({ cells: ['<span class="mono">' + esc(h.tool) + '</span> ' + UI.pill(h.sideEffect, h.sideEffect === 'write' ? 'warn' : h.sideEffect === 'destructive' ? 'danger' : 'outline') + '<div class="muted" style="font-size:11px">' + esc(h.workspace || '') + '</div>', '<span class="mono" style="font-size:12px">' + esc(h.client || 'unknown') + '</span>', h.arguments ? '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(JSON.stringify(h.arguments)) + '</span>' : '<span class="muted">above your clearance</span>', esc(when(h.createdAt)) + '<div class="muted" style="font-size:11px">' + (h.state === 'approved' ? 'usable until ' : 'expires ') + esc(when(h.expiresAt)) + '</div>', '<span class="hstack gap6" style="justify-content:flex-end">' + (h.state === 'pending' ? UI.btn('Reject', { size: 'sm', kind: 'ghost', attrs: 'data-holdreject="' + esc(h.id) + '" aria-label="Reject ' + esc(h.tool) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-holdapprove="' + esc(h.id) + '" aria-label="Approve ' + esc(h.tool) + '"' }) : UI.pill(h.state, h.state === 'approved' ? 'ok' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'Nothing waiting', emptyText: 'Write and destructive calls from MCP clients wait here for you.' })
+          + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls.</span>'
+          + (App.can('tools:invoke') ? '<div class="divider"></div><div class="eyebrow">MCP servers that act as you</div>'
+            + UI.table(['Server', 'Connection', 'Expires', { label: '', right: true }], servers.map((x) => [esc(x.name) + (x.description ? '<div class="muted" style="font-size:11px">' + esc(x.description) + '</div>' : ''), x.connected ? UI.pill(x.expired ? 'expired' : 'connected', x.expired ? 'danger' : 'ok') + ' ' + UI.pill(x.source === 'oauth' ? 'OAuth' : 'token', 'outline') : UI.pill('not connected', 'outline'), x.connected ? esc(x.expiresAt ? (x.refreshable ? 'refreshed after ' : '') + when(x.expiresAt) : 'no expiry') : '', '<span class="hstack gap6" style="justify-content:flex-end">' + (x.connected ? UI.btn('Disconnect', { size: 'sm', kind: 'ghost', attrs: 'data-mcpdisconnect="' + esc(x.id) + '" aria-label="Disconnect ' + esc(x.name) + '"' }) : x.oauth ? UI.btn('Connect', { size: 'sm', kind: 'primary', attrs: 'data-mcpconnect="' + esc(x.id) + '" aria-label="Connect ' + esc(x.name) + '"' }) : '<span class="muted" style="font-size:12px">a tool admin sets up OAuth first</span>') + '</span>']), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No servers with per-user tokens', emptyText: 'MCP servers that act with each person\'s own token are listed here.' })
+            + '<span class="muted" style="font-size:12px">Connecting uses the authorization code with PKCE at the server\'s own authorization server, for that server only. Disconnecting revokes the tokens there and forgets them here.</span>' : ''));
+      })();
+
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(me.user.displayName))
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
         + '<style>#main .settings-avatar{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:18px;font-weight:700;flex-shrink:0;object-fit:cover}</style>'
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + mcpPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       if (ctx.$('[data-pwnew]')) App.passwordMeter.attach(ctx.$('[data-pwnew]'), ctx.$('[data-pwmeter]'));
@@ -342,6 +369,32 @@
       ctx.on('click', '[data-copykey]', () => { if (navigator.clipboard && st.revealed) navigator.clipboard.writeText(st.revealed.key).then(() => ctx.toast('Copied.', 'ok')); });
       ctx.on('click', '[data-revealdone]', () => { st.revealed = null; ctx.rerender(); });
 
+      // ----- MCP access (B-7101, B-7103) -----
+      const mcpReload = () => { st.loaded = false; ctx.rerender(); };
+      ctx.on('click', '[data-mcpcopy]', (e, t) => { if (navigator.clipboard) navigator.clipboard.writeText(t.dataset.mcpcopy).then(() => ctx.toast('Copied.', 'ok'), () => ctx.toast('Copy failed; select the URL instead.', 'warn')); else ctx.toast('Copy is not available here; select the URL instead.', 'warn'); });
+      ctx.on('click', '[data-holdapprove]', async (e, t) => {
+        const h = st.mcp.access.holds.find((x) => x.id === t.dataset.holdapprove);
+        const ok = await ctx.confirm({ title: 'Approve ' + h.tool + '?', tag: h.sideEffect, tone: h.sideEffect === 'destructive' ? 'danger' : 'warn', body: '<div class="fg2">' + esc(h.client || 'The client') + ' may run this call once, with exactly these arguments, in the next 15 minutes. It runs as you.</div>' + (h.arguments ? UI.code(JSON.stringify(h.arguments, null, 2), 'json') : ''), kv: [['Workspace', esc(h.workspace || '')], ['Asked', esc(when(h.createdAt))]], ok: 'Approve' });
+        if (!ok) return;
+        try { await App.post('/api/me/mcp-holds/' + h.id + '/decide', { decision: 'approve' }); ctx.toast(esc(h.tool) + ' approved. It runs when the client calls it again.', 'ok'); st.mcpNote = null; mcpReload(); } catch (err) { App.fail(err); }
+      });
+      ctx.on('click', '[data-holdreject]', async (e, t) => {
+        const h = st.mcp.access.holds.find((x) => x.id === t.dataset.holdreject);
+        const ok = await ctx.confirm({ title: 'Reject ' + h.tool + '?', tone: 'danger', body: '<div class="fg2">The call never runs.</div>', ok: 'Reject' });
+        if (!ok) return;
+        try { await App.post('/api/me/mcp-holds/' + h.id + '/decide', { decision: 'reject' }); ctx.toast(esc(h.tool) + ' rejected.', 'ok'); st.mcpNote = null; mcpReload(); } catch (err) { App.fail(err); }
+      });
+      ctx.on('click', '[data-mcpconnect]', (e, t) => {
+        const x = st.mcp.servers.find((y) => y.id === t.dataset.mcpconnect);
+        ctx.modal({ title: 'Connect ' + esc(x.name), body: '<p class="fg2" style="margin:0">You are sent to the authorization server of <span class="mono">' + esc(x.url || x.name) + '</span> to sign in and approve access (authorization code with PKCE, for this MCP server only). You come back here when it is done. The tokens are sealed with your tenant\'s key, used only when a tool from ' + esc(x.name) + ' runs for you, and never enter model context.</p>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Continue', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(m) { m.querySelector('[data-ok]').addEventListener('click', async () => { try { const r = await App.post('/api/mcp-oauth/start', { server: x.id, returnTo: 'settings' }); location.assign(r.authorizeUrl); } catch (err) { App.closeOverlay(); App.fail(err); } }); } });
+      });
+      ctx.on('click', '[data-mcpdisconnect]', async (e, t) => {
+        const x = st.mcp.servers.find((y) => y.id === t.dataset.mcpdisconnect);
+        const ok = await ctx.confirm({ title: 'Disconnect ' + x.name + '?', tag: 'revokes token', tone: 'danger', body: '<div class="fg2">' + (x.source === 'oauth' ? 'The tokens are revoked at the server\'s authorization server and deleted here.' : 'Your token is deleted here.') + ' Tools from ' + esc(x.name) + ' are hidden for you until you connect again.</div>', ok: 'Disconnect' });
+        if (!ok) return;
+        try { await App.del('/api/mcp/servers/' + x.id + '/token'); ctx.toast(esc(x.name) + ' disconnected.', 'ok'); mcpReload(); } catch (err) { App.fail(err); }
+      });
       ctx.on('click', '[data-rmgrant]', async (e, t) => {
         const g = grants.find((x) => x.clientId === t.dataset.rmgrant);
         const ok = await ctx.confirm({ title: 'Remove access for ' + g.name + '?', tag: 'ends its tokens now', tone: 'danger', body: '<div class="fg2">' + esc(g.name) + ' can no longer act as you. Its access and refresh tokens stop working at once, and it asks for your consent again next time.</div>', kv: [['Can do', '<span class="mono">' + esc(g.scopes.join(' ')) + '</span>'], ['Last used', esc(when(g.lastUsedAt))]], ok: 'Remove access' });

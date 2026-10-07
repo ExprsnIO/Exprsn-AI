@@ -71,8 +71,9 @@ export function mcpAccessRoutes(s: Services): Router {
     const pub = (await s.mcpServer.publication(p.tenantId, wsId)) ?? { workspace_id: wsId, label: 'internal' as const, groups: [...MCP_GROUPS] };
     const caller = await s.mcpServer.callerIn(p, { ...pub, id: '', tenant_id: p.tenantId, enabled: true, require_dpop: false, created_by: null, updated_by: null, created_at: 0, updated_at: 0 });
     if (!caller) return void res.json({ asYou: false, tools: [] });
-    const tools = await s.mcpServer.catalog(caller, pub.groups);
-    res.json({ asYou: true, label: caller.clearance, tools: tools.map((t) => ({ name: t.name, title: t.title, group: t.group, sideEffect: t.sideEffect, description: t.description })) });
+    // Every group, so the page can preview a change of groups before it is saved; `published` marks the saved ones.
+    const tools = await s.mcpServer.catalog(caller, [...MCP_GROUPS]);
+    res.json({ asYou: true, label: caller.clearance, groups: pub.groups, tools: tools.map((t) => ({ name: t.name, title: t.title, group: t.group, sideEffect: t.sideEffect, description: t.description, published: t.group === 'status' || pub.groups.includes(t.group) })) });
   });
 
   // ---------- each user ----------
@@ -126,7 +127,7 @@ export function mcpAccessRoutes(s: Services): Router {
       const srv = await s.mcp.server(out.tenantId, out.serverId);
       await s.mcp.storeOAuthTokens(out.tenantId, srv, out.userId, out.tokens);
       await s.audit.append({ tenantId: out.tenantId, action: 'mcp.oauth.connected', kind: 'admin', actor: { user: out.userId, ip: req.ip ?? null }, target: { mcpServer: srv.id, name: srv.name }, detail: { scopes: out.tokens.scopes, expiresAt: out.tokens.expiresAt, refresh: !!out.tokens.refresh }, traceId: req.traceId });
-      return back(out.returnTo === 'mcp-servers' ? 'mcp-servers' : 'settings', { tab: 'mcp', server: srv.id, result: 'connected' });
+      return back(out.returnTo === 'mcp-servers' ? 'mcp-servers' : 'settings', { tab: out.returnTo === 'mcp-servers' ? 'authorization' : 'mcp', server: srv.id, result: 'connected' });
     } catch (err) {
       if (!(err instanceof OAuthFailure)) throw err;
       s.log.warn({ err: err.message, code: err.code, trace_id: req.traceId }, 'mcp oauth callback failed');

@@ -38,10 +38,13 @@
     if (!res.ok) throw new App.ApiError(data || { status: res.status, title: res.statusText });
     return data;
   };
+  // 1.6.0 (B-7101): the MCP server's tool groups, and the label order its label is picked from.
+  const MCP_GROUP_NAMES = { workflows: ['Workflows', 'published workflows, as workflow_<name>'], agents: ['Agents', 'agents published to the workspace, as agent_<name>'], knowledge: ['Knowledge', 'one search tool per published knowledge base'], tools: ['Registry tools', 'tools published to the workspace'], records: ['App records', 'list, query, count, aggregate, create, update, delete'] };
+  const LABEL_ORDER = ['public', 'internal', 'confidential', 'restricted'];
   const copy = (text, what, ctx) => { if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => ctx.toast(esc(what) + ' copied.', 'ok'), () => ctx.toast('Copy failed; select the text instead.', 'warn')); else ctx.toast('Copy is not available here; select the text instead.', 'warn'); };
 
   App.register({
-    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, user stores (GitHub, AT-Protocol), sign-up and MFA policy, invitations, CSV imports, DID bindings',
+    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, user stores (GitHub, AT-Protocol), sign-up and MFA policy, invitations, CSV imports, DID bindings, the MCP server (publication, self-registration)',
     crumb: ['Admin', 'Identity'],
     commands: [
       { label: 'Invite someone', sub: 'Identity', run(app) { const s = app.stateFor('identity'); s.tab = 'policy'; s.policyView = 'invitations'; s.openInvite = true; app.render(); } },
@@ -55,7 +58,11 @@
       { title: 'Sign-up pending approval', tone: 'warn', text: 'With the approval mode, a new account is created disabled and identity admins get a notice. Approve activates it; reject keeps it disabled and tells the user by email.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'signups'; ctx.state.signupFilter = 'pending'; ctx.rerender(); } },
       { title: 'MFA grace restarted', tone: 'info', text: 'Widening the MFA requirement restarts the grace period: covered accounts sign in without a factor for graceDays, then enrol first. Audited with graceRestarted.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'policy'; ctx.state.graceRestarted = true; ctx.rerender(); } },
       { title: 'Import dry run with conflicts', tone: 'warn', text: 'A dry run plans and reports every row; conflicts (an account linked to another store, a reused address) and errors (a role the importer may not grant) change nothing.', apply(ctx) { const st = ctx.state; st.tab = 'imports'; const x = (st.imports || []).find((i) => i.dryRun && i.summary && (i.summary.conflict || i.summary.error)) || (st.imports || []).find((i) => i.dryRun); if (x) st.importSel = x.id; ctx.rerender(); } },
-      { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } }
+      { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } },
+      // 1.6.0 (B-7101, B-7102): the MCP server. States explain; none of them changes anything.
+      { title: 'MCP server published', tone: 'ok', text: 'A workspace publishes its MCP server: clients connect to its URL, sign in through this issuer and see the groups it publishes, filtered by each person\'s roles and the label.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpNote = 'published'; ctx.rerender(); } },
+      { title: 'Token for another resource', tone: 'danger', text: 'A token issued for the API or another workspace is refused with 401, and WWW-Authenticate names the protected resource metadata so the client can get the right one (RFC 8707, RFC 9728).', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpNote = 'refusal'; ctx.rerender(); } },
+      { title: 'Self-registration on', tone: 'warn', text: 'With dynamic client registration on, any MCP client that reaches the issuer can register itself; each one still asks every person for consent, and only for the MCP scopes.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpNote = 'dcr'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -71,9 +78,9 @@
         const extraErr = {};
         const opt = (perm, key, url) => (App.can(perm) ? App.get(url).catch((err) => { extraErr[key] = err; return null; }) : Promise.resolve(null));
         Promise.all([App.get('/api/admin/federation'), App.get('/api/admin/federation/oidc/clients'), App.get('/api/admin/federation/saml/sps'), App.get('/api/admin/federation/upstream'), App.get('/api/admin/federation/sessions'), App.get('/api/admin/federation/scopes'), App.get('/api/admin/federation/keys'), App.get('/api/admin/federation/proposals?state=pending'), App.get('/api/admin/federation/metadata'),
-          opt('identity:manage', 'policy', '/api/admin/identity-policy'), opt('users:manage', 'signups', '/api/admin/signups'), opt('members:invite', 'invites', '/api/invitations'), opt('users:manage', 'imports', '/api/admin/user-imports'), opt('identity:manage', 'dids', '/api/admin/atproto/accounts'), opt('identity:manage', 'stores', '/api/admin/identity-providers'), opt('users:manage', 'roles', '/api/admin/roles'), opt('users:manage', 'people', '/api/admin/users?limit=500')])
-          .then(([overview, clients, sps, upstream, sessions, scopes, keys, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people]) => {
-            Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, extraErr, loaded: true, loadError: null });
+          opt('identity:manage', 'policy', '/api/admin/identity-policy'), opt('users:manage', 'signups', '/api/admin/signups'), opt('members:invite', 'invites', '/api/invitations'), opt('users:manage', 'imports', '/api/admin/user-imports'), opt('identity:manage', 'dids', '/api/admin/atproto/accounts'), opt('identity:manage', 'stores', '/api/admin/identity-providers'), opt('users:manage', 'roles', '/api/admin/roles'), opt('users:manage', 'people', '/api/admin/users?limit=500'), opt('identity:manage', 'mcp', '/api/admin/mcp-server')])
+          .then(([overview, clients, sps, upstream, sessions, scopes, keys, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, mcp]) => {
+            Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, mcp, extraErr, loaded: true, loadError: null });
             st.draft = policy ? clone(policy) : null;
           })
           .catch((err) => { st.loadError = err; })
@@ -95,7 +102,7 @@
       const rotatesAt = ov.rotation.rotatesAt;
       const nearing = st.keyExpiring || (!nextKey && rotatesAt && rotatesAt - Date.now() < 14 * DAY);
 
-      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'User stores and federation' }, { id: 'policy', label: 'Sign-up and MFA policy', count: st.signups ? st.signups.filter((x) => x.state === 'pending').length : undefined }, { id: 'imports', label: 'CSV imports' }, { id: 'dids', label: 'AT-Protocol accounts' }, { id: 'sessions', label: 'Sessions' }], st.tab);
+      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'User stores and federation' }, { id: 'policy', label: 'Sign-up and MFA policy', count: st.signups ? st.signups.filter((x) => x.state === 'pending').length : undefined }, { id: 'imports', label: 'CSV imports' }, { id: 'dids', label: 'AT-Protocol accounts' }, { id: 'mcp', label: 'MCP server', count: st.mcp ? st.mcp.publications.filter((x) => x.enabled).length : undefined }, { id: 'sessions', label: 'Sessions' }], st.tab);
       const banner = nearing && signing ? UI.notice('<b>Signing key ' + esc(signing.kid) + ' rotates ' + esc(rotatesAt ? inDays(rotatesAt) : 'soon') + '.</b> Rotate now to generate the next key and publish it to JWKS, so relying parties cache it before it signs anything.', 'warn', UI.btn('Rotate now', { size: 'sm', attrs: 'data-rotatekey' })) : '';
 
       function keysTable(compact) {
@@ -228,6 +235,8 @@
           + (!st.dids ? (st.extraErr.dids ? UI.problem('Bindings could not be loaded', st.extraErr.dids.message, st.extraErr.dids.problem && st.extraErr.dids.problem.trace_id) : UI.notice('Seeing bindings needs the identity:manage permission.', 'info'))
             : UI.table(['User', 'DID', 'Handle', 'State', 'Proof', { label: '', right: true }], st.dids.map((d) => ['<span class="mono">' + esc(d.username) + '</span>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.did) + '</span>', d.handle ? '<span class="mono">' + esc(d.handle) + '</span>' : '<span class="muted">none</span>', d.verified ? UI.pill('verified', 'ok') : d.challengePending ? UI.pill('challenge pending', 'warn') + '<div class="muted" style="font-size:12px">expires ' + esc(stamp(d.challengeExpiresAt)) + '</div>' : UI.pill('unverified', 'warn'), d.proof ? UI.pill(d.proof, 'outline') : '', UI.btn('Remove binding', { size: 'xs', kind: 'ghost', attrs: 'data-rmdid="' + esc(d.id) + '" aria-label="Remove the binding for ' + esc(d.username) + '"' })]), { clickable: false, minWidth: '760px', emptyTitle: 'No bindings', emptyText: 'Users bind a DID from Settings.' }))
           + '<div class="muted" style="font-size:12px">Removing a binding is audited atproto.did.removed (204). Handles are checked both ways: the DNS or well-known record must give the DID, and the DID document must name the handle back.</div>';
+      } else if (st.tab === 'mcp') {
+        body = mcpBody();
       } else {
         body = '<div class="eyebrow">Active sessions and grants in this tenant</div>' + UI.table(['User', 'Signed in', 'Method', 'Client', ''], st.sessions.map((s, i) => ['<b>' + esc(s.user) + '</b>', esc(s.kind === 'service' ? 'token, ' + when(s.signedInAt) : when(s.signedInAt)), esc(s.method), esc(s.client), UI.btn('Revoke', { size: 'xs', attrs: 'data-revoke="' + i + '"' })]), { clickable: false, minWidth: '560px', emptyTitle: 'No active sessions', emptyText: 'Sessions appear when someone signs in or a service account requests a token.' })
           + '<div class="muted" style="font-size:12px">Revocation also invalidates refresh tokens. Users disabled by directory sync lose their sessions within one sync interval.</div><div>' + UI.btn('Open tenant sessions', { size: 'sm', kind: 'ghost', attrs: 'data-gotenants' }) + '</div>';
@@ -247,7 +256,7 @@
           + '<div class="field"><span class="fl">Redirect URIs</span>' + (client.redirectUris.length ? client.redirectUris.map((r) => '<div class="mono" style="overflow-wrap:anywhere">' + esc(r) + '</div>').join('') : '<div class="muted">none</div>') + '</div>'
           + '<div class="field"><span class="fl">Grant types</span><div class="hstack wrap gap4">' + client.grants.map((g) => UI.pill(g, 'outline')).join('') + '</div></div>'
           + '<div class="field"><span class="fl">Scopes</span><div class="mono">' + esc(client.scopes.join(' ')) + '</div></div>'
-          + UI.toggle(cc ? 'PKCE not applicable to client credentials' : 'PKCE required', client.pkceRequired, 'data-manual data-pkce' + (cc || client.type === 'public' ? ' data-na style="opacity:.6"' : ''))
+          + UI.toggle(cc ? 'PKCE not applicable to client credentials' : 'PKCE required', client.pkceRequired, 'data-manual data-pkce' + (cc || client.type === 'public' ? ' data-na aria-disabled="true" style="opacity:.6"' : ''))
           + UI.toggle('DPoP proof required (sender-constrained tokens)', client.dpopRequired, 'data-manual data-dpop')
           + (client.confidential ? '<div class="field"><span class="fl">Token introspection</span><div class="fg2" style="font-size:12px">' + (client.introspect === 'any' ? 'Resource server: introspects access tokens of every client in this tenant.' : client.introspectPending ? 'Its own tokens. Introspecting every client\'s tokens waits for a second identity admin.' : 'Its own tokens only.') + '</div><div>' + (client.introspect === 'any' ? UI.btn('Limit to its own tokens', { size: 'sm', kind: 'ghost', attrs: 'data-introspect="own"' }) : client.introspectPending ? '' : UI.btn('Make it a resource server', { size: 'sm', kind: 'ghost', attrs: 'data-introspect="any"' })) + '</div></div>' : '')
           + (client.grants.indexOf('authorization_code') >= 0 ? UI.toggle('Pushed authorization requests required', client.parRequired, 'data-manual data-par') : '')
@@ -552,6 +561,80 @@
 
       // ----- handlers -----
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; delete ctx.params.tab; ctx.rerender(); });
+
+      // ----- the MCP server (B-7101, B-7102) -----
+      function mcpBody() {
+        const m = st.mcp;
+        if (!m) return st.extraErr.mcp ? UI.problem('The MCP server settings could not be loaded', st.extraErr.mcp.message, st.extraErr.mcp.problem && st.extraErr.mcp.problem.trace_id) : UI.notice('Seeing the MCP server needs the identity:manage permission.', 'info');
+        const live = m.publications.filter((x) => x.enabled);
+        const sample = live[0] || m.publications[0];
+        const prm = (u) => u.replace(/\/mcp\//, '/.well-known/oauth-protected-resource/mcp/');
+        return UI.notice('Each workspace can publish an MCP server. Clients such as Claude Desktop connect to its URL, sign in through this tenant\'s issuer (OAuth 2.1, PKCE) and act as the person who signed in: their roles, the token\'s scopes, the label the workspace publishes at, guardrails and approvals apply to every call, and every call is audited <span class="mono">mcp.server.call</span>.', 'info')
+          + (st.mcpNote === 'published' ? (live.length ? UI.notice('<b>' + esc(live.map((x) => x.workspace).join(', ')) + (live.length === 1 ? ' publishes its' : ' publish their') + ' MCP server.</b> People find the URL under Settings, MCP access.', 'ok') : UI.notice('No workspace publishes its MCP server yet. Edit one below and turn it on.', 'info')) : '')
+          + (st.mcpNote === 'refusal' && sample ? UI.panel('A token for another resource', '<div class="fg2" style="font-size:12px">A token issued for the API (audience <span class="mono">' + esc(m.issuer + '/api') + '</span>) or another workspace is refused. Each server accepts only tokens whose audience is its own URL (RFC 8707), and the API refuses tokens for an MCP server.</div>'
+            + UI.code('HTTP/1.1 401 Unauthorized\nWWW-Authenticate: Bearer resource_metadata="' + prm(sample.url) + '",\n  scope="' + m.scopes.join(' ') + '",\n  error="invalid_token", error_description="The access token is invalid, expired, revoked, or was issued for another resource."', 'http'), { actions: UI.btn('Dismiss', { size: 'xs', kind: 'ghost', attrs: 'data-mcpdismiss' }) }) : '')
+          + UI.panel('Self-registration', UI.toggle('Let MCP clients register themselves (RFC 7591)', m.dynamicRegistration, 'data-mcpdcr data-manual')
+            + UI.kv([['Registration endpoint', m.dynamicRegistration ? '<span class="mono">' + esc(m.registrationEndpoint) + '</span>' : '<span class="muted">not offered</span>'], ['Issuer', '<span class="mono">' + esc(m.issuer) + '</span>'], ['Scopes a client may ask for', '<span class="mono">' + esc(m.scopes.concat(['offline_access']).join(' ')) + '</span>']], 1)
+            + (m.dynamicRegistration || st.mcpNote === 'dcr' ? UI.notice((m.dynamicRegistration ? '<b>Self-registration is on.</b> ' : '<b>When self-registration is on,</b> ') + 'any MCP client that reaches the issuer can register a public client with HTTPS or loopback redirect URIs. Each one asks every person for consent before it acts, and only for the MCP scopes.', 'warn') : '<span class="muted" style="font-size:12px">Off: an identity admin creates the client for each MCP client under OIDC clients, with its redirect URI.</span>'))
+          + '<div class="eyebrow">Workspaces</div>'
+          + UI.table(['Workspace', 'MCP server', 'Tool groups', 'Label', 'DPoP', 'Connection URL', { label: '', right: true }], m.publications.map((x) => [
+            '<b>' + esc(x.workspace) + '</b><div class="muted" style="font-size:11px">ceiling ' + esc(x.ceiling) + '</div>',
+            x.enabled ? UI.pill('published', 'ok') : UI.pill('off', 'outline'),
+            esc(x.groups.map((g) => (MCP_GROUP_NAMES[g] || [g])[0]).join(', ')),
+            UI.label(x.label, { sm: true }),
+            x.requireDpop ? UI.pill('required', 'info') : '<span class="muted">optional</span>',
+            x.enabled ? '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(x.url) + '</span>' : '<span class="muted">not published</span>',
+            '<span class="hstack gap6" style="justify-content:flex-end">' + (x.enabled ? UI.iconbtn('copy', 'Copy the URL of ' + x.workspace, { attrs: 'data-mcpcopy="' + esc(x.url) + '"', cls: 'sm ghost' }) : '') + UI.btn('Edit', { size: 'sm', attrs: 'data-mcpedit="' + esc(x.workspaceId) + '" aria-label="Edit the MCP server of ' + esc(x.workspace) + '"' }) + '</span>']), { minWidth: '760px', clickable: false, emptyTitle: 'No workspaces', emptyText: 'Create a workspace under Tenants first.' })
+          + '<div class="muted" style="font-size:12px">Clients find the issuer from the server\'s protected resource metadata (RFC 9728) and ask for a token for that server\'s URL (RFC 8707). Tokens for the API or another workspace are refused with 401.</div>'
+          + UI.panel('Clients that registered themselves', UI.table(['Client', 'Client ID', 'Redirect URI', 'Scopes', 'Last used', { label: '', right: true }], m.clients.map((c) => [esc(c.name) + ' ' + UI.pill(c.status === 'active' ? c.type.replace('_', ' ') : 'disabled', c.status === 'active' ? 'outline' : 'warn'), '<span class="mono">' + esc(c.clientId) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.redirectUris.join(' ')) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.scopes.join(' ')) + '</span>', esc(when(c.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-mcpclient="' + esc(c.id) + '" aria-label="Open ' + esc(c.name) + ' under OIDC clients"' }) + '</span>']), { minWidth: '640px', clickable: false, emptyTitle: 'No self-registered clients', emptyText: 'With self-registration on, MCP clients that register themselves are listed here.' })
+            + '<span class="muted" style="font-size:12px">Disable or remove them under OIDC clients; disabling ends their tokens at once.</span>');
+      }
+      function mcpEdit(wsId) {
+        const x = st.mcp.publications.find((p) => p.workspaceId === wsId);
+        if (!x) return;
+        const draft = { enabled: x.enabled, groups: x.groups.slice(), label: x.label, requireDpop: x.requireDpop };
+        const labels = LABEL_ORDER.filter((l) => LABEL_ORDER.indexOf(l) <= LABEL_ORDER.indexOf(x.ceiling));
+        let tools = null; let toolsErr = null;
+        const preview = () => '<div class="eyebrow">What it publishes, as you would see it</div>' + (toolsErr ? UI.notice(esc(toolsErr), 'warn') : !tools ? UI.notice('Loading…', 'info') : UI.table(['Tool', 'Group', 'Side effect'], tools.filter((t) => t.group === 'status' ? draft.groups.indexOf('workflows') >= 0 || draft.groups.indexOf('agents') >= 0 : draft.groups.indexOf(t.group) >= 0).map((t) => ['<span class="mono">' + esc(t.name) + '</span>', esc(t.group), UI.pill(t.sideEffect === 'read' ? 'read-only' : t.sideEffect, t.sideEffect === 'read' ? 'ok' : t.sideEffect === 'write' ? 'warn' : 'danger')]), { minWidth: '0', clickable: false, emptyTitle: 'No tools', emptyText: 'Nothing in these groups is published to this workspace for you, or no group is picked.' })) + '<span class="muted" style="font-size:12px">At the saved label, with your roles. Write and destructive calls wait until the person approves them in Settings, MCP access.</span>';
+        ctx.drawer({
+          title: 'MCP server of ' + esc(x.workspace),
+          body: UI.toggle('Published', draft.enabled, 'data-pubon') + UI.kv([['Connection URL', '<span class="mono" style="overflow-wrap:anywhere">' + esc(x.url) + '</span>'], ['Protected resource metadata', '<span class="mono" style="overflow-wrap:anywhere;font-size:12px">' + esc(x.url.replace(/\/mcp\//, '/.well-known/oauth-protected-resource/mcp/')) + '</span>']], 1)
+            + '<fieldset class="vstack gap6" style="border:0;padding:0;margin:0"><legend class="eyebrow">Tool groups</legend>' + st.mcp.groups.map((g) => UI.check((MCP_GROUP_NAMES[g] || [g, ''])[0] + ': ' + (MCP_GROUP_NAMES[g] || [g, ''])[1], draft.groups.indexOf(g) >= 0, 'data-pubgroup="' + g + '"')).join('') + '</fieldset>'
+            + UI.field('Highest label a call carries', UI.select(labels, draft.label, 'data-publabel'), 'Each person\'s clearance is lowered to it for calls here; the workspace ceiling is ' + esc(x.ceiling) + '.')
+            + UI.toggle('Require DPoP-bound tokens', draft.requireDpop, 'data-pubdpop') + '<div data-pubpreview>' + preview() + '</div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-pubsave' }),
+          onMount(dr) {
+            const show = () => { const el = dr.querySelector('[data-pubpreview]'); if (el) el.innerHTML = preview(); };
+            App.get('/api/admin/mcp-server/workspaces/' + x.workspaceId + '/tools').then((r) => { tools = r.tools; if (!r.asYou) toolsErr = 'You are not a member of this workspace, so the preview is empty.'; }).catch((err) => { toolsErr = err.message; }).finally(show);
+            dr.querySelectorAll('[data-pubgroup]').forEach((el) => el.addEventListener('change', () => { const g = el.dataset.pubgroup; draft.groups = draft.groups.filter((y) => y !== g).concat(el.checked ? [g] : []); show(); }));
+            dr.querySelector('[data-pubsave]').addEventListener('click', async () => {
+              draft.enabled = dr.querySelector('[data-pubon]').getAttribute('aria-checked') === 'true';
+              draft.requireDpop = dr.querySelector('[data-pubdpop]').getAttribute('aria-checked') === 'true';
+              draft.label = dr.querySelector('[data-publabel]').value;
+              App.closeOverlay();
+              const turning = draft.enabled !== x.enabled;
+              const ok = await ctx.confirm({ title: (turning ? (draft.enabled ? 'Publish' : 'Stop publishing') : 'Save') + ' the MCP server of ' + esc(x.workspace) + '?', tone: turning && !draft.enabled ? 'danger' : 'info', body: '<p class="fg2" style="margin:0">' + (turning && !draft.enabled ? 'Clients get 404 at its URL from the next request; tokens issued for it stop being useful.' : 'Clients see these groups on their next tools/list.') + '</p>', kv: [['Groups', esc(draft.groups.join(', ') || 'none')], ['Label', esc(draft.label)], ['DPoP', draft.requireDpop ? 'required' : 'optional']], ok: turning ? (draft.enabled ? 'Publish' : 'Stop publishing') : 'Save' });
+              if (!ok) return;
+              try {
+                await App.api('PUT', '/api/admin/mcp-server/workspaces/' + x.workspaceId, draft);
+                ctx.toast(esc(x.workspace) + (turning ? (draft.enabled ? ' publishes its MCP server.' : ' no longer publishes its MCP server.') : ': MCP server saved.'), turning && !draft.enabled ? 'warn' : 'ok');
+                if (turning && draft.enabled) st.mcpNote = 'published';
+                reload();
+              } catch (err) { App.fail(err); }
+            });
+          }
+        });
+      }
+      ctx.on('click', '[data-mcpedit]', (e, t) => mcpEdit(t.dataset.mcpedit));
+      ctx.on('click', '[data-mcpcopy]', (e, t) => copy(t.dataset.mcpcopy, 'The URL', ctx));
+      ctx.on('click', '[data-mcpdismiss]', () => { st.mcpNote = null; ctx.rerender(); });
+      ctx.on('click', '[data-mcpclient]', (e, t) => { st.client = t.dataset.mcpclient; st.tab = 'clients'; ctx.rerender(); });
+      ctx.on('click', '[data-mcpdcr]', async () => {
+        const on = !st.mcp.dynamicRegistration;
+        const ok = await ctx.confirm({ title: (on ? 'Let' : 'Stop letting') + ' MCP clients register themselves?', tone: on ? 'warn' : 'info', body: '<p class="fg2" style="margin:0">' + (on ? 'The discovery document names <span class="mono">' + esc(st.mcp.registrationEndpoint) + '</span>. Any client that reaches the issuer can register a public client; each one asks every person for consent, and only for the MCP scopes.' : 'Registration answers 404. Clients that registered before keep working until you disable them under OIDC clients.') + '</p>', ok: on ? 'Turn on' : 'Turn off' });
+        if (!ok) return;
+        try { await App.api('PUT', '/api/admin/mcp-server/settings', { dynamicRegistration: on }); ctx.toast('Self-registration ' + (on ? 'on' : 'off') + '.', on ? 'warn' : 'ok'); reload(); } catch (err) { App.fail(err); }
+      });
       ctx.on('click', 'tr[data-client]', (e, t) => { st.client = t.dataset.client; delete ctx.params.client; ctx.rerender(); });
       ctx.on('input', '[data-q]', (e, t) => { st.q = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-q]'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } });
       ctx.on('click', '[data-create]', createClient);

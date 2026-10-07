@@ -14571,7 +14571,7 @@
         "tags": [
           "admin/mcp-server"
         ],
-        "summary": "identity:manage. What the workspace publishes, as the admin would see it over MCP (their roles and clearance, lowered to the label): {asYou, label, tools [{name, title, group, sideEffect, description}]}",
+        "summary": "identity:manage. What the workspace publishes, as the admin would see it over MCP (their roles and clearance, lowered to the label), in every group so a change of groups can be previewed: {asYou, label, groups (the published ones), tools [{name, title, group, sideEffect, description, published}]}",
         "parameters": [
           {
             "name": "workspaceId",
