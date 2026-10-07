@@ -49,6 +49,11 @@ from prototype data to live only when every control on it is backed by the serve
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
 | 38 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen; release (1.7.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
 
+**End-to-end tests (owner, 2026-10-06).** During a sprint, each part runs only the Playwright specs of the screens
+it changes (with their accessibility and reflow checks); CI runs the full suite on every pull request. The full
+local run, fixing what it finds, and the cross-screen sweeps belong to each major release's release item (1.6.0's
+B-5101, 1.7.0's B-5901, and the same for 1.8.0 and later).
+
 Current codebase: every sidebar screen is live (Chat, Compare, Runs, Knowledge, Memory, Workflows, Scripts, Media,
 Images, Files, Apps, Groups and events, Messages and feed, Models, Profiles, Pools, Registry, MCP servers, Guardrails,
 Flags, Classifiers, Moderation, Channels, Connections, Training, Tenants, Roles and access, User stores, Identity,
