@@ -150,7 +150,9 @@ describe('agent runs', () => {
     expect(v.state).toBe('succeeded');
     expect(v.steps.map((s) => [s.n, s.lane, s.state])).toEqual([[1, 'think', 'ok'], [2, 'do', 'ok'], [3, 'think', 'ok']]);
     expect(v.steps[1]!.meta.approval).toMatchObject({ decision: 'approved', by: 'MEM' });
-    expect(v.output).toBe('Result: {"key":"FIN-1188"}');
+    // B-6901: the MCP result reached the model as untrusted content (the fake echoes the tool message).
+    expect(v.output).toContain('Result: <untrusted-content source="mcp" from="jira.create_issue"');
+    expect(v.output).toContain('{"key":"FIN-1188"}');
     expect(mcp.calls).toEqual([expect.objectContaining({ name: 'create_issue', arguments: { summary: 'Q3 variance review' } })]);
     expect(v.usage).toMatchObject({ steps: 3, toolCalls: 1 });
 

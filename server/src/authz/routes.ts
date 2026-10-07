@@ -1264,6 +1264,7 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/knowledge/bases/{id}/reclassify', 'knowledge:read'],
   ['POST /api/knowledge/documents/{id}/reclassify', 'knowledge:read'],
   ['PUT /api/admin/classifiers/{id}/samples/image', 'classifiers:manage'],
+  ['GET /api/admin/guardrails/injection', 'guardrails:manage'],
   // ---- end of routes ----
 ];
 

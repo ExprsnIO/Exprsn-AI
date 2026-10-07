@@ -13021,6 +13021,32 @@
         }
       }
     },
+    "/api/admin/guardrails/injection": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/guardrails"
+        ],
+        "summary": "guardrails:manage. B-6902 prompt-injection defence: detections at the untrusted-content checkpoint per source (knowledge, crawl, tool, mcp, http; blocked and annotated) over the last ?days (1 to 90, default 7) and the 50 most recent (no text), the mode the tenant's effective rules give (block, annotate or off), those rules, and the heuristic classifier's rates on the CI corpus (B-6903) with its floor and ceiling",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/guardrails/test": {
       "post": {
         "tags": [
@@ -18100,7 +18126,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "A draft, checked at once. Tool: {kind: 'tool', name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP ",
+        "summary": "A draft, checked at once. Tool: {kind: 'tool', impl?: script\\|http (1.6.0, B-8901: definition is the HTTP request; see docs/api.md, Sprint 37a), name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP ",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"

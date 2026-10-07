@@ -126,6 +126,11 @@ export interface ProfileRow {
   fallback: { profileId: string; afterQueueWaitMs: number } | null;
   canary: { modelId: string; percent: number } | null;
   tools: string[];
+  /**
+   * 1.6.0 (B-6901): untrusted content (retrieved chunks, crawled pages, tool, MCP and HTTP results) reaches the model
+   * datamarked inside its delimiters. On when unset (rows written before the column, test seeds).
+   */
+  trust_marking?: boolean;
   label: Label;
   status: 'draft' | 'published' | 'disabled';
   version: number;
@@ -172,6 +177,7 @@ export const profileFrom = (r: Record<string, unknown>): ProfileRow => ({
   fallback: json<ProfileRow['fallback']>(r.fallback, null),
   canary: json<ProfileRow['canary']>(r.canary, null),
   tools: json<string[]>(r.tools, []),
+  trust_marking: r.trust_marking == null ? true : r.trust_marking === true || r.trust_marking === 1 || r.trust_marking === '1' || r.trust_marking === 't',
   version: Number(r.version),
   created_at: Number(r.created_at),
   updated_at: Number(r.updated_at)

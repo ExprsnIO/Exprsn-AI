@@ -48,7 +48,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
-| `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
+| `guardrails:manage` | yes | 19 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
@@ -462,6 +462,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/flags/{ref}/rule`
 - `PUT /api/admin/guardrails/sets/{id}/draft`
 - `PUT /api/admin/guardrails/sets/{id}/draft/rules/{ruleId}`
+- `GET /api/admin/guardrails/injection`
 
 ### `flags:review`
 

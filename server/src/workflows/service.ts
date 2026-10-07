@@ -1368,7 +1368,7 @@ export class WorkflowService implements WorkflowToolRunner {
     let extra: Record<string, unknown> = {};
     if (cfg.skills?.length) {
       // B-3902, B-4103: the skills' closure, its instructions and tools, through the dispatcher (steps/skills.ts).
-      const out = await modelWithSkills({ run, p, n, step, scope: c.scope, merged: c.merged ?? {}, input: c.input ?? null, label: c.label, signal: c.signal }, this.host, { skills: cfg.skills, messages, toolsCapable: r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld, chat: chatOnce, approverRole: cfg.approverRole ?? 'workflow-admin', approvalTimeoutMs: cfg.approvalTimeoutMs ?? 24 * 3_600_000 });
+      const out = await modelWithSkills({ run, p, n, step, scope: c.scope, merged: c.merged ?? {}, input: c.input ?? null, label: c.label, signal: c.signal }, this.host, { skills: cfg.skills, messages, toolsCapable: r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld, trustMarking: r.profile.trust_marking !== false, chat: chatOnce, approverRole: cfg.approverRole ?? 'workflow-admin', approvalTimeoutMs: cfg.approvalTimeoutMs ?? 24 * 3_600_000 });
       // B-4106: a held call pauses the step.
       if (out === WAIT) return WAIT;
       text = out.text;

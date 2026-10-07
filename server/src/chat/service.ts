@@ -18,6 +18,7 @@ import type { AttachmentRow, AttachmentService } from './attachments.js';
 import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
 import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
 import { formatContext, passageSpan, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
+import { toolResultContent, type UntrustedVerdict } from '../guardrails/injection.js';
 import { StreamGuard, type CheckLimiter, type Release, type Screen } from '../guardrails/stream.js';
 import type { FlagService } from '../guardrails/flags.js';
 import type { Notifications } from '../platform/notifications.js';
@@ -1141,7 +1142,7 @@ export class ChatService {
   private async applyContext(c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], gathered: ContextItem[], st: Stream): Promise<void> {
     const items = gathered.filter((x) => labelRank(x.label) <= labelRank(lease.pool.label_ceiling));
     if (!items.length) return;
-    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items) });
+    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items, { marking: r.profile.trust_marking !== false }) });
     const label = highest(c.label, ...items.map((x) => x.label));
     const citations = items.map((x, i) => ({ n: i + 1, kind: x.tag === 'context' ? 'knowledge' : 'memory', label: x.label, ...x.cite }));
     st.context = { items, citations };
@@ -1374,10 +1375,12 @@ export class ChatService {
         for (const call of calls) {
           const expression = String((call.function.arguments as { expression?: unknown }).expression ?? '');
           let tool: NonNullable<Chunk['tool']>;
+          let untrusted: UntrustedVerdict | undefined;
           const ext = extra.find((t) => t.fn === call.function.name);
           if (ext) {
             const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal, chainRoot: { kind: 'chat-turn', ref: m.id } }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
             tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
+            if (o.ok) untrusted = o.untrusted;
           } else if (call.function.name !== 'calculate' || !r.profile.tools.includes('calculate')) tool = { name: call.function.name, expression, error: 'Unknown tool' };
           else {
             usage.calcCalls++;
@@ -1387,7 +1390,8 @@ export class ChatService {
               tool = { name: 'calculate', expression, error: (err as Error).message };
             }
           }
-          messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(tool.result ?? tool.output ?? { error: tool.error }) });
+          // B-6901: a registry, MCP or HTTP tool's result reaches the model as untrusted content (calculate is trusted).
+          messages.push({ role: 'tool', tool_name: call.function.name, content: toolResultContent(tool.result ?? tool.output ?? { error: tool.error }, { name: tool.name, untrusted: untrusted ?? null, marking: r.profile.trust_marking !== false }) });
           const shown = await this.screenTool(st, tool);
           st.tools.push(shown);
           if (!st.held) this.push(st, { tool: shown });

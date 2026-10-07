@@ -4,6 +4,7 @@ import type { ToolDef } from '../../registry/dispatch.js';
 import { skillClosure } from '../../registry/skills.js';
 import { guardedByApproval, graphSchema } from '../graph.js';
 import { StepBlocked, StepFailed, type StepCall, type StepHost, type WAIT } from './host.js';
+import { toolResultContent, type UntrustedVerdict } from '../../guardrails/injection.js';
 
 /*
  * Skills on a model step (B-3902, B-4103). Each skill named in `skills[]` loads with its closure (the skills it builds
@@ -32,6 +33,8 @@ export interface SkillModelOptions {
   messages: ChatMessage[];
   /** Whether the profile's model can call tools. */
   toolsCapable: boolean;
+  /** B-6901: the profile's trust marking (datamark untrusted tool results); on when unset. */
+  trustMarking?: boolean;
   /** One model call (metered by the caller), with the tools to offer. */
   chat(messages: ChatMessage[], tools: ToolDef[]): Promise<ChatTurn>;
   /** Who approves a held call, and how long they have. */
@@ -109,6 +112,7 @@ export async function modelWithSkills(c: StepCall, host: StepHost, o: SkillModel
       const call = queue[0]!;
       const tool = tools.find((t) => t.fn === call.name);
       let content: unknown;
+      let untrusted: UntrustedVerdict | null = null;
       // The call the step paused on comes back with its decision.
       const decided = decision;
       decision = null;
@@ -128,9 +132,10 @@ export async function modelWithSkills(c: StepCall, host: StepHost, o: SkillModel
         }
         const error = out.pending ? `${out.error} A model step does not wait for it.` : (out.error ?? null);
         content = out.ok ? out.result : { error };
+        if (out.ok) untrusted = out.untrusted ?? null;
         calls.push({ tool: tool.entry.name, ok: out.ok, decision: out.decision, error: out.ok ? null : error, ...(decided ? { approvedBy: decided.by } : {}) });
       }
-      messages.push({ role: 'tool', tool_name: call.name, content: JSON.stringify(content ?? null) });
+      messages.push({ role: 'tool', tool_name: call.name, content: toolResultContent(content ?? null, { name: tool?.entry.name ?? call.name, untrusted, marking: o.trustMarking !== false }) });
       queue = queue.slice(1);
     }
   }

@@ -9,6 +9,7 @@ import type { ClassifierService } from './classifiers.js';
 import { detectPii, detectSecrets } from './detectors.js';
 import type { FlagService, Severity } from './flags.js';
 import { complete, guardMessages, GUARD_CATEGORIES, parseGuardVerdict } from './model.js';
+import { injectionGuardMessages, parseInjectionVerdict, scoreInjection } from './injection.js';
 import { compilePattern, matchAll } from './regex.js';
 import { actionRank, type Rule } from './rules.js';
 import type { ActiveRule, RuleSetRow, RuleSetService } from './sets.js';
@@ -68,6 +69,8 @@ export class GuardrailEngine implements Guardrails {
       const tenantId = String(p.tenantId ?? ctx.job.tenant_id);
       const breached = await this.flags.sweep(tenantId);
       const purged = await this.db('guard_decisions').where({ tenant_id: tenantId }).andWhere('created_at', '<', Date.now() - RETENTION_DAYS * 86_400_000).delete();
+      // B-6902: injection detections (counts only, no text) are kept 90 days.
+      await this.db('injection_detections').where({ tenant_id: tenantId }).andWhere('created_at', '<', Date.now() - 90 * 86_400_000).delete();
       return { breached, purged };
     });
   }
@@ -156,6 +159,17 @@ export class GuardrailEngine implements Guardrails {
           const cats = m.categories.length ? v.categories.filter((c) => m.categories.includes(c)) : v.categories;
           const hit = !v.safe && (m.categories.length === 0 || cats.length > 0);
           return done({ hit, spans: [], score: hit ? 1 : 0, unit: 'verdict', detail: v.safe ? 'safe' : `unsafe: ${(cats.length ? cats : v.categories).map((c) => `${c} ${GUARD_CATEGORIES[c] ?? ''}`.trim()).join(', ') || 'no category'}`, error: null });
+        }
+        case 'injection': {
+          // B-6902: the heuristic classifier, or a guard model asked whether the text tries to instruct the assistant.
+          if (m.engine === 'guard-model') {
+            const out = await complete(this.gateway, input.tenantId, m.profile!, input.label, injectionGuardMessages(input.text));
+            const hit = parseInjectionVerdict(out.text);
+            return done({ hit, spans: [], score: hit ? 1 : 0, unit: 'verdict', detail: hit ? 'injection: the guard model found instructions aimed at the assistant' : 'benign', error: null });
+          }
+          const r = scoreInjection(input.text);
+          const hit = r.score > 0 && r.score >= m.threshold;
+          return done({ hit, spans: hit ? r.spans : [], score: r.score, unit: 'injection score', detail: hit ? `injection ${r.score.toFixed(2)}: ${r.signals.slice(0, 3).map((x) => x.what).join('; ')}` : null, error: null });
         }
       }
     } catch (err) {

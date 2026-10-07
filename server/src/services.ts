@@ -135,6 +135,8 @@ import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
 import { ImportService } from './imports/service.js';
+import { InjectionDefence } from './guardrails/injection.js';
+import { HttpToolRunner } from './registry/http-tool.js';
 
 export interface Services {
   cfg: Config;
@@ -178,6 +180,10 @@ export interface Services {
   mcp: McpService;
   scripts: ScriptService;
   tools: ToolDispatcher;
+  /** 1.6.0 (B-8901): `impl: http` registry tools through the outbound address guard. */
+  httpTools: HttpToolRunner;
+  /** 1.6.0 (B-6902): the untrusted-content checkpoint, its counts per source and audit. */
+  injection: InjectionDefence;
   agents: AgentService;
   /** Workflow graphs, versions and durable runs (Sprint 8). */
   workflows: WorkflowService;
@@ -421,6 +427,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
+  // 1.6.0 (B-6902, B-8901): tool results pass the untrusted-content checkpoint; HTTP tools go through the address guard.
+  const injection = new InjectionDefence(db, () => s.guardrails, audit);
+  tools.useInjection(injection);
+  const httpTools = new HttpToolRunner({ db, audit, log, policy: servicePolicy(cfg), tenantHosts: (t) => s.integrations.allowList(t), vault: (t, owner, ref, via) => s.vault.resolveFor(t, owner, ref, { via }), maxTimeoutMs: cfg.HTTP_TOOL_TIMEOUT_MS, maxResponseBytes: cfg.HTTP_TOOL_MAX_RESPONSE_BYTES });
+  tools.useHttp(httpTools);
   const chains = new ChainService(db, {
     maxDepth: cfg.CHAIN_MAX_DEPTH,
     kindCaps: { 'workflow-run': cfg.WORKFLOW_MAX_DEPTH, 'agent-run': cfg.AGENT_MAX_DEPTH },
@@ -459,7 +470,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
   const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers }, overrides.dynamicCredentials !== undefined ? overrides.dynamicCredentials : createDynamicCredentials(cfg));
   const knowledge = new KnowledgeService(
-    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, classifiers: guard.classifiers },
+    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, classifiers: guard.classifiers, injection: () => s.injection },
     {
       maxBytes: cfg.ATTACHMENT_MAX_BYTES,
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
@@ -516,6 +527,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     guardrails: guard.engine,
     guard,
     registry,
+    injection,
+    httpTools,
     mcp,
     scripts,
     tools,

@@ -9,6 +9,7 @@ import { THINK_LEVELS, type ThinkLevel } from '../gateway/repo.js';
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL } from '../chat/calc.js';
 import { formatContext, passageSpan, type ContextItem } from '../chat/context.js';
+import { toolResultContent, type UntrustedVerdict } from '../guardrails/injection.js';
 import type { ResolvedTool } from '../registry/dispatch.js';
 import type { GuardDecision } from '../guardrails/types.js';
 import { ApiHolds } from './holds.js';
@@ -337,7 +338,7 @@ export class OpenAiService {
     if (ext.memory) items.push(...(await s.memory.contextFor(req)));
     const kept = items.filter((x) => labelRank(x.label) <= labelRank(ceiling));
     if (!kept.length) return { items: [], label };
-    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(kept) });
+    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(kept, { marking: r.profile.trust_marking !== false }) });
     return { items: kept, label: kept.reduce<Label>((a, x) => (labelRank(x.label) > labelRank(a) ? x.label : a), label) };
   }
 
@@ -447,10 +448,12 @@ export class OpenAiService {
           const ext2 = server.extra.find((t) => t.fn === call.function.name);
           let out: unknown;
           let ok = false;
+          let untrusted: UntrustedVerdict | null = null;
           if (ext2) {
             const o = await s.tools.call({ principal: p, label: answerLabel, source: { kind: 'api-request', id }, signal }, ext2, args);
             ok = o.ok;
             out = o.ok ? o.result : { error: o.error ?? 'The tool failed.' };
+            if (o.ok) untrusted = o.untrusted ?? null;
             toolsRun.push({ name: ext2.entry.name, ok });
           } else if (call.function.name === 'calculate' && server.calculate) {
             calcCalls++;
@@ -465,7 +468,7 @@ export class OpenAiService {
             out = { error: 'Unknown tool' };
             toolsRun.push({ name: call.function.name, ok: false });
           }
-          messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(out) });
+          messages.push({ role: 'tool', tool_name: call.function.name, content: toolResultContent(out, { name: ext2?.entry.name ?? call.function.name, untrusted, marking: r.profile.trust_marking !== false }) });
         }
         if (round === MAX_TOOL_ROUNDS - 1) doneReason = 'length';
       }

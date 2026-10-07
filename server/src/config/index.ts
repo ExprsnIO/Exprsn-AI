@@ -113,6 +113,13 @@ const base = z.object({
     WORKFLOW_HTTP_HOSTS: z.string().default(''),
     WORKFLOW_HTTP_ALLOW_LOOPBACK: bool.default(false),
     /**
+     * 1.6.0 (B-8901): HTTP tools in the registry. Each call goes through the outbound address guard: internal hosts
+     * only as SERVICE_ALLOWED_HOSTS names them, public hosts only from the tenant's list of allowed hosts. A tool's
+     * timeout and response cap are at most these.
+     */
+    HTTP_TOOL_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
+    HTTP_TOOL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(16 * 1024 * 1024).default(1024 * 1024),
+    /**
      * Sprint 32 (B-4101): the chain context. Every invocation (chat turn, agent run, workflow run, tool call, skill load,
      * plugin action, app trigger) is a node in its root's chain; a chain is at most CHAIN_MAX_DEPTH deep across kinds,
      * with WORKFLOW_MAX_DEPTH nested workflow runs and AGENT_MAX_DEPTH nested agent runs as per-kind caps (the plugin
