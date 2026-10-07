@@ -168,6 +168,23 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
   `y-reflow-overlays.spec.ts`.
 
+- **Groups and Social and messaging: groups depth** (B-4401 to B-4405, Sprint 36a): the Groups list's mode switch
+  (My groups, Discover, Trending) is a named segmented group of pressed-state buttons; Category is a menu button like
+  the other filters, and Distance opens a labelled dialog (a select of known places, the point and the radius, each a
+  labelled field with a hint). An active filter says so in its button text ("Within 50 km") and its accessible name
+  names the centre. Discover and Trending say what ranks the list in text above it; each row's second line says why
+  (shared members and activity, or joins and posts) and the distance in km, in words, never by colour. The Channels
+  tab is a table whose rows open the channel with a click or Enter (`tabindex="0"`, an accessible name "Open the
+  channel …"); a channel's page names its group with a link back. New channel is a labelled form whose label select
+  offers the labels up to the caller's clearance, preset to the group's, with a hint naming the floor; a label below it
+  is refused by the server and shown as a problem panel with the server's words. Group settings add Category, Place and "Latitude, longitude" fields with hints. On
+  Social and messaging, Group categories and Trending groups are tables with column headers; Rename and Remove carry
+  the category's name in their accessible names, and New category is a labelled dialog whose errors land in a
+  `role="alert"` region. `e2e/tests/groups-depth.spec.ts` runs axe-core (Standard and Enhanced) and the in-page
+  checker in light and dark on Discover, Trending, the Channels tab, a channel, the Social and messaging Groups tab,
+  the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
+  and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

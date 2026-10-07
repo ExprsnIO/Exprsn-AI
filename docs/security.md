@@ -160,6 +160,21 @@ filter, private `/tmp`, only the state directory writable.
   workspace contact rule of `admins` lets holders of `social:manage` or `tenant:manage` start conversations with
   anyone in the workspace (each person's own contact rule and blocks still apply).
 
+- Groups depth (1.6.0, Sprint 36a, B-4401 to B-4405). Coordinates of groups and events are kept in the clear (the
+  place name is sealed) so the database can filter on them; anyone with database access reads where a group meets.
+  A group's place is shown to readers of its content (for a public group, everyone in the workspace); whether it
+  should be for members only is an open decision in `Backlog-1.6.0.md`. A distance filter only matches places the
+  caller may read, but the answer's order and `distanceKm` tell a reader roughly where a public group is, by design.
+  Discovery's `sharedMembers` counts members of a group the caller shares another group with, including private
+  groups the caller may see listed: it is a count, never names, but it says that some of the caller's co-members
+  belong. Trending counts joins and posts of private groups too (their names are listed to the workspace anyway);
+  hidden groups never trend. Channels follow their group: a `groups:manage` holder or an owner of the group acts as
+  owner of every channel, including hidden ones. A channel's members are not removed when a later label change
+  leaves them below the channel's label; they lose read access by the clearance check, as with groups. The
+  `groups.trending` job shares `FEED_TRENDING_MINUTES` and `FEED_TRENDING_HOURS` with hashtags; there is no separate
+  setting. Over DAV, a member's calendars include their channels (`includeChannels`). PostGIS is created by the
+  migration only when the role is a superuser or it is installed already; otherwise the bounding box is used, with the
+  same results.
 - Tenant provisioning templates (1.6.0, Sprint 35d, B-4501). Only a system admin provisions a tenant from a
   template (`POST /api/admin/tenants/from-template`, or `exprsn-ai tenant:create` on the host), and only a template
   whose highest workspace ceiling the caller's clearance reaches. Templates are code, not data: their custom roles
