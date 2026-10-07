@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createHash } from 'node:crypto';
+import { addText, encodePng, isPng, readText } from '../src/images/png.js';
 
 export interface FakeModel {
   name: string;
@@ -14,6 +15,7 @@ export interface FakeModel {
 interface Msg {
   role: string;
   content: string;
+  images?: string[];
   tool_calls?: { function: { name: string; arguments: Record<string, unknown> } }[];
 }
 
@@ -42,6 +44,65 @@ export function embedding(text: string, dims: number): number[] {
 }
 
 /**
+ * Sprint 36c: a test picture carrying what the fake vision model "sees" in it: PNG tEXt chunks (`caption`, `ocr`,
+ * `scores` as JSON), on `size` × `size` pixels of deterministic noise so it is not tiny (images under 1 KB inside
+ * PDF and Word documents are skipped as icons).
+ */
+export function markedPng(marks: { caption?: string; ocr?: string; scores?: Record<string, number> }, size = 24, seed = 1): Buffer {
+  const rgb = Buffer.alloc(size * size * 3);
+  let x = seed * 2654435761;
+  for (let i = 0; i < rgb.length; i++) {
+    x = (x * 1103515245 + 12345) >>> 0;
+    rgb[i] = x >>> 24;
+  }
+  let png = encodePng(size, size, rgb);
+  if (marks.caption != null) png = addText(png, 'caption', marks.caption);
+  if (marks.ocr != null) png = addText(png, 'ocr', marks.ocr);
+  if (marks.scores) png = addText(png, 'scores', JSON.stringify(marks.scores));
+  return png;
+}
+
+/** A JPEG-shaped test picture: the marks in a comment segment (`caption=…`, `ocr=…` lines). */
+export function markedJpeg(marks: { caption?: string; ocr?: string }, pad = 2048): Buffer {
+  const text = Buffer.from(`caption=${marks.caption ?? ''}\nocr=${marks.ocr ?? ''}`, 'latin1');
+  const com = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from([(text.length + 2) >> 8, (text.length + 2) & 0xff]), text]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1'), com, Buffer.alloc(pad, 0x11), Buffer.from([0xff, 0xd9])]);
+}
+
+/** What a test picture carries (see markedPng and markedJpeg). */
+export function marksOf(image: Buffer): { caption?: string; ocr?: string; scores?: Record<string, number> } {
+  if (isPng(image)) {
+    const t = readText(image);
+    return { ...(t.caption != null ? { caption: t.caption } : {}), ...(t.ocr != null ? { ocr: t.ocr } : {}), ...(t.scores ? { scores: JSON.parse(t.scores) as Record<string, number> } : {}) };
+  }
+  const at = image.indexOf(Buffer.from([0xff, 0xfe]));
+  if (image[0] === 0xff && image[1] === 0xd8 && at > 0) {
+    const len = image.readUInt16BE(at + 2);
+    const out: Record<string, string> = {};
+    for (const line of image.subarray(at + 4, at + 2 + len).toString('latin1').split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq > 0) out[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    return out;
+  }
+  return {};
+}
+
+/**
+ * The fake vision model: a description prompt (asking for a "caption") gets the picture's caption and text; a
+ * classification prompt (asking for "scores") gets the picture's scores for the labels named in the prompt.
+ */
+export function fakeVision(messages: Msg[], images: Buffer[]): string {
+  const system = messages.find((m) => m.role === 'system')?.content ?? '';
+  const marks = images[0] ? marksOf(images[0]) : {};
+  if (system.includes('"scores"')) {
+    const labels = (/against these labels: (.*?)\.(?: |$)/.exec(system)?.[1] ?? '').split(',').map((l) => l.trim()).filter(Boolean);
+    return JSON.stringify({ scores: Object.fromEntries(labels.map((l) => [l, marks.scores?.[l] ?? 0])) });
+  }
+  return JSON.stringify({ caption: marks.caption ?? 'A picture.', text: marks.ocr ?? '' });
+}
+
+/**
  * An Ollama stand-in speaking enough of its HTTP API for the gateway and chat: version, tags, ps, show, pull,
  * delete, generate (load and unload) and streamed chat. Replies come from `reply`, streamed word by word.
  */
@@ -61,6 +122,8 @@ export class FakeOllama {
   guard: (messages: Msg[]) => string = (messages) => (/UNSAFE-TEST/.test(messages[messages.length - 1]?.content ?? '') ? 'unsafe\nS1' : 'safe');
   /** Embedding size per model: models with "bge" in the name give 48 dimensions, others 64. */
   embedDims: (model: string) => number = (model) => (model.includes('bge') ? 48 : 64);
+  /** Sprint 36c: answers to messages carrying images (by default `fakeVision`). */
+  vision: (messages: Msg[], images: Buffer[], model: string) => string = (messages, images) => fakeVision(messages, images);
   /** When set, requests hang until released (to test queueing and stop). */
   hold: Promise<void> | null = null;
   /** When set, embedding requests hang until released (to test what keeps answering during a reindex). */
@@ -181,7 +244,8 @@ export class FakeOllama {
     this.loaded.set(name, { size: m.size, expires: Date.now() + 30 * 60_000 });
     res.writeHead(200, { 'content-type': 'application/x-ndjson' });
     const messages = body.messages as Msg[];
-    const r = name.includes('guard') ? { content: this.guard(messages) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
+    const images = messages.flatMap((x) => x.images ?? []).map((b) => Buffer.from(b, 'base64'));
+    const r = name.includes('guard') ? { content: this.guard(messages) } : images.length ? { content: this.vision(messages, images, name) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
     const send = (o: unknown) => res.write(JSON.stringify(o) + '\n');
     const sleep = () => new Promise((x) => setTimeout(x, this.chatDelayMs));
     let evalCount = 0;

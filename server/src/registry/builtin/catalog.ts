@@ -110,6 +110,36 @@ export const BUILTIN_TOOLS: BuiltinSpec[] = [
       additionalProperties: false
     },
     outputSchema: { type: 'object', properties: { message: { type: 'string' }, seq: { type: 'integer' } }, required: ['message'] }
+  },
+  {
+    // Sprint 36c (B-8803), seeded by migration 038c: the knowledge step of agents and workflows.
+    id: id26('knowledgesearch'),
+    name: 'knowledge_search',
+    builtin: 'knowledge_search',
+    description: 'Searches published knowledge bases the caller may read, at most at the label of the conversation or run it is called from. Takes label filters for image documents (labels.any, labels.all, labels.minScore); an image hit carries its caption, an excerpt of its text, its labels with their scores and a thumbnail URL.',
+    sideEffect: 'read',
+    label: 'restricted',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kbIds: { type: 'array', items: ULID, minItems: 1, maxItems: 20, description: 'The knowledge bases to search' },
+        query: str('What to look for', 2000),
+        k: { type: 'integer', minimum: 1, maximum: 20, description: 'How many hits (8 when left out)' },
+        labels: {
+          type: 'object',
+          description: 'Image labels a hit must carry',
+          properties: {
+            any: { type: 'array', items: { type: 'string', maxLength: 100 }, maxItems: 20, description: 'At least one of these labels' },
+            all: { type: 'array', items: { type: 'string', maxLength: 100 }, maxItems: 20, description: 'Every one of these labels' },
+            minScore: { type: 'number', minimum: 0, maximum: 1, description: "The lowest score that counts (each classifier's own threshold when left out)" }
+          },
+          additionalProperties: false
+        }
+      },
+      required: ['kbIds', 'query'],
+      additionalProperties: false
+    },
+    outputSchema: { type: 'object', properties: { hits: { type: 'array', items: { type: 'object' } }, ceiling: { type: 'string' } }, required: ['hits'] }
   }
 ];
 

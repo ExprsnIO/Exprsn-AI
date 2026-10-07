@@ -116,6 +116,42 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   from its `/v1/models` listing with `format: server` and no digest; the licence, the conformance run, the label
   ceiling and dual-control approval apply as to a pulled model.
 
+## Images in Knowledge (1.6.0, Sprint 36c)
+
+- **Before any model sees an image.** An image upload (PNG, JPEG, WebP, GIF, HEIC) goes through the same sealed
+  quarantine as other uploads: its type is sniffed from the bytes and ClamAV scans it when configured. Indexing then
+  runs the image safety check (`IMAGE_SAFETY_URL`, `IMAGE_SAFETY_THRESHOLD`); with `IMAGE_SAFETY_REQUIRED` an image no
+  classifier checked is refused as well. A flagged image is `rejected`: its stored content is deleted, nothing of it
+  reaches an index, and the system audit entry `knowledge.image.withheld` records the score, classifier and
+  categories. Images taken out of a PDF or Word document (its parts) are documents of their own and pass quarantine
+  and the safety check themselves.
+- **What a caption or OCR text may leak.** The vision profile writes text about anything visible in the image: names,
+  account and card numbers, addresses, people described, a screenshot of a password or an API key. That text is sealed
+  at rest with the document (associated data `kdoc-vision:<id>`), then chunked, embedded and indexed like any document
+  text. The PII classifier runs over it and can raise the document's label (an IBAN read from a screenshot makes the
+  image confidential), and the `context` checkpoint screens both the chunk and an image hit's caption and text excerpt
+  (withheld by a blocking rule, rewritten by a redacting one). The image itself is sent to the vision profile's pool at
+  the label known before it is described: the base's label, the source floor, the parent document's label and a
+  manual label. A label the OCR text raises afterwards does not change which pool already saw the image, so a base's
+  label must reflect what its images may show. The vision profile must route to a model that reads images and both
+  must be cleared for the base's label; this is checked when the profile is set.
+- **Labels are metadata at the image's label.** Each label a vision classifier gives an image (`knowledge_doc_labels`)
+  carries the image's own label rank and follows a relabel. The label filters on search and on the documents list,
+  and the label counts behind the filter chips, read only labels of documents within the caller's clearance (the
+  documents list and search also apply row access), so a label name or a count never reveals an image above the
+  reader. Vision classifiers publish only after an evaluation with at least 200 image cases per label, and only
+  published ones label documents.
+- **Thumbnails.** The thumbnail URL serves the image itself, only after the safety check passed and the document was
+  indexed, to readers cleared for its label and allowed by its row access, with `X-Content-Type-Options: nosniff`, a
+  `default-src 'none'; sandbox` content security policy and `Cache-Control: private, no-store`. HEIC images have none.
+- **Parts of PDF and Word documents** take the document's label as a floor (a part cannot be relabelled below it, and
+  a relabel of the document raises its parts) and its row access; removing the document removes them.
+- **Eval image cases** are sealed in the blob store (`eval-images/<tenant>/<case id>`, associated data
+  `eval-image:<case id>`) and deleted with the tenant at offboarding.
+- **`knowledge_search`**, the built-in tool agents and workflows search with, searches only published bases shared
+  with the caller, at most at the label of the conversation or run it is called from (and never above the caller's
+  clearance), so a result never carries data above the context it lands in.
+
 ## Deployment hardening
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
@@ -1060,3 +1096,10 @@ filter, private `/tmp`, only the state directory writable.
   is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
   step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
   confidential data from reaching it).
+- Image classification in Knowledge (1.6.0, Sprint 36c, B-8801 to B-8805). The thumbnail is the stored image served as
+  is: nothing is resized on the server, so a large image is sent whole (the console scales it). HEIC images have no
+  thumbnail, since browsers do not show them. Only JPEG and 8-bit RGB or grey Flate images are taken out of PDFs
+  (JPEG 2000, CCITT, indexed colour and masked images are not); at most 20 images per document, and images under 1 KB
+  are skipped as icons. A guardrail rule that names a vision classifier on text fails, and its `onError` decides. The
+  vision profile's description and classification calls are metered as `embed` usage (knowledge indexing), with no
+  user, not under a usage kind of their own.

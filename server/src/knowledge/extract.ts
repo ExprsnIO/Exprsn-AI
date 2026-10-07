@@ -1,4 +1,5 @@
 import { inflateRawSync, inflateSync } from 'node:zlib';
+import { imageType } from './images.js';
 
 /**
  * Text extraction for knowledge documents, with no external tools: plain text, Markdown, CSV and JSON as they are;
@@ -11,7 +12,8 @@ export class ExtractionError extends Error {}
 
 export const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export const TEXT_TYPES = ['text/plain', 'text/markdown', 'text/csv', 'application/json', 'text/html'];
-export const ACCEPTED = [...TEXT_TYPES, 'application/pdf', DOCX];
+/** Sprint 36c (B-8801): images are documents too, described by the knowledge base's vision profile. */
+export const ACCEPTED = [...TEXT_TYPES, 'application/pdf', DOCX, 'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/heic'];
 
 /** File name extensions a Git or S3 source picks up. */
 export const INDEXABLE_EXT = /\.(md|markdown|txt|text|rst|csv|json|html?|pdf|docx)$/i;
@@ -20,6 +22,8 @@ const MAX_INFLATE = 64 * 1024 * 1024;
 
 /** Detects the media type from the bytes (and, for text, the name). */
 export function detectType(buf: Buffer, name: string): { type: string } | { rejected: string } {
+  const image = imageType(buf);
+  if (image) return { type: image };
   if (buf.subarray(0, 5).toString('latin1') === '%PDF-') return { type: 'application/pdf' };
   if (buf.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) {
     try {
@@ -27,9 +31,9 @@ export function detectType(buf: Buffer, name: string): { type: string } | { reje
     } catch {
       // not a readable zip
     }
-    return { rejected: 'A zip archive that is not a Word document. Accepted: text, Markdown, CSV, JSON, HTML, PDF and DOCX.' };
+    return { rejected: 'A zip archive that is not a Word document. Accepted: text, Markdown, CSV, JSON, HTML, PDF, DOCX and images (PNG, JPEG, WebP, GIF, HEIC).' };
   }
-  if (buf.includes(0)) return { rejected: 'Binary content of a type that is not accepted (text, Markdown, CSV, JSON, HTML, PDF, DOCX).' };
+  if (buf.includes(0)) return { rejected: 'Binary content of a type that is not accepted (text, Markdown, CSV, JSON, HTML, PDF, DOCX, PNG, JPEG, WebP, GIF, HEIC).' };
   const text = buf.toString('utf8');
   if (text.includes('�')) return { rejected: 'The text is not valid UTF-8.' };
   const ext = name.toLowerCase().split('.').pop() ?? '';

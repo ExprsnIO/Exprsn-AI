@@ -248,6 +248,11 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   tenant, adopted when a scan releases a version and released by the trash purge), `apps/forms-held.ts`
   (`s.apps.forms.held`, B-4701: public submissions the `user-input` guardrail holds, decided from the moderation and
   flag queues) and `vault/anomalies.ts` (`s.revealWatch`, B-4803: reveal history and flags for a secret's owner).
+- 1.6.0 Sprint 36c: `knowledge/images.ts` (B-8801: image types from the bytes, the images inside PDF and Word
+  documents as a document's parts, the vision profile's prompt and validated answer); image documents, their labels
+  (`knowledge_doc_labels`) and the jobs `knowledge.classify` and `knowledge.reclassify` in `knowledge/service.ts`; the
+  `vision` classifier engine and image eval cases in `guardrails/classifiers.ts`; the built-in tool `knowledge_search`.
+  The fake Ollama answers image prompts from a picture's text chunks (`markedPng` in `server/test/fake-ollama.ts`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

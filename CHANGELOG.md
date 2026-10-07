@@ -10,6 +10,36 @@
   expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
   instance poll.
 
+### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
+
+- Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,
+  `media`, the sealed description, the safety score), `knowledge_doc_labels`, image eval cases (`eval_cases.media_key`,
+  `media_type`) and the `knowledge_search` built-in tool.
+- Images as knowledge documents (B-8801): PNG, JPEG, WebP, GIF and HEIC uploads pass quarantine and the image safety
+  check (a flagged image is rejected and deleted, audited `knowledge.image.withheld`); the base's vision profile
+  writes a caption and the text in the image, which become the indexed text, so a screenshot is found by a phrase from
+  it. The images inside PDF and Word documents become the document's parts, at least its label; a scanned PDF is
+  indexed through its images. `server/src/knowledge/images.ts`.
+- The `vision` classifier engine (B-8802): labels with thresholds like `llm`, scored by a vision profile from the
+  image, JSON answers validated against the labels. A knowledge base names its published vision classifiers; the
+  labels are stored on each image with their scores and the classifier version (`knowledge.classify`), and a new
+  version of a published classifier re-labels the base's images in the background (`knowledge.reclassify`, audited
+  `knowledge.reclassified`) without re-uploading them.
+- Label search (B-8803): `labels: {any, all, minScore}` on `POST /api/knowledge/search` and on the documents list
+  (`labels`, `labelsAll`, `minScore`, `media=image`); `GET /api/knowledge/bases/:id/labels` for the filter chips; image
+  hits carry the caption, a text excerpt, the labels and a thumbnail URL (`GET /api/knowledge/documents/:id/thumbnail`,
+  at the caller's clearance). The built-in tool `knowledge_search` is the knowledge step of agents and workflows, with
+  the same filters, at the label of the call.
+- Console (B-8804): the Knowledge screen shows image documents with their thumbnail, caption, labels and scores, label
+  filter chips, re-classify for a base and an image, and the vision profile and image classifiers in a base's settings;
+  the Classifiers screen offers the `vision` engine. Prototype boards first; axe-core and reflow checks in
+  `e2e/tests/knowledge-images.spec.ts`.
+- Evaluation (B-8805): image cases in the eval-set format (`image` as base64 on the samples route, or
+  `PUT /api/admin/classifiers/:id/samples/image`), sealed in the blob store; a vision classifier publishes only after
+  an evaluation with at least 200 image cases per label. `POST /api/classify` takes an image for a vision classifier.
+- Docs: `docs/api.md`, `docs/openapi.json`, `docs/security.md` (what a caption or OCR text may leak, labels as
+  metadata at the image's label, known gaps) and `docs/accessibility.md`.
+
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
 
 - The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,

@@ -1250,6 +1250,11 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['GET /api/vault/reveal-flags', 'secrets:read'],
   ['GET /api/vault/reveal-flags/{id}', 'secrets:read'],
   ['POST /api/vault/reveal-flags/{id}/resolve', 'secrets:read'],
+  ['GET /api/knowledge/bases/{id}/labels', 'knowledge:read'],
+  ['GET /api/knowledge/documents/{id}/thumbnail', 'knowledge:read'],
+  ['POST /api/knowledge/bases/{id}/reclassify', 'knowledge:read'],
+  ['POST /api/knowledge/documents/{id}/reclassify', 'knowledge:read'],
+  ['PUT /api/admin/classifiers/{id}/samples/image', 'classifiers:manage'],
   // ---- end of routes ----
 ];
 

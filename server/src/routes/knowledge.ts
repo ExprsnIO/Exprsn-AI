@@ -5,7 +5,7 @@ import { LABELS, type Label } from '../authz/labels.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, workspacesFor } from '../http/middleware.js';
 import { badRequest, conflict, forbidden } from '../http/problem.js';
-import { docView, indexView, SCHEDULES, SOURCE_KINDS, sourceView } from '../knowledge/service.js';
+import { docView, indexView, SCHEDULES, SOURCE_KINDS, sourceView, type LabelFilter } from '../knowledge/service.js';
 import { replicationView } from '../knowledge/replication.js';
 import { ROLE_NAME } from '../connections/drivers.js';
 import { allowed as allowedObject } from '../connections/service.js';
@@ -14,6 +14,10 @@ import type { Services } from '../services.js';
 const id26 = z.string().length(26);
 const chunking = z.object({ tokens: z.number().int().min(100).max(4000), overlap: z.number().int().min(0).max(1000) }).strict();
 const modelName = z.string().trim().min(1).max(200);
+/** Sprint 36c (B-8803): label filters for image documents. */
+const labelName = z.string().trim().min(1).max(100);
+const labelFilter = z.object({ any: z.array(labelName).max(20).optional(), all: z.array(labelName).max(20).optional(), minScore: z.number().min(0).max(1).optional() }).strict();
+const profileName = z.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'a profile name');
 
 /**
  * Knowledge bases, sources, documents, index builds, access and test search. Reading needs `knowledge:read`;
@@ -50,9 +54,16 @@ export function knowledgeRoutes(s: Services): Router {
 
   r.get('/knowledge/models', read, async (_req, res) => {
     const models = (await s.gateway.repo.models()).filter((m) => m.state === 'approved' || m.state === 'deprecated');
+    // Sprint 36c (B-8801, B-8802): the profiles that can describe images, and the vision classifiers a base may name.
+    const p = principalOf(_req);
+    const byId = new Map(models.map((m) => [m.id, m]));
+    const profiles = (await s.gateway.repo.profiles(p.tenantId)).filter((x) => !x.alias_of && x.status === 'published' && x.model_id && byId.get(x.model_id)?.capabilities.includes('vision'));
+    const classifiers = (await s.guard.classifiers.list(p.tenantId)).filter((c) => c.engine === 'vision');
     res.json({
       embedding: models.filter((m) => m.capabilities.includes('embedding')).map((m) => ({ name: m.name, label: m.label, state: m.state })),
-      rerankers: models.filter((m) => m.capabilities.includes('completion') && !m.capabilities.includes('embedding')).map((m) => ({ name: m.name, label: m.label, state: m.state }))
+      rerankers: models.filter((m) => m.capabilities.includes('completion') && !m.capabilities.includes('embedding')).map((m) => ({ name: m.name, label: m.label, state: m.state })),
+      visionProfiles: profiles.map((x) => ({ name: x.name, displayName: x.display_name, model: byId.get(x.model_id!)!.name, label: x.label })),
+      imageClassifiers: classifiers.map((c) => ({ id: c.id, slug: c.slug, name: c.name, status: c.status, version: c.version, labels: c.config.labels }))
     });
   });
 
@@ -113,12 +124,12 @@ export function knowledgeRoutes(s: Services): Router {
 
   r.patch('/knowledge/bases/:id', read, async (req, res) => {
     const body = parseBody(
-      z.object({ name: z.string().trim().min(1).max(200).optional(), description: z.string().trim().max(500).nullable().optional(), label: z.enum(LABELS).optional(), reranker: modelName.nullable().optional(), sharing: z.enum(['members', 'curators']).optional(), status: z.enum(['draft', 'published']).optional(), chunking: chunking.optional() }).strict(),
+      z.object({ name: z.string().trim().min(1).max(200).optional(), description: z.string().trim().max(500).nullable().optional(), label: z.enum(LABELS).optional(), reranker: modelName.nullable().optional(), sharing: z.enum(['members', 'curators']).optional(), status: z.enum(['draft', 'published']).optional(), chunking: chunking.optional(), visionProfile: profileName.nullable().optional(), imageClassifiers: z.array(z.string().trim().min(1).max(63)).max(10).optional() }).strict(),
       req.body
     );
     try {
       const kb = await k.update(principalOf(req), String(req.params.id), body);
-      await audit(req, 'knowledge.updated', { kb: kb.id, name: kb.name }, { changed: Object.keys(body) }, kb.label);
+      await audit(req, 'knowledge.updated', { kb: kb.id, name: kb.name }, { changed: Object.keys(body), ...(body.visionProfile !== undefined ? { visionProfile: kb.vision_profile } : {}), ...(body.imageClassifiers ? { imageClassifiers: kb.image_classifiers } : {}) }, kb.label);
       res.json(await detail(req, kb.id));
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A knowledge base with that name exists.');
@@ -231,8 +242,24 @@ export function knowledgeRoutes(s: Services): Router {
   // ---------- documents ----------
 
   r.get('/knowledge/bases/:id/documents', read, async (req, res) => {
-    const q = parseBody(z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(1000).default(200) }), req.query);
-    res.json(await k.documents(principalOf(req), String(req.params.id), q));
+    const q = parseBody(z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(1000).default(200), media: z.enum(['image']).optional(), labels: z.string().max(2000).optional(), labelsAll: z.string().max(2000).optional(), minScore: z.coerce.number().min(0).max(1).optional() }), req.query);
+    // B-8804: the filter chips, as comma-separated label names.
+    const list = (v?: string) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 20) : []);
+    const labels: LabelFilter | undefined = q.labels || q.labelsAll ? { any: list(q.labels), all: list(q.labelsAll), ...(q.minScore != null ? { minScore: q.minScore } : {}) } : undefined;
+    res.json(await k.documents(principalOf(req), String(req.params.id), { ...(q.q ? { q: q.q } : {}), limit: q.limit, ...(q.media ? { media: q.media } : {}), ...(labels ? { labels } : {}) }));
+  });
+
+  /** B-8804: the labels the base's image documents carry, with how many documents carry each (for the filter chips). */
+  r.get('/knowledge/bases/:id/labels', read, async (req, res) => {
+    res.json(await k.labelCounts(principalOf(req), String(req.params.id)));
+  });
+
+  /** B-8802: labels every image of the base again with the classifiers it names (a job). */
+  r.post('/knowledge/bases/:id/reclassify', read, async (req, res) => {
+    parseBody(z.object({}).strict(), req.body ?? {});
+    const out = await k.reclassify(principalOf(req), String(req.params.id));
+    await audit(req, 'knowledge.reclassify.started', { kb: String(req.params.id) }, out);
+    res.status(202).json(out);
   });
 
   /** Raw upload (the body is the file) into sealed quarantine; a scan job admits it. */
@@ -247,9 +274,34 @@ export function knowledgeRoutes(s: Services): Router {
   });
 
   r.get('/knowledge/documents/:id', read, async (req, res) => {
-    const { doc, kb } = await k.documentFor(principalOf(req), String(req.params.id));
+    const p = principalOf(req);
+    const { doc, kb } = await k.documentFor(p, String(req.params.id));
     const src = await k.source(doc.tenant_id, doc.source_id);
-    res.json({ ...docView(doc, src), kb: { id: kb.id, name: kb.name } });
+    const image = await k.imageDetail(p, doc);
+    res.json({ ...docView(doc, src, doc.media === 'image' ? image.labels : undefined), kb: { id: kb.id, name: kb.name, imageClassifiers: kb.image_classifiers.length }, caption: image.caption, text: image.text, visionModel: image.visionModel, parts: image.parts });
+  });
+
+  /**
+   * B-8803: an image document's picture, for the caller's clearance and row access. The image itself is served (no
+   * resizing on the server); HEIC, which browsers do not show, has none.
+   */
+  r.get('/knowledge/documents/:id/thumbnail', read, async (req, res) => {
+    const img = await k.thumbnail(principalOf(req), String(req.params.id));
+    res.setHeader('content-type', img.type);
+    res.setHeader('content-length', String(img.data.length));
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('content-security-policy', "default-src 'none'; sandbox");
+    res.setHeader('content-disposition', 'inline');
+    res.setHeader('cache-control', 'private, no-store');
+    res.end(img.data);
+  });
+
+  r.post('/knowledge/documents/:id/reclassify', read, async (req, res) => {
+    const p = principalOf(req);
+    const { doc } = await k.documentFor(p, String(req.params.id), 'manage');
+    const out = await k.reclassify(p, doc.kb_id, doc.id);
+    await audit(req, 'knowledge.document.reclassify.started', { kb: doc.kb_id, document: doc.id }, { job: out.jobId }, doc.label);
+    res.status(202).json(out);
   });
 
   r.patch('/knowledge/documents/:id', read, async (req, res) => {
@@ -276,10 +328,10 @@ export function knowledgeRoutes(s: Services): Router {
 
   r.post('/knowledge/search', read, async (req, res) => {
     const p = principalOf(req);
-    const body = parseBody(z.object({ kbIds: z.array(id26).min(1).max(20), query: z.string().trim().min(1).max(2000), k: z.number().int().min(1).max(50).default(8), rerank: z.boolean().default(true) }).strict(), req.body);
+    const body = parseBody(z.object({ kbIds: z.array(id26).min(1).max(20), query: z.string().trim().min(1).max(2000), k: z.number().int().min(1).max(50).default(8), rerank: z.boolean().default(true), labels: labelFilter.optional() }).strict(), req.body);
     const kbs = [];
     for (const id of body.kbIds) kbs.push(await k.base(p, id));
-    const out = await k.search(p, kbs, body.query, { k: body.k, rerank: body.rerank, withText: true, queryLabel: 'internal' });
+    const out = await k.search(p, kbs, body.query, { k: body.k, rerank: body.rerank, withText: true, queryLabel: 'internal', ...(body.labels ? { labels: body.labels } : {}) });
     res.json({ ...out, vectorStore: s.vectors.kind });
   });
 

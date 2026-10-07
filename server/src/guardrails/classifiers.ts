@@ -6,13 +6,14 @@ import type { Label } from '../authz/labels.js';
 import { isUniqueViolation } from '../audit/chain.js';
 import { conflict, HttpProblem, notFound } from '../http/problem.js';
 import type { Gateway } from '../gateway/gateway.js';
+import type { BlobStore } from '../platform/blob.js';
 import type { DataKeys } from '../platform/datakeys.js';
 import type { JobContext, JobQueue } from '../platform/jobs.js';
 import { detectPii, detectSecrets, PII_KINDS, SECRET_KINDS, type Detection } from './detectors.js';
 import { scoreLinear, trainLinear, type LinearHead } from './linear.js';
 import { complete, GUARD_CATEGORIES, guardMessages, parseGuardVerdict } from './model.js';
 
-export const ENGINES = ['deterministic', 'linear', 'guard', 'llm'] as const;
+export const ENGINES = ['deterministic', 'linear', 'guard', 'llm', 'vision'] as const;
 export type Engine = (typeof ENGINES)[number];
 
 /** Below this many labelled cases per label, precision and recall are not reliable and a classifier cannot publish. */
@@ -22,9 +23,9 @@ export interface ClassifierConfig {
   labels: { label: string; threshold: number }[];
   /** deterministic: which detector family. */
   family?: 'pii' | 'secrets';
-  /** guard and llm: the tenant profile that routes to the model. */
+  /** guard, llm and vision: the tenant profile that routes to the model (for vision, a model that reads images). */
   profile?: string;
-  /** llm: extra instructions in the prompt. */
+  /** llm and vision: extra instructions in the prompt. */
   instructions?: string;
   /** linear: the trained head. */
   head?: LinearHead | null;
@@ -119,12 +120,14 @@ export interface ScoreResult {
   hits: string[];
   engine: Engine;
   ms: number;
+  /** vision: what the model call used, for metering. */
+  usage?: { model: string; promptTokens: number; outputTokens: number; poolId: string | null; profileId: string };
 }
 
 export const newClassifierSchema = z.object({
   name: z.string().trim().min(1).max(100),
   slug: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
-  engine: z.enum(['linear', 'guard', 'llm']),
+  engine: z.enum(['linear', 'guard', 'llm', 'vision']),
   labels: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
   profile: z.string().trim().min(1).max(63).optional(),
   instructions: z.string().trim().max(2000).optional(),
@@ -132,14 +135,53 @@ export const newClassifierSchema = z.object({
   description: z.string().trim().max(1000).optional()
 });
 
+/** Sprint 36c (B-8802): what a vision classifier asks its profile about an image. */
+export function visionPrompt(labels: string[], instructions?: string): string {
+  return `Classify the image against these labels: ${labels.join(', ')}.${instructions ? ` ${instructions}` : ''} For each label, give a score from 0 to 1 for how clearly it applies to the image. Answer with JSON only, in the form {"scores": {"<label>": <a number from 0 to 1>}}, with every label.`;
+}
+
 /**
- * The classifier registry. Four engines behind one interface: deterministic detectors, a trained linear head, a
- * guard model and a general model answering in JSON (both through the gateway). Platform classifiers (tenant null)
+ * A vision classifier's answer, validated against its labels: a JSON object whose `scores` map only known labels to
+ * numbers from 0 to 1. A label left out scores 0; an unknown label or a score that is not a number is an error.
+ */
+export function parseVisionScores(answer: string, labels: string[]): Record<string, number> {
+  const m = /\{[\s\S]*\}/.exec(answer);
+  let j: { scores?: unknown } = {};
+  try {
+    j = m ? (JSON.parse(m[0]) as typeof j) : {};
+  } catch {
+    j = {};
+  }
+  const bad = (why: string) => new Error(`The vision model's answer ${why}: "${answer.trim().slice(0, 80)}"`);
+  if (!j.scores || typeof j.scores !== 'object' || Array.isArray(j.scores)) throw bad('has no scores');
+  const out: Record<string, number> = Object.fromEntries(labels.map((l) => [l, 0]));
+  for (const [k, v] of Object.entries(j.scores as Record<string, unknown>)) {
+    if (!labels.includes(k)) throw bad(`names ${k.slice(0, 40)}, which is not one of the labels`);
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) throw bad(`gives ${k} a score that is not a number from 0 to 1`);
+    out[k] = v;
+  }
+  return out;
+}
+
+/** An image case's picture: sealed in the blob store under its case id. */
+const evalImageKey = (tenantId: string, id: string) => `eval-images/${tenantId}/${id}`;
+
+/**
+ * The classifier registry. Five engines behind one interface: deterministic detectors, a trained linear head, a
+ * guard model, a general model answering in JSON (both through the gateway) and, since 1.6.0, a vision model scoring an
+ * image against the labels (`vision`, B-8802). Platform classifiers (tenant null)
  * are shared; tenants add their own. Eval datasets are named sets of labelled cases (`eval_cases`, sealed), fed by
  * confirmed flags and by hand; evaluation and training run as jobs.
  */
 export class ClassifierService {
   private seeded: Promise<void> | null = null;
+  /** The blob store image cases live in (set once the services are built). */
+  blobs: BlobStore | null = null;
+  /**
+   * B-8802: called when a published classifier gets a new version (a published draft, or a change while published),
+   * so what it labelled is labelled again in the background.
+   */
+  readonly onVersion: ((c: ClassifierRow) => Promise<void>)[] = [];
 
   constructor(
     private readonly db: Db,
@@ -191,7 +233,7 @@ export class ClassifierService {
     const slug = input.slug ?? input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 63);
     if (!slug) throw new HttpProblem(422, 'Invalid classifier', 'The name needs letters or digits.');
     if (await this.get(tenantId, slug)) throw conflict(`A classifier named ${slug} exists.`);
-    if ((input.engine === 'guard' || input.engine === 'llm') && !input.profile) throw new HttpProblem(422, 'Invalid classifier', 'A model-based classifier needs the profile that routes to its model.');
+    if ((input.engine === 'guard' || input.engine === 'llm' || input.engine === 'vision') && !input.profile) throw new HttpProblem(422, 'Invalid classifier', 'A model-based classifier needs the profile that routes to its model.');
     const labels = [...new Set(input.labels)].map((label) => ({ label, threshold: 0.5 }));
     const t = Date.now();
     const row: ClassifierRow = {
@@ -235,7 +277,7 @@ export class ClassifierService {
       l.threshold = Math.round(thr * 100) / 100;
     }
     if (patch.profile !== undefined) {
-      if (c.engine !== 'guard' && c.engine !== 'llm') throw conflict('Only model-based classifiers route through a profile.');
+      if (c.engine !== 'guard' && c.engine !== 'llm' && c.engine !== 'vision') throw conflict('Only model-based classifiers route through a profile.');
       config.profile = patch.profile;
     }
     if (patch.instructions !== undefined) config.instructions = patch.instructions;
@@ -243,6 +285,7 @@ export class ClassifierService {
     await this.db('classifiers').where({ id: c.id }).update({ config: JSON.stringify(config), version: next.version, dataset: next.dataset, description: next.description, updated_at: next.updated_at });
     const changed = Object.keys(patch.thresholds ?? {});
     await this.snapshot(next, changed.length ? `threshold ${changed.join(', ')}` : 'settings', by);
+    if (next.status === 'published') await this.versioned(next);
     return next;
   }
 
@@ -256,7 +299,13 @@ export class ClassifierService {
     if (!c.metrics || c.metrics.at < c.updated_at) throw conflict('Run an evaluation of this version before publishing it.');
     if (c.engine === 'linear' && !c.config.head) throw conflict('Train the classifier before publishing it.');
     await this.db('classifiers').where({ id: c.id }).update({ status: 'published', updated_at: Date.now() });
-    return { ...c, status: 'published' };
+    const next: ClassifierRow = { ...c, status: 'published' };
+    await this.versioned(next);
+    return next;
+  }
+
+  private async versioned(c: ClassifierRow): Promise<void> {
+    for (const fn of this.onVersion) await fn(c);
   }
 
   // ---------- scoring ----------
@@ -276,6 +325,8 @@ export class ClassifierService {
       const out = await complete(this.gateway, tenantId, c.config.profile ?? 'llama-guard', label, guardMessages(text, false));
       const v = parseGuardVerdict(out.text);
       for (const l of labels) scores[l] = v.categories.includes(l) ? 1 : 0;
+    } else if (c.engine === 'vision') {
+      throw new Error(`${c.name} classifies images; give it an image, not text`);
     } else {
       const prompt = `Classify the text into exactly one of these labels: ${labels.join(', ')}.${c.config.instructions ? ` ${c.config.instructions}` : ''} Answer with JSON only, in the form {"label": "<one of the labels>", "confidence": <a number from 0 to 1>}.`;
       const out = await complete(this.gateway, tenantId, c.config.profile ?? '', label, [{ role: 'system', content: prompt }, { role: 'user', content: text }]);
@@ -296,11 +347,28 @@ export class ClassifierService {
     return { scores, spans, top: top ? { label: top[0], score: top[1] } : null, hits, engine: c.engine, ms: Math.round((performance.now() - t0) * 10) / 10 };
   }
 
+  /**
+   * B-8802: scores an image with a vision classifier: the profile's model must read images, the answer must be JSON
+   * scores for the classifier's labels. Thresholds decide the hits as for the other engines.
+   */
+  async scoreImage(tenantId: string, c: ClassifierRow, image: Buffer, label: Label, timeoutMs = 120_000): Promise<ScoreResult> {
+    if (c.engine !== 'vision') throw new Error(`${c.name} classifies text, not images`);
+    const t0 = performance.now();
+    const labels = c.config.labels.map((l) => l.label);
+    const out = await complete(this.gateway, tenantId, c.config.profile ?? '', label, [{ role: 'system', content: visionPrompt(labels, c.config.instructions) }, { role: 'user', content: 'Classify this image.', images: [image.toString('base64')] }], timeoutMs, 'vision');
+    const scores = parseVisionScores(out.text, labels);
+    const thr = new Map(c.config.labels.map((l) => [l.label, l.threshold]));
+    const hits = labels.filter((l) => (scores[l] ?? 0) >= (thr.get(l) ?? 0.5) && (scores[l] ?? 0) > 0);
+    const top = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+    return { scores, spans: [], top: top ? { label: top[0], score: top[1] } : null, hits, engine: c.engine, ms: Math.round((performance.now() - t0) * 10) / 10, usage: { model: out.model, promptTokens: out.promptTokens, outputTokens: out.outputTokens, poolId: out.poolId, profileId: out.profileId } };
+  }
+
   // ---------- datasets ----------
 
   async sampleCounts(tenantId: string, c: ClassifierRow): Promise<Record<string, number>> {
     if (!c.dataset) return {};
-    const rows = (await this.db('eval_cases').where({ tenant_id: tenantId, eval_set: c.dataset }).groupBy('expected').select('expected').count({ n: '*' })) as { expected: string; n: number | string }[];
+    // A vision classifier counts its image cases only; the text engines their text cases.
+    const rows = (await this.db('eval_cases').where({ tenant_id: tenantId, eval_set: c.dataset }).modify((q) => void (c.engine === 'vision' ? q.whereNotNull('media_key') : q.whereNull('media_key'))).groupBy('expected').select('expected').count({ n: '*' })) as { expected: string; n: number | string }[];
     return Object.fromEntries(rows.map((r) => [r.expected, Number(r.n)]));
   }
 
@@ -313,14 +381,36 @@ export class ClassifierService {
     return items.length;
   }
 
+  /**
+   * B-8805: image cases in the eval-set format (an expected label, the data's label), each picture sealed in the blob
+   * store under the case id.
+   */
+  async addImageCases(tenantId: string, evalSet: string, items: { data: Buffer; type: string; expected: string; label?: Label }[], by: string | null): Promise<number> {
+    if (!this.blobs) throw new Error('The blob store is not available');
+    const t = Date.now();
+    for (const it of items) {
+      const id = ulid();
+      const key = evalImageKey(tenantId, id);
+      await this.blobs.put(key, Buffer.from(await this.keys.sealBytes(tenantId, it.data, `eval-image:${id}`)));
+      await this.db('eval_cases').insert({ id, tenant_id: tenantId, eval_set: evalSet, expected: it.expected, text: await this.keys.seal(tenantId, '', `eval:${id}`), label: it.label ?? 'internal', media_key: key, media_type: it.type, flag_id: null, rule_id: null, created_by: by, created_at: t });
+    }
+    return items.length;
+  }
+
+  private async caseImage(tenantId: string, id: string, key: string): Promise<Buffer> {
+    const sealed = await this.blobs?.get(key);
+    if (!sealed) throw new Error('The image of this case is missing');
+    return this.keys.openBytes(tenantId, sealed.toString(), `eval-image:${id}`);
+  }
+
   async evalSets(tenantId: string): Promise<{ name: string; cases: number }[]> {
     const rows = (await this.db('eval_cases').where({ tenant_id: tenantId }).groupBy('eval_set').select('eval_set').count({ n: '*' })) as { eval_set: string; n: number | string }[];
     return rows.map((r) => ({ name: r.eval_set, cases: Number(r.n) })).sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  private async cases(tenantId: string, evalSet: string): Promise<{ id: string; text: string; expected: string; label: Label }[]> {
-    const rows = (await this.db('eval_cases').where({ tenant_id: tenantId, eval_set: evalSet }).orderBy('id').limit(20_000)) as { id: string; text: string; expected: string; label: Label }[];
-    return Promise.all(rows.map(async (r) => ({ id: r.id, expected: r.expected, label: r.label, text: await this.keys.open(tenantId, r.text, `eval:${r.id}`) })));
+  private async cases(tenantId: string, evalSet: string): Promise<{ id: string; text: string; expected: string; label: Label; media: string | null }[]> {
+    const rows = (await this.db('eval_cases').where({ tenant_id: tenantId, eval_set: evalSet }).orderBy('id').limit(20_000)) as { id: string; text: string; expected: string; label: Label; media_key: string | null }[];
+    return Promise.all(rows.map(async (r) => ({ id: r.id, expected: r.expected, label: r.label, media: r.media_key ?? null, text: await this.keys.open(tenantId, r.text, `eval:${r.id}`) })));
   }
 
   // ---------- jobs ----------
@@ -329,8 +419,9 @@ export class ClassifierService {
   private async evaluateJob(tenantId: string, id: string, ctx: JobContext): Promise<unknown> {
     const c = await this.get(tenantId, id);
     if (!c) throw new Error('Classifier not found');
-    const all = await this.cases(tenantId, c.dataset ?? `${c.slug}-eval`);
-    if (!all.length) throw new Error(`The dataset ${c.dataset} has no labelled cases yet`);
+    // A vision classifier is measured on the image cases of its dataset, the text engines on the text cases.
+    const all = (await this.cases(tenantId, c.dataset ?? `${c.slug}-eval`)).filter((x) => (c.engine === 'vision') === !!x.media);
+    if (!all.length) throw new Error(`The dataset ${c.dataset} has no labelled ${c.engine === 'vision' ? 'image ' : ''}cases yet`);
     // A trained head is measured on the cases it was not trained on.
     const held = c.engine === 'linear' ? all.filter((x) => heldOut(x.id)) : [];
     const cases = held.length ? held : all;
@@ -342,7 +433,7 @@ export class ClassifierService {
     for (const [i, cs] of cases.entries()) {
       if (ctx.signal.aborted) throw new Error('cancelled');
       try {
-        const r = await this.score(tenantId, c, cs.text, cs.label);
+        const r = cs.media ? await this.scoreImage(tenantId, c, await this.caseImage(tenantId, cs.id, cs.media), cs.label) : await this.score(tenantId, c, cs.text, cs.label);
         for (const l of labels) points[l]!.push([r.scores[l] ?? 0, cs.expected === l ? 1 : 0]);
         const top = r.hits.length ? r.hits.sort((a, b) => (r.scores[b] ?? 0) - (r.scores[a] ?? 0))[0]! : 'none';
         distribution[top] = (distribution[top] ?? 0) + 1;

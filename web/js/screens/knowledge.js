@@ -31,6 +31,12 @@
   const statePill = (s) => (s === 'indexed' || s === 'synced' || s === 'serving' ? UI.pill(s, 'ok') : s === 'syncing' || s === 'indexing' || s === 'queued' || s === 'scanning' || s === 'building' ? UI.pill(s, 'info') : /quarantin/.test(s) ? UI.pill(s, 'warn') : /failed|rejected/.test(s) ? UI.pill(s, 'danger') : UI.pill(s, ''));
   const docState = (d) => (d.state === 'failed' ? 'extraction failed' : d.state === 'unchanged' ? 'unchanged, skipped' : d.state);
   const origin = (d) => d.labelOrigin || 'inherited';
+  // Sprint 36c (B-8804): image documents, their labels and the filter chips.
+  const hits = (d) => (d.labels || []).filter((l) => l.hit);
+  const altOf = (d, caption) => (caption ? caption : 'Image: ' + d.name);
+  const thumb = (d, caption, big) => (d.thumbnail ? '<img class="kb-thumb' + (big ? ' big' : '') + '" src="' + esc(d.thumbnail) + '" alt="' + esc(altOf(d, caption)) + '" loading="lazy">' : '<span class="kb-thumb kb-nothumb' + (big ? ' big' : '') + '" role="img" aria-label="' + esc(altOf(d, caption) + (d.type === 'image/heic' ? ' (HEIC has no thumbnail)' : '')) + '">' + UI.icon('images', big ? 28 : 14) + '</span>');
+  const KB_CSS = '.kb-thumb{display:inline-flex;align-items:center;justify-content:center;width:40px;height:30px;object-fit:cover;border:1px solid var(--line);border-radius:4px;background:var(--panel2);color:var(--muted);flex-shrink:0}.kb-thumb.big{width:auto;max-width:100%;height:auto;max-height:240px;object-fit:contain}.kb-nothumb.big{width:100%;max-width:320px;height:160px}.kb-doc{display:inline-flex;align-items:center;gap:8px}.kb-labels{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}.kb-chips{gap:6px}.kb-fs{border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:0;display:flex;flex-direction:column;gap:6px;min-width:0}.kb-fs legend{font-size:12px;font-weight:600;padding:0 4px}';
+  const labelPills = (list) => list.map((l) => UI.pill(l.label + ' ' + l.score.toFixed(2), 'accent')).join(' ');
 
   function cur(st) { return (st.bases || []).find((k) => k.id === st.kb) || null; }
 
@@ -43,13 +49,17 @@
       { title: 'Index swap pending', tone: 'info', text: 'A new index builds beside the serving one, for example with a new embedding model. Retrieval keeps using the serving index until the atomic switch.', apply(ctx) { ctx.state.demo = 'swap'; ctx.rerender(); } },
       { title: 'Upload quarantined', tone: 'warn', text: 'An upload is held until the type check, malware scan and classification pass. It cannot be attached or indexed yet.', apply(ctx) { ctx.state.demo = 'quarantine'; ctx.rerender(); } },
       { title: 'Extraction failed', tone: 'danger', text: 'A document that could not be read (for example a password-protected PDF) shows the error, the trace ID and a retry action.', apply(ctx) { ctx.state.demo = 'failed'; ctx.rerender(); } },
-      { title: 'Member view', tone: 'neutral', text: 'Members see sources and documents read-only, with no relabel or reindex actions.', apply(ctx) { ctx.state.member = true; ctx.state.tab = 'sources'; ctx.rerender(); } }
+      { title: 'Member view', tone: 'neutral', text: 'Members see sources and documents read-only, with no relabel or reindex actions.', apply(ctx) { ctx.state.member = true; ctx.state.tab = 'sources'; ctx.rerender(); } },
+      { title: 'Filtered by image label', tone: 'info', text: 'The label chips keep only the images carrying a label at or above its classifier\'s threshold. Text documents carry no image labels.', apply(ctx) { ctx.state.demo = 'chips'; ctx.rerender(); } },
+      { title: 'Image withheld', tone: 'danger', text: 'An image the image safety check flags is deleted and never reaches the index; the document shows why.', apply(ctx) { ctx.state.demo = 'withheld'; ctx.rerender(); } },
+      { title: 'No vision profile', tone: 'warn', text: 'A base without a vision profile cannot describe an uploaded image; the document fails until a profile is set and it is retried.', apply(ctx) { ctx.state.demo = 'novision'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
       const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
       st.tab = st.tab || 'sources'; st.filter = st.filter || ''; st.docq = st.docq || ''; st.query = st.query || '';
       st.detail = st.detail || {}; st.docs = st.docs || {}; st.access = st.access || {};
+      st.labelCounts = st.labelCounts || {}; st.chips = st.chips || {}; st.filtered = st.filtered || null; st.searchLabel = st.searchLabel || '';
       // Re-rendering closes any open dialog, so data that arrives while one is open waits until it closes.
       const later = () => { if (App.state.route !== 'knowledge') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
       const load = () => {
@@ -63,10 +73,22 @@
       const loadKb = (id) => {
         if (!id || st.kbLoading === id) return;
         st.kbLoading = id;
-        Promise.all([App.get('/api/knowledge/bases/' + enc(id)), App.get('/api/knowledge/bases/' + enc(id) + '/documents?limit=500')])
-          .then(([d, docs]) => { st.detail[id] = d; st.docs[id] = docs; const i = (st.bases || []).findIndex((k) => k.id === id); if (i >= 0) st.bases[i] = Object.assign({}, st.bases[i], d); })
+        Promise.all([App.get('/api/knowledge/bases/' + enc(id)), App.get('/api/knowledge/bases/' + enc(id) + '/documents?limit=500'), App.get('/api/knowledge/bases/' + enc(id) + '/labels').catch(() => [])])
+          .then(([d, docs, labels]) => { st.detail[id] = d; st.docs[id] = docs; st.labelCounts[id] = labels; const i = (st.bases || []).findIndex((k) => k.id === id); if (i >= 0) st.bases[i] = Object.assign({}, st.bases[i], d); if (st.filtered && st.filtered.kb === id) loadFiltered(id); })
           .catch((err) => { st.detail[id] = { error: err }; })
           .finally(() => { st.kbLoading = null; later(); });
+      };
+      /** The filter chips ask the server for the documents carrying any of the chosen labels. */
+      const chipList = () => Object.keys(st.chips).filter((l) => st.chips[l]);
+      const loadFiltered = (id) => {
+        const chosen = chipList();
+        if (!chosen.length && !st.imagesOnly) { st.filtered = null; later(); return; }
+        const key = chosen.join(',') + '|' + (st.imagesOnly ? 'i' : '');
+        st.filtered = { kb: id, key: key, docs: st.filtered && st.filtered.kb === id ? st.filtered.docs : null };
+        App.get('/api/knowledge/bases/' + enc(id) + '/documents?limit=500' + (chosen.length ? '&labels=' + enc(chosen.join(',')) : '') + (st.imagesOnly ? '&media=image' : ''))
+          .then((docs) => { if (st.filtered && st.filtered.key === key) st.filtered.docs = docs; })
+          .catch((err) => { if (st.filtered && st.filtered.key === key) st.filtered.error = err; })
+          .finally(later);
       };
       const loadAccess = (id) => { App.get('/api/knowledge/bases/' + enc(id) + '/access').then((a) => { st.access[id] = a; later(); }).catch((err) => { st.access[id] = { error: err }; later(); }); };
       if (!st.loaded && !st.loading) st.paramHash = null;
@@ -99,6 +121,9 @@
         if (d === 'swap') { const b = bases.find((k) => k.building); if (b) { st.kb = b.id; st.tab = 'index'; } else st.demoNote = 'No index is building right now. Reindex starts a build beside the serving index; this page then shows its progress.'; }
         else if (d === 'quarantine') { const b = bases.find((k) => st.detail[k.id] && st.detail[k.id].quarantined); if (b) { st.kb = b.id; st.tab = 'documents'; st.docq = 'quarantined'; } else st.demoNote = 'Nothing is in quarantine. An upload waits there while its type, malware scan and classification are checked, usually for a few seconds.'; }
         else if (d === 'failed') { const b = bases.find((k) => (st.docs[k.id] || []).some((x) => x.state === 'failed')); if (b) { st.kb = b.id; st.tab = 'documents'; st.failedOpen = true; } else st.demoNote = 'No document failed extraction in the bases loaded so far.'; }
+        else if (d === 'chips') { const b = bases.find((k) => (st.labelCounts[k.id] || []).length); if (b) { st.kb = b.id; st.tab = 'documents'; st.chips = {}; st.chips[st.labelCounts[b.id][0].label] = true; loadFiltered(b.id); } else st.demoNote = 'No image carries a label yet in the bases loaded so far. Name a published vision classifier in a base\'s Image settings; its images are labelled in the background.'; }
+        else if (d === 'withheld') { const b = bases.find((k) => (st.docs[k.id] || []).some((x) => x.media === 'image' && x.state === 'rejected')); if (b) { st.kb = b.id; st.tab = 'documents'; st.docq = 'rejected'; } else st.demoNote = 'No image was withheld by the image safety check in the bases loaded so far.'; }
+        else if (d === 'novision') { const b = bases.find((k) => (st.docs[k.id] || []).some((x) => x.media === 'image' && x.state === 'failed')); if (b) { st.kb = b.id; st.tab = 'documents'; st.failedOpen = true; } else st.demoNote = 'Every base that holds images has a vision profile, or no image failed. A base without one cannot describe an uploaded image.'; }
       }
 
       const kb = cur(st);
@@ -108,23 +133,32 @@
       const docs = kb ? st.docs[kb.id] || [] : [];
       const sources = det && det.sources ? det.sources : [];
       const quarantinedDocs = docs.filter((x) => x.state === 'quarantined' || x.state === 'scanning');
-      const busy = !!(kb && (kb.building || sources.some((s) => s.state === 'syncing') || docs.some((x) => BUSY_DOC.indexOf(x.state) >= 0)));
+      // An image indexed in the last two minutes is still being labelled by the base's classifiers (Sprint 36c).
+      const labelling = (x) => x.media === 'image' && x.state === 'indexed' && kb.imageClassifiers && kb.imageClassifiers.length && !(x.labels || []).length && x.indexedAt && Date.now() - x.indexedAt < 120000;
+      const busy = !!(kb && (kb.building || sources.some((s) => s.state === 'syncing') || docs.some((x) => BUSY_DOC.indexOf(x.state) >= 0 || labelling(x))));
       if (busy && !st.poll) st.poll = setTimeout(() => { st.poll = null; if (App.state.route === 'knowledge' && st.kb) loadKb(st.kb); }, 3000);
       if (st.tab === 'access' && kb && !st.access[kb.id]) loadAccess(kb.id);
       const kbList = bases.filter((k) => !st.filter || k.name.toLowerCase().indexOf(st.filter.toLowerCase()) >= 0);
       const subOf = (k) => k.documents + ' document' + (k.documents === 1 ? '' : 's') + (k.building ? ', index swap pending' : k.lastSyncAt ? ', synced ' + ago(k.lastSyncAt) : '') + (k.status === 'draft' ? ', draft' : '');
 
       const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository, database view or collection, or internal web site.' });
-      const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [esc(d.name), UI.label(d.label, { sm: true }), esc(origin(d)), String(d.chunks), statePill(docState(d))], attrs: 'data-doc="' + esc(d.id) + '"', selected: st.failedOpen && d.state === 'failed' })), { minWidth: '0', emptyTitle: docs.length ? 'No documents match' : 'No documents yet', emptyText: docs.length ? 'Try another word.' : 'Add a source or upload a file. Documents appear as they are extracted.' });
+      const docCell = (d) => (d.media === 'image' ? '<span class="kb-doc">' + thumb(d) + '<span>' + esc(d.name) + (hits(d).length ? '<span class="kb-labels">' + labelPills(hits(d)) + '</span>' : '') + '</span></span>' : esc(d.name));
+      const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [docCell(d), UI.label(d.label, { sm: true }), esc(origin(d)), String(d.chunks), statePill(docState(d))], attrs: 'data-doc="' + esc(d.id) + '"', selected: st.failedOpen && d.state === 'failed' })), { minWidth: '0', emptyTitle: docs.length ? 'No documents match' : 'No documents yet', emptyText: chipList().length ? 'No image carries ' + esc(chipList().join(' or ')) + ' at or above its classifier\'s threshold.' : docs.length ? 'Try another word.' : 'Add a source or upload a file. Documents appear as they are extracted.' });
+      const counts = kb ? st.labelCounts[kb.id] || [] : [];
+      const hasImages = docs.some((d) => d.media === 'image');
+      const chipBar = () => (hasImages || counts.length ? '<div class="hstack wrap kb-chips" role="group" aria-label="Filter documents by image label"><span class="muted" style="font-size:12px">Image labels</span>'
+        + counts.map((c) => '<button type="button" class="chip' + (st.chips[c.label] ? ' on' : '') + '" aria-pressed="' + (st.chips[c.label] ? 'true' : 'false') + '" data-chip="' + esc(c.label) + '">' + esc(c.label) + ' <span class="num">' + c.documents + '</span></button>').join('')
+        + '<button type="button" class="chip' + (st.imagesOnly ? ' on' : '') + '" aria-pressed="' + (st.imagesOnly ? 'true' : 'false') + '" data-imagesonly>Images only</button>'
+        + (manage && kb.imageClassifiers && kb.imageClassifiers.length ? '<span class="right">' + UI.btn('Re-classify images', { size: 'sm', icon: 'refresh', attrs: 'data-reclassify' }) + '</span>' : '') + '</div>' : '');
       const failedDoc = docs.find((d) => d.state === 'failed');
       const failedPanel = st.failedOpen && failedDoc ? '<div class="problem"><div class="ptitle">Extraction failed for ' + esc(failedDoc.name) + '</div><div class="ptext">' + esc(failedDoc.error || 'The document could not be read.') + ' The document keeps its label and stays out of retrieval until a retry succeeds.</div><div class="trace"><span>Trace</span><span class="mono">' + esc(failedDoc.traceId || 'none') + '</span>' + (failedDoc.traceId ? UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + esc(failedDoc.traceId) + '"' }) : '') + '<span class="right"></span>' + (manage ? UI.btn('Retry extraction', { size: 'sm', icon: 'refresh', attrs: 'data-retry="' + esc(failedDoc.id) + '"' }) : '') + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissfail' }) + '</div></div>' : '';
 
       const res = kb && st.results && st.results.kb === kb.id ? st.results : null;
       const testSearch = () => '<section class="panel"><div class="phead"><div class="eyebrow">Test search</div><span class="muted" style="font-size:12px">Runs with your clearance: ' + esc(myClearance) + '. Chunks above it are filtered inside the query.</span></div>'
-        + '<div class="hstack" style="align-items:flex-end"><div class="field grow"><label for="kb-q">Query</label><input class="input" id="kb-q" value="' + esc(st.query) + '" placeholder="What would a user ask?"></div><div>' + UI.btn(st.searching ? 'Searching…' : 'Search', { attrs: 'data-search', disabled: !!st.searching }) + '</div></div>'
+        + '<div class="hstack wrap" style="align-items:flex-end"><div class="field grow"><label for="kb-q">Query</label><input class="input" id="kb-q" value="' + esc(st.query) + '" placeholder="What would a user ask?"></div>' + (counts.length ? '<div class="field"><label for="kb-sl">Only images labelled</label>' + UI.select([{ value: '', label: 'any document' }].concat(counts.map((c) => ({ value: c.label, label: c.label }))), st.searchLabel, 'id="kb-sl" data-searchlabel') + '</div>' : '') + '<div>' + UI.btn(st.searching ? 'Searching…' : 'Search', { attrs: 'data-search', disabled: !!st.searching }) + '</div></div>'
         + (res && res.error ? UI.problem('Search failed', res.error.message, res.error.problem && res.error.problem.trace_id) : '')
         + (res && res.hits ? (res.vectorSkipped ? UI.notice('Vector ranking was skipped: ' + esc(res.vectorSkipped) + ' Keyword ranking still ran.', 'warn') : '')
-          + UI.table(['Chunk', 'Vector', 'Full-text', 'Reranker', 'Label'], res.hits.map((c, i) => ({ cells: [esc(c.document) + (c.heading ? ', ' + esc(c.heading) : '') + (c.withheld ? ' ' + UI.pill('withheld', 'warn') : ''), c.vector == null ? '–' : c.vector.toFixed(2), c.keyword == null ? '–' : c.keyword.toFixed(2), c.rerank == null ? '–' : c.rerank.toFixed(2), UI.label(c.label, { sm: true })], attrs: 'data-chunk="' + i + '"' })), { minWidth: '0', emptyTitle: 'No chunks match', emptyText: 'Nothing in ' + kb.name + ' scores for this query at or below your clearance.' })
+          + UI.table(['Chunk', 'Vector', 'Full-text', 'Reranker', 'Label'], res.hits.map((c, i) => ({ cells: [(c.image ? '<span class="kb-doc">' + thumb({ name: c.document, thumbnail: c.image.thumbnail }, c.image.caption) + '<span>' : '') + esc(c.document) + (c.heading ? ', ' + esc(c.heading) : '') + (c.withheld ? ' ' + UI.pill('withheld', 'warn') : '') + (c.image ? (c.image.labels.filter((l) => l.hit).length ? '<span class="kb-labels">' + labelPills(c.image.labels.filter((l) => l.hit)) + '</span>' : '') + '</span></span>' : ''), c.vector == null ? '–' : c.vector.toFixed(2), c.keyword == null ? '–' : c.keyword.toFixed(2), c.rerank == null ? '–' : c.rerank.toFixed(2), UI.label(c.label, { sm: true })], attrs: 'data-chunk="' + i + '"' })), { minWidth: '0', emptyTitle: 'No chunks match', emptyText: 'Nothing in ' + kb.name + ' scores for this query at or below your clearance.' })
           + '<div class="muted" style="font-size:12px">Hybrid: vector similarity (' + esc(STORE[res.vectorStore] || res.vectorStore) + ') plus BM25 full-text, fused with reciprocal rank fusion' + (kb.reranker ? ', then reranked by ' + esc(kb.reranker) : '') + '. Chunks above ' + esc(res.ceiling) + ' were filtered by clearance before ranking.</div>' : '') + '</section>';
 
       const serving = kb && kb.serving;
@@ -149,19 +183,19 @@
       else if (det && det.error) body = UI.problem('This knowledge base could not be loaded', det.error.message, det.error.problem && det.error.problem.trace_id);
       else if (!det) body = UI.notice('Loading…', 'info');
       else if (st.tab === 'sources') body = sourcesTable() + '<div class="hstack"><div class="eyebrow grow">Documents</div>' + UI.btn('All documents', { kind: 'ghost', size: 'sm', attrs: 'data-tab="documents"' }) + '</div>' + docsTable(docs.slice(0, 5)) + failedPanel + testSearch();
-      else if (st.tab === 'documents') { const shown = docs.filter((d) => !st.docq || (d.name + ' ' + docState(d) + ' ' + d.label).toLowerCase().indexOf(st.docq.toLowerCase()) >= 0); body = '<div class="toolbar">' + UI.search('Search documents', 'data-docq', st.docq) + '<span class="muted" style="font-size:12px">' + shown.length + ' shown of ' + docs.length + ' documents at or below your clearance</span>' + (manage ? '<span class="right">' + UI.btn('Upload files', { size: 'sm', icon: 'upload', attrs: 'data-upload' }) + '</span>' : '') + '</div>' + docsTable(shown) + failedPanel; }
+      else if (st.tab === 'documents') { const base = st.filtered && st.filtered.kb === kb.id && st.filtered.docs ? st.filtered.docs : docs; const shown = base.filter((d) => !st.docq || (d.name + ' ' + docState(d) + ' ' + d.label).toLowerCase().indexOf(st.docq.toLowerCase()) >= 0); body = (st.filtered && st.filtered.error ? UI.problem('The filter could not be applied', st.filtered.error.message, st.filtered.error.problem && st.filtered.error.problem.trace_id) : '') + '<div class="toolbar">' + UI.search('Search documents', 'data-docq', st.docq) + '<span class="muted" style="font-size:12px">' + shown.length + ' shown of ' + docs.length + ' documents at or below your clearance</span>' + (manage ? '<span class="right">' + UI.btn('Upload files', { size: 'sm', icon: 'upload', attrs: 'data-upload' }) + '</span>' : '') + '</div>' + chipBar() + docsTable(shown) + failedPanel; }
       else if (st.tab === 'index') body = indexTab();
       else if (st.tab === 'access') body = accessTab();
       else body = testSearch();
 
-      root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}.kb-page > *{flex-shrink:0}.knowledge-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0 10px}</style>'
+      root.innerHTML = '<style>.kb-list{display:flex;flex-direction:column;gap:2px}.kb-page > *{flex-shrink:0}.knowledge-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0 10px}' + KB_CSS + '</style>'
         + '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Knowledge bases</div>' + (curator && !st.member ? UI.btn('New', { size: 'sm', attrs: 'data-newkb' }) : '') + '</div>' + UI.search('Filter', 'data-filter', st.filter).replace('class="search"', 'class="search" style="width:100%"')
         + '<div class="kb-list">' + kbList.map((k) => UI.listItem(esc(k.name), esc(subOf(k)), { active: kb && k.id === kb.id, attrs: 'data-kb="' + esc(k.id) + '"', right: UI.label(k.label, { sm: true }) })).join('') + (kbList.length || !bases.length ? '' : UI.empty('No knowledge base matches', 'Try another word.')) + '</div></div>'
         + '<div class="page kb-page">'
         + (st.member ? UI.notice('You are viewing as a member. Sources and documents are read-only; relabel, reindex and source changes need the knowledge curator role.', 'info', '<a href="#" data-leavemember>Back to curator view</a>') : '')
         + (st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissnote' })) : '')
         + (kb ? UI.pagehead(esc(kb.name), 'Embedding ' + esc(kb.embedModel) + ', index v' + (serving ? serving.version : '–') + ', vector plus full-text · ' + UI.pill(kb.status, kb.status === 'published' ? 'ok' : '') + (kb.description ? '<div class="muted" style="font-size:12px">' + esc(kb.description) + '</div>' : ''),
-          manage ? UI.btn('Edit', { kind: 'ghost', attrs: 'data-editkb' }) + (kb.status === 'draft' ? UI.btn('Publish', { attrs: 'data-publish' }) : '') + UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }) : '')
+          manage ? UI.btn('Edit', { kind: 'ghost', attrs: 'data-editkb' }) + UI.btn('Image settings', { icon: 'images', attrs: 'data-imagesettings' }) + (kb.status === 'draft' ? UI.btn('Publish', { attrs: 'data-publish' }) : '') + UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }) : '')
           + (kb.status === 'draft' ? UI.notice('This knowledge base is a draft. Chat retrieves only from published bases.', 'warn') : '')
           + (building && st.tab !== 'index' ? UI.notice('Index v' + building.version + ' is building beside v' + (serving ? serving.version : '?') + ': ' + building.progress + '% complete. Retrieval keeps using v' + (serving ? serving.version : '?') + ' until the atomic switch.', 'info', '<a href="#" data-tab="index">Index</a>') : '')
           + (quarantinedDocs.length ? UI.notice('<b>' + esc(quarantinedDocs[0].name) + '</b>' + (quarantinedDocs.length > 1 ? ' and ' + (quarantinedDocs.length - 1) + ' more are' : ' is') + ' held in quarantine until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn', '<a href="#" data-doc="' + esc(quarantinedDocs[0].id) + '">Details</a>') : '')
@@ -184,15 +218,47 @@
         const i = ctx.$('#kb-q'); if (i) st.query = i.value;
         if (!st.query.trim()) { toast('Type a query first.'); return; }
         st.searching = true; ctx.rerender();
-        try { const r = await App.post('/api/knowledge/search', { kbIds: [kb.id], query: st.query.trim(), k: 10 }); st.results = Object.assign({ kb: kb.id }, r); }
+        try { const r = await App.post('/api/knowledge/search', Object.assign({ kbIds: [kb.id], query: st.query.trim(), k: 10 }, st.searchLabel ? { labels: { any: [st.searchLabel] } } : {})); st.results = Object.assign({ kb: kb.id }, r); }
         catch (err) { st.results = { kb: kb.id, error: err }; }
         st.searching = false; later();
       };
       ctx.on('input', '#kb-q', (e, t) => { st.query = t.value; });
       ctx.on('keydown', '#kb-q', (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
       ctx.on('click', '[data-search]', search);
+      ctx.on('change', '[data-searchlabel]', (e, t) => { st.searchLabel = t.value; });
+      ctx.on('click', '[data-chip]', (e, t) => { const l = t.dataset.chip; st.chips[l] = !st.chips[l]; loadFiltered(kb.id); ctx.rerender(); const c = ctx.$('[data-chip="' + l + '"]'); if (c) c.focus(); });
+      ctx.on('click', '[data-imagesonly]', () => { st.imagesOnly = !st.imagesOnly; loadFiltered(kb.id); ctx.rerender(); const c = ctx.$('[data-imagesonly]'); if (c) c.focus(); });
+      ctx.on('click', '[data-reclassify]', async () => {
+        const n = docs.filter((d) => d.media === 'image' && (d.state === 'indexed' || d.state === 'unchanged')).length;
+        const names = (models.imageClassifiers || []).filter((c) => (kb.imageClassifiers || []).indexOf(c.id) >= 0).map((c) => c.name + ' v' + c.version);
+        const ok = await ctx.confirm({ title: 'Re-classify the images of ' + esc(kb.name), tone: 'primary', ok: 'Start job', body: '<div class="fg2">Every indexed image is scored again by the classifiers this base names. The images are not uploaded or described again.</div>', kv: [['Images', String(n)], ['Classifiers', esc(names.join(', ') || 'the named classifiers')], ['Job', '<span class="mono">knowledge.reclassify</span>']] });
+        if (ok) act(() => App.post('/api/knowledge/bases/' + enc(kb.id) + '/reclassify', {}), 'Re-classification queued for ' + n + ' image' + (n === 1 ? '' : 's') + '. Labels update as each one is scored.');
+      });
+      ctx.on('click', '[data-imagesettings]', () => {
+        const profiles = models.visionProfiles || []; const classifiers = models.imageClassifiers || [];
+        const pOpts = [{ value: '', label: 'none: images are not described' }].concat(profiles.map((p) => ({ value: p.name, label: p.name + ' (' + p.model + ', cleared for ' + p.label + ')' })));
+        if (kb.visionProfile && !profiles.some((p) => p.name === kb.visionProfile)) pOpts.push({ value: kb.visionProfile, label: kb.visionProfile + ' (no longer a published vision profile)' });
+        ctx.modal({ title: 'Image settings for ' + esc(kb.name),
+          body: UI.field('Vision profile', UI.select(pOpts, kb.visionProfile || '', 'data-vision'), profiles.length ? 'Writes each image\'s caption and reads its text. It must read images and be cleared for ' + esc(kb.label) + '.' : 'No published profile routes to a model that reads images. Create one on the Profiles screen.')
+            + '<fieldset class="kb-fs"><legend>Image classifiers</legend>' + (classifiers.length ? classifiers.map((c) => UI.check(c.name + ' v' + c.version + ' (' + c.labels.map((l) => l.label).join(', ') + ')' + (c.status === 'draft' ? ': a draft, which publishes after an evaluation with ' + 200 + ' image samples per label' : ''), (kb.imageClassifiers || []).indexOf(c.id) >= 0, 'data-icls="' + esc(c.id) + '"' + (c.status === 'draft' ? ' disabled' : ''))).join('') : '<div class="muted" style="font-size:12px">No vision classifier yet. Create one on the Classifiers screen with the vision engine.</div>') + '</fieldset>'
+            + UI.notice('A classifier you add labels the images in the background; one you drop takes its labels with it. A new version of a named classifier re-labels the images without uploading them again.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-go' }),
+          onMount(m) {
+            m.querySelector('[data-go]').addEventListener('click', async () => {
+              const body = { visionProfile: m.querySelector('[data-vision]').value || null, imageClassifiers: Array.prototype.slice.call(m.querySelectorAll('[data-icls]:checked')).map((x) => x.dataset.icls) };
+              try { await App.patch('/api/knowledge/bases/' + enc(kb.id), body); App.closeOverlay(); toast('Image settings saved for ' + esc(kb.name) + '. Audit entry written.', 'ok'); refresh(); }
+              catch (e2) { m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Not saved') + '.</b> ' + esc(e2.message), 'danger'); }
+            });
+          } });
+      });
       ctx.on('click', 'tr[data-chunk]', (e, t) => {
         const c = res && res.hits[+t.dataset.chunk]; if (!c) return;
+        if (c.image) {
+          const im = c.image;
+          ctx.drawer({ title: esc(c.document), body: thumb({ name: c.document, thumbnail: im.thumbnail }, im.caption, true) + UI.kv([['Vector', c.vector == null ? '–' : c.vector.toFixed(3)], ['Full-text', c.keyword == null ? '–' : c.keyword.toFixed(3)], ['Reranker', c.rerank == null ? '–' : c.rerank.toFixed(2)], ['Label', UI.label(c.label, { sm: true })], ['Caption', im.caption ? esc(im.caption) : 'withheld or none'], ['Image labels', im.labels.length ? im.labels.map((l) => esc(l.label) + ' ' + l.score.toFixed(2) + (l.hit ? ', above threshold' : ', below threshold')).join('; ') : 'none']], 2)
+            + (c.withheld ? UI.notice('Withheld by the context checkpoint: ' + esc(c.withheld), 'warn') : UI.ctx('Text in the image (excerpt)', im.ocr || 'No text was read in the image.', c.label)) + '<div class="muted" style="font-size:12px">Image hits carry the caption, an excerpt of the image\'s text, its labels and a thumbnail readable at your clearance.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) });
+          return;
+        }
         ctx.drawer({ title: esc(c.document) + (c.heading ? ', ' + esc(c.heading) : ''), body: UI.kv([['Vector', c.vector == null ? '–' : c.vector.toFixed(3)], ['Full-text', c.keyword == null ? '–' : c.keyword.toFixed(3)], ['Fused (RRF)', c.fused == null ? '–' : c.fused.toFixed(4)], ['Reranker', c.rerank == null ? '–' : c.rerank.toFixed(2)], ['Label', UI.label(c.label, { sm: true })], ['Source', '<span class="mono">' + esc(c.source || '') + '</span>']], 2)
           + (c.withheld ? UI.notice('Withheld by the context checkpoint: ' + esc(c.withheld), 'warn') : UI.ctx('Chunk text', c.text || '', c.label)) + '<div class="muted" style="font-size:12px">Headings and page are kept as chunk metadata and cited as the source in answers.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) });
       });
@@ -220,18 +286,50 @@
 
       ctx.on('click', '[data-doc]', (e, t) => {
         e.preventDefault();
-        const d = docs.find((x) => x.id === t.dataset.doc); if (!d) return;
+        const d = docs.find((x) => x.id === t.dataset.doc) || (st.filtered && st.filtered.docs || []).find((x) => x.id === t.dataset.doc); if (!d) return;
+        if (d.media === 'image' || d.type === 'application/pdf' || /wordprocessingml/.test(d.type || '')) { App.get('/api/knowledge/documents/' + enc(d.id)).then((det) => openDoc(d, det)).catch((err) => App.fail(err)); return; }
+        openDoc(d, null);
+      });
+      function openDoc(d, det) {
+        if (d.media === 'image' && det) { openImage(d, det); return; }
+        const parts = det && det.parts ? det.parts : [];
         const failed = d.state === 'failed' || d.state === 'rejected', quarantined = d.state === 'quarantined' || d.state === 'scanning';
         ctx.drawer({ title: esc(d.name), body: '<div class="hstack">' + UI.label(d.label) + statePill(docState(d)) + '</div>' + UI.kv([['Label origin', esc(origin(d))], ['Chunks', String(d.chunks)], ['Source', '<span class="mono">' + esc(d.source || '') + '</span>'], ['Type', esc(d.type || 'not detected yet')], ['Size', esc(size(d.size))], ['Content hash', '<span class="mono">' + esc(d.sha256 ? d.sha256.slice(0, 4) + '..' + d.sha256.slice(-4) : '') + '</span>'], ['Knowledge base', esc(kb.name)], ['Indexed', esc(when(d.indexedAt) || 'not yet')]], 2)
+          + (parts.length ? '<div class="eyebrow">Image parts</div>' + UI.table(['Image', 'Label', 'Image labels', 'State'], parts.map((x) => ({ cells: ['<span class="kb-doc">' + thumb(x) + '<span>' + esc(x.name) + '</span></span>', UI.label(x.label, { sm: true }), hits(x).map((l) => esc(l.label)).join(', ') || 'none', statePill(docState(x))], attrs: 'data-part="' + esc(x.id) + '"' })), { minWidth: '0' }) + '<div class="muted" style="font-size:12px">The images inside the document are documents of their own, at least its label, through quarantine and the image safety check.</div>' : '')
           + (failed ? UI.problem(d.state === 'rejected' ? 'Upload rejected' : 'Extraction failed', d.error || 'The document could not be read.', d.traceId) : quarantined ? UI.notice('Held until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn') : d.state === 'unchanged' ? '<div class="fg2">The content hash matched the previous build, so extraction and embedding were skipped.</div>' : '<div class="fg2">Chunks carry this label, the tenant, the source version and an ACL.</div>'),
           actions: !manage || quarantined ? UI.btn('Close', { attrs: 'data-close' }) : (d.state === 'rejected' ? '' : failed ? UI.btn('Retry extraction', { kind: 'primary', icon: 'refresh', attrs: 'data-retry="' + esc(d.id) + '"' }) : UI.btn('Reindex document', { icon: 'refresh', attrs: 'data-reindexdoc' })) + UI.btn('Relabel', { icon: 'edit', attrs: 'data-relabel' }) + UI.btn('Remove', { kind: 'danger', attrs: 'data-removedoc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
           onMount(dr) {
             const rl = dr.querySelector('[data-relabel]'); if (rl) rl.addEventListener('click', () => relabel(d));
             const ri = dr.querySelector('[data-reindexdoc]'); if (ri) ri.addEventListener('click', () => { App.closeOverlay(); act(() => App.post('/api/knowledge/documents/' + enc(d.id) + '/reindex'), 'Reindex queued for ' + esc(d.name) + '. Embeddings come from cache where the text is unchanged.'); });
             const rt = dr.querySelector('[data-retry]'); if (rt) rt.addEventListener('click', () => { App.closeOverlay(); retry(d); });
-            const rm = dr.querySelector('[data-removedoc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove document', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">The document and its ' + d.chunks + ' chunks leave every index now. A synced document stays removed, so the next sync does not bring it back.</div>', kv: [['Document', esc(d.name)], ['Label', UI.label(d.label, { sm: true })]] }); if (ok) act(() => App.del('/api/knowledge/documents/' + enc(d.id)), esc(d.name) + ' removed. Audit entry written.'); });
+            const rm = dr.querySelector('[data-removedoc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove document', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">The document and its ' + d.chunks + ' chunks leave every index now' + (parts.length ? ', with its ' + parts.length + ' image part' + (parts.length === 1 ? '' : 's') : '') + '. A synced document stays removed, so the next sync does not bring it back.</div>', kv: [['Document', esc(d.name)], ['Label', UI.label(d.label, { sm: true })]] }); if (ok) act(() => App.del('/api/knowledge/documents/' + enc(d.id)), esc(d.name) + ' removed. Audit entry written.'); });
+            Array.prototype.forEach.call(dr.querySelectorAll('[data-part]'), (row) => row.addEventListener('click', () => { const x = parts.find((p) => p.id === row.dataset.part); if (!x) return; App.closeOverlay(); App.get('/api/knowledge/documents/' + enc(x.id)).then((xd) => setTimeout(() => openImage(x, xd), 30)).catch((err) => App.fail(err)); }));
           } });
-      });
+      }
+      /** B-8804: an image document with its picture, caption, text, labels and scores. */
+      function openImage(d, det) {
+        const rejected = d.state === 'rejected', failed = d.state === 'failed', quarantined = d.state === 'quarantined' || d.state === 'scanning';
+        const labels = det.labels || [];
+        const thr = {}; (models.imageClassifiers || []).forEach((c) => c.labels.forEach((l) => { thr[c.id + '/' + l.label] = l.threshold; }));
+        const parentLink = d.parentId ? '<a href="#" data-parent="' + esc(d.parentId) + '">the document it was taken from</a>' : '';
+        ctx.drawer({ title: esc(d.name), body: '<div class="hstack">' + UI.label(d.label) + statePill(docState(d)) + '</div>'
+          + (rejected ? UI.problem('Image withheld', (d.error || 'The image was rejected.') + ' The image was deleted and never reached the index.', d.traceId)
+            : failed ? UI.problem(/vision profile/.test(d.error || '') ? 'No vision profile' : 'The image could not be described', d.error || 'The image could not be described.', d.traceId)
+            : quarantined ? UI.notice('Held until the type check, malware scan and image safety check pass. It cannot be indexed yet.', 'warn')
+            : thumb(d, det.caption, true))
+          + UI.kv([['Caption', det.caption ? esc(det.caption) : 'none yet'], ['Type', esc(d.type || 'not detected yet')], ['Image safety check', d.safetyScore == null ? 'no score (no safety classifier configured)' : 'score ' + d.safetyScore.toFixed(2)], ['Described by', det.visionModel ? '<span class="mono">' + esc(det.visionModel) + '</span> through the profile <span class="mono">' + esc(kb.visionProfile || '') + '</span>' : 'not yet'], ['Label origin', esc(origin(d))], ['Source', '<span class="mono">' + esc(d.source || (det.source || '')) + '</span>']].concat(d.parentId ? [['Part of', parentLink]] : []), 2)
+          + (det.text ? UI.ctx('Text in the image', det.text, d.label) : '')
+          + (labels.length ? UI.table(['Image label', { label: 'Score', right: true }, 'Threshold', 'Classifier'], labels.map((l) => [esc(l.label), l.score.toFixed(2), (l.hit ? UI.pill('reached', 'ok') : UI.pill('below', 'outline')) + (thr[l.classifierId + '/' + l.label] != null ? ' <span class="muted">at ' + thr[l.classifierId + '/' + l.label].toFixed(2) + '</span>' : ''), esc(l.classifier) + ' v' + l.version]), { clickable: false, minWidth: '0' }) + '<div class="muted" style="font-size:12px">Labels are metadata at the image\'s label: readers below ' + esc(d.label) + ' see none of them, in filters or counts.</div>'
+            : !rejected && !failed && !quarantined ? '<div class="fg2">' + ((kb.imageClassifiers || []).length ? 'Not labelled yet: the base\'s classifiers label it in the background.' : 'This base names no image classifier, so its images carry no labels. Pick one in Image settings.') + '</div>' : ''),
+          actions: !manage || quarantined || rejected ? UI.btn('Close', { attrs: 'data-close' }) : ((kb.imageClassifiers || []).length && !failed ? UI.btn('Re-classify', { icon: 'refresh', attrs: 'data-reclassdoc' }) : '') + (failed ? UI.btn('Retry', { kind: 'primary', icon: 'refresh', attrs: 'data-reindexdoc' }) : UI.btn('Reindex document', { icon: 'refresh', attrs: 'data-reindexdoc' })) + UI.btn('Relabel', { icon: 'edit', attrs: 'data-relabel' }) + UI.btn('Remove', { kind: 'danger', attrs: 'data-removedoc' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+          onMount(dr) {
+            const rc = dr.querySelector('[data-reclassdoc]'); if (rc) rc.addEventListener('click', () => { App.closeOverlay(); act(() => App.post('/api/knowledge/documents/' + enc(d.id) + '/reclassify', {}), 'Re-classification queued for ' + esc(d.name) + '.'); });
+            const ri = dr.querySelector('[data-reindexdoc]'); if (ri) ri.addEventListener('click', () => { App.closeOverlay(); act(() => App.post('/api/knowledge/documents/' + enc(d.id) + '/reindex'), 'The vision profile describes ' + esc(d.name) + ' again; its labels follow.'); });
+            const rl = dr.querySelector('[data-relabel]'); if (rl) rl.addEventListener('click', () => relabel(d));
+            const rm = dr.querySelector('[data-removedoc]'); if (rm) rm.addEventListener('click', async () => { App.closeOverlay(); const ok = await ctx.confirm({ title: 'Remove document', tag: 'destructive', tone: 'danger', ok: 'Remove', body: '<div class="fg2">The image, its chunks and its labels leave every index now.</div>', kv: [['Document', esc(d.name)], ['Label', UI.label(d.label, { sm: true })]] }); if (ok) act(() => App.del('/api/knowledge/documents/' + enc(d.id)), esc(d.name) + ' removed. Audit entry written.'); });
+            const pl = dr.querySelector('[data-parent]'); if (pl) pl.addEventListener('click', (e) => { e.preventDefault(); const p = docs.find((x) => x.id === pl.dataset.parent); App.closeOverlay(); if (p) App.get('/api/knowledge/documents/' + enc(p.id)).then((pd) => setTimeout(() => openDoc(p, pd), 30)).catch((err) => App.fail(err)); });
+          } });
+      }
       function retry(d) {
         ctx.confirm({ title: 'Retry extraction', tone: 'primary', ok: 'Retry', body: '<div class="fg2">Runs extraction and embedding again for this file. If the cause is still there the job fails with a new trace.</div>', kv: [['Document', esc(d.name)], ['Last error', esc(d.error || '')], ['Trace', '<span class="mono">' + esc((d.traceId || '').slice(0, 12)) + '…</span>']] })
           .then((ok) => { if (!ok) return; st.failedOpen = false; act(() => App.post('/api/knowledge/documents/' + enc(d.id) + '/reindex'), 'Extraction retried for ' + esc(d.name) + '.'); });
@@ -297,7 +395,7 @@
             + UI.field('The column names', UI.select([{ value: 'group', label: 'directory groups' }, { value: 'user', label: 'users (username or email)' }], 'group', 'data-akind aria-label="What the access column names"'))
             + '<div data-roles-wrap>' + UI.field('Row security by role', UI.textarea('', { placeholder: 'finance = kb_finance\nops = kb_ops', rows: 3, attrs: 'data-roles' }), 'Optional, PostgreSQL. One group = database role per line: rows are read as each role, so the table\'s row security policies decide which group retrieves each row. Instead of an access column; the source then syncs by full reads.') + '</div>'
             + '<div data-repl-wrap>' + UI.check('Stream changes with logical replication (PostgreSQL tables)', false, 'data-repl') + UI.field('Publication', UI.input('exprsn_knowledge', { attrs: 'data-pub aria-label="Publication"' }), 'The database owner creates it for the table; the connection\'s account needs the REPLICATION attribute. Without them the source keeps syncing by watermark.') + '</div></div>'
-          + '<div data-file-wrap hidden>' + UI.field('Files', '<input type="file" multiple data-files class="input">', 'Text, Markdown, CSV, JSON, HTML, PDF with a text layer, DOCX.') + '</div>'
+          + '<div data-file-wrap hidden>' + UI.field('Files', '<input type="file" multiple data-files class="input">', 'Text, Markdown, CSV, JSON, HTML, PDF, DOCX, and images (PNG, JPEG, WebP, GIF, HEIC), which the base\'s vision profile describes.') + '</div>'
           + UI.field('Label floor', UI.select(myLabels.filter((l) => rank(l) >= rank(kb.label)), kb.label, 'data-floor'), 'Documents get at least this label; the auto-classifier can raise it.')
           + '<div data-sched-wrap>' + UI.field('Sync', UI.select([{ value: '15m', label: 'every 15 min, incremental' }, { value: 'hourly', label: 'hourly' }, { value: 'daily', label: 'daily' }, { value: 'manual', label: 'manual' }], '15m', 'data-sched')) + '</div>'
           + UI.notice('Uploads go to quarantine first. Other sources sync by version, watermark or page validators; database sources read only the connection\'s allow-list.', 'info') + '<div data-err></div>',
