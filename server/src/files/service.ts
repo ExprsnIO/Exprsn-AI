@@ -19,6 +19,7 @@ import { TOPICS, type IntegrationEvent } from '../platform/bus.js';
 import type { JobContext } from '../platform/jobs.js';
 import type { Workspace } from '../repos/tenants.js';
 import type { Services } from '../services.js';
+import { FileBlobs } from './dedup.js';
 import { collect, decryptStream, encryptStream, newFileKey, packKey, unpackKey, type FileKey } from './crypt.js';
 import { PreviewUnavailable, type PreviewRenderer } from './preview.js';
 import { clamStream, IMAGE_TYPES, inspect } from './scan.js';
@@ -99,6 +100,8 @@ export interface VersionRow {
   findings: { scanner?: string; detections?: Record<string, number> } | null;
   blob_key: string | null;
   sealed_key: string | null;
+  /** 1.6.0 (B-4601): the shared object this version reads (`file_blobs`); null for an object of its own. */
+  blob_id?: string | null;
   restored_from: number | null;
   created_by: string | null;
   created_at: number;
@@ -228,10 +231,15 @@ const quotaExceeded = (scope: 'tenant' | 'workspace', used: number, max: number,
   });
 
 export class FileService {
+  /** 1.6.0 (B-4601): the tenant's shared, reference-counted objects. */
+  readonly dedup: FileBlobs;
+
   constructor(
     private readonly s: () => Services,
     private readonly o: FilesOptions
-  ) {}
+  ) {
+    this.dedup = new FileBlobs(() => this.s().db);
+  }
 
   private get db() {
     return this.s().db;
@@ -540,7 +548,7 @@ export class FileService {
     let row: VersionRow | null = null;
     for (let attempt = 0; attempt < 5 && !row; attempt++) {
       const last = ((await this.db('file_versions').where({ file_id: file.id }).max({ n: 'number' })) as Record<string, unknown>[])[0];
-      const candidate: VersionRow = { id, tenant_id: file.tenant_id, workspace_id: file.workspace_id, file_id: file.id, number: Number(last?.n ?? 0) + 1, state: 'quarantined', size: bytes, sha256, type: null, declared_type: o.declaredType?.slice(0, 120) ?? null, label: o.label, reason: null, findings: null, blob_key: blobKey, sealed_key: sealedKey, restored_from: o.restoredFrom, created_by: userId, created_at: Date.now(), scanned_at: null };
+      const candidate: VersionRow = { id, tenant_id: file.tenant_id, workspace_id: file.workspace_id, file_id: file.id, number: Number(last?.n ?? 0) + 1, state: 'quarantined', size: bytes, sha256, type: null, declared_type: o.declaredType?.slice(0, 120) ?? null, label: o.label, reason: null, findings: null, blob_key: blobKey, sealed_key: sealedKey, restored_from: o.restoredFrom, blob_id: null, created_by: userId, created_at: Date.now(), scanned_at: null };
       try {
         await this.db('file_versions').insert({ ...candidate, findings: null });
         row = candidate;
@@ -604,10 +612,12 @@ export class FileService {
   /** The plaintext of a stored version, decrypted segment by segment as it is read. */
   private async plain(v: VersionRow): Promise<AsyncIterable<Buffer>> {
     if (!v.blob_key || !v.sealed_key) throw notFound('File content');
-    const key = await this.keyOf(v.tenant_id, v.sealed_key, `file-key:${v.id}`);
+    // A shared object (B-4601) was sealed for the version that first stored it: its key and stream name that version.
+    const owner = v.blob_id ?? v.id;
+    const key = await this.keyOf(v.tenant_id, v.sealed_key, `file-key:${owner}`);
     const got = await this.s().blobs.getStream(v.blob_key);
     if (!got) throw notFound('File content');
-    return decryptStream(got.stream as AsyncIterable<Buffer>, key, versionAad(v.id));
+    return decryptStream(got.stream as AsyncIterable<Buffer>, key, versionAad(owner));
   }
 
   /** The current version's content (or version `number`'s, for members of the file's workspace). */
@@ -680,21 +690,29 @@ export class FileService {
       const ws = await s.tenants.workspace(v.tenant_id, v.workspace_id);
       if (user && labelRank(label) > labelRank(user.clearance)) return await reject(`Classified ${label}, above the uploader's clearance.`, findings);
       if (ws && labelRank(label) > labelRank(ws.label_ceiling)) return await reject(`Classified ${label}, above this workspace's ceiling of ${ws.label_ceiling}.`, findings);
-      // Out of quarantine: the sealed bytes move as they are (no re-encryption).
-      const storeKey = `files/${v.tenant_id}/store/${v.id}`;
-      const got = await s.blobs.getStream(v.blob_key!);
-      if (!got) throw new Error('The quarantined content is missing.');
-      await s.blobs.putStream(storeKey, got.stream as AsyncIterable<Buffer>, 'application/octet-stream');
-      await s.blobs.delete(v.blob_key!);
+      // Out of quarantine. 1.6.0 (B-4601): content the tenant already stores is shared (the quarantined copy goes);
+      // anything else moves as it is (no re-encryption) and becomes a blob later uploads of the same content share.
       const t = Date.now();
-      await this.db('file_versions').where({ id: v.id }).update({ state: 'ready', type: result.type, label, findings: JSON.stringify(findings), blob_key: storeKey, scanned_at: t });
+      const shared = await this.dedup.adopt(v);
+      if (shared) {
+        await s.blobs.delete(v.blob_key!);
+        await this.db('file_versions').where({ id: v.id }).update({ state: 'ready', type: result.type, label, findings: JSON.stringify({ ...findings, shared: true }), blob_key: shared.blob_key, sealed_key: shared.sealed_key, blob_id: shared.id, scanned_at: t });
+      } else {
+        const storeKey = `files/${v.tenant_id}/store/${v.id}`;
+        const got = await s.blobs.getStream(v.blob_key!);
+        if (!got) throw new Error('The quarantined content is missing.');
+        await s.blobs.putStream(storeKey, got.stream as AsyncIterable<Buffer>, 'application/octet-stream');
+        await s.blobs.delete(v.blob_key!);
+        const own = await this.dedup.register({ ...v, blob_key: storeKey });
+        await this.db('file_versions').where({ id: v.id }).update({ state: 'ready', type: result.type, label, findings: JSON.stringify(findings), blob_key: storeKey, blob_id: own ? v.id : null, scanned_at: t });
+      }
       // The newest ready version is current; an older one finishing later does not take its place.
       const moved = await this.db('files')
         .where({ id: file.id })
         .andWhere((q) => q.whereNull('current_version').orWhere('current_version', '<', v.number))
         .update({ current_version: v.number, state: 'ready', size: v.size, type: result.type, label, updated_at: t });
       const after = (await this.fileRow(v.tenant_id, file.id))!;
-      await s.audit.append({ tenantId: v.tenant_id, action: 'file.version.ready', kind: 'system', actor: { service: 'files', user: v.created_by ?? undefined }, target: { file: file.id, version: v.number }, label, detail: { type: result.type, size: v.size, sha256: v.sha256, scanner, ...(v.restored_from != null ? { restoredFrom: v.restored_from } : {}), current: !!moved } });
+      await s.audit.append({ tenantId: v.tenant_id, action: 'file.version.ready', kind: 'system', actor: { service: 'files', user: v.created_by ?? undefined }, target: { file: file.id, version: v.number }, label, detail: { type: result.type, size: v.size, sha256: v.sha256, scanner, ...(shared ? { sharedWith: shared.id } : {}), ...(v.restored_from != null ? { restoredFrom: v.restored_from } : {}), current: !!moved } });
       if (moved) {
         const type = v.restored_from != null ? 'file.restored' : v.number === 1 ? 'file.uploaded' : 'file.updated';
         this.event(type, after, v.number, v.created_by, v.restored_from != null ? { from: v.restored_from } : {});
@@ -912,17 +930,21 @@ export class FileService {
       const versions = ((await this.db('file_versions').where({ file_id: f.id })) as Record<string, unknown>[]).map(versionFrom);
       const previews = ((await this.db('file_previews').where({ file_id: f.id })) as Record<string, unknown>[]).map(previewFrom);
       for (const v of versions) {
-        if (v.blob_key) await s.blobs.delete(v.blob_key);
+        // 1.6.0 (B-4601): a shared object goes only with the last version that reads it (below).
+        if (v.blob_key && !v.blob_id) await s.blobs.delete(v.blob_key);
         if (v.state !== 'rejected') bytes += v.size;
       }
       for (const pv of previews) if (pv.blob_key) await s.blobs.delete(pv.blob_key);
+      const freed: string[] = [];
       await this.db.transaction(async (trx) => {
         await trx('file_previews').where({ file_id: f.id }).delete();
         await trx('file_versions').where({ file_id: f.id }).delete();
         await trx('file_tags').where({ file_id: f.id }).delete();
         await trx('file_shares').where({ file_id: f.id }).delete();
         await trx('files').where({ id: f.id }).delete();
+        for (const v of versions) if (v.blob_id) freed.push(...(await this.dedup.release(trx, v.blob_id)));
       });
+      for (const k of freed) await s.blobs.delete(k);
       await s.audit.append({ tenantId, action: 'file.purged', kind: 'system', actor: { service: 'files', ...(o.by ? { user: o.by } : {}) }, target: { file: f.id, workspace: f.workspace_id }, label: f.label, detail: { versions: versions.length, trashedAt: f.trashed_at, ...(o.all ? { emptied: true } : {}) } });
     }
     // Trashed folders go once nothing is left in them.

@@ -103,6 +103,7 @@ import { VaultService } from './vault/service.js';
 import { DatabaseLeases } from './vault/leases.js';
 import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
 import { RotationNotices } from './vault/rotation.js';
+import { RevealWatch } from './vault/anomalies.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
@@ -255,6 +256,8 @@ export interface Services {
   dbLeases: DatabaseLeases;
   /** Sprint 25 (B-1706): rotation schedules and notices for KV secrets and transit keys. */
   rotation: RotationNotices;
+  /** 1.6.0, Sprint 36b (B-4803): reveal history and anomaly flags for secret owners. */
+  revealWatch: RevealWatch;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
   /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
@@ -410,7 +413,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
   });
   // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
-  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
+  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : kind === 'app-form-submission' ? s.apps.forms.held.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
   const chainRefs = new ChainRefs(db, registry);
   registry.useRefs(chainRefs);
@@ -564,6 +567,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 25c: database leases and rotation schedules.
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
+    revealWatch: new RevealWatch(() => s),
     atproto: new AtprotoService(() => s),
     atprotoAccounts: new AtprotoAccounts(() => s),
     // 1.4.0, Sprint 26d: the file store.
@@ -687,6 +691,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 25 (B-1704 to B-1706): the lease sweeper, rotation checks, and `vault:` references resolved as their owner.
   s.dbLeases.registerJobs();
   s.rotation.registerJobs();
+  s.revealWatch.registerJobs(); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
   {
     const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
@@ -721,6 +726,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 27 (B-2201 to B-2208): AI fills, reindexing, CSV imports and exports, triggers; workflows' record steps;
   // records as moderation objects (a takedown hides the record from every list and read; an upheld appeal shows it).
   s.apps.registerJobs();
+  s.apps.forms.held.registerJobs(); // 1.6.0, Sprint 36b (B-4701): decided held submissions purged
   s.workflows.useRecords(s.apps.triggers);
   s.workflows.useStepKit(new WorkflowStepKit(() => s)); // Sprint 32c (B-3907, B-3908): notify and webhook steps, approval forms
   if (!s.moderation.registry.get('record')) {
@@ -815,6 +821,7 @@ export function startSchedules(s: Services): void {
   s.pki.schedule(s.scheduler); // Sprint 24 (B-1603): CRLs for every live issuer
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
+  s.revealWatch.schedule(s.scheduler); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
   s.feedGenerators.schedule(s.scheduler); // Sprint 31 (B-3003): feed indexes pruned to their retention
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
@@ -827,4 +834,5 @@ export function startSchedules(s: Services): void {
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation
   s.imports.schedule(s.scheduler, activeTenants); // 1.5.0, Sprint 30 (B-3801, B-3803): due harvests, promoted bundles
+  s.apps.forms.held.schedule(s.scheduler); // 1.6.0, Sprint 36b (B-4701): decided held submissions purged
 }

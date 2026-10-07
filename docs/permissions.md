@@ -49,7 +49,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
-| `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
+| `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |  |
@@ -66,7 +66,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `prompts:manage` | yes | 4 | x | x |  |  |  |  | x |  |  |  |  |  |  |  |
 | `billing:read` | yes | 5 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `billing:manage` | yes | 5 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `secrets:read` | no | 17 | x | x |  |  |  |  |  |  |  | x |  | x |  |  |
+| `secrets:read` | no | 20 | x | x |  |  |  |  |  |  |  | x |  | x |  |  |
 | `secrets:write` | yes | 4 | x | x |  |  |  |  |  |  |  | x |  |  |  |  |
 | `secrets:admin` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `pki:manage` | yes | 32 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
@@ -78,7 +78,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:check` | yes | 3 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `moderation:report` | no | 2 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `moderation:appeal` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `moderation:review` | yes | 9 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
+| `moderation:review` | yes | 12 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `moderation:sanction` | yes | 3 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
@@ -471,6 +471,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/flags/{ref}/reassign`
 - `POST /api/flags/{ref}/rule`
 - `GET /api/eval-sets` (or another permission)
+- `GET /api/apps/held` (or another permission)
+- `GET /api/apps/held/{id}` (or another permission)
+- `POST /api/apps/held/{id}/decide` (or another permission)
 
 ### `classifiers:manage`
 
@@ -872,6 +875,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/vault/transit/rewrap/{name}`
 - `POST /api/vault/transit/sign/{name}`
 - `POST /api/vault/transit/verify/{name}`
+- `GET /api/vault/reveal-flags`
+- `GET /api/vault/reveal-flags/{id}`
+- `POST /api/vault/reveal-flags/{id}/resolve`
 
 ### `secrets:write`
 
@@ -1082,6 +1088,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/moderation/appeals/{ref}` (or another permission)
 - `GET /api/moderation/queues` (or another permission)
 - `POST /api/moderation/appeals` (or another permission)
+- `GET /api/apps/held` (or another permission)
+- `GET /api/apps/held/{id}` (or another permission)
+- `POST /api/apps/held/{id}/decide` (or another permission)
 
 ### `moderation:sanction`
 

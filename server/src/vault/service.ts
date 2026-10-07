@@ -381,6 +381,8 @@ export class VaultService {
     if (ver.deleted_at) throw new HttpProblem(410, 'Gone', `Version ${want} of ${path} is deleted; undelete it to read it.`, { extensions: { version: want, state: 'deleted' } });
     const data = JSON.parse(await this.s().keys.open(c.tenantId, ver.value_sealed, `vault-kv:${ver.id}`)) as KvData;
     await this.audit(c, 'vault.secret.read', 'decision', { path, version: want }, row.label, { keys: Object.keys(data).length });
+    // 1.6.0 (B-4803): compared with the secret's reveal history; an unusual reveal raises a flag for its owner.
+    await this.s().revealWatch.observe(c, row, want).catch((err: unknown) => this.s().log.warn({ err, path }, 'reveal anomaly check failed'));
     return { path, version: want, label: row.label, data, createdAt: ver.created_at, createdBy: ver.created_by };
   }
 

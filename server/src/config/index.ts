@@ -503,6 +503,16 @@ const base = z.object({
     VAULT_ROTATION_CHECK_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
     VAULT_ROTATION_NOTICE_DAYS: z.coerce.number().int().min(0).max(90).default(7),
     /**
+     * 1.6.0, Sprint 36b (B-4803): every reveal of a KV secret is kept for VAULT_ANOMALY_HISTORY_DAYS; a reveal
+     * from an address the secret was not revealed from in that time, at an hour of day it was never revealed in (once
+     * it has at least VAULT_ANOMALY_MIN_HISTORY reveals), or the VAULT_ANOMALY_BURST-th reveal by one principal within
+     * VAULT_ANOMALY_BURST_SECONDS raises a flag for the secret's owner. VAULT_ANOMALY_BURST=0 turns detection off.
+     */
+    VAULT_ANOMALY_BURST: z.coerce.number().int().min(0).max(1000).default(5),
+    VAULT_ANOMALY_BURST_SECONDS: z.coerce.number().int().min(1).max(86_400).default(60),
+    VAULT_ANOMALY_HISTORY_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    VAULT_ANOMALY_MIN_HISTORY: z.coerce.number().int().min(1).max(10_000).default(20),
+    /**
      * Sprint 25 (B-1608 to B-1611): AT-Protocol trust. ATPROTO_PUBLIC_URL is the base the platform's did:web and the
      * tenants' path-form DIDs and labeler endpoints live under (default PUBLIC_URL); ATPROTO_PLC_URL is the PLC
      * directory did:plc operations go to and are resolved from (through the service URL checks). The public DID,
@@ -640,6 +650,13 @@ const base = z.object({
     APPS_BULK_MAX: z.coerce.number().int().min(1).max(1000).default(500),
     APPS_TRIGGER_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
     APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /**
+     * 1.6.0, Sprint 36b (B-4701): a public form submission the `user-input` guardrail holds waits for review instead of being
+     * refused; at most APPS_HELD_MAX_PER_FORM wait per form (beyond that a held value is refused, as before), and a
+     * decided one is deleted APPS_HELD_KEEP_DAYS after its decision (its values are dropped at the decision).
+     */
+    APPS_HELD_MAX_PER_FORM: z.coerce.number().int().min(0).max(100_000).default(200),
+    APPS_HELD_KEEP_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
     /**
      * Sprint 32b (B-3903): workflows started by their own triggers. An event trigger fires at most
      * WORKFLOW_EVENT_RATE_PER_MINUTE times a minute (in the shared counter store), and an event caused by a chain of

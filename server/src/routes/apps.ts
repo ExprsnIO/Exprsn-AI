@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { clears, LABELS } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
-import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
+import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
 import { badRequest } from '../http/problem.js';
 import { draft, draftSchema } from '../apps/drafts.js';
 import { formDefinitionSchema, formView } from '../apps/forms.js';
@@ -67,6 +67,25 @@ export function appRoutes(s: Services): Router {
 
   const actor = (req: Request): Actor & { principal: Principal } => ({ principal: principalOf(req), source: 'api', ip: ip(req), traceId: req.traceId });
   const param = (req: Request, k: string) => parseBody(ref, req.params[k]);
+
+  // ---------- held submissions (1.6.0, B-4701) ----------
+  // Before `/apps/:app`: public submissions the user-input guardrail held, for reviewers of the flag and moderation queues.
+
+  const reviewHeld = requireAnyPermission(s, ['flags:review', 'moderation:review']);
+
+  r.get('/apps/held', reviewHeld, async (req, res) => {
+    const q = parseBody(z.object({ state: z.enum(['held', 'accepted', 'rejected', 'all']).default('held') }).strict(), req.query);
+    res.json({ items: await a.forms.held.list(principalOf(req), q.state) });
+  });
+
+  r.get('/apps/held/:id', reviewHeld, async (req, res) => {
+    res.json(await a.forms.held.detail(principalOf(req), parseBody(id26, req.params.id)));
+  });
+
+  r.post('/apps/held/:id/decide', reviewHeld, async (req, res) => {
+    const body = parseBody(z.object({ decision: z.enum(['accept', 'reject']), reason: z.string().trim().max(500).nullable().optional() }).strict(), req.body);
+    res.json(await a.forms.held.decide(principalOf(req), parseBody(id26, req.params.id), body.decision, body.reason || null, { ip: ip(req), traceId: req.traceId ?? null }));
+  });
 
   // ---------- apps ----------
 

@@ -1243,6 +1243,13 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/admin/storage/orphans/dry-run', 'platform:manage'],
   ['POST /api/admin/storage/quarantine/{kind}/{id}/delete', 'platform:manage'],
   ['POST /api/admin/storage/quarantine/{kind}/{id}/rescan', 'platform:manage'],
+  // 1.6.0, Sprint 36b (B-4701, B-4803): held form submissions and reveal flags
+  ['GET /api/apps/held', { anyOf: ['flags:review', 'moderation:review'] }],
+  ['GET /api/apps/held/{id}', { anyOf: ['flags:review', 'moderation:review'] }],
+  ['POST /api/apps/held/{id}/decide', { anyOf: ['flags:review', 'moderation:review'] }],
+  ['GET /api/vault/reveal-flags', 'secrets:read'],
+  ['GET /api/vault/reveal-flags/{id}', 'secrets:read'],
+  ['POST /api/vault/reveal-flags/{id}/resolve', 'secrets:read'],
   // ---- end of routes ----
 ];
 
