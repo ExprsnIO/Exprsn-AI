@@ -246,7 +246,7 @@ test.describe('Social and messaging', () => {
 
     // Each design state, as the accessibility sweep applies them.
     const n = await page.evaluate(() => ((window as unknown as AppGlobal).App.screens.social?.states ?? []).length);
-    expect(n).toBe(5);
+    expect(n).toBe(6); // 1.6.0 (B-4405) added "Category removed, groups uncategorised"
     for (let i = 0; i < n; i++) {
       await page.evaluate((k) => { const A = (window as unknown as AppGlobal).App; A.closeOverlay(); A.state.screenState.social = {}; A.render(); A.applyState(k); }, i);
       await page.waitForTimeout(250);

@@ -4,11 +4,14 @@
   // Groups and events (Sprint 30, B-3409) over the Sprint 27c API: /api/groups, /api/group-requests, /api/group-posts,
   // /api/calendar. What the caller may do inside a group is their acting group role (a groups:manage holder acts as
   // owner); the screen hides what the server would refuse and shows the server's refusals as they come.
+  // 1.6.0 (Sprint 36a, B-4401 to B-4405): channels inside a group (/api/groups/:id/channels), Discover ranked by the
+  // server (/api/groups/discover), Trending (/api/groups/trending), the tenant's categories (/api/group-categories)
+  // and distance filters (near, km) on the lists and the calendar.
   const enc = encodeURIComponent;
   const RANK = { public: 1, internal: 2, confidential: 3, restricted: 4 };
   const LABELS = ['public', 'internal', 'confidential', 'restricted'];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  const ROOM_EVENTS = ['group.updated', 'group.member.added', 'group.member.removed', 'group.member.role', 'group.post.created', 'group.post.deleted', 'group.event.created', 'group.event.updated', 'group.event.cancelled', 'group.event.rsvp', 'group.event.check-in'];
+  const ROOM_EVENTS = ['group.channel.created', 'group.updated', 'group.member.added', 'group.member.removed', 'group.member.role', 'group.post.created', 'group.post.deleted', 'group.event.created', 'group.event.updated', 'group.event.cancelled', 'group.event.rsvp', 'group.event.check-in'];
   const pad = (n) => String(n).padStart(2, '0');
   const isoDay = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   const fmtDate = (iso) => { const [y, m, d] = String(iso).split('-').map(Number); return d + ' ' + MONTHS[m - 1].slice(0, 3) + ' ' + y; };
@@ -31,6 +34,11 @@
   const isMod = (g) => g.actingRole === 'owner' || g.actingRole === 'moderator';
   const readable = (g) => g.state !== 'hidden' && clears(g.label) && (!!g.actingRole || g.visibility === 'public');
   const canWrite = () => App.can('groups:write');
+  const POINT = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+  /** "lat, lon" → { lat, lon }, '' → null, anything else → false. */
+  const parsePoint = (v) => { const t = String(v || '').trim(); if (!t) return null; const m = POINT.exec(t); if (!m || Math.abs(+m[1]) > 90 || Math.abs(+m[2]) > 180) return false; return { lat: +m[1], lon: +m[2] }; };
+  const fmtPoint = (lat, lon) => (lat == null || lon == null ? '' : (+lat).toFixed(4) + ', ' + (+lon).toFixed(4));
+  const KMS = [5, 10, 25, 50, 100, 300, 1000];
 
   /** An event from the API with its wall-clock date and times in its own zone. */
   function norm(e) {
@@ -124,21 +132,37 @@
       { title: 'Capacity reached', tone: 'danger', text: 'Capacity counts people with their guests. An RSVP past it is 409 with the places left.', apply(ctx) { ctx.state.pending = 'capacity'; ctx.rerender(); } },
       { title: 'Event cancelled, attendees notified', tone: 'warn', text: 'Cancelling stops the reminders and notifies every attendee (going or maybe) in the console and by email, without the title or reason.', apply(ctx) { ctx.state.pending = 'cancelled'; ctx.rerender(); } },
       { title: 'Hidden group (moderation)', tone: 'warn', text: 'A group hidden through moderation is closed to everyone but managers and its owners; its events leave calendars and reminders stop.', apply(ctx) { ctx.state.pending = 'hidden'; ctx.rerender(); } },
-      { title: 'Last owner cannot leave', tone: 'danger', text: 'A group keeps at least one owner: leaving or demoting the last one is 409. Hand over ownership first.', apply(ctx) { ctx.state.pending = 'owner'; ctx.rerender(); } }
+      { title: 'Last owner cannot leave', tone: 'danger', text: 'A group keeps at least one owner: leaving or demoting the last one is 409. Hand over ownership first.', apply(ctx) { ctx.state.pending = 'owner'; ctx.rerender(); } },
+      { title: 'Channel below the group\'s label', tone: 'danger', text: 'A channel is labelled at least as high as its group (the floor). Creating one lower is 422 with step label-floor.', apply(ctx) { ctx.state.pending = 'floor'; ctx.rerender(); } },
+      { title: 'Discover never shows a group above your clearance', tone: 'info', text: 'Discovery lists groups you may join, ranked by shared members and activity, and never one labelled above your clearance, whatever else you may see.', apply(ctx) { ctx.state.pending = 'above'; ctx.rerender(); } },
+      { title: 'Distance filter', tone: 'info', text: 'Groups and events with a place can be filtered by distance. Only places you may read count (a private group\'s place is its members\').', apply(ctx) { ctx.state.pending = 'near'; ctx.rerender(); } },
+      { title: 'Trending after a burst of joins', tone: 'ok', text: 'The groups.trending job counts joins (3 each) and posts in the last hours of its window; a burst of joins leads after one run.', apply(ctx) { ctx.state.pending = 'trending'; ctx.rerender(); } },
+      { title: 'Uncategorised after a category is removed', tone: 'warn', text: 'Removing a category on Social and messaging leaves its groups listed and uncategorised, never hidden. Filter Category: uncategorised shows them.', apply(ctx) { ctx.state.pending = 'uncategorised'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
-      st.mode = st.mode || 'mine'; st.tab = st.tab || 'overview'; st.query = st.query || ''; st.fws = st.fws || 'all'; st.fvis = st.fvis || 'all'; st.fjoin = st.fjoin || 'all';
-      st.det = st.det || {}; st.mineReq = st.mineReq || {}; st.invites = st.invites || {}; st.notified = st.notified || {};
+      st.mode = st.mode || 'mine'; st.tab = st.tab || 'overview'; st.query = st.query || ''; st.fws = st.fws || 'all'; st.fvis = st.fvis || 'all'; st.fjoin = st.fjoin || 'all'; st.fcat = st.fcat || 'all';
+      st.categories = st.categories || []; st.disc = st.disc || { groups: [] }; st.trend = st.trend || { groups: [] };
+      st.det = st.det || {}; st.mineReq = st.mineReq || {}; st.invites = st.invites || {}; st.notified = st.notified || {}; st.chans = st.chans || {};
       if (st.calY == null) { const n = new Date(); st.calY = n.getFullYear(); st.calM = n.getMonth(); }
       const later = () => { if (App.state.route !== 'groups') return; if (overlayOpen()) { setTimeout(later, 250); return; } ctx.rerender(); };
 
       const load = (quiet) => {
         if (st.loading) { st.again = true; return; }
         st.loading = true;
-        Promise.all([App.get('/api/groups'), App.get('/api/group-requests').catch(() => []), App.get('/api/calendar/feeds').catch(() => [])])
-          .then(([gs, mine, feeds]) => {
-            st.groups = gs; st.feeds = feeds; st.mineReq = {}; st.invites = {};
+        // The category and distance filters are the server's (B-4403, B-4405); the others filter what it returned.
+        const f = [];
+        if (st.fcat !== 'all') f.push('category=' + enc(st.fcat));
+        if (st.near) f.push('near=' + enc(st.near.lat + ',' + st.near.lon), 'km=' + enc(st.near.km));
+        const qs = f.length ? '?' + f.join('&') : '';
+        Promise.all([App.get('/api/groups' + qs), App.get('/api/group-requests').catch(() => []), App.get('/api/calendar/feeds').catch(() => []),
+          App.get('/api/groups/discover' + qs).catch(() => ({ groups: [] })), App.get('/api/groups/trending' + (st.fcat !== 'all' ? '?category=' + enc(st.fcat) : '')).catch(() => ({ groups: [] })), App.get('/api/group-categories').catch(() => []),
+          st.sel && st.chans[st.sel] ? App.get('/api/groups/' + enc(st.sel)).catch(() => false) : Promise.resolve(null)])
+          .then(([gs, mine, feeds, disc, trend, cats, chan]) => {
+            // The open channel's own view (its role and counts), or gone (the group was left or the channel deleted).
+            if (chan) st.chans[chan.id] = chan; else if (chan === false) delete st.chans[st.sel];
+            st.groups = gs; st.feeds = feeds; st.mineReq = {}; st.invites = {}; st.disc = disc; st.trend = trend; st.categories = cats;
+            if (st.fcat !== 'all' && st.fcat !== 'none' && !cats.some((c) => c.id === st.fcat)) { st.fcat = 'all'; st.again = true; }
             mine.forEach((r) => { if (r.state !== 'pending') return; if (r.kind === 'invite') st.invites[r.groupId] = r; else st.mineReq[r.groupId] = r; });
             st.loaded = true; st.loadError = null;
           })
@@ -158,11 +182,13 @@
           rd ? App.get('/api/groups/' + enc(id) + '/posts?limit=100') : none,
           rd ? App.get('/api/groups/' + enc(id) + '/events?includeCancelled=true&from=' + enc(from.toISOString()) + '&to=' + enc(to.toISOString())) : none,
           mod ? Promise.all(['pending', 'accepted', 'declined', 'expired'].map((s) => App.get('/api/groups/' + enc(id) + '/requests?state=' + s))).then((a) => a.reduce((x, y) => x.concat(y), [])) : none,
-          mod ? App.get('/api/groups/' + enc(id) + '/cases') : none
-        ]).then(([members, posts, events, requests, cases]) => {
+          mod ? App.get('/api/groups/' + enc(id) + '/cases') : none,
+          rd && !g.parentId ? App.get('/api/groups/' + enc(id) + '/channels') : none
+        ]).then(([members, posts, events, requests, cases, channels]) => {
+          (channels || []).forEach((c) => { st.chans[c.id] = c; });
           // Attendance and the caller's RSVP come with each event's own record.
           return Promise.all((events || []).slice(0, 80).map((e) => App.get('/api/calendar/events/' + enc(e.id)).catch(() => e)))
-            .then((full) => { Object.assign(d, { members, posts, events: full.map(norm), requests: requests ? requests.sort((a, b) => b.createdAt - a.createdAt) : null, cases, error: null, loaded: true }); });
+            .then((full) => { Object.assign(d, { members, posts, events: full.map(norm), requests: requests ? requests.sort((a, b) => b.createdAt - a.createdAt) : null, cases, channels, error: null, loaded: true }); });
         }).catch((err) => { d.error = err; d.loaded = true; })
           .finally(() => { d.loading = false; if (d.again) { d.again = false; loadGroup(g); return; } later(); });
       };
@@ -177,33 +203,50 @@
 
       // A design state waits until every group it looks through is loaded, then picks its case.
       if (st.pending) {
-        const need = st.pending === 'request' || st.pending === 'hidden' ? [] : st.groups.filter(readable);
+        const need = ['capacity', 'cancelled', 'owner'].indexOf(st.pending) < 0 ? [] : st.groups.filter(readable);
         const waiting = need.filter((x) => { const d = st.det[x.id]; if (!d || !d.loaded || d.stale) { if (!d || !d.loading) { if (d) d.stale = false; loadGroup(x); } return true; } return !!d.loading; });
         if (waiting.length) {
           root.innerHTML = '<div class="page">' + UI.pagehead('Groups and events', 'Looking through ' + need.length + ' group' + (need.length === 1 ? '' : 's'), '') + UI.notice('Loading…', 'info') + '</div>';
           return;
         }
         resolveState(st, st.pending); st.pending = null;
+        if (st.reloadNow) { st.reloadNow = false; load(true); }
       }
 
       // Deep links: ?id=<group>&event=<event> (notifications), ?invite=<request>, ?group=, ?tab=
       const p = ctx.params;
-      if (p.id || p.group) { const want = p.id || p.group; delete p.id; delete p.group; const g0 = st.groups.find((x) => x.id === want); if (g0) { st.sel = g0.id; if (!g0.role) st.mode = 'discover'; } }
+      const byId = (id) => st.groups.find((x) => x.id === id) || (st.disc.groups || []).find((x) => x.id === id) || (st.trend.groups || []).find((x) => x.id === id) || st.chans[id] || null;
+      if (p.id || p.group) {
+        const want = p.id || p.group; delete p.id; delete p.group; const g0 = byId(want);
+        if (g0) { st.sel = g0.id; if (!g0.role && !g0.parentId) st.mode = 'discover'; }
+        // A channel (or a group outside the loaded lists) is fetched by itself.
+        else App.get('/api/groups/' + enc(want)).then((v) => { st.chans[v.id] = v; st.sel = v.id; st.tab = 'overview'; ctx.rerender(); }).catch(() => { st.demoNote = 'That group is not available to you.'; ctx.rerender(); });
+      }
       if (p.invite) { const want = p.invite; delete p.invite; const gid = Object.keys(st.invites).find((k) => st.invites[k].id === want); if (gid) { st.sel = gid; st.mode = 'discover'; st.tab = 'overview'; } else st.demoNote = 'That invitation is no longer pending: it was accepted, declined, withdrawn or has expired.'; }
       if (p.event) { st.wantEvent = p.event; st.tab = 'events'; delete p.event; }
       if (p.tab) { st.tab = p.tab; delete p.tab; }
 
-      let list = st.groups.filter((g) => (st.mode === 'mine' ? !!g.role : true));
-      list = list.filter((g) => (!st.query || (g.name + ' ' + (g.description || '')).toLowerCase().indexOf(st.query.toLowerCase()) >= 0) && (st.fws === 'all' || g.workspaceId === st.fws) && (st.fvis === 'all' || g.visibility === st.fvis) && (st.fjoin === 'all' || g.joinMode === st.fjoin));
-      if (!st.sel || !st.groups.some((g) => g.id === st.sel)) st.sel = list.length ? list[0].id : null;
-      const g = st.groups.find((x) => x.id === st.sel) || null;
+      // My groups from the list; Discover and Trending as the server ranked them (B-4402, B-4404).
+      const pool = st.mode === 'discover' ? st.disc.groups || [] : st.mode === 'trending' ? st.trend.groups || [] : st.groups.filter((x) => !!x.role);
+      const list = pool.filter((g) => (!st.query || (g.name + ' ' + (g.description || '')).toLowerCase().indexOf(st.query.toLowerCase()) >= 0) && (st.fws === 'all' || g.workspaceId === st.fws) && (st.fvis === 'all' || g.visibility === st.fvis) && (st.fjoin === 'all' || g.joinMode === st.fjoin));
+      if (!st.sel || !byId(st.sel)) st.sel = list.length ? list[0].id : null;
+      const g = st.sel ? byId(st.sel) : null;
       const wsList = (App.me && App.me.workspaces) || [];
+      const catName = (id) => (st.categories.find((c) => c.id === id) || {}).name || '';
+      const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+      const subOf = (x) => (st.mode === 'discover' ? plural(x.sharedMembers || 0, 'shared member') + ', ' + plural((x.activity || {}).posts || 0, 'post') + ' and ' + plural((x.activity || {}).joins || 0, 'join') + ' in ' + (st.disc.windowDays || 30) + ' days'
+        : st.mode === 'trending' && x.trend ? plural(x.trend.joins, 'join') + ', ' + plural(x.trend.posts, 'post') + ' in ' + (st.trend.hours || 72) + ' h'
+          : esc(wsName(x.workspaceId)) + ', ' + plural(x.members || 0, 'member') + ', ' + esc(x.visibility) + ', ' + esc(x.joinMode))
+        + (x.distanceKm != null ? ', ' + (x.distanceKm < 10 ? x.distanceKm.toFixed(1) : Math.round(x.distanceKm)) + ' km' : '') + (x.categoryId && catName(x.categoryId) ? ' · ' + esc(catName(x.categoryId)) : '');
 
-      const left = '<div class="leftpane w320">' + UI.seg([{ id: 'mine', label: 'My groups' }, { id: 'discover', label: 'Discover' }], st.mode, 'data-modeseg aria-label="Which groups"')
+      const left = '<div class="leftpane w320">' + UI.seg([{ id: 'mine', label: 'My groups' }, { id: 'discover', label: 'Discover' }, { id: 'trending', label: 'Trending' }], st.mode, 'data-modeseg aria-label="Which groups"')
         + UI.search('Search groups', 'data-search', st.query)
-        + '<div class="hstack gap6 wrap"><span class="relative">' + UI.btn(st.fws === 'all' ? 'Workspace' : wsName(st.fws), { size: 'xs', icon: 'filter', attrs: 'data-fws', cls: st.fws === 'all' ? '' : 'active' }) + '</span><span class="relative">' + UI.btn(st.fvis === 'all' ? 'Visibility' : st.fvis, { size: 'xs', icon: 'filter', attrs: 'data-fvis', cls: st.fvis === 'all' ? '' : 'active' }) + '</span><span class="relative">' + UI.btn(st.fjoin === 'all' ? 'Join mode' : st.fjoin, { size: 'xs', icon: 'filter', attrs: 'data-fjoin', cls: st.fjoin === 'all' ? '' : 'active' }) + '</span></div>'
-        + '<div class="vstack" style="gap:2px">' + list.map((x) => UI.listItem(esc(x.name) + (x.state === 'hidden' ? ' ' + UI.pill('hidden by moderation', 'warn') : ''), esc(wsName(x.workspaceId)) + ', ' + (x.members || 0) + ' member' + (x.members === 1 ? '' : 's') + ', ' + esc(x.visibility) + ', ' + esc(x.joinMode), { active: x.id === st.sel, attrs: 'data-group="' + esc(x.id) + '"', right: rolePill(x.role) || (st.invites[x.id] ? UI.pill('invited', 'info') : st.mineReq[x.id] ? UI.pill('requested', 'info') : UI.label(x.label, { sm: true })) })).join('')
-        + (list.length ? '' : UI.empty('No groups match', st.mode === 'mine' ? (st.groups.length ? 'You are in no group that matches. Try Discover.' : 'You are in no group yet. Create one, or look in Discover.') : 'Hidden groups are known only to their members and invitees.')) + '</div>'
+        + '<div class="hstack gap6 wrap"><span class="relative">' + UI.btn(st.fws === 'all' ? 'Workspace' : wsName(st.fws), { size: 'xs', icon: 'filter', attrs: 'data-fws', cls: st.fws === 'all' ? '' : 'active' }) + '</span><span class="relative">' + UI.btn(st.fvis === 'all' ? 'Visibility' : st.fvis, { size: 'xs', icon: 'filter', attrs: 'data-fvis', cls: st.fvis === 'all' ? '' : 'active' }) + '</span><span class="relative">' + UI.btn(st.fjoin === 'all' ? 'Join mode' : st.fjoin, { size: 'xs', icon: 'filter', attrs: 'data-fjoin', cls: st.fjoin === 'all' ? '' : 'active' }) + '</span>'
+        + '<span class="relative">' + UI.btn(st.fcat === 'all' ? 'Category' : st.fcat === 'none' ? 'Uncategorised' : catName(st.fcat) || 'Category', { size: 'xs', icon: 'filter', attrs: 'data-fcat', cls: st.fcat === 'all' ? '' : 'active' }) + '</span>'
+        + UI.btn(st.near ? 'Within ' + st.near.km + ' km' : 'Distance', { size: 'xs', icon: 'map', attrs: 'data-fnear' + (st.near ? ' aria-label="Distance filter: within ' + st.near.km + ' km of ' + esc(st.near.label || fmtPoint(st.near.lat, st.near.lon)) + '"' : ''), cls: st.near ? 'active' : '' }) + '</div>'
+        + (st.mode === 'discover' ? small('Groups you may join, ranked by shared members and activity. Groups above your clearance are never listed.') : st.mode === 'trending' ? small('Counted by the groups.trending job over the last ' + (st.trend.hours || 72) + ' hours' + (st.trend.computedAt ? ', last run ' + esc(fmtWhen(st.trend.computedAt)) : '') + '. Hidden groups and channels never trend.') : '')
+        + '<div class="vstack" style="gap:2px">' + list.map((x) => UI.listItem(esc(x.name) + (x.state === 'hidden' ? ' ' + UI.pill('hidden by moderation', 'warn') : ''), subOf(x), { active: x.id === st.sel, attrs: 'data-group="' + esc(x.id) + '"', right: rolePill(x.role) || (st.invites[x.id] ? UI.pill('invited', 'info') : st.mineReq[x.id] ? UI.pill('requested', 'info') : UI.label(x.label, { sm: true })) })).join('')
+        + (list.length ? '' : UI.empty('No groups match', st.near ? 'No group whose place you may read is within ' + st.near.km + ' km.' : st.mode === 'mine' ? (st.groups.length ? 'You are in no group that matches. Try Discover.' : 'You are in no group yet. Create one, or look in Discover.') : st.mode === 'trending' ? 'Nothing trends in your workspaces yet. The groups.trending job counts joins and posts.' : 'Nothing to join that matches. Hidden groups are known only to their members and invitees.')) + '</div>'
         + (canWrite() ? '<div style="margin-top:auto">' + UI.btn('New group', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newgroup' }) + '</div>' : '') + '</div>';
 
       let page = '', aside = '';
@@ -223,7 +266,10 @@
         const reqs = d.requests || [];
         const invite = st.invites[g.id]; const myReq = st.mineReq[g.id];
         if (st.tab === 'cases' && !mod) st.tab = 'overview';
-        const tabs = UI.tabs([{ id: 'overview', label: 'Overview' }, { id: 'members', label: 'Members', count: g.members || 0 }, { id: 'posts', label: 'Posts', count: posts.filter((x) => x.state !== 'hidden').length }, { id: 'events', label: 'Events', count: evs.filter((e) => e.state !== 'cancelled').length }, { id: 'feeds', label: 'Feeds' }].concat(mod ? [{ id: 'cases', label: 'Cases', count: (d.cases || []).filter((c) => c.state === 'open').length }] : []), st.tab);
+        const isChan = !!g.parentId;
+        if (isChan && (st.tab === 'channels' || st.tab === 'feeds')) st.tab = 'overview';
+        const chans = d.channels || [];
+        const tabs = UI.tabs([{ id: 'overview', label: 'Overview' }, { id: 'members', label: 'Members', count: g.members || 0 }, { id: 'posts', label: 'Posts', count: posts.filter((x) => x.state !== 'hidden').length }, { id: 'events', label: 'Events', count: evs.filter((e) => e.state !== 'cancelled').length }].concat(isChan ? [] : [{ id: 'channels', label: 'Channels', count: rd ? (d.channels ? chans.length : g.channels || 0) : 0 }, { id: 'feeds', label: 'Feeds' }]).concat(mod ? [{ id: 'cases', label: 'Cases', count: (d.cases || []).filter((c) => c.state === 'open').length }] : []), st.tab);
         let join = '';
         if (!hidden && !isMember && canWrite()) {
           if (myReq) join = UI.pill('request pending', 'info') + UI.btn('Withdraw', { kind: 'ghost', size: 'sm', attrs: 'data-withdrawmine' });
@@ -231,7 +277,7 @@
           else if (clears(g.label)) join = UI.btn(g.joinMode === 'open' ? 'Join' : g.joinMode === 'request' ? 'Ask to join' : 'Invite only', { kind: 'primary', size: 'sm', attrs: 'data-join', disabled: g.joinMode === 'invite' });
         }
         const headActions = (!hidden && isMember && st.tab === 'overview' && canWrite() ? UI.btn('Leave', { kind: 'ghost', size: 'sm', attrs: 'data-leave' }) : '') + join + UI.label(g.label);
-        const head = UI.pagehead(g.name, esc(wsName(g.workspaceId)) + ' · ' + visPill(g.visibility) + ' · join: ' + esc(g.joinMode) + ' · ' + (g.members || 0) + ' member' + (g.members === 1 ? '' : 's') + (g.role ? ' · your role: ' + esc(g.role) : g.actingRole ? ' · you manage groups here (acting owner)' : '') + ' · created ' + esc(fmtDay(g.createdAt)), headActions);
+        const head = UI.pagehead(g.name, (isChan ? 'Channel of <a href="#" data-backparent>' + esc(g.parentName || 'its group') + '</a> · ' : esc(wsName(g.workspaceId)) + ' · ') + (g.categoryId && catName(g.categoryId) ? UI.pill(catName(g.categoryId), 'outline') + ' · ' : '') + visPill(g.visibility) + ' · join: ' + esc(g.joinMode) + ' · ' + (g.members || 0) + ' member' + (g.members === 1 ? '' : 's') + (g.role ? ' · your role: ' + esc(g.role) : g.actingRole ? ' · you manage groups here (acting owner)' : '') + ' · created ' + esc(fmtDay(g.createdAt)), headActions);
         const leaveProblem = st.leaveProblem && st.leaveProblem.groupId === g.id ? UI.problem('Last owner cannot leave', st.leaveProblem.detail, st.leaveProblem.trace) : '';
         const loadingNote = !d.loaded ? UI.notice('Loading…', 'info') : d.error ? UI.problem('Part of this group could not be loaded', d.error.message, (d.error.problem && d.error.problem.trace_id) || false) : '';
         let body = '';
@@ -244,12 +290,18 @@
             + (invite ? UI.notice('<b>You are invited</b> to ' + esc(g.name) + ' as ' + esc(invite.role) + '. The invitation expires ' + esc(fmtDay(invite.expiresAt)) + '.', 'info') : '')
             + (st.joinRefused && st.joinRefused.groupId === g.id ? UI.problem(st.joinRefused.title, st.joinRefused.detail, st.joinRefused.trace) : '')
             + leaveProblem + loadingNote
-            + UI.panel('About', rd ? '<div class="serif" style="font-size:15px;line-height:1.5">' + esc(g.description || 'No description yet.') + '</div>' : UI.notice(clears(g.label) ? 'The description and content are shown to members only (private group). Join to read them.' : 'The group is labelled ' + esc(g.label) + ', above your clearance of ' + esc(me().clearance) + '. Its content is not shown to you.', 'info'))
+            + (st.uncatNote && st.uncatNote.groupId === g.id ? UI.notice(esc(st.uncatNote.text), 'warn', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-uncatok' })) : '')
+            + UI.panel('About', rd ? '<div class="serif" style="font-size:15px;line-height:1.5">' + esc(g.description || 'No description yet.') + '</div>'
+              + (isChan ? '' : UI.kv([['Category', g.categoryId ? esc(catName(g.categoryId) || 'a removed category') : 'uncategorised'], ['Place', g.location ? esc(g.location.name || 'a point') + (g.location.lat != null ? ' ' + small(esc(fmtPoint(g.location.lat, g.location.lon))) : '') : 'none']], 2))
+              : UI.notice(clears(g.label) ? 'The description, place and content are shown to members only (private group). Join to read them.' : 'The group is labelled ' + esc(g.label) + ', above your clearance of ' + esc(me().clearance) + '. Its content is not shown to you.', 'info'))
             + '<div class="grid3">' + UI.stat(String(g.members || 0), 'members', mod && d.requests ? small(reqs.filter((r) => r.state === 'pending').length + ' pending requests and invitations') : '')
             + UI.stat(rd ? String(evs.filter(upcoming).length) : '–', 'upcoming events', rd ? small('next: ' + esc(next ? next.title : 'none')) : '')
             + UI.stat(rd ? String(posts.filter((x) => x.state !== 'hidden').length) : '–', 'posts', rd && posts[0] ? small('newest ' + esc(fmtWhen(posts[0].createdAt))) : '') + '</div>'
             + (mod ? UI.panel('Settings', '<div class="formgrid" style="--cols:3">' + UI.field('Name', UI.input(g.name, { attrs: 'data-sname', readonly: !own })) + UI.field('Visibility', UI.select(['public', 'private', 'hidden'], g.visibility, 'data-svis' + (own ? '' : ' disabled'))) + UI.field('Join mode', UI.select(['open', 'request', 'invite'], g.joinMode, 'data-sjoin' + (own ? '' : ' disabled')))
-              + UI.field('Label', UI.select(LABELS, g.label, 'data-slabel' + (own ? '' : ' disabled')), 'At most the workspace ceiling' + (wsLabel(g.workspaceId) ? ' (' + esc(wsLabel(g.workspaceId)) + ')' : '') + '; raising it raises every post and event and re-checks the sockets in the room') + '</div>'
+              + UI.field('Label', UI.select(isChan ? LABELS.filter((l) => RANK[l] >= RANK[g.parentLabel || 'public']) : LABELS, g.label, 'data-slabel' + (own ? '' : ' disabled')), isChan ? 'At least the group\'s label (' + esc(g.parentLabel || '') + '), at most the workspace ceiling' : 'At most the workspace ceiling' + (wsLabel(g.workspaceId) ? ' (' + esc(wsLabel(g.workspaceId)) + ')' : '') + '; raising it raises every post, event and channel below it and re-checks the sockets in the rooms')
+              + (isChan ? '' : UI.field('Category', UI.select([{ value: '', label: 'Uncategorised' }].concat(st.categories.map((c) => ({ value: c.id, label: c.name }))), g.categoryId || '', 'data-scat' + (own ? '' : ' disabled')), 'The tenant\'s list, kept on Social and messaging')
+                + UI.field('Place', UI.input(g.location ? g.location.name || '' : '', { attrs: 'data-splace maxlength="200"', placeholder: 'Hamburg office', readonly: !own }))
+                + UI.field('Latitude, longitude', UI.input(g.location ? fmtPoint(g.location.lat, g.location.lon) : '', { attrs: 'data-spoint', placeholder: '53.5511, 9.9937', readonly: !own }), 'WGS 84 degrees; both or neither. Shown to readers of the content only')) + '</div>'
               + UI.field('Description', UI.textarea(g.description || '', { rows: 2, attrs: 'data-sdesc' + (own ? '' : ' readonly') }))
               + '<div class="hstack gap6">' + UI.btn('Save', { kind: 'primary', size: 'sm', attrs: 'data-savesettings', disabled: !own || !canWrite() }) + (own && canWrite() ? UI.btn('Delete group', { kind: 'danger', size: 'sm', attrs: 'data-delete' }) : small('Settings are the owner\'s; moderators handle requests, members, posts and events.')) + '</div>') : '')
             + small('Workspace membership is the outer boundary: a member who leaves ' + esc(wsName(g.workspaceId)) + ' loses this group at once, whatever their group role.');
@@ -281,15 +333,19 @@
           body = loadingNote + (!rd ? UI.notice('Events are shown to members of a private group. Join to see them.', 'info') : (st.cancelledNote && ev && ev.id === st.cancelledNote.eventId ? UI.notice('<b>' + esc(ev.title) + ' cancelled.</b> ' + (st.cancelledNote.notified != null ? st.cancelledNote.notified + ' attendee' + (st.cancelledNote.notified === 1 ? ' was' : 's were') : 'Every attendee was') + ' (going or maybe) notified in the console (event.cancelled) and by email with the time and a link, never the title or the reason. Its reminders are cancelled. Audited as group.event.cancelled.', 'warn', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearcancel' })) : '')
             + (st.capacityProblem && ev && ev.id === st.capacityProblem.eventId ? UI.problem('Capacity reached', st.capacityProblem.detail, st.capacityProblem.trace) : '')
             + '<div class="cols groups-cols"><div class="grow">' + calendar(st, evs) + '</div></div>'
-            + UI.panel('Events', UI.table(['Event', 'When', 'Location', 'Attendance', 'Capacity', 'State', 'Your RSVP'], evs.map((e) => { const x = att(e); return { cells: ['<b>' + esc(e.title) + '</b>' + (e.sequence > 1 ? ' ' + small('rev ' + e.sequence) : ''), esc(whenText(e)), esc(e.location || ''), '<span class="num">' + x.going + '</span> going, <span class="num">' + x.maybe + '</span> maybe' + (x.guests ? ', <span class="num">' + x.guests + '</span> guests' : '') + (x.checkedIn ? ', <span class="num">' + x.checkedIn + '</span> checked in' : ''), e.capacity ? '<span class="num">' + (x.going + x.guests) + ' of ' + e.capacity + '</span>' + (x.going + x.guests >= e.capacity ? ' ' + UI.pill('full', 'danger') : '') : small('unlimited'), e.state === 'cancelled' ? UI.pill('cancelled', 'danger') : e.state === 'hidden' ? UI.pill('hidden', 'warn') : UI.pill('scheduled', 'ok'), e.myRsvp ? UI.pill(e.myRsvp.response, e.myRsvp.response === 'going' ? 'ok' : e.myRsvp.response === 'maybe' ? 'warn' : '') : small('none')], attrs: 'data-event="' + esc(e.id) + '"', selected: e.id === st.eventSel }; }), { minWidth: '820px', emptyTitle: 'No events', emptyText: 'Moderators create events for the group.' }), { actions: mod && canWrite() ? UI.btn('New event', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newevent' }) : '' }));
+            + UI.panel('Events', UI.table(['Event', 'When', 'Location', 'Attendance', 'Capacity', 'State', 'Your RSVP'], evs.map((e) => { const x = att(e); return { cells: ['<b>' + esc(e.title) + '</b>' + (e.sequence > 1 ? ' ' + small('rev ' + e.sequence) : ''), esc(whenText(e)), esc(e.location || '') + (e.lat != null ? '<br>' + small(esc(fmtPoint(e.lat, e.lon))) : ''), '<span class="num">' + x.going + '</span> going, <span class="num">' + x.maybe + '</span> maybe' + (x.guests ? ', <span class="num">' + x.guests + '</span> guests' : '') + (x.checkedIn ? ', <span class="num">' + x.checkedIn + '</span> checked in' : ''), e.capacity ? '<span class="num">' + (x.going + x.guests) + ' of ' + e.capacity + '</span>' + (x.going + x.guests >= e.capacity ? ' ' + UI.pill('full', 'danger') : '') : small('unlimited'), e.state === 'cancelled' ? UI.pill('cancelled', 'danger') : e.state === 'hidden' ? UI.pill('hidden', 'warn') : UI.pill('scheduled', 'ok'), e.myRsvp ? UI.pill(e.myRsvp.response, e.myRsvp.response === 'going' ? 'ok' : e.myRsvp.response === 'maybe' ? 'warn' : '') : small('none')], attrs: 'data-event="' + esc(e.id) + '"', selected: e.id === st.eventSel }; }), { minWidth: '820px', emptyTitle: 'No events', emptyText: 'Moderators create events for the group.' }), { actions: mod && canWrite() ? UI.btn('New event', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newevent' }) : '' }));
           if (rd) {
             aside = '<aside class="inspector w360" aria-label="Selected event">' + (ev ? '<div class="hstack"><div class="eyebrow grow">Selected event</div>' + (ev.state === 'cancelled' ? UI.pill('cancelled', 'danger') : UI.label(ev.label, { sm: true })) + '</div><h2 class="groups-title">' + esc(ev.title) + '</h2><div class="fg2">' + esc(whenText(ev)) + '</div>'
               + (ev.description ? '<div class="serif" style="font-size:14px;line-height:1.5;margin:6px 0;white-space:pre-wrap">' + esc(ev.description) + '</div>' : '')
-              + UI.kv([['Location', esc(ev.location || 'none given')], ['Time zone', '<span class="mono">' + esc(ev.timeZone) + '</span>' + (ev.timeZone !== 'UTC' ? '<br>' + small('stored in UTC; a wall-clock time that occurs twice takes the earlier instant') : '')], ['Capacity', ev.capacity ? (a.going + a.guests) + ' of ' + ev.capacity + ' (people with guests)' : 'unlimited'], ['Guests', ev.maxGuests ? 'up to ' + ev.maxGuests + ' each' : 'none'], ['Reminders', (ev.reminders || []).length ? ev.reminders.map(remText).join(', ') + ' before' : 'none'], ['Attendance', a.going + ' going, ' + a.maybe + ' maybe, ' + a.guests + ' guests, ' + a.checkedIn + ' checked in'], ['Revision', 'sequence ' + ev.sequence]], 1)
+              + UI.kv([['Location', esc(ev.location || 'none given') + (ev.lat != null ? '<br>' + small(esc(fmtPoint(ev.lat, ev.lon)) + ' (for distance filters)') : '')], ['Time zone', '<span class="mono">' + esc(ev.timeZone) + '</span>' + (ev.timeZone !== 'UTC' ? '<br>' + small('stored in UTC; a wall-clock time that occurs twice takes the earlier instant') : '')], ['Capacity', ev.capacity ? (a.going + a.guests) + ' of ' + ev.capacity + ' (people with guests)' : 'unlimited'], ['Guests', ev.maxGuests ? 'up to ' + ev.maxGuests + ' each' : 'none'], ['Reminders', (ev.reminders || []).length ? ev.reminders.map(remText).join(', ') + ' before' : 'none'], ['Attendance', a.going + ' going, ' + a.maybe + ' maybe, ' + a.guests + ' guests, ' + a.checkedIn + ' checked in'], ['Revision', 'sequence ' + ev.sequence]], 1)
               + (ev.state === 'cancelled' ? UI.notice('Cancelled: ' + esc(ev.cancelReason || 'no reason given') + '.' + (st.notified[ev.id] != null ? ' ' + st.notified[ev.id] + ' attendee' + (st.notified[ev.id] === 1 ? '' : 's') + ' notified.' : ''), 'warn')
                 : canWrite() && (isMember || g.visibility === 'public') && Date.parse(ev.endsAt) >= Date.now() ? '<div class="eyebrow" style="margin-top:8px" id="groups-rsvp-l">Your RSVP</div>' + UI.seg([{ id: 'going', label: 'Going' }, { id: 'maybe', label: 'Maybe' }, { id: 'declined', label: 'Declined' }], mine ? mine.response : '', 'data-rsvp aria-labelledby="groups-rsvp-l"') + (ev.maxGuests ? UI.field('Guests', UI.select(Array.from({ length: ev.maxGuests + 1 }, (_, i) => String(i)), String(st.myGuests != null ? st.myGuests : mine ? mine.guests : 0), 'data-guests')) : '') : '')
               + '<div class="vstack gap6" style="margin-top:10px">' + UI.btn('Attendees', { attrs: 'data-attendees' }) + (mod ? UI.btn('Reminders', { attrs: 'data-reminders' }) : '') + (mod && canWrite() && ev.state === 'scheduled' ? UI.btn('Edit', { attrs: 'data-editevent' }) + UI.btn('Cancel event', { kind: 'danger', attrs: 'data-cancelevent' }) : '') + (canWrite() ? UI.btn('Calendar feed for this event', { kind: 'ghost', attrs: 'data-eventfeed' }) : '') + '</div>' : UI.empty('No event selected', 'Pick one in the calendar or the list.')) + '</aside>';
           }
+        } else if (st.tab === 'channels') {
+          body = loadingNote + (st.floorProblem && st.floorProblem.groupId === g.id ? UI.problem(st.floorProblem.title, st.floorProblem.detail, st.floorProblem.trace) : '')
+            + (rd ? UI.panel('Channels', UI.table(['Channel', 'Visibility', 'Join mode', 'Label', { label: 'Members', right: true }, 'Your role'], chans.map((c) => ({ cells: ['<b>' + esc(c.name) + '</b>' + (c.description ? '<div class="muted" style="font-size:12px">' + esc(c.description) + '</div>' : ''), visPill(c.visibility), esc(c.joinMode), UI.label(c.label, { sm: true }), '<span class="num">' + (c.members || 0) + '</span>', c.role ? rolePill(c.role) : small(c.actingRole === 'owner' ? 'acting owner' : 'not a member')], attrs: 'data-channel="' + esc(c.id) + '" tabindex="0" aria-label="Open the channel ' + esc(c.name) + '"' })), { minWidth: '640px', emptyTitle: 'No channels yet', emptyText: 'Owners and moderators split a group into channels, each with its own members and posts.' })
+              + small('A channel has its own members, roles, posts and events. Only members of ' + esc(g.name) + ' join it; leaving the group leaves its channels. A public channel is read by everyone who reads the group, a private one by its members, a hidden one is known only to them. Its label is never below the group\'s.'), { actions: mod && canWrite() && g.state === 'active' ? UI.btn('New channel', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newchannel' }) : '' }) : UI.notice('Channels are shown to readers of the group. Join first.', 'info'));
         } else if (st.tab === 'feeds') {
           const feeds = st.feeds || [];
           body = UI.notice('<b>Feed URLs are public links.</b> No session or cookie: the signature in the URL is an HMAC over the feed\'s id, tenant, owner, kind and target. The feed is rendered as you at every fetch (workspace, group and clearance). Events above the feed\'s label limit (internal by default) appear as <span class="mono">Busy (confidential)</span> without details. Revoking makes the link a 404.', 'info')
@@ -334,13 +390,24 @@
       ctx.on('click', '[data-fws]', (e, t) => menu(ctx, t, [['all', 'Any workspace']].concat(wsList.map((w) => [w.id, w.name])), st.fws, (v) => { st.fws = v; ctx.rerender(); }));
       ctx.on('click', '[data-fvis]', (e, t) => menu(ctx, t, [['all', 'Any visibility'], ['public', 'Public'], ['private', 'Private'], ['hidden', 'Hidden']], st.fvis, (v) => { st.fvis = v; ctx.rerender(); }));
       ctx.on('click', '[data-fjoin]', (e, t) => menu(ctx, t, [['all', 'Any join mode'], ['open', 'Open'], ['request', 'Request'], ['invite', 'Invite']], st.fjoin, (v) => { st.fjoin = v; ctx.rerender(); }));
-      ctx.on('click', '[data-group]', (e, t) => { st.sel = t.dataset.group; if (st.tab === 'cases') st.tab = 'overview'; st.joinRefused = null; st.leaveProblem = null; st.capacityProblem = null; st.cancelledNote = null; st.postRefused = null; st.eventSel = null; st.myGuests = null; ctx.rerender(); });
+      ctx.on('click', '[data-group]', (e, t) => { st.sel = t.dataset.group; if (st.tab === 'cases') st.tab = 'overview'; st.joinRefused = null; st.leaveProblem = null; st.capacityProblem = null; st.cancelledNote = null; st.postRefused = null; st.floorProblem = null; st.eventSel = null; st.myGuests = null; ctx.rerender(); });
+      // 1.6.0: the category and distance filters ask the server again (B-4403, B-4405).
+      ctx.on('click', '[data-fcat]', (e, t) => menu(ctx, t, [['all', 'Any category']].concat(st.categories.map((c) => [c.id, c.name])).concat([['none', 'Uncategorised']]), st.fcat, (v) => { st.fcat = v; st.sel = null; load(true); }));
+      ctx.on('click', '[data-fnear]', () => nearModal(ctx, load));
+      ctx.on('click', '[data-uncatok]', () => { st.uncatNote = null; ctx.rerender(); });
       ctx.on('click', '[data-demook]', () => { st.demoNote = null; ctx.rerender(); });
       ctx.on('click', '[data-gomoderation]', () => ctx.navigate('moderation'));
       ctx.on('click', '[data-openflag]', (e, t) => { e.preventDefault(); ctx.navigate('flags', { id: t.dataset.openflag }); });
       ctx.on('click', '[data-newgroup]', () => newGroupModal(ctx, load));
       if (st.openNew) { st.openNew = false; if (canWrite()) setTimeout(() => newGroupModal(ctx, load), 50); }
       if (!g2) return;
+
+      // ---- channels (B-4401) ----
+      const openChannel = (id) => { const c = (det.channels || []).find((x) => x.id === id); if (!c) return; st.chans[c.id] = c; st.sel = c.id; st.tab = 'overview'; st.floorProblem = null; st.eventSel = null; ctx.rerender(); };
+      ctx.on('click', '[data-channel]', (e, t) => openChannel(t.dataset.channel));
+      ctx.on('keydown', '[data-channel]', (e, t) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openChannel(t.dataset.channel); } });
+      ctx.on('click', '[data-backparent]', (e) => { e.preventDefault(); if (!g2.parentId) return; st.sel = g2.parentId; st.tab = 'channels'; if (!byId(g2.parentId)) App.get('/api/groups/' + enc(g2.parentId)).then((v) => { st.chans[v.id] = v; ctx.rerender(); }).catch(fail('Group not loaded')); ctx.rerender(); });
+      ctx.on('click', '[data-newchannel]', () => channelModal(ctx, g2, (c) => { st.floorProblem = null; st.chans[c.id] = c; ctx.toast(esc(c.name) + ' created; you are its owner. Audited as group.channel.created.', 'ok'); after(g2.id); }, (err) => { if (err.status === 422 && err.problem && err.problem.step === 'label-floor') { st.floorProblem = { groupId: g2.id, title: err.problem.title || 'Label below the group\'s', detail: err.problem.detail || err.message, trace: err.problem.trace_id || false }; ctx.rerender(); } else App.fail(err, 'Channel not created'); }));
 
       // ---- join, leave, invitations, settings ----
       ctx.on('click', '[data-join]', async () => {
@@ -375,8 +442,15 @@
       });
       ctx.on('click', '[data-savesettings]', () => {
         const body = { name: ctx.$('[data-sname]').value.trim() || g2.name, visibility: ctx.$('[data-svis]').value, joinMode: ctx.$('[data-sjoin]').value, label: ctx.$('[data-slabel]').value, description: ctx.$('[data-sdesc]').value.trim() || null };
+        if (!g2.parentId) {
+          // B-4403, B-4405: the category and the place (a name, a point, or both).
+          body.categoryId = ctx.$('[data-scat]').value || null;
+          const pt = parsePoint(ctx.$('[data-spoint]').value); const pn = ctx.$('[data-splace]').value.trim();
+          if (pt === false) { ctx.toast('A place is a latitude (−90 to 90) and a longitude (−180 to 180), separated by a comma.', 'warn'); return; }
+          body.location = pt || pn ? Object.assign({ name: pn || null }, pt || { lat: null, lon: null }) : null;
+        }
         const raised = RANK[body.label] > RANK[g2.label];
-        App.patch('/api/groups/' + enc(g2.id), body).then(() => { ctx.toast('Settings saved.' + (raised ? ' Posts and events raised to ' + esc(body.label) + '; everyone in the room is checked again.' : '') + ' Audited as group.updated.', 'ok'); after(g2.id); }).catch(fail('Not saved'));
+        App.patch('/api/groups/' + enc(g2.id), body).then((v) => { if (g2.parentId) st.chans[v.id] = Object.assign({}, st.chans[v.id], v); ctx.toast('Settings saved.' + (raised ? ' Posts and events raised to ' + esc(body.label) + (g2.parentId ? '' : ', with the channels below it') + '; everyone in the room is checked again.' : '') + ' Audited as group.updated.', 'ok'); after(g2.id); }).catch(fail('Not saved'));
       });
 
       // ---- members, requests ----
@@ -529,6 +603,27 @@
       const g = gs.find((x) => x.state === 'hidden');
       if (g) { st.mode = g.role ? 'mine' : 'discover'; st.sel = g.id; st.tab = 'overview'; }
       else st.demoNote = 'No group is hidden by moderation. A hidden group is closed to everyone but managers and its owners; its events leave calendars and their reminders stop. An upheld appeal restores it.';
+    } else if (kind === 'floor') {
+      const g = gs.find((x) => isMod(x) && readable(x) && x.label !== 'public');
+      if (g) { st.mode = g.role ? 'mine' : 'discover'; st.sel = g.id; st.tab = 'channels'; st.floorProblem = { groupId: g.id, title: 'Label below the group\'s', detail: 'A channel of ' + g.name + ' is labelled at least ' + g.label + ' (the group\'s label is the floor). New channel refuses a lower label with 422 and step label-floor.', trace: false }; }
+      else st.demoNote = 'You moderate no group labelled above public. A channel is labelled at least as high as its group; creating one lower is refused with 422 and step label-floor.';
+    } else if (kind === 'above') {
+      const n = gs.filter((x) => !clears(x.label)).length;
+      st.mode = 'discover'; st.sel = null;
+      st.demoNote = n ? n + ' group' + (n === 1 ? '' : 's') + ' you can see ' + (n === 1 ? 'is' : 'are') + ' labelled above your clearance of ' + me().clearance + ': Discover never lists ' + (n === 1 ? 'it' : 'them') + ', whatever else you may see.' : 'Discover lists groups you may join, ranked by shared members and activity. A group labelled above your clearance (' + me().clearance + ') is never listed, even for those who manage groups.';
+    } else if (kind === 'near') {
+      const g = gs.find((x) => x.location && x.location.lat != null);
+      st.mode = 'discover'; st.sel = null;
+      if (g) { st.near = { lat: g.location.lat, lon: g.location.lon, km: 50, label: g.location.name || g.name }; st.reloadNow = true; }
+      else st.demoNote = 'No group you can read has a place yet. Owners give a group a place (a name and a point) in its settings; Distance then keeps those within the radius, nearest first.';
+    } else if (kind === 'trending') {
+      st.mode = 'trending';
+      const t = (st.trend.groups || [])[0];
+      if (t) st.sel = t.id; else { st.sel = null; st.demoNote = 'Nothing trends in your workspaces yet. The groups.trending job counts joins (3 each) and posts in its window; a group with a burst of joins leads after one run.'; }
+    } else if (kind === 'uncategorised') {
+      st.mode = 'mine'; st.fcat = 'none'; st.sel = null; st.reloadNow = true;
+      st.uncatNote = null;
+      st.demoNote = 'Category: uncategorised. Removing a category on Social and messaging leaves its groups here, listed and uncategorised, never hidden.';
     } else if (kind === 'owner') {
       const uid = me().id;
       const g = gs.find((x) => { const ms = st.det[x.id] && st.det[x.id].members; return ms && ms.filter((m) => m.role === 'owner').length === 1 && ms.some((m) => m.userId === uid && m.role === 'owner'); });
@@ -537,18 +632,68 @@
     }
   }
 
+  /** The distance filter (B-4403): a centre (a place of a group you read, or a point) and a radius. */
+  function nearModal(ctx, reload) {
+    const st = ctx.state;
+    const places = []; const seen = {};
+    (st.groups || []).concat(st.disc.groups || []).forEach((g) => { if (g.location && g.location.lat != null && !seen[g.id]) { seen[g.id] = 1; places.push({ value: g.location.lat + ',' + g.location.lon, label: (g.location.name || 'Place') + ' (' + g.name + ')', name: g.location.name || g.name }); } });
+    const cur = st.near ? st.near.lat + ',' + st.near.lon : '';
+    ctx.modal({ title: 'Distance filter',
+      body: (places.length ? UI.field('Near a place', UI.select([{ value: '', label: 'A point I enter' }].concat(places), places.some((x) => x.value === cur) ? cur : '', 'data-nplace')) : '')
+        + UI.field('Point (latitude, longitude)', UI.input(st.near ? st.near.lat + ', ' + st.near.lon : '', { attrs: 'data-npoint', placeholder: '52.52, 13.405' }), 'WGS 84 degrees')
+        + UI.field('Within', UI.select(KMS.map((k) => ({ value: String(k), label: k + ' km' })), st.near ? String(st.near.km) : '25', 'data-nkm'))
+        + UI.notice('Only groups and events with a place you may read count: a private group\'s place is shown to its members. Nearest first.', 'info'),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + (st.near ? UI.btn('Clear', { attrs: 'data-nclear' }) : '') + UI.btn('Apply', { kind: 'primary', attrs: 'data-napply' }),
+      onMount(m) {
+        const sel = m.querySelector('[data-nplace]'); const pt = m.querySelector('[data-npoint]');
+        if (sel) sel.addEventListener('change', () => { if (sel.value) pt.value = sel.value.replace(',', ', '); });
+        const clear = m.querySelector('[data-nclear]'); if (clear) clear.addEventListener('click', () => { st.near = null; st.sel = null; App.closeOverlay(); reload(true); });
+        m.querySelector('[data-napply]').addEventListener('click', () => {
+          const p = parsePoint(pt.value); if (!p) { ctx.toast('Enter a latitude (−90 to 90) and a longitude (−180 to 180), separated by a comma.', 'warn'); return; }
+          const named = places.find((x) => x.value === p.lat + ',' + p.lon);
+          st.near = { lat: p.lat, lon: p.lon, km: Number(m.querySelector('[data-nkm]').value), label: named ? named.name : fmtPoint(p.lat, p.lon) }; st.sel = null;
+          App.closeOverlay(); reload(true);
+        });
+      } });
+  }
+
+  /** A new channel in a group (B-4401): its label starts at the group's, the floor. */
+  function channelModal(ctx, g, done, failed) {
+    ctx.modal({ title: 'New channel in ' + esc(g.name),
+      body: '<div class="formgrid">' + UI.field('Name', UI.input('', { attrs: 'data-cname maxlength="200"', placeholder: 'Intercompany' }))
+        + UI.field('Visibility', UI.select([{ value: 'public', label: 'public (everyone who reads the group)' }, { value: 'private', label: 'private (listed; content for its members)' }, { value: 'hidden', label: 'hidden (known only to its members)' }], 'public', 'data-cvis'))
+        + UI.field('Join mode', UI.select(['open', 'request', 'invite'], 'open', 'data-cjoin'))
+        + UI.field('Label', UI.select(LABELS.filter((l) => clears(l)), g.label, 'data-clabel'), 'At least ' + esc(g.label) + ' (the group\'s), at most the workspace ceiling') + '</div>'
+        + UI.field('Description', UI.textarea('', { rows: 2, attrs: 'data-cdesc' }))
+        + UI.notice('You become the channel\'s owner; the group\'s owners act as owners too. Only members of ' + esc(g.name) + ' can join it. Channels do not nest.', 'info'),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create channel', { kind: 'primary', attrs: 'data-ccreate' }),
+      onMount(m) { m.querySelector('[data-ccreate]').addEventListener('click', () => {
+        const name = m.querySelector('[data-cname]').value.trim(); if (!name) { ctx.toast('A channel needs a name.', 'warn'); return; }
+        const desc = m.querySelector('[data-cdesc]').value.trim();
+        const body = { name, visibility: m.querySelector('[data-cvis]').value, joinMode: m.querySelector('[data-cjoin]').value, label: m.querySelector('[data-clabel]').value };
+        if (desc) body.description = desc;
+        App.post('/api/groups/' + enc(g.id) + '/channels', body).then((c) => { App.closeOverlay(); done(c); }).catch((err) => { App.closeOverlay(); failed(err); });
+      }); } });
+  }
+
   function newGroupModal(ctx, reload) {
     const st = ctx.state;
     const ws = (App.me && App.me.workspaces) || [];
     const cur = (App.me && App.me.workspace) || (ws[0] && ws[0].id) || '';
     ctx.modal({ title: 'New group',
-      body: '<div class="formgrid">' + UI.field('Workspace', UI.select(ws.map((w) => ({ value: w.id, label: w.name })), cur, 'data-gws')) + UI.field('Name', UI.input('', { attrs: 'data-gname', placeholder: 'Quarter-end reviewers' })) + UI.field('Visibility', UI.select(['public', 'private', 'hidden'], 'private', 'data-gvis')) + UI.field('Join mode', UI.select(['open', 'request', 'invite'], 'request', 'data-gjoin')) + UI.field('Label', UI.select(LABELS, 'internal', 'data-glabel'), 'At most the workspace ceiling (422) and your clearance (403)') + '</div>'
+      body: '<div class="formgrid">' + UI.field('Workspace', UI.select(ws.map((w) => ({ value: w.id, label: w.name })), cur, 'data-gws')) + UI.field('Name', UI.input('', { attrs: 'data-gname', placeholder: 'Quarter-end reviewers' })) + UI.field('Visibility', UI.select(['public', 'private', 'hidden'], 'private', 'data-gvis')) + UI.field('Join mode', UI.select(['open', 'request', 'invite'], 'request', 'data-gjoin')) + UI.field('Label', UI.select(LABELS, 'internal', 'data-glabel'), 'At most the workspace ceiling (422) and your clearance (403)')
+        + UI.field('Category', UI.select([{ value: '', label: 'Uncategorised' }].concat((st.categories || []).map((c) => ({ value: c.id, label: c.name }))), '', 'data-gcat'))
+        + UI.field('Place', UI.input('', { attrs: 'data-gplace maxlength="200"', placeholder: 'Optional: Hamburg office' })) + UI.field('Latitude, longitude', UI.input('', { attrs: 'data-gpoint', placeholder: 'Optional: 53.5511, 9.9937' }), 'Both or neither, for distance filters') + '</div>'
         + UI.field('Description', UI.textarea('', { rows: 2, attrs: 'data-gdesc' })) + UI.notice('You become the owner. Hidden groups are known only to members, invitees and managers.', 'info'),
       actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create', { kind: 'primary', attrs: 'data-gcreate' }),
       onMount(m) { m.querySelector('[data-gcreate]').addEventListener('click', () => {
         const name = m.querySelector('[data-gname]').value.trim(); if (!name) { ctx.toast('A group needs a name.', 'warn'); return; }
         const desc = m.querySelector('[data-gdesc]').value.trim();
         const body = { name, visibility: m.querySelector('[data-gvis]').value, joinMode: m.querySelector('[data-gjoin]').value, label: m.querySelector('[data-glabel]').value };
+        const cat = m.querySelector('[data-gcat]').value; if (cat) body.categoryId = cat;
+        const pt = parsePoint(m.querySelector('[data-gpoint]').value); const pn = m.querySelector('[data-gplace]').value.trim();
+        if (pt === false) { ctx.toast('A place is a latitude (−90 to 90) and a longitude (−180 to 180), separated by a comma.', 'warn'); return; }
+        if (pt || pn) body.location = Object.assign({ name: pn || null }, pt || {});
         const w = m.querySelector('[data-gws]').value; if (w) body.workspaceId = w; if (desc) body.description = desc;
         App.post('/api/groups', body).then((g) => { App.closeOverlay(); st.mode = 'mine'; st.sel = g.id; st.tab = 'overview'; ctx.toast(esc(g.name) + ' created; you are its owner. Event group.created.', 'ok'); reload(true); }).catch((err) => App.fail(err, 'Group not created'));
       }); } });
@@ -572,13 +717,14 @@
   function eventModal(ctx, g, ev, done) {
     const isNew = !ev;
     const tomorrow = new Date(Date.now() + 86400000);
-    const v = ev ? { title: ev.title, location: ev.location || '', timeZone: ev.timeZone, date: ev.date, start: ev.start || '10:00', end: ev.end || '11:00', allDay: ev.allDay, capacity: ev.capacity, maxGuests: ev.maxGuests || 0, reminders: ev.reminders || [] }
-      : { title: '', location: '', timeZone: TZS.list.indexOf(TZS.own) >= 0 ? TZS.own : 'UTC', date: isoDay(tomorrow), start: '10:00', end: '11:00', allDay: false, capacity: null, maxGuests: 0, reminders: [1440, 60] };
+    const v = ev ? { lat: ev.lat, lon: ev.lon, title: ev.title, location: ev.location || '', timeZone: ev.timeZone, date: ev.date, start: ev.start || '10:00', end: ev.end || '11:00', allDay: ev.allDay, capacity: ev.capacity, maxGuests: ev.maxGuests || 0, reminders: ev.reminders || [] }
+      : { lat: null, lon: null, title: '', location: '', timeZone: TZS.list.indexOf(TZS.own) >= 0 ? TZS.own : 'UTC', date: isoDay(tomorrow), start: '10:00', end: '11:00', allDay: false, capacity: null, maxGuests: 0, reminders: [1440, 60] };
     const tzs = TZS.list.indexOf(v.timeZone) >= 0 ? TZS.list : TZS.list.concat([v.timeZone]);
     ctx.modal({ title: isNew ? 'New event in ' + esc(g.name) : 'Edit ' + esc(v.title), cls: 'wide',
       body: '<div class="formgrid" style="--cols:3">' + UI.field('Title', UI.input(v.title, { attrs: 'data-etitle' })) + UI.field('Location', UI.input(v.location, { attrs: 'data-eloc' })) + UI.field('Time zone', UI.select(tzs, v.timeZone, 'data-etz'), 'IANA name; offsets are refused')
         + UI.field('Date', UI.input(v.date, { type: 'date', attrs: 'data-edate' })) + UI.field('Start', UI.input(v.start, { type: 'time', attrs: 'data-estart' })) + UI.field('End', UI.input(v.end, { type: 'time', attrs: 'data-eend' }))
-        + UI.field('Capacity', UI.input(v.capacity == null ? '' : String(v.capacity), { type: 'number', attrs: 'data-ecap min="1"', placeholder: 'unlimited' }), 'People with their guests') + UI.field('Guests per person', UI.input(String(v.maxGuests), { type: 'number', attrs: 'data-eguests min="0" max="20"' })) + UI.field('Reminders (minutes before)', UI.input(v.reminders.join(', '), { attrs: 'data-erem' }), 'Up to five, at most 28 days') + '</div>'
+        + UI.field('Capacity', UI.input(v.capacity == null ? '' : String(v.capacity), { type: 'number', attrs: 'data-ecap min="1"', placeholder: 'unlimited' }), 'People with their guests') + UI.field('Guests per person', UI.input(String(v.maxGuests), { type: 'number', attrs: 'data-eguests min="0" max="20"' })) + UI.field('Reminders (minutes before)', UI.input(v.reminders.join(', '), { attrs: 'data-erem' }), 'Up to five, at most 28 days')
+        + UI.field('Latitude, longitude', UI.input(fmtPoint(v.lat, v.lon), { attrs: 'data-epoint', placeholder: '53.5511, 9.9937' }), 'Optional, for distance filters; both or neither') + '</div>'
         + UI.toggle('All day', v.allDay, 'data-eallday')
         + UI.notice('Wall-clock times are stored in UTC with the zone. A time that occurs twice (the autumn clock change) takes the earlier instant; one in a spring gap moves forward by the gap. Events last at most 31 days.' + (isNew ? '' : ' A change attendees see moves the sequence; a new time or reminder list reschedules the reminders.'), 'info'),
       actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(isNew ? 'Create event' : 'Save', { kind: 'primary', attrs: 'data-esave' }),
@@ -591,7 +737,9 @@
         const start = m.querySelector('[data-estart]').value || v.start, end = m.querySelector('[data-eend]').value || v.end;
         if (!allDay && end <= start) { ctx.toast('The end comes after the start.', 'warn'); return; }
         const cap = m.querySelector('[data-ecap]').value.trim();
-        const body = { title, location: m.querySelector('[data-eloc]').value.trim() || null, timeZone: m.querySelector('[data-etz]').value, allDay, capacity: cap ? Number(cap) : null, maxGuests: Number(m.querySelector('[data-eguests]').value) || 0, reminders: rem, start: allDay ? date : date + 'T' + start, end: allDay ? date : date + 'T' + end };
+        const pt = parsePoint(m.querySelector('[data-epoint]').value);
+        if (pt === false) { ctx.toast('A place is a latitude (−90 to 90) and a longitude (−180 to 180), separated by a comma.', 'warn'); return; }
+        const body = { lat: pt ? pt.lat : null, lon: pt ? pt.lon : null, title, location: m.querySelector('[data-eloc]').value.trim() || null, timeZone: m.querySelector('[data-etz]').value, allDay, capacity: cap ? Number(cap) : null, maxGuests: Number(m.querySelector('[data-eguests]').value) || 0, reminders: rem, start: allDay ? date : date + 'T' + start, end: allDay ? date : date + 'T' + end };
         const req = isNew ? App.post('/api/groups/' + enc(g.id) + '/events', body) : App.patch('/api/calendar/events/' + enc(ev.id), body);
         req.then((r) => { App.closeOverlay(); ctx.toast(isNew ? 'Event created. Members in the room get group.event.created.' : 'Event saved; sequence is now ' + r.sequence + '. Attendees get group.event.updated.', 'ok'); done(r); }).catch((err) => App.fail(err, isNew ? 'Event not created' : 'Event not saved'));
       }); } });

@@ -413,7 +413,10 @@ export class GroupService {
         distance = distanceKm(q.near, { lat: g.lat, lon: g.lon });
         if (distance > q.near.km) continue;
       }
-      const view = await this.present(g, a, { members: counts.get(g.id) ?? 0, ...(g.parent_id ? {} : { channels: channels.get(g.id) ?? 0 }) });
+      const base = await this.present(g, a, { members: counts.get(g.id) ?? 0, ...(g.parent_id ? {} : { channels: channels.get(g.id) ?? 0 }) });
+      // A channel names its group (and the label floor it keeps).
+      const pg = g.parent_id ? parents.get(g.parent_id)?.group : null;
+      const view = pg ? { ...base, parentName: pg.name, parentLabel: pg.label } : base;
       out.push(distance == null ? view : { ...view, distanceKm: Math.round(distance * 1000) / 1000 });
     }
     if (q.near) out.sort((x, y) => ((x as { distanceKm?: number }).distanceKm ?? 0) - ((y as { distanceKm?: number }).distanceKm ?? 0) || x.name.localeCompare(y.name));

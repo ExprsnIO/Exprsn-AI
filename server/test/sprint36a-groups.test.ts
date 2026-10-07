@@ -124,7 +124,7 @@ describe('Groups depth (Sprint 36a, B-4401 to B-4405)', () => {
     // a channel is not listed among groups; its group counts and lists it
     expect(names((await ann.get('/api/groups').expect(200)).body)).toEqual(['Month-end close']);
     expect((await ann.get(`/api/groups/${g.id}`).expect(200)).body.channels).toBe(1);
-    expect(names((await ann.get(`/api/groups/${g.id}/channels`).expect(200)).body)).toEqual(['Accruals']);
+    expect((await ann.get(`/api/groups/${g.id}/channels`).expect(200)).body).toMatchObject([{ name: 'Accruals', parentId: g.id, parentName: 'Month-end close', parentLabel: 'internal' }]);
 
     // own members: only the group's members join, and joining the group does not join the channel
     await ann.post(`/api/groups/${ch.id}/join`).expect(200);
