@@ -86,14 +86,14 @@ An admin permission is any permission outside the member baseline: a custom role
 | `apps:design` | yes | 17 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
-| `groups:read` | no | 42 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `groups:write` | no | 19 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `groups:read` | no | 46 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `groups:write` | no | 20 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `groups:manage` | yes | 0 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:manage` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |  |
 | `social:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `social:write` | no | 16 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `social:manage` | yes | 19 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `social:manage` | yes | 23 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:read` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -1180,11 +1180,15 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/calendar/events/{id}/attendees`
 - `GET /api/calendar/events/{id}/reminders`
 - `GET /api/calendar/feeds`
+- `GET /api/group-categories`
 - `GET /api/group-requests`
 - `GET /api/groups`
+- `GET /api/groups/discover`
+- `GET /api/groups/trending`
 - `GET /api/groups/{id}`
 - `GET /api/groups/{id}/candidates`
 - `GET /api/groups/{id}/cases`
+- `GET /api/groups/{id}/channels`
 - `GET /api/groups/{id}/events`
 - `GET /api/groups/{id}/members`
 - `GET /api/groups/{id}/posts`
@@ -1235,6 +1239,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/group-requests/{id}/accept`
 - `POST /api/group-requests/{id}/decline`
 - `POST /api/groups`
+- `POST /api/groups/{id}/channels`
 - `POST /api/groups/{id}/events`
 - `POST /api/groups/{id}/invites`
 - `POST /api/groups/{id}/join`
@@ -1308,6 +1313,7 @@ No route requires it directly; handlers and services check it.
 
 ### `social:manage`
 
+- `DELETE /api/admin/social/group-categories/{id}`
 - `DELETE /api/admin/social/trending/exclusions/{tag}`
 - `GET /api/admin/social/conversations`
 - `GET /api/admin/social/exports/{id}/download`
@@ -1317,10 +1323,13 @@ No route requires it directly; handlers and services check it.
 - `GET /api/admin/social/messaging`
 - `GET /api/admin/social/relations`
 - `GET /api/social/admin/users/{id}`
+- `PATCH /api/admin/social/group-categories/{id}`
 - `POST /api/admin/social/calendar-feeds/{id}/revoke`
 - `POST /api/admin/social/digest/test`
 - `POST /api/admin/social/exports`
 - `POST /api/admin/social/exports/{id}/withdraw`
+- `POST /api/admin/social/group-categories`
+- `POST /api/admin/social/groups/trending/run`
 - `POST /api/admin/social/groups/{id}/archive`
 - `POST /api/admin/social/groups/{id}/transfer`
 - `POST /api/admin/social/trending/exclusions`

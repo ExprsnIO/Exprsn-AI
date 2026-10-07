@@ -186,12 +186,18 @@ export class FeedService {
       const manager = perms.has('groups:manage');
       const roles = new Map(((await this.db('group_members').where({ tenant_id: p.tenantId, user_id: p.userId }).select('group_id', 'role')) as { group_id: string; role: string }[]).map((m) => [m.group_id, m.role]));
       // 1.6.0 (B-4206): an archived group's feed stays readable; nobody posts in it.
-      const rows = (await this.db('social_groups').where({ tenant_id: p.tenantId }).whereIn('state', ['active', 'archived']).whereIn('workspace_id', [...workspaces.keys()]).select('id', 'workspace_id', 'visibility', 'label', 'state')) as { id: string; workspace_id: string; visibility: string; label: string; state: string }[];
-      for (const g of rows) {
+      const rows = (await this.db('social_groups').where({ tenant_id: p.tenantId }).whereIn('state', ['active', 'archived']).whereIn('workspace_id', [...workspaces.keys()]).select('id', 'workspace_id', 'visibility', 'label', 'state', 'parent_id')) as { id: string; workspace_id: string; visibility: string; label: string; state: string; parent_id: string | null }[];
+      const owners = new Set<string>();
+      // Groups first, then channels (1.6.0, B-4401): a channel is read only by readers of its group, whose owners act
+      // as its owners.
+      for (const g of [...rows.filter((x) => !x.parent_id), ...rows.filter((x) => x.parent_id)]) {
         const label: Label = isLabel(g.label) ? g.label : 'restricted';
         const role = roles.get(g.id) ?? null;
-        if (!clears(p.clearance, label) || !(manager || role || g.visibility === 'public')) continue;
-        groups.set(g.id, { workspaceId: g.workspace_id, label, moderate: manager || role === 'owner' || role === 'moderator', post: g.state === 'active' && (manager || !!role), archived: g.state === 'archived' });
+        if (g.parent_id && !groups.has(g.parent_id)) continue;
+        const lead = manager || (!!g.parent_id && owners.has(g.parent_id));
+        if (!clears(p.clearance, label) || !(lead || role || g.visibility === 'public')) continue;
+        if (!g.parent_id && (manager || role === 'owner')) owners.add(g.id);
+        groups.set(g.id, { workspaceId: g.workspace_id, label, moderate: lead || role === 'owner' || role === 'moderator', post: g.state === 'active' && (lead || !!role), archived: g.state === 'archived' });
       }
     }
     return { p, workspaces, groups, labels: LABELS.filter((l) => clears(p.clearance, l)), manage: perms.has('feed:manage') };
@@ -631,12 +637,15 @@ export class FeedService {
     for (let i = 0; i < userIds.length; i += 500) {
       const chunk = userIds.slice(i, i + 500);
       let ok = await inWs(chunk);
-      if (x.group_id) {
-        const g = (await this.db('social_groups').where({ id: x.group_id }).first('visibility')) as { visibility: string } | undefined;
+      // The post's group, and for a channel its group too (1.6.0, B-4401): each one that is not public needs membership.
+      let gid: string | null = x.group_id;
+      while (gid) {
+        const g = (await this.db('social_groups').where({ id: gid }).first('visibility', 'parent_id')) as { visibility: string; parent_id: string | null } | undefined;
         if (g?.visibility !== 'public') {
-          const members = new Set(((await this.db('group_members').where({ group_id: x.group_id }).whereIn('user_id', chunk).select('user_id')) as { user_id: string }[]).map((r) => r.user_id));
+          const members = new Set(((await this.db('group_members').where({ group_id: gid }).whereIn('user_id', chunk).select('user_id')) as { user_id: string }[]).map((r) => r.user_id));
           ok = new Set([...ok].filter((u) => members.has(u)));
         }
+        gid = g?.parent_id ?? null;
       }
       out.push(...chunk.filter((u) => ok.has(u)));
     }

@@ -3887,6 +3887,7 @@
             "enum": [
               "active",
               "hidden",
+              "archived",
               "deleted"
             ]
           },
@@ -3938,6 +3939,88 @@
           },
           "members": {
             "type": "integer"
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4401): the group a channel belongs to; null for a group"
+          },
+          "categoryId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4405): the tenant category, or null (uncategorised)"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lat": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lon": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4403): the place, shown to readers of the content only"
+          },
+          "channels": {
+            "type": "integer",
+            "description": "1.6.0: channels of a group the caller may know of (not on a channel)"
+          },
+          "distanceKm": {
+            "type": "number",
+            "description": "1.6.0: with near, the great-circle distance"
+          },
+          "parentName": {
+            "type": "string",
+            "description": "1.6.0: on a channel's own view, its group's name"
+          },
+          "parentLabel": {
+            "$ref": "#/components/schemas/Label"
           }
         },
         "required": [
@@ -4338,6 +4421,32 @@
           },
           "notified": {
             "type": "integer"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4403): the point of the place"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4403)"
+          },
+          "distanceKm": {
+            "type": "number",
+            "description": "1.6.0: with near on GET /api/calendar/events"
           }
         },
         "required": [
@@ -10555,6 +10664,46 @@
             ]
           }
         }
+      },
+      "GroupCategory": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position": {
+            "type": "integer"
+          },
+          "groups": {
+            "type": "integer",
+            "description": "On the admin view: groups (not channels) at labels the caller is cleared for"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "position"
+        ]
       }
     },
     "responses": {
@@ -16647,7 +16796,7 @@
         "tags": [
           "admin/social"
         ],
-        "summary": "The Groups and events tab: defaults by workspace, groups across workspaces with counts, and calendar feeds",
+        "summary": "The Groups and events tab: defaults by workspace, groups across workspaces with counts, and calendar feeds. 1.6.0: also the tenant's group categories with their counts (categories, uncategorised) and the trending groups; each group row names its parentId (a channel) and categoryId",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -16738,6 +16887,209 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/group-categories": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. B-4405: adds a group category (names unique in the tenant whatever the case, 409). Audited group.category.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupCategory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/group-categories/{id}": {
+      "patch": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. Renames, describes or moves a category. Audited group.category.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupCategory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. Removes a category; its groups stay, uncategorised (one transaction). Audited group.category.removed with the count",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "removed": {
+                      "type": "boolean"
+                    },
+                    "uncategorised": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/trending/run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. Queues the groups.trending job for the tenant now (B-4404). Audited group.trending.requested",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -38512,12 +38864,13 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. The groups the caller may know of in their workspaces",
+        "summary": "groups:read. The groups (not channels) the caller may know of in their workspaces. 1.6.0: category and distance filters; with near only groups whose place the caller may read match, nearest first, with distanceKm",
         "parameters": [
           {
             "name": "workspace",
             "in": "query",
             "required": false,
+            "description": "Only this workspace",
             "schema": {
               "type": "string"
             }
@@ -38526,8 +38879,36 @@
             "name": "mine",
             "in": "query",
             "required": false,
+            "description": "true: only groups the caller is a member of",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "A category id, or none for uncategorised groups (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "description": "A distance filter: latitude,longitude in WGS 84 degrees (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "km",
+            "in": "query",
+            "required": false,
+            "description": "The radius of near in km (default 25, at most 20016)",
+            "schema": {
+              "type": "number"
             }
           }
         ],
@@ -38607,6 +38988,66 @@
                       "confidential",
                       "restricted"
                     ]
+                  },
+                  "categoryId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "location": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "description": "The group's place (1.6.0, B-4403): a name, a point, or both; null clears it",
+                        "properties": {
+                          "name": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 200
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lat": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -90,
+                                "maximum": 90
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lon": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -180,
+                                "maximum": 180
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -38624,6 +39065,230 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/groups/discover": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 × shared members + 2 × joins + posts in the last 30 days; nearest first with near",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "Only this workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "A category id, or none for uncategorised groups (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "description": "A distance filter: latitude,longitude in WGS 84 degrees (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "km",
+            "in": "query",
+            "required": false,
+            "description": "The radius of near in km (default 25, at most 20016)",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (default 50, at most 200)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Group"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "sharedMembers": {
+                                "type": "integer"
+                              },
+                              "activity": {
+                                "type": "object",
+                                "properties": {
+                                  "posts": {
+                                    "type": "integer"
+                                  },
+                                  "joins": {
+                                    "type": "integer"
+                                  }
+                                }
+                              },
+                              "score": {
+                                "type": "integer"
+                              },
+                              "invited": {
+                                "type": "boolean"
+                              },
+                              "requested": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/groups/trending": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:read. B-4404: the trending groups of the caller’s workspaces as the groups.trending job last counted them (3 × joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "Only this workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "A category id, or none for uncategorised groups (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (default 20, at most 100)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Group"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "trend": {
+                                "type": "object",
+                                "properties": {
+                                  "joins": {
+                                    "type": "integer"
+                                  },
+                                  "posts": {
+                                    "type": "integer"
+                                  },
+                                  "score": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "computedAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "windowStart": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "hours": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
@@ -38672,7 +39337,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes name, description, visibility, join mode or label",
+        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel’s label is never below its group’s (422 step label-floor); raising a group’s label raises its channels below it",
         "parameters": [
           {
             "name": "id",
@@ -38729,6 +39394,66 @@
                       "internal",
                       "confidential",
                       "restricted"
+                    ]
+                  },
+                  "categoryId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "location": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "description": "The group's place (1.6.0, B-4403): a name, a point, or both; null clears it",
+                        "properties": {
+                          "name": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 200
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lat": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -90,
+                                "maximum": 90
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lon": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -180,
+                                "maximum": 180
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   }
                 },
@@ -39378,6 +40103,134 @@
         }
       }
     },
+    "/api/groups/{id}/channels": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group’s readers, a private one by its members, a hidden one is known only to them)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Group"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group’s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 5000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "private",
+                      "hidden"
+                    ],
+                    "default": "public"
+                  },
+                  "joinMode": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "request",
+                      "invite"
+                    ],
+                    "default": "open"
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/groups/{id}/events": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -39529,6 +40382,30 @@
                       "maximum": 40320
                     },
                     "maxItems": 5
+                  },
+                  "lat": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -90,
+                        "maximum": 90
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lon": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -180,
+                        "maximum": 180
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -39711,6 +40588,33 @@
         }
       }
     },
+    "/api/group-categories": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:read. B-4405: the tenant’s group categories in their order (managed under /api/admin/social/group-categories)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupCategory"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/group-posts/{id}": {
       "delete": {
         "x-exprsn-since": "1.4.0",
@@ -39780,6 +40684,24 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "description": "A distance filter: latitude,longitude in WGS 84 degrees (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "km",
+            "in": "query",
+            "required": false,
+            "description": "The radius of near in km (default 25, at most 20016)",
+            "schema": {
+              "type": "number"
             }
           }
         ],
@@ -39927,6 +40849,30 @@
                       "maximum": 40320
                     },
                     "maxItems": 5
+                  },
+                  "lat": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -90,
+                        "maximum": 90
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lon": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -180,
+                        "maximum": 180
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [],

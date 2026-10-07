@@ -332,7 +332,7 @@ export interface Homes {
 /** The caller's group calendars: groups they belong to (or manage) and may read. */
 export async function memberGroups(ctx: DavCtx): Promise<Access[]> {
   if (!can(ctx, 'groups:read')) return [];
-  const list = await ctx.s.groups.list(ctx.p, { mine: true });
+  const list = await ctx.s.groups.list(ctx.p, { mine: true, includeChannels: true });
   const out: Access[] = [];
   for (const g of list) {
     const a = await ctx.s.groups.accessOrNull(ctx.p, g.id);
