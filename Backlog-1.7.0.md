@@ -15,7 +15,9 @@ gaps in `docs/security.md`.
 P2 61. Agents, tools and skills in chat and the second half of the import wizard are 13 items and 72 points; the port
 items added on 2026-10-07 are 50 items and 211 points. That is four sprints at the 78-point pace, Sprints 40 to 43
 (72, 74, 72 and 65 points). The first of them was numbered Sprint 38 until 2026-10-07, when the 1.6.0 gaps took
-Sprints 37 to 39 and this release moved to 40 to 43; 2.0.0 follows at Sprints 44 to 50.
+Sprints 37 to 39 and this release moved to 40 to 43; 2.0.0 follows at Sprints 44 to 50. Unscheduled beside them, added
+2026-10-07: governance, thinking, learning, skills from knowledge, classification and moderation (B-115 to B-121,
+below), 52 items and 240 points, about three more sprints; where they go is an open decision.
 
 **Builds on.** B-39 Workflows 2 and B-41 chaining (1.5.0), the registry dispatcher and the tool-call guardrail, agent
 runs and their budgets, the B-3801 repository registry and B-3803 model import, the 500 GB dataset quota and the
@@ -284,6 +286,186 @@ has never been run against live infrastructure.
 | B-11402 | Cross-posting: an author who opts in has each post marked public written as an `app.bsky.feed.post` record in their hosted repo (text, facets, images as blobs with alt text, a link back), edits and deletes mirrored; workspace and unlisted posts, and anything labelled above public, are never written | A public post appears in the author's repo, deleting it deletes the record, and a workspace post is never written | 8 |
 | B-11403 | Only posts that passed the feed's checks cross-post (a held post once accepted); a hide or takedown deletes the record and emits the takedown label; the composer's cross-post switch and a per-post status on Messages and feed, with their specs and axe-core and the reflow checks | A post taken down in Moderation disappears from the author's repo | 3 |
 
+## Governance, thinking, learning and classification (2026-10-07)
+
+Added 2026-10-07 at the owner's request: governance, thinking, learning, skills from knowledge, classification and
+moderation. The same day the owner built three governance and moderation profiles on their own install (`moderate`,
+`appeal` and `govern` on Magistral, thinking high, with hand-written skills, agents, five read-only moderation tools
+and a Moderation knowledge base holding four starter policies: a governance charter, community guidelines, a
+moderation playbook and an appeals procedure). That build-out shows what the platform lacks: the policies are prose
+in a knowledge base that nothing enforces; the skills were written by hand beside the base they describe; a reviewer
+works flags one by one with no case; the tenant's safety rule set blocks a reviewer discussing a policy's own
+categories; Magistral thinks only with a hand-written prompt convention and fails the tool-calling evaluation; and
+nobody can tell an answer it was wrong. Each epic here closes one of those gaps and the ones next to it, on the seams
+that already decide things: labels and clearances, publish checks and dual control, the guardrail checkpoints, the
+registry, the chain context, the flags queue and the audit chain.
+
+**Size.** 52 items, 240 points: B-115 AI governance (41), B-116 group governance (23), B-117 thinking (34), B-118
+learning (38), B-119 skills from knowledge (30), B-120 classification (36) and B-121 moderation (38). Unscheduled:
+three sprints at the 78-point pace, split by dependency below; where they go (two or three more sprints in 1.7.0
+with 2.0.0 moving, or the first sprints of a 1.8.0) is an open decision. The priorities below are a proposal.
+
+**Proposed split.** A: governance and moderation, B-115, B-121 and B-11707 (81 points). B: classification, skills from
+knowledge and the thinking policy and budgets, B-120, B-119, B-11701 and B-11702 (74 points). C: plans, reflection,
+learning and group governance, the rest of B-117, B-118 and B-116 (85 points). The order follows the dependencies:
+policy documents (B-11501) before guidelines as reason codes (B-12104); the inventory (B-7301, 1.6.0) before risk
+tiers and reviews (B-11503, B-11505); cases (B-12101) before assisted review and strikes (B-12103, B-12106); taxonomies
+(B-12002) before classification on write and search by finding (B-12001, B-12006); the review band (B-12004) before
+active learning (B-11806); a skill naming knowledge (B-11901) before drafting one (B-11902); feedback (B-11801)
+before the rest of B-118; the thinking policy (B-11701) before plans and reflection show thinking (B-11703, B-11704);
+per-group roles and bans (B-9705, B-9701) before proposals execute (B-11604).
+
+**Builds on.** The B-73 inventory, B-75 compliance export and B-76 DLP (1.6.0); access reviews (B-3305); the registry's
+publish checks, skill closure (B-4103) and signed bundles (B-3909); the chain context (B-4101); profile evaluations and
+their gate (Sprint 21); the `memory` checkpoint and memory proposals (B-37); the training scrub and worker (Sprint 9);
+classifiers and their publish rule (Sprint 5, B-88); moderation queues, appeals and providers (B-19, B-3405), held
+items (B-4701, B-94), evidence retention (B-95) and group moderation (B-9706); the draft assistant (B-2207) and the
+guardrail rule builder (B-96); groups depth (B-44) and the rest of nexus (B-97).
+
+### P1
+
+### B-115 AI governance: policies, register, reviews and exceptions (41 points)
+
+Governance today is spread over seams that each decide one thing: labels and clearances, a profile's allow-lists and
+ceilings, publish checks and dual control on models, profiles, overrides and exports, access reviews over the
+permission matrix (B-3305), the audit chain with its signed checkpoints and, in 1.6.0, the AI inventory (B-73), the
+compliance export (B-75) and DLP (B-76). No one place states a tenant's AI-use policy, records who owns each AI
+system and at what risk, grants a time-boxed exception, or shows which control is met by what evidence. The owner's
+charter, guidelines, playbook and appeals procedure (2026-10-07) are prose in a knowledge base; this epic makes such
+documents records the server enforces where it already decides, and reviews them from one screen.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-11501 | Policy documents as records: charter, guidelines, playbook and procedures per tenant with workspace overrides, versioned, with an owner, an effective date and dual-control publish; a published version is indexed into a knowledge base of the tenant's choosing by itself (the Moderation base is filled by hand today) and cited by the governance profiles | Publishing a new charter version re-indexes the base, and a profile's next answer cites the new version, not the old one | 5 |
+| B-11502 | An AI-use policy per tenant: which model families, servers (`openai` instances, cloud backends when 2.0.0 adds them) and labels may serve which purposes and roles, which tool side-effect classes each role may approve, and which data labels may leave for an outside server; enforced at profile publish, the conversation capability list (B-4001), the dispatcher and the gateway's placement, with `explain` naming the policy line | A profile on an outside server for confidential data cannot be published while the policy forbids it, and explain names the line | 8 |
+| B-11503 | Risk tier, purpose, owner and review date on every inventory system (B-7301: models, profiles, agents, skills, workflows, tools, MCP servers, classifiers, datasets); a tier above minimal needs an evaluation set, a named oversight role and a review cadence before publish; a service subject may own a system, and its effective clearance follows its direct value as soon as an admin changes it (today it is recomputed only at sign-in) | A high-tier agent without an evaluation set cannot be published, and a service account's raised clearance applies on its next call | 5 |
+| B-11504 | Exceptions: a time-boxed exemption from a policy line or a publish check (who, what, why, until when) under dual control, a reminder before expiry, re-blocked at expiry; listed on the system and in the register | An expired exception blocks the next publish it allowed, and the reminder went out seven days before | 3 |
+| B-11505 | Governance reviews: scheduled attestation campaigns over the register, like access reviews (B-3305): each owner confirms purpose, data, evaluations and incidents for their systems; overdue systems are flagged and, when the policy says so, unlisted until reviewed | A system 30 days overdue under an "unlist" policy is no longer offered to members until its review closes | 5 |
+| B-11506 | Control mapping: NIST AI RMF, ISO/IEC 42001 and EU AI Act deployer obligations mapped to the evidence the platform already produces (audit events, evaluations, the inventory, guardrail sets, reviews, exceptions), each control met, partial or missing, exported with the compliance export (B-7501) and the register (B-7302) | The export shows the evidence behind a met control, and a control with no evidence is marked missing, never met | 5 |
+| B-11507 | A decision log: every dual-control decision, override, exception, review outcome and policy publish as one record with its reason, the people and its audit entries, searchable and signed into the checkpoints | A decision in the log verifies against the audit chain offline | 2 |
+| B-11508 | Prototype board for a Governance screen: Policies, Register, Reviews, Exceptions, Controls and Decisions, their states and copy; the smoke run clean | The board passes the prototype smoke run in light and dark | 3 |
+| B-11509 | Console: the Governance screen live, keyboard-first, with the inventory tab (B-7301) linking into it; Playwright with axe-core and the reflow checks | A review is completed and an exception granted end to end in the e2e suite with no axe or reflow finding | 5 |
+
+### B-119 Skills from knowledge (30 points)
+
+A skill is a registry entry: instructions, the tools it needs and the skills it builds on (B-4103), loaded by agents
+and model steps and, with B-4005, in chat. A knowledge base holds documents, chunks and vectors with labels and a
+classifier's finding. The two do not meet: a skill cannot name a base, and a skill about a base is written by hand
+(the owner's three moderation skills of 2026-10-07 restate the playbook, guidelines and procedure that sit in the
+Moderation base beside them). This epic lets a skill carry knowledge, drafts a skill from a base with citations,
+keeps it in step with the base, and makes it earn publication as a classifier does.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-11901 | A skill names knowledge: `definition.knowledge: [kbId…]`; loading the skill attaches those bases for retrieval during the turn as a profile grant does, under the base's label rules; the closure (B-4103) carries the bases of every skill in it; a `knowledge-attach` node in the chain | A turn with the skill cites the base, and a member below the base's label gets the skill's instructions, no citations and a notice | 3 |
+| B-11902 | Draft a skill from a base: a job reads the base (or chosen documents) with a profile and writes the instructions (purpose, when to use it, the procedure, rules, examples, glossary), each part citing its documents; validated against the skill schema, secrets scanned, screened by the guardrails; saved as a draft entry that names its sources and their versions | A draft from the Moderation base cites each of its four documents, and a draft missing the procedure fails validation | 8 |
+| B-11903 | Staleness: a changed or removed source document marks the skill stale (on the entry, with a notice to its owner); a re-draft makes a new version with a diff against the published one; publishing runs the usual checks | Editing the playbook marks the moderation-review skill stale at the next sync, and the re-draft's diff shows the changed rule | 5 |
+| B-11904 | Skill evaluation: an eval set drafted from the base (questions with expected answers and citations, judged by a profile) and curated; a skill publishes only with at least 20 cases and a passing run; results on the entry as on a classifier | A skill with 12 cases cannot be published, and the entry shows per-case results after a run | 5 |
+| B-11905 | Skill packs: one skill per document or folder of a base and a parent skill that lists them (sub-skills, the closure), exported and imported as a signed bundle (B-3909) that references the base's documents rather than copying them | Importing a pack into another workspace recreates the skills and refuses to publish them until their base exists there | 4 |
+| B-11906 | Console: "Create a skill" on the Knowledge screen (documents, profile, a preview of the draft, edit, save as draft) and the Registry entry's Sources, Staleness and Evaluation sections; Playwright with axe-core and the reflow checks | A skill is drafted, evaluated and published in the e2e suite with no axe or reflow finding | 5 |
+
+### B-120 Classification across the platform (36 points)
+
+Classifiers (deterministic, linear, guard-model, `llm`, and `vision` with B-88) run where a feature calls them:
+guardrail rules at the checkpoints, attachment and knowledge document labels (never relabelled below the finding),
+feed ranking, image safety, and the owner's support-ticket triage on the `classify` profile. Messages, posts,
+records, files and conversations get a label only from their author or a guardrail rule; there is no taxonomy shared
+between classifiers, no batch run, no search by finding and no routing by what a classifier found. This epic makes
+classification a platform service: one taxonomy, a policy saying what runs on what, and findings every screen can
+search.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-12001 | Classification on write: a tenant policy names which classifiers run on which kinds (messages, posts and comments, records by entity, files, memories, knowledge documents, conversations) and when (synchronous under a size, a job above it); findings stored as labels with scores on the object; a sensitivity finding raises the object's label as knowledge does today and its author cannot lower it; a classifier that is down queues the job and holds nothing | A record whose text holds a card number is labelled confidential on save, and its author cannot relabel it below that | 8 |
+| B-12002 | Taxonomies: named label sets, flat or hierarchical, with definitions and examples, versioned, shared by classifiers, routing rules, queue rules, feed definitions and search; a classifier's labels map onto a taxonomy's | Renaming a taxonomy label updates every classifier and queue rule that uses it, and the old name still resolves in exports | 5 |
+| B-12003 | Conversation classification and routing: a profile-level classifier tags a conversation's topic, intent and language on its first turn (and on request) for analytics (B-7401) and routing: a profile may send a turn to another profile by label (a cheaper or specialised one) within the caller's clearance and the conversation's ceiling, recorded in the chain | A billing question on the general profile is answered by the billing profile, and the chain shows the route | 5 |
+| B-12004 | Classification as a step and a tool: a `classify` workflow step and a built-in `classify` domain tool (B-3904's pattern) returning labels and scores from a published classifier; a "needs review" band between two thresholds files a flag instead of a decision, and feeds active learning (B-11806) | A workflow branches on a classifier's label, and a score inside the band files a flag and takes no branch | 3 |
+| B-12005 | Batch classification: a job over an app entity, a folder, a knowledge base or a range of conversations with a cost estimate, progress and cancel; re-classification offered when a classifier publishes a new version; results summarised per label | A batch over 10,000 records reports progress, can be cancelled, and its summary matches the stored labels | 5 |
+| B-12006 | Search and filters by finding on Files, Messages and feed, app records, Knowledge and chat history, with label chips and counts; findings never shown above the viewer's clearance | Filtering Files by a label lists only files with that finding and none above the viewer's clearance | 5 |
+| B-12007 | Console: Taxonomies and Policies tabs and a run history on Classifiers; a finding's "why" (labels, scores, classifier version) on each object; Playwright with axe-core and the reflow checks | A policy is set and a batch run watched in the e2e suite with no axe or reflow finding | 5 |
+
+### B-121 Moderation 2: cases, assisted review and transparency (38 points)
+
+Moderation has reports, flags routed to queues with SLA timers, hide actions, sanctions, appeals with independence
+rules, external providers in shadow or enforce mode and dead letters; 1.6.0 and 1.7.0 add held posts, forms and
+messages (B-4701, B-94), evidence retention and legal hold (B-95), group moderators (B-9706) and DLP (B-76). The
+owner's `moderate` and `appeal` profiles (2026-10-07) assist reviewers from the playbook and guidelines with five
+read-only moderation tools, and met two gaps: the tenant's safety rule set blocks a reviewer discussing a policy's
+own categories, and a reviewer has flags to work one by one, never a case. This epic adds cases, review assisted by a
+profile under the reviewer's decision, guidelines as reason codes, statements of reasons, strikes, reports on
+generated content and a transparency report.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-12101 | Cases: flags on one object, or on one user within a window, fold into a case with a timeline (reports, verdicts, held items, actions, appeals, notes), assignment, SLA and escalation at the case level; queues list cases; actions and appeals cite the case | Three reports on one post make one case, and its SLA runs from the earliest flag | 5 |
+| B-12102 | Review context for rule sets: a published rule set may exempt a checkpoint for a named profile or role (a moderation or governance profile discussing a policy's categories), under dual control, audited and listed as a known weakening of the set; the exemption never covers tool calls or anything leaving the reviewer's screen | The `govern` profile lists the policy's categories under the exemption, and the same text in a member's chat is still blocked | 3 |
+| B-12103 | Assisted review: a moderation profile summarises the case's content at the reviewer's clearance, maps it to the guidelines and proposes an action with a reason code and a confidence; the proposal sits beside the case and is audited; the reviewer decides; a policy may let a duplicate report below a confidence be dismissed by itself, and nothing else | A proposal is never applied without a reviewer, and a dismissed duplicate is audited as automatic | 8 |
+| B-12104 | Guidelines and reason codes: the community guidelines per tenant, workspace and group as a policy document (B-11501), its rules as reason codes on report forms, actions and sanctions, shown at join and before a first post; drafted with the draft assistant (B-2207) and screened | A report form offers the workspace's reason codes, and an action records the guideline version it cites | 3 |
+| B-12105 | Statement of reasons: every action and sanction notifies the affected person with the reason code, the guideline cited, an evidence reference and how to appeal; the appeal references it; `GET /api/moderation/mine` lists them; exportable for the transparency report | A hidden post's author receives the statement with the appeal link, and the appeal shows it to the reviewer | 3 |
+| B-12106 | Strikes: a policy of confirmed violations within a window to a proposed warn, suspend or ban, with decay; proposals land in the queue for a reviewer; a member sees their strikes in `mine` | A third confirmed violation in 30 days proposes a suspension, and a decayed strike does not count | 5 |
+| B-12107 | Reporting generated content: images, media and `/v1` answers reportable into the same queues with their generation context (profile, model, prompt hash, guardrail decisions) so a reviewer can act on the content and propose a guardrail rule from the case | A reported image's case shows its profile and model, and "propose a rule" opens a shadow draft (B-9601) | 3 |
+| B-12108 | Transparency report: a scheduled report per tenant (reports, actions, appeals and outcomes by reason code, median time to decision, provider share, proposals accepted), CSV and JSON, with an opt-in public page per workspace | The report's counts match the audit chain for the period, and the public page names no object or person | 3 |
+| B-12109 | Console: Cases, Guidelines, Strikes and Reports tabs on Moderation, the proposal card and the statement of reasons; Playwright with axe-core and the reflow checks | A case is worked from proposal to statement in the e2e suite with no axe or reflow finding | 5 |
+
+### P2
+
+### B-116 Group governance: proposals, voting and execution (23 points)
+
+Port decision D7 left exprsn-platform's nexus governance (GRP-17) for 1.7 or later without an id; this is the id.
+The platform had a governance model per group (centralized, decentralized, dao, consensus), proposals with a voting
+method, a quorum, a window and an action, weighted votes, results, close and execute (role, member and rule
+actions). Exprsn-AI's groups (B-25, B-44, B-97) have owners, moderators, members, per-group roles (B-9705) and group
+moderation (B-9706) for a passed proposal to act through.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-11601 | A governance model on a group: the owner decides, simple majority, supermajority (a set fraction) or consensus (no "no" votes), with rules: who may propose (a role), quorum as a fraction of active members, the default window, vote weight by role or one each; edited by the owner, audited, shown on the group | Changing the model while a proposal is open leaves that proposal on the model it opened under | 3 |
+| B-11602 | Proposals: title, description (screened by the guardrails), type (free text, rule change, role change, member removal, setting change) with the action's parameters; states draft, active, passed, failed, cancelled, executed; opened and closed by the scheduler at the window's ends; one active proposal per subject | A proposal with a two-day window closes itself on time on every instance | 5 |
+| B-11603 | Votes: yes, no or abstain, one per member, weighted as the model says, changeable while active; open or secret ballots (secret: the tally is public, the ballots only to the proposer after close); results with quorum and the threshold applied; audited without the ballot when secret | A secret ballot's tally is right, and no route or export shows who voted which way while it is open | 5 |
+| B-11604 | Execution: a passed proposal's action runs with the same checks as a manual one (a role through B-9705, a removal through B-9701, a setting through the group's own routes), by a moderator or by itself when the model says so; a failed action records why and the proposal stays passed, not executed | An executed removal is enforced at once, and an action its executor lacks permission for fails with the permission named | 3 |
+| B-11605 | Notifications and the feed: proposal opened, closing within a day, result and execution to members through the group notifications (B-9708); the proposal as a card in the group feed with the vote control | A member sees the closing notice once and can vote from the feed card | 2 |
+| B-11606 | Console: a Governance tab on Groups and events (the model and rules form, proposals by state, the proposal page with the vote control, results and the execution record); Playwright with axe-core and the reflow checks | A proposal passes and executes end to end in the e2e suite with no axe or reflow finding | 5 |
+
+### B-117 Thinking: policy, budgets, plans and reflection (34 points)
+
+Thinking exists: profiles carry a default and a ceiling, levels stream apart from the answer, the `model-output`
+check screens thinking and withholds what it blocks, thinking tokens are metered and priced, `/v1` maps
+`reasoning.effort`, and the chain view carries thinking per node. Missing are control over who sees thinking and how
+long it is kept, a budget for it, a way to make a model plan before it acts, a second look at an answer before it is
+trusted, and models whose thinking needs a prompt template: the owner's Magistral profiles (2026-10-07) thought only
+once a hand-written `<think>` convention was in their system prompt, and the model failed the console's tool-calling
+evaluation because the evaluation sends no system prompt.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-11701 | A thinking policy per tenant and workspace: who sees thinking (the author, reviewers, nobody), its retention apart from the answer (purged earlier), whether exports carry it; thinking never shown above the viewer's clearance; applied to chat, `/v1`, runs and the chain view | With "nobody" set, the author's stream carries no thinking and the stored message holds only its token count | 5 |
+| B-11702 | Thinking budgets: a thinking-token budget per profile and per workspace per day, metered with the rest, a notice near the limit and a level drop at it rather than a refusal; `/v1` `reasoning.effort` mapped onto levels and capped by the ceiling and the budget | A workspace at its budget gets answers at `low`, and the usage summary shows the drop | 3 |
+| B-11703 | Plan first: a profile or agent option under which the model drafts a plan (steps, the tools and data it intends to use) shown as a card before any tool runs; the person approves, edits or declines; in an agent run the plan becomes the step list and a deviation needs a new approval; write and destructive tools keep their own cards (B-4003); the chain records the plan | A declined plan runs no tool, and an agent that calls a tool outside its approved plan pauses for approval | 8 |
+| B-11704 | Reflection: an optional second pass that checks the answer against the question, its citations and its tool results (unsupported claims, missing parts, contradictions), with another profile allowed; the result is a "checked" badge with findings or a revised answer, metered and screened like any answer; a profile's evaluations may require it | An answer whose citation does not support its claim gets a finding, and the badge names it | 5 |
+| B-11705 | Thinking on workflow model steps and agent steps: a level per step within the profile's ceiling, counted against the run's budget (B-4101) and shown per node in the chain view | A step at `high` on a profile whose ceiling is `medium` is refused at publish with the ceiling named | 3 |
+| B-11706 | Evaluations on thinking and plans: a case may hold a rubric for the thinking (judged by a profile) and the tools a plan must and must not include; outputs sealed; the profile's gate counts them | A profile whose plan calls a destructive tool the case forbids fails the gate | 3 |
+| B-11707 | Model thinking templates: a catalogue entry records how a model is made to think (native, a template such as Magistral's `<think>` convention, or none) and profiles inherit it, so every profile on the model thinks; the tool-calling evaluation sends a system prompt as chat does | A profile created on Magistral thinks without a hand-written convention, and the model passes the tool-calling evaluation | 2 |
+| B-11708 | Console: Profiles (policy, budget, plan first, reflection), Chat (the plan card, the checked badge, thinking shown per policy), Runs and the chain view; Playwright with axe-core and the reflow checks | A plan is approved and a reflection finding shown in the e2e suite with no axe or reflow finding | 5 |
+
+### B-118 Learning: feedback, corrections and the improvement loop (38 points)
+
+What the platform learns from today: a reviewer confirms a flag into an eval case, curators accept memory proposals,
+classifiers train on labelled samples, profiles are gated by evaluation sets, and the training worker fine-tunes on
+sealed datasets. A person cannot say an answer was wrong, and nothing turns corrections into eval cases, memories,
+samples or training data. This epic adds feedback at the answer, a curated path from feedback to each of those, and
+continuous evaluation so the loop is measured. Nothing changes a model or a prompt without a curator or the usual
+dual control.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-11801 | Feedback on answers: up or down, a reason from a list, an optional correction (the answer as it should have been), on chat, `/v1` (a feedback route keyed by the response id) and agent runs; sealed with the tenant key, labelled as the conversation, audited; the author chooses whether it may be used for learning, with a tenant default | Feedback on a confidential answer is withheld from a curator cleared for internal | 5 |
+| B-11802 | A feedback queue for curators: grouped by profile and reason, the turn opened at the curator's clearance, a correction turned into an eval case (an expected answer or a rubric) for the profile or into a classifier sample, or dismissed; duplicates folded; the flags queue's routing and SLA reused | A correction becomes an eval case that the profile's next evaluation run fails until the profile is fixed | 5 |
+| B-11803 | Learned instructions: a pattern in accepted corrections (the same fix three times for a profile) proposed as a workspace memory or a system-prompt amendment through the `memory` checkpoint; a curator accepts; never applied by itself | A repeated correction becomes a proposal, and until it is accepted the next answer is unchanged | 5 |
+| B-11804 | Learning datasets: consented conversations and corrections for a profile exported into a training dataset through the training scrub, sealed; a fine-tune job on the training worker; the resulting model enters the catalogue as any import does and needs its evaluation and dual-control approval | An unconsented conversation is never in the dataset, and the fine-tuned model is unusable before approval | 8 |
+| B-11805 | Continuous evaluation: scheduled runs per profile on its growing set, a score history, a regression alert (a drop beyond a threshold notifies the owner and, under the policy, un-publishes), and the learning numbers (feedback rate, corrections, cases, the score trend) on the Analytics screen (B-7401) | A regression beyond the threshold raises an alert on the next scheduled run, and the trend shows it | 5 |
+| B-11806 | Active learning for classifiers: classifications in the review band (B-12004) queue for labelling, labelled items join the dataset, retraining or re-evaluation is proposed when the set has grown by a set count; the `classify` profile's results included | A low-confidence classification is labelled from the queue, and the next training run uses it | 5 |
+| B-11807 | Console: feedback controls on Chat and Runs; a Learning tab on Profiles (queue, cases, trend) and a Labelling tab on Classifiers; Playwright with axe-core and the reflow checks | Feedback given in the e2e suite reaches the queue and becomes a case with no axe or reflow finding | 5 |
+
 ## Release
 
 | ID | Item | Done when |
@@ -295,7 +477,7 @@ has never been run against live infrastructure.
 | Item | Why |
 | --- | --- |
 | Server log view in the console (B-57) | 1.7 or later per the platform administration decisions; traces and metrics only for now |
-| Group governance: proposals, voting, quorum (GRP-17) | Port decision D7: 1.7 or later; not placed in Sprints 40 to 43 and still without an id |
+| Group governance: proposals, voting, quorum (GRP-17) | Port decision D7: 1.7 or later; now B-116 (added 2026-10-07), unscheduled |
 
 ## Open decisions
 
@@ -303,6 +485,18 @@ has never been run against live infrastructure.
   The board and decision record are the epic's first item.
 - [ ] Sessions as leases (B-9206): migrate every install in 1.7.0 with the dual read, or keep the `sessions` table as an
   option for single-process installs?
+- [ ] Placement of B-115 to B-121 (added 2026-10-07, 240 points): two or three more sprints in 1.7.0 (Sprints 44 to 46,
+  with 2.0.0 moving to 47 to 53 and the release item to the last of them), or the first sprints of a 1.8.0 after 2.0.0?
+  The split A, B, C above is sized for three.
+- [ ] Priorities of B-115 to B-121: the P1 and P2 above are a proposal; the owner asked for the seven together and set no
+  order.
+- [ ] AI-use policy (B-11502): policy lines as records edited in the console under dual control (assumed), or a policy file
+  in the deployment, versioned with it, that the console only shows?
+- [ ] Review context (B-12102): an exemption on the rule set for a named profile or role (assumed), or a separate `review`
+  checkpoint with its own rules that moderation and governance profiles run under?
+- [ ] Learning datasets (B-11804): fine-tuning in scope with the rest of B-118, or stop at eval cases, samples and
+  memories until a training worker runs on cluster GPUs (2.0.0's compute pools, B-104)?
+- [ ] Secret ballots (B-11603): ballots shown to the proposer after close (assumed), or to nobody?
 
 ## Risks
 
@@ -313,3 +507,9 @@ has never been run against live infrastructure.
 | Vault on every request | Sessions as leases (B-9206) make a slow or unavailable vault an outage | The hot-path cache (B-9203), a single indexed lookup, Redis required for more than one process (B-90), and a fail-closed boot order (B-9202) |
 | Response cache | A cached answer crosses a tenant, a label or a changed guardrail set | Tenant, label and guardrail-set version in the key, entries sealed with the tenant key, opt-in per profile (B-9901) |
 | Groups carrying access | A group owner widens who reads files, secrets or knowledge | Grants never exceed a member's clearance or the object's label, bans and per-group roles first, explain names the group (B-98) |
+| Assisted review | Reviewers accept the profile's proposal without reading the case | The proposal shows its evidence and confidence, its acceptance rate is in the transparency report, and it is never applied by itself (B-12103, B-12108) |
+| Classification on write | A slow or stopped classifier slows or fails writes | Synchronous only under a size, jobs above it, a stopped classifier queues the job and holds nothing; a sensitivity finding is never lowered (B-12001) |
+| Learning datasets | Unconsented or over-labelled content reaches a training set | Consent per author with a tenant default, the training scrub, labels carried into the dataset, dual-control approval of the model (B-11804) |
+| Plan first | Approving a plan is taken as approving every tool call in it | Write and destructive tools keep their approval cards, and a deviation from the plan pauses the run (B-11703) |
+| Skill drafts | A drafted skill states something its base does not say | Every part of the draft cites a document, the evaluation set comes from the same base, and a changed document marks the skill stale (B-11902 to B-11904) |
+| AI-use policy | A policy line blocks profiles already in use | Policy evaluated at publish and listing, not retroactively on stored conversations; exceptions with expiry (B-11504); explain names the line |
