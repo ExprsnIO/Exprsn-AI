@@ -1,0 +1,139 @@
+<section class="section" id="finops">
+  <div class="part-head">
+    <span class="eyebrow">Part 7 · B-106 FinOps</span>
+    <h2>Cloud spend: estimates, budgets, showback and anomalies</h2>
+    <p>The screen <span class="mono">#/finops</span> (sidebar "Cloud spend") brings every cost the cloud work creates into one place: the estimate before a plan is applied, the actual bill ingested from each provider, budgets with alerts and a hard stop, showback per workspace and tenant, and the token cost of cloud models priced into usage records. It builds on the 1.6 usage and cost analytics (B-74) and the 1.1 price books, and never sends money anywhere.</p>
+    <p class="example">Example data: September 2026 month to date, Monday 28 Sep 2026 09:40 UTC. Prices and totals are illustrative, not provider quotes.</p>
+  </div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Cloud spend</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Cloud spend</h1><div class="sub">September 2026, month to date across 6 accounts</div></div><div class="actions"><button type="button" class="btn sm">Export showback CSV</button><button type="button" class="btn sm primary">New budget</button></div></div>
+        <nav class="tabs" aria-label="Cloud spend sections"><button type="button" class="active">Overview</button><button type="button">Budgets <span class="count">6</span></button><button type="button">Showback</button><button type="button">Anomalies <span class="count">2</span></button><button type="button">Sources</button></nav>
+        <div class="stats">
+          <div class="stat"><div class="n">$23,350</div><div class="l">Month to date</div><div class="d">62 % of $37,700 budgets</div></div>
+          <div class="stat"><div class="n">$26,900</div><div class="l">Forecast month end</div><div class="d">2 accounts forecast over <span class="callout">1</span></div></div>
+          <div class="stat"><div class="n">1</div><div class="l">Hard stop active</div><div class="d">do-team since 26 Sep</div></div>
+          <div class="stat"><div class="n">$474</div><div class="l">Saved by GPU scale-down</div><div class="d">212 GPU-hours</div></div>
+        </div>
+        <div class="diagram"><svg viewBox="0 0 640 180" role="img" aria-labelledby="fo-chart-t"><title id="fo-chart-t">Daily cloud spend, 1 to 28 September 2026, all accounts; 28 September to 09:40. Highest on 26 and 27 September.</title><line x1="40" x2="630" y1="150.0" y2="150.0" style="stroke:var(--line2)"/><text x="34" y="154.0" text-anchor="end" font-size="10" style="fill:var(--muted)">$0</text><line x1="40" x2="630" y1="96.2" y2="96.2" style="stroke:var(--line2)"/><text x="34" y="100.2" text-anchor="end" font-size="10" style="fill:var(--muted)">$500</text><line x1="40" x2="630" y1="42.3" y2="42.3" style="stroke:var(--line2)"/><text x="34" y="46.3" text-anchor="end" font-size="10" style="fill:var(--muted)">$1,000</text><rect x="46" y="58.5" width="16" height="91.5" rx="2" style="fill:var(--meter)"><title>1 Sep: $850</title></rect><text x="54.0" y="166" text-anchor="middle" font-size="10" style="fill:var(--muted)">1 Sep</text><rect x="67" y="62.3" width="16" height="87.7" rx="2" style="fill:var(--meter)"><title>2 Sep: $814</title></rect><rect x="88" y="58.8" width="16" height="91.2" rx="2" style="fill:var(--meter)"><title>3 Sep: $847</title></rect><rect x="109" y="54.9" width="16" height="95.1" rx="2" style="fill:var(--meter)"><title>4 Sep: $883</title></rect><rect x="130" y="63.8" width="16" height="86.2" rx="2" style="fill:var(--meter)"><title>5 Sep: $800</title></rect><rect x="151" y="63.5" width="16" height="86.5" rx="2" style="fill:var(--meter)"><title>6 Sep: $803</title></rect><rect x="172" y="52.4" width="16" height="97.6" rx="2" style="fill:var(--meter)"><title>7 Sep: $906</title></rect><text x="180.0" y="166" text-anchor="middle" font-size="10" style="fill:var(--muted)">7 Sep</text><rect x="193" y="56.6" width="16" height="93.4" rx="2" style="fill:var(--meter)"><title>8 Sep: $867</title></rect><rect x="214" y="63.2" width="16" height="86.8" rx="2" style="fill:var(--meter)"><title>9 Sep: $806</title></rect><rect x="235" y="59.2" width="16" height="90.8" rx="2" style="fill:var(--meter)"><title>10 Sep: $843</title></rect><rect x="256" y="56.0" width="16" height="94.0" rx="2" style="fill:var(--meter)"><title>11 Sep: $873</title></rect><rect x="277" y="63.7" width="16" height="86.3" rx="2" style="fill:var(--meter)"><title>12 Sep: $801</title></rect><rect x="298" y="51.1" width="16" height="98.9" rx="2" style="fill:var(--meter)"><title>13 Sep: $918</title></rect><rect x="319" y="57.2" width="16" height="92.8" rx="2" style="fill:var(--meter)"><title>14 Sep: $862</title></rect><text x="327.0" y="166" text-anchor="middle" font-size="10" style="fill:var(--muted)">14 Sep</text><rect x="340" y="61.5" width="16" height="88.5" rx="2" style="fill:var(--meter)"><title>15 Sep: $822</title></rect><rect x="361" y="64.1" width="16" height="85.9" rx="2" style="fill:var(--meter)"><title>16 Sep: $798</title></rect><rect x="382" y="63.3" width="16" height="86.7" rx="2" style="fill:var(--meter)"><title>17 Sep: $805</title></rect><rect x="403" y="58.1" width="16" height="91.9" rx="2" style="fill:var(--meter)"><title>18 Sep: $853</title></rect><rect x="424" y="58.5" width="16" height="91.5" rx="2" style="fill:var(--meter)"><title>19 Sep: $850</title></rect><rect x="445" y="63.6" width="16" height="86.4" rx="2" style="fill:var(--meter)"><title>20 Sep: $802</title></rect><rect x="466" y="61.0" width="16" height="89.0" rx="2" style="fill:var(--meter)"><title>21 Sep: $826</title></rect><text x="474.0" y="166" text-anchor="middle" font-size="10" style="fill:var(--muted)">21 Sep</text><rect x="487" y="63.3" width="16" height="86.7" rx="2" style="fill:var(--meter)"><title>22 Sep: $805</title></rect><rect x="508" y="56.4" width="16" height="93.6" rx="2" style="fill:var(--meter)"><title>23 Sep: $869</title></rect><rect x="529" y="58.2" width="16" height="91.8" rx="2" style="fill:var(--meter)"><title>24 Sep: $852</title></rect><rect x="550" y="63.7" width="16" height="86.3" rx="2" style="fill:var(--meter)"><title>25 Sep: $801</title></rect><rect x="571" y="36.9" width="16" height="113.1" rx="2" style="fill:var(--warn-fg)"><title>26 Sep: $1,050</title></rect><rect x="592" y="40.8" width="16" height="109.2" rx="2" style="fill:var(--warn-fg)"><title>27 Sep: $1,014</title></rect><rect x="613" y="114.5" width="16" height="35.5" rx="2" style="fill:var(--faint)"><title>28 Sep: $330</title></rect><text x="621.0" y="166" text-anchor="middle" font-size="10" style="fill:var(--muted)">28 Sep</text><line x1="40" x2="630" y1="14.7" y2="14.7" style="stroke:var(--accent);stroke-dasharray:4 3"/><text x="628" y="10.7" text-anchor="end" font-size="10" style="fill:var(--accent)">budget pace $1,257 a day</text></svg></div>
+        <div class="twocol">
+          <div class="panel"><div class="eyebrow">By provider</div><div class="tablewrap minitable bare"><table class="dt"><tbody>
+            <tr><td>AWS</td><td class="r num">$11,250</td></tr><tr><td>Azure</td><td class="r num">$7,670</td></tr><tr><td>DigitalOcean</td><td class="r num">$4,120</td></tr><tr><td>Cloudflare</td><td class="r num">$310</td></tr>
+          </tbody></table></div></div>
+          <div class="panel"><div class="eyebrow">Budgets <span class="callout">2</span></div>
+            <div class="meter warn"><div class="mrow"><span>aws-prod, alert 50 % sent 16 Sep</span><span class="num">$9,840 of $18,000</span></div><div class="track"><div class="fill" style="width:55%"></div></div></div>
+            <div class="meter warn"><div class="mrow"><span>aws-sandbox, forecast $1,690</span><span class="num">$1,410 of $1,500</span></div><div class="track"><div class="fill" style="width:94%"></div></div></div>
+            <div class="meter warn"><div class="mrow"><span>azure-eu</span><span class="num">$7,050 of $12,000</span></div><div class="track"><div class="fill" style="width:59%"></div></div></div>
+            <div class="meter danger"><div class="mrow"><span>do-team, hard stop</span><span class="num">$4,120 of $4,000</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+            <div class="meter"><div class="mrow"><span>cf-edge</span><span class="num">$310 of $1,200</span></div><div class="track"><div class="fill" style="width:26%"></div></div></div>
+            <div class="meter warn"><div class="mrow"><span>azure-contoso (Contoso)</span><span class="num">$620 of $1,000</span></div><div class="track"><div class="fill" style="width:62%"></div></div></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Actual and forecast</b> both trigger the 50, 80 and 100 % alerts; forecast is the month-to-date run rate plus committed resources from the journal (B-10602).</span></li>
+      <li><span class="n">2</span><span>Meters turn amber at 50 % and red at 100 %, the same tones as quotas on Storage. Bars in the chart: amber for anomaly days, faint for today so far, the dashed line is the combined budget pace.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="finops-budget">
+  <h2>Budget, hard stop and override</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Cloud spend / Budgets / <b>do-team</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="notice danger"><span class="grow" style="min-width:0"><b>Hard stop since 26 Sep.</b> do-team has spent $4,120 of $4,000. Plans that add monthly cost are refused with <span class="mono">budget_exceeded</span>: lab-do (adds $214 a month) and the gpu-do-h100 scale-up are waiting. Scale-down and destroy are always allowed. <span class="callout">1</span></span></div>
+        <div class="formgrid" style="--cols:3">
+          <div class="field"><label for="bd-amt">Monthly budget</label><input class="input" id="bd-amt" value="$4,000"></div>
+          <div class="field"><label for="bd-al">Alerts at</label><input class="input" id="bd-al" value="50 %, 80 %, 100 %"></div>
+          <div class="field"><label for="bd-to">Notify</label><input class="input" id="bd-to" value="Cloud admins, webhook finops-alerts"></div>
+        </div>
+        <label class="check"><input type="checkbox" checked> <span>Hard stop on new resources at 100 %</span></label>
+        <div class="panel">
+          <div class="phead"><div class="eyebrow">Request an override</div><span class="callout">2</span></div>
+          <div class="formgrid" style="--cols:2">
+            <div class="field"><label for="ov-r">Reason</label><input class="input" id="ov-r" value="Lab deployment for the Q4 demo, removed on 5 Oct"></div>
+            <div class="field"><label for="ov-d">Until</label><select class="select" id="ov-d"><option>5 Oct 2026 (7 days, the maximum)</option><option>1 Oct 2026</option></select></div>
+            <div class="field"><label for="ov-c">Extra allowed this month</label><input class="input" id="ov-c" value="$300"></div>
+            <div class="field"><label for="ov-a">Second approver</label><select class="select" id="ov-a"><option>Jonas Lindqvist, Cloud admin</option></select></div>
+          </div>
+          <div class="fb"><span class="muted" style="font-size:12px">Audited as cloud.budget.override.proposed; nothing changes until approved.</span><span class="grow"></span><button type="button" class="btn sm primary">Send for approval</button></div>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span>The hard stop applies to plans, not to running resources: Exprsn-AI never stops a database or a node to save money. Scaling a GPU node group above its minimum counts as new cost.</span></li>
+      <li><span class="n">2</span><span><b>Override</b> is dual-controlled, needs a reason, a cap and an end date of at most 7 days; the requester cannot approve it (B-10602).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="finops-showback">
+  <h2>Showback, anomalies and billing sources</h2>
+  <div class="twocol">
+    <div class="panel">
+      <div class="phead"><div class="eyebrow">Showback, September to date (B-10604)</div></div>
+      <div class="tablewrap minitable"><table class="dt" style="min-width:420px"><thead><tr><th>Workspace or tenant</th><th class="r">Allocated</th><th>Main driver</th></tr></thead><tbody>
+        <tr><td>Finance Ops</td><td class="r num">$6,920</td><td>GPU-ms on gpu-cloud-eu, Azure tokens</td></tr>
+        <tr><td>Field Sales</td><td class="r num">$3,880</td><td>partner-mysql, Bedrock tokens</td></tr>
+        <tr><td>People Ops</td><td class="r num">$2,410</td><td>hr-analytics-flex</td></tr>
+        <tr><td>Legal</td><td class="r num">$1,960</td><td>storage, embeddings</td></tr>
+        <tr><td>Platform lab (Contoso)</td><td class="r num">$1,240</td><td>azure-contoso</td></tr>
+        <tr><td>Shared platform</td><td class="r num">$6,940</td><td>clusters, networking, unallocated</td></tr>
+      </tbody></table></div>
+      <div class="eyebrow">Allocation rules</div>
+      <div class="tablewrap minitable bare"><table class="dt"><tbody>
+        <tr><td>Tagged <span class="mono">exprsn:workspace</span> or <span class="mono">exprsn:tenant</span></td><td class="fg2">charged directly</td></tr>
+        <tr><td>GPU node groups (<span class="mono">exprsn:pool</span>)</td><td class="fg2">split by GPU-ms from usage records</td></tr>
+        <tr><td>Cloud model tokens</td><td class="fg2">from usage records, priced at metering</td></tr>
+        <tr><td>Database and object store</td><td class="fg2">split by storage per workspace</td></tr>
+        <tr><td>Everything else</td><td class="fg2">shared platform</td></tr>
+      </tbody></table></div>
+    </div>
+    <div class="vstack gap12" style="min-width:0">
+      <div class="panel">
+        <div class="phead"><div class="eyebrow">Anomalies (B-10606)</div></div>
+        <div class="notice warn"><span class="grow" style="min-width:0"><b>aws-prod NAT gateway data processing +210 % on 26 Sep.</b> eu-central-1, nw-prod-eu: $186 a day against a $60 baseline. Top contributor: knowledge crawl egress.</span></div>
+        <div class="notice warn"><span class="grow" style="min-width:0"><b>azure-eu Azure OpenAI tokens +80 % on 27 Sep.</b> Finance Ops, profile analyst-cloud.</span></div>
+        <p class="example">Baseline is the 14-day daily mean per account and service. Workers AI neurons on cf-edge are within baseline.</p>
+      </div>
+      <div class="panel">
+        <div class="phead"><div class="eyebrow">Billing sources (B-10603, B-10608)</div></div>
+        <div class="tablewrap minitable bare"><table class="dt"><tbody>
+          <tr><td>AWS</td><td class="fg2">Cost Explorer, daily by tag</td></tr>
+          <tr><td>Azure</td><td class="fg2">Cost Management Query, daily by tag</td></tr>
+          <tr><td>DigitalOcean</td><td class="fg2">balance, billing history and invoice CSV</td></tr>
+          <tr><td>Cloudflare</td><td class="fg2">billing API and GraphQL Analytics (Workers AI neurons)</td></tr>
+        </tbody></table></div>
+        <p class="example">Last ingestion 28 Sep 06:00. Ingested costs are reconciled with plan estimates and with usage-record costs for cloud models.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="finops-estimate">
+  <h2>Pre-deploy estimate breakdown</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / New / <b>Review: estimate</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="tablewrap minitable"><table class="dt" style="min-width:560px"><thead><tr><th>Line</th><th>Assumption</th><th class="r">Per month</th></tr></thead><tbody>
+          <tr><td>App tier, ECS Fargate 2 tasks</td><td>2 vCPU, 4 GiB, 730 h</td><td class="r num">$144</td></tr>
+          <tr><td>RDS PostgreSQL 17 db.t4g.medium</td><td>single instance, 100 GiB gp3</td><td class="r num">$128</td></tr>
+          <tr><td>ElastiCache Valkey t4g.small</td><td>1 node</td><td class="r num">$47</td></tr>
+          <tr><td>S3 blobs</td><td>200 GiB, 1M requests</td><td class="r num">$9</td></tr>
+          <tr><td>Load balancer and NAT</td><td>1 ALB, 1 NAT, 50 GiB processed <span class="callout">1</span></td><td class="r num">$58</td></tr>
+          <tr><td><b>Total</b></td><td>sandbox-ecs, us-east-1</td><td class="r num"><b>$386</b></td></tr>
+        </tbody></table></div>
+        <div class="notice info"><span class="grow" style="min-width:0">aws-sandbox is at 94 % with this plan's first-month share included. Apply is allowed; the 100 % alert will follow.</span></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span>Every line states its assumption so a reviewer can challenge it. Prices come from the AWS Price List API, the Azure Retail Prices API, DigitalOcean's sizes API and a maintained sheet for what has no API, cached daily (B-10601).</span></li>
+    </ol></div>
+  </div>
+</section>

@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>models · Exprsn-AI</title>
+<title>deployments · Exprsn-AI</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
 /* Exprsn-AI console prototype — tokens and components.
@@ -747,309 +747,312 @@ table.dt .actions{white-space:nowrap}
 })();
 
 </script>
-<script>App.fileMode = true; App.defaultRoute = "models";</script>
+<script>App.fileMode = true; App.defaultRoute = "deployments";</script>
 <script>
 (function () {
   const { UI, esc } = App;
 
-  const STEPS = ['draft', 'evaluated', 'approved', 'deprecated', 'retired'];
-  const MODELS = [
-    { id: 'qwen2.5:32b-q4_K_M', family: 'Qwen 2.5', size: '32B', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', digest: 'sha256:41ab9c0e7f5d2b18...e3a7', full: 'sha256:41ab9c0e7f5d2b18c4a6f0d9e2b7c1a8f5e3d2c1b0a9f8e7d6c5b4a3f2e1d0e3a7', ctx: '32,768', source: 'Ollama library, import bundle 2026-35', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'cuda passed, rocm passed, cpu passed', conf: '44 of 44 passed', confTone: 'ok', pools: ['gpu-large'], profiles: ['analyst'] },
-    { id: 'llama3.1:8b-q5_K_M', family: 'Llama 3.1', size: '8B', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', digest: 'sha256:7d21e6b03a9f4c55...0b2d', full: 'sha256:7d21e6b03a9f4c55e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a60b2d', ctx: '32,768', source: 'Ollama library, import bundle 2026-35', licence: 'Llama 3.1 Community, recorded', manifest: 'verified', hw: 'cuda passed, cpu passed', conf: '43 of 44 passed', confTone: 'ok', pools: ['gpu-large', 'cpu-helpers'], profiles: ['general-8b', 'chat-default'] },
-    { id: 'qwen2.5-coder:32b-q4_K_M', family: 'Qwen 2.5', size: '32B', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'evaluated', digest: 'sha256:9f2c41d07be6a3...c81e', full: 'sha256:9f2c41d07be6a3f1e8d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7c81e', ctx: '32,768', source: 'Ollama library, import bundle 2026-37', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'cuda passed, cpu passed', conf: '41 of 44 passed', confTone: 'warn', pools: ['gpu-large'], profiles: ['coder-32b', 'code'], warn: 'The tools capability is withheld until the conformance suite passes. Approval is still possible for chat only.' },
-    { id: 'nomic-embed-text:v1.5', family: 'Nomic', size: '137M', caps: ['embed'], label: 'restricted', lifecycle: 'approved', digest: 'sha256:0c6e3d4a1f9b2e77...94af', full: 'sha256:0c6e3d4a1f9b2e77d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f494af', ctx: '8,192', source: 'Ollama library, import bundle 2026-31', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'cpu passed, cuda passed', conf: 'not applicable, no tools capability', confTone: '', pools: ['cpu-helpers'], profiles: [] },
-    { id: 'llama-guard3:8b', family: 'Llama Guard', size: '8B', caps: ['chat'], label: 'restricted', lifecycle: 'approved', digest: 'sha256:b3a8f1c92d0e6547...1e60', full: 'sha256:b3a8f1c92d0e6547a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c41e60', ctx: '8,192', source: 'Ollama library, import bundle 2026-31', licence: 'Llama 3.1 Community, recorded', manifest: 'verified', hw: 'cpu passed, cuda passed', conf: 'not applicable, guard model', confTone: '', pools: ['cpu-helpers'], profiles: [], guard: true },
-    { id: 'finance-lora-v3:8b', family: 'Llama 3.1', size: '8B', caps: ['chat'], label: 'confidential', lifecycle: 'draft', digest: 'sha256:e5d09a7c3b2f1486...77c3', full: 'sha256:e5d09a7c3b2f1486b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d377c3', ctx: '32,768', source: 'Internal fine-tune, training job finance-lora-v3', licence: 'Inherits Llama 3.1 Community, recorded', manifest: 'signed, cosign key northwind-ml', hw: 'cuda passed', conf: 'not run', confTone: '', pools: ['none until approved'], profiles: [], evalNote: 'Registration waits on the guardrail red-team suite, which is below its threshold (0.968 against 0.980).' },
-    { id: 'system', family: 'Apple Foundation Model', size: 'on-device', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'evaluated', held: true, server: 'mac-studio-1-fm', digest: 'held by the server, no digest', full: 'held by the server, no digest', ctx: 'not reported by the server', source: 'Model server mac-studio-1-fm (fm serve on a Unix socket), model id system', licence: 'Apple Foundation Models terms, recorded', manifest: 'not applicable', hw: 'metal passed', conf: '2 of 2 passed', confTone: 'ok', pools: ['apple-silicon'], profiles: [], reported: { server: 'fm serve', tools: 'work', json: 'works', embeddings: 'not offered: knowledge and memory embed on an Ollama pool' }, heldNote: 'Held by the server: nothing is pulled and there is no digest to verify. The server\'s model id stands in for it; the licence, the conformance run and a second approver still apply.' },
-    { id: 'llama3:8b-q4_0', family: 'Llama 3', size: '8B', caps: ['chat'], label: 'internal', lifecycle: 'deprecated', digest: 'sha256:2a7c9e4d0b1f8365...5bd2', full: 'sha256:2a7c9e4d0b1f8365c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e25bd2', ctx: '8,192', source: 'Ollama library, import bundle 2026-12', licence: 'Llama 3 Community, recorded', manifest: 'verified', hw: 'cuda passed, cpu passed', conf: '38 of 44 passed', confTone: 'warn', pools: ['gpu-large'], profiles: [], depNote: 'Deprecated on 2 Sep. New profiles cannot pick it; existing profiles keep routing until 30 Sep, then it retires.' }
-  ];
-  const CAPS = ['chat', 'tools', 'embed', 'vision', 'thinking'];
-  // B-43: Chat Completions servers registered as instances (Apple's fm serve, mlx_lm.server, llama-server).
-  const SERVERS = [
-    { name: 'mac-studio-1-fm', pool: 'apple-silicon', transport: 'socket', target: '/var/run/exprsn/fm.sock', token: false, health: 'healthy', server: 'fm serve', ctx: 'not reported', tools: 'work', json: 'works', embeddings: 'not offered', models: [{ id: 'system', available: true, catalogued: true }, { id: 'pcc', available: false, reason: 'PCC inference is not available in this context.' }] },
-    { name: 'mac-studio-1-llama', pool: 'apple-silicon', transport: 'url', target: 'http://10.20.4.31:8081', token: true, health: 'healthy', server: 'llama.cpp', ctx: '32,768', tools: 'work', json: 'works', embeddings: 'offered', models: [{ id: 'qwen2.5-7b-instruct-q4_k_m.gguf', available: true }] },
-    { name: 'mac-mini-2-mlx', pool: 'apple-silicon', transport: 'url', target: 'http://10.20.4.32:8080', token: false, health: 'unreachable', server: 'chat-completions', ctx: 'not reported', tools: 'not probed', json: 'not probed', embeddings: 'not tried', models: [{ id: 'mlx-community/Qwen3-4B-4bit', available: true }] }
-  ];
+  // ---- nav entry (app.js untouched): after Cloud accounts when present, otherwise before Zones ----
+  (function nav() {
+    const admin = (App.NAV || []).find((g) => g.group === 'Admin'); if (!admin || admin.items.some((i) => i.id === 'deployments')) return;
+    const item = { id: 'deployments', label: 'Deployments', icon: 'branch' };
+    const c = admin.items.findIndex((i) => i.id === 'cloud'), z = admin.items.findIndex((i) => i.id === 'zones');
+    if (c >= 0) admin.items.splice(c + 1, 0, item); else if (z >= 0) admin.items.splice(z, 0, item); else admin.items.push(item);
+  })();
 
-  // ---- 2.0.0 cloud model backends (B-105; every one needs B-43's ModelServer interface and format: server entries) ----
-  const PROVIDERS = ['all', 'Ollama', 'Bedrock', 'Azure AI Foundry', 'DigitalOcean GenAI', 'Workers AI'];
-  const cloudRow = (o) => Object.assign({ digest: 'held by the provider, no digest', full: 'held by the provider, no digest', source: 'Provider catalogue, account ' + o.cloud.account, licence: 'Provider service terms, recorded on the account', manifest: 'not applicable', hw: 'not applicable, provider-hosted', pools: ['none (provider endpoint)'], conf: 'not run', confTone: '', profiles: [] }, o);
-  const CLOUD = [
-    cloudRow({ id: 'amazon.nova-pro-v1:0', provider: 'Bedrock', family: 'Amazon Nova', size: 'eu-central-1', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', ctx: '300,000', conf: '44 of 44 passed', confTone: 'ok', profiles: ['analyst-cloud'], cloud: { account: 'aws-prod', region: 'eu-central-1', regionCeiling: 'confidential', price: '$0.80 in, $3.20 out per 1M tokens', endpoint: 'Bedrock Converse and ConverseStream, SigV4 with the account\'s federated role', residency: 'Single-region model id: runs in eu-central-1 only.', guardrail: 'Bedrock Guardrail gr-example01, an extra layer; Exprsn-AI guardrails run first and last and stay authoritative', gateway: 'off' } }),
-    cloudRow({ id: 'eu.amazon.nova-lite-v1:0', provider: 'Bedrock', family: 'Amazon Nova (inference profile)', size: 'eu-* (EU regions only)', caps: ['chat'], label: 'internal', lifecycle: 'evaluated', ctx: '300,000', conf: '41 of 44 passed', confTone: 'warn', cloud: { account: 'aws-prod', region: 'EU cross-region inference profile', regionCeiling: 'internal', price: '$0.06 in, $0.24 out per 1M tokens', endpoint: 'Bedrock Converse through an inference profile', residency: 'A cross-region profile may run in any EU region of the profile. Cross-region profiles are refused above internal by default, so the ceiling is internal.', guardrail: 'none on the provider side; Exprsn-AI guardrails only', gateway: 'off' }, warn: 'The tools capability is withheld until the conformance suite passes. Approval is still possible for chat only.' }),
-    cloudRow({ id: 'amazon.titan-embed-text-v2:0', provider: 'Bedrock', family: 'Amazon Titan', size: 'eu-central-1', caps: ['embed'], label: 'confidential', lifecycle: 'approved', ctx: '8,192', conf: 'not applicable, no tools capability', profiles: ['knowledge-embed'], cloud: { account: 'aws-prod', region: 'eu-central-1', regionCeiling: 'confidential', price: '$0.02 per 1M tokens', endpoint: 'Bedrock InvokeModel (embeddings)', residency: 'Single-region model id: runs in eu-central-1 only.', guardrail: 'not applicable to embeddings', gateway: 'off' } }),
-    cloudRow({ id: 'nw-gpt-4-1-mini', provider: 'Azure AI Foundry', family: 'gpt-4.1-mini (deployment)', size: 'swedencentral', caps: ['chat', 'tools'], label: 'confidential', lifecycle: 'approved', ctx: '1,047,576', conf: '44 of 44 passed', confTone: 'ok', profiles: ['analyst-cloud'], cloud: { account: 'azure-eu', region: 'swedencentral', regionCeiling: 'confidential', price: '$0.40 in, $1.60 out per 1M tokens', endpoint: 'kind: openai, Azure OpenAI v1 with an Entra token from the federated credential', residency: 'Regional deployment in swedencentral; data stays in the region.', guardrail: 'Azure content filter results mapped to guardrail decisions; Exprsn-AI guardrails stay authoritative', gateway: 'on (Cloudflare AI Gateway; logs off for content above internal)' } }),
-    cloudRow({ id: 'nw-embed-3-large', provider: 'Azure AI Foundry', family: 'text-embedding-3-large (deployment)', size: 'swedencentral', caps: ['embed'], label: 'confidential', lifecycle: 'approved', ctx: '8,191', conf: 'not applicable, no tools capability', profiles: ['knowledge-embed'], cloud: { account: 'azure-eu', region: 'swedencentral', regionCeiling: 'confidential', price: '$0.13 per 1M tokens', endpoint: 'kind: openai, /embeddings on the Azure OpenAI v1 endpoint', residency: 'Regional deployment in swedencentral.', guardrail: 'not applicable to embeddings', gateway: 'on (Cloudflare AI Gateway; logs off for content above internal)' } }),
-    cloudRow({ id: 'llama3.3-70b-instruct', provider: 'DigitalOcean GenAI', family: 'Llama 3.3', size: 'global endpoint', caps: ['chat'], label: 'internal', lifecycle: 'draft', ctx: '128,000', cloud: { account: 'do-team', region: 'global serverless endpoint', regionCeiling: 'internal', price: '$0.65 in, $0.65 out per 1M tokens', endpoint: 'kind: openai, serverless inference with a model access key from the vault', residency: 'The serverless endpoint does not pin a region, so the ceiling is internal.', guardrail: 'none on the provider side; Exprsn-AI guardrails only', gateway: 'off' }, evalNote: 'Conformance has not run yet. Approval waits on an eval record for this provider endpoint.' }),
-    cloudRow({ id: '@cf/meta/llama-3.1-8b-instruct', provider: 'Workers AI', family: 'Llama 3.1', size: 'Cloudflare edge', caps: ['chat'], label: 'internal', lifecycle: 'evaluated', ctx: '128,000', conf: '43 of 44 passed', confTone: 'ok', profiles: ['edge-chat'], cloud: { account: 'cf-edge', region: 'Cloudflare edge', regionCeiling: 'internal', price: 'priced in neurons, example $0.011 per 1,000 neurons', endpoint: 'kind: openai, Workers AI OpenAI-compatible endpoint with a scoped API token', residency: 'Runs at the Cloudflare edge location nearest the gateway; the edge ceiling is internal.', guardrail: 'none on the provider side; Exprsn-AI guardrails only', gateway: 'on (Cloudflare AI Gateway; logs off for content above internal)' } })
-  ];
-  // Importable provider models per account (the Cloud catalogue modal). Prices are example data.
-  const CATALOGUE = [
-    { account: 'aws-prod', provider: 'Bedrock', where: 'eu-central-1', rows: [['amazon.nova-pro-v1:0', 'chat, tools', '$0.80 / $3.20'], ['eu.amazon.nova-lite-v1:0', 'chat', '$0.06 / $0.24'], ['amazon.titan-embed-text-v2:0', 'embed', '$0.02'], ['amazon.nova-micro-v1:0', 'chat', '$0.035 / $0.14'], ['us.amazon.nova-pro-v1:0', 'chat, tools', '$0.80 / $3.20', 'US cross-region profile']] },
-    { account: 'azure-eu', provider: 'Azure AI Foundry', where: 'swedencentral deployments', rows: [['nw-gpt-4-1-mini', 'chat, tools', '$0.40 / $1.60'], ['nw-embed-3-large', 'embed', '$0.13'], ['nw-gpt-4-1-nano', 'chat, tools', '$0.10 / $0.40']] },
-    { account: 'do-team', provider: 'DigitalOcean GenAI', where: 'serverless inference', rows: [['llama3.3-70b-instruct', 'chat', '$0.65 / $0.65'], ['mistral-nemo-instruct-2407', 'chat', '$0.30 / $0.30']] },
-    { account: 'cf-edge', provider: 'Workers AI', where: 'Cloudflare edge', rows: [['@cf/meta/llama-3.1-8b-instruct', 'chat', 'neurons'], ['@cf/baai/bge-m3', 'embed', 'neurons']] }
-  ];
+  // ---- example data (Northwind, Monday 28 Sep 2026 09:40 UTC). Every ID here is fake. ----
+  const ACCOUNTS = { AWS: ['aws-prod', 'aws-sandbox'], Azure: ['azure-eu', 'azure-contoso'], DigitalOcean: ['do-team'], Cloudflare: ['cf-edge'], 'On-prem': ['northwind-dc1'] };
+  const REGIONS = { 'aws-prod': ['eu-central-1', 'us-east-1'], 'aws-sandbox': ['us-east-1'], 'azure-eu': ['swedencentral', 'westeurope'], 'azure-contoso': ['westeurope'], 'do-team': ['ams3', 'fra1', 'nyc3'], 'cf-edge': ['global edge'], 'northwind-dc1': ['Frankfurt data centre'] };
+  const CEIL = { 'eu-central-1': 'confidential', 'us-east-1': 'internal', swedencentral: 'confidential', westeurope: 'confidential', ams3: 'internal', fra1: 'internal', nyc3: 'internal', 'global edge': 'internal', 'Frankfurt data centre': 'restricted' };
+  const COMPUTE = {
+    AWS: { k8s: 'Amazon EKS', vm: 'EC2 with the bare-metal installer', containers: 'ECS Fargate' },
+    Azure: { k8s: 'Azure Kubernetes Service', vm: 'Azure VMs with the bare-metal installer', containers: 'Azure Container Apps' },
+    DigitalOcean: { k8s: 'DigitalOcean Kubernetes', vm: 'Droplets with the bare-metal installer', containers: 'App Platform' }
+  };
+  const CF_REASON = 'Runs the app tier only; pick a provider for data and GPUs';
+  const BASE = { k8s: [1150, 2600, 5900], vm: [380, 900, 2310], containers: [290, 760, 1900], cfc: [240, 520, 1100] };
+  const DB = [190, 620, 1720], CACHE = [60, 180, 420], STORE = [25, 60, 140], NET = [70, 110, 220];
+  const SIZES = ['Small', 'Medium', 'Large-HA'];
 
-  function menu(ctx, host, items, cur, onPick) {
-    ctx.$$('.dropdown').forEach((d) => d.remove());
-    const d = document.createElement('div'); d.className = 'dropdown';
-    d.innerHTML = items.map((it) => '<button type="button" data-v="' + esc(it) + '" class="' + (it === cur ? 'on' : '') + '">' + esc(it) + '</button>').join('');
-    host.appendChild(d);
-    d.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; d.remove(); onPick(b.dataset.v); });
-    setTimeout(() => document.addEventListener('click', function h(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', h); } }), 0);
-  }
+  const DEPLOYS0 = () => [
+    { id: 'nw-prod-eu', provider: 'AWS', account: 'aws-prod', region: 'eu-central-1', target: 'Kubernetes, EKS 1.33, 3x m7i.xlarge', data: 'Aurora PostgreSQL 17, ElastiCache Valkey 8, S3', front: 'Cloudflare DNS, Tunnel, WAF, Access', release: '2.0.0', upgrade: '2.0.1', state: 'healthy', drift: 1, est: 8420, mtd: 5980, url: 'https://ai.northwind-example.com' },
+    { id: 'nw-dr-azure', provider: 'Azure', account: 'azure-eu', region: 'swedencentral', target: 'VMs, 2x Standard_D4s_v5', data: 'PostgreSQL Flexible 17, Azure Cache for Redis, Blob', front: 'ACME (Let\'s Encrypt), Azure DNS', release: '2.0.0', state: 'healthy', note: 'warm standby', drift: 0, est: 2310, mtd: 1640, url: 'https://dr.ai.northwind-example.com' },
+    { id: 'nw-edge-cf', provider: 'Cloudflare', account: 'cf-edge + aws-prod', region: 'edge, eu-central-1', target: 'Cloudflare Containers (3), assets on Workers', data: 'Hyperdrive to nw-edge-aurora, Valkey nw-edge-valkey, R2 (EU)', front: 'Cloudflare (built in)', release: '2.0.0', state: 'plan ready', wait: 'cf-edge token lacks Containers Edit', drift: 0, est: 1480, mtd: null, url: 'https://edge.ai.northwind-example.com' },
+    { id: 'lab-do', provider: 'DigitalOcean', account: 'do-team', region: 'ams3', target: 'App Platform, 2 containers', data: 'Managed PostgreSQL 17, Managed Valkey, Spaces', front: 'Cloudflare DNS, WAF', release: '2.0.0', state: 'blocked', wait: 'budget exceeded (plan adds $214/mo)', drift: 0, est: 214, mtd: null, url: 'https://lab.ai.northwind-example.com' },
+    { id: 'sandbox-ecs', provider: 'AWS', account: 'aws-sandbox', region: 'us-east-1', target: 'ECS Fargate, 2 tasks', data: 'RDS PostgreSQL 17, ElastiCache Valkey, S3', front: 'ACME, Route 53', release: '2.0.0', state: 'applying', step: 7, drift: 0, est: 386, mtd: 41, url: 'https://sandbox.ai.northwind-example.com' }
+  ];
+  const SANDBOX_STEPS = ['VPC and subnets', 'Security groups', 'NAT gateway', 'S3 bucket exprsn-sandbox-blobs-example', 'ElastiCache subnet group', 'ElastiCache Valkey t4g.small', 'RDS PostgreSQL 17 db.t4g.medium', 'Secrets sealed into the vault', 'ECS cluster and task definition', 'Migration task (migrate --check, migrate)', 'ECS service and load balancer', 'Route 53 record, ACME certificate, verify'];
+  const RESOURCES = {
+    'nw-prod-eu': [
+      ['VPC', 'vpc-0example01', 'network', 'in sync'], ['Subnets (6, private and public)', 'subnet-0example1a … 1f', 'network', 'in sync'], ['Security group', 'sg-0example1', 'firewall', 'drifted'], ['NAT gateway', 'nat-0example01', 'network', 'in sync'],
+      ['EKS cluster 1.33', 'nw-prod-eu', 'cluster', 'in sync'], ['Node group ng-app, 3x m7i.xlarge', 'ng-app', 'node group', 'in sync'], ['Node group ng-gpu-l40s (pool gpu-cloud-eu)', 'ng-gpu-l40s', 'node group', 'in sync', 'cloud-compute'],
+      ['Aurora PostgreSQL 17.4, protected', 'nw-prod-aurora', 'database', 'in sync', 'cloud-data'], ['ElastiCache Valkey 8.0', 'nw-prod-valkey', 'cache', 'in sync', 'cloud-data'], ['S3 bucket', 'nw-prod-blobs-example', 'bucket', 'in sync'],
+      ['Helm release exprsn-ai 2.0.0', 'exprsn-ai/exprsn-ai', 'release', 'in sync'], ['Cloudflare Tunnel, 2 connectors', 'tunnel 6f1e…example', 'front door', 'in sync'], ['Cloudflare DNS ai.northwind-example.com', 'CNAME to the tunnel', 'dns', 'in sync'], ['Cloudflare Access app, admin console', 'access app example-01', 'front door', 'in sync']
+    ],
+    'nw-dr-azure': [['Resource group', 'rg-exprsn-dr', 'group', 'in sync'], ['Virtual network', 'vnet-exprsn-dr', 'network', 'in sync'], ['VM exprsn-dr-1, Standard_D4s_v5', 'vm-exprsn-dr-1', 'vm', 'in sync'], ['VM exprsn-dr-2, Standard_D4s_v5', 'vm-exprsn-dr-2', 'vm', 'in sync'], ['PostgreSQL Flexible 17, protected', 'nw-dr-flex', 'database', 'in sync', 'cloud-data'], ['Azure Cache for Redis', 'nw-dr-redis', 'cache', 'in sync', 'cloud-data'], ['Storage account, Blob', 'nwdrblobsexample', 'bucket', 'in sync'], ['Azure DNS dr.ai.northwind-example.com', 'A record', 'dns', 'in sync']],
+    'nw-edge-cf': [['Cloudflare Container app exprsn-ai, 3 instances', 'not created', 'containers', 'planned'], ['Worker with static assets (console)', 'not created', 'worker', 'planned'], ['Hyperdrive config to nw-edge-aurora', 'not created', 'hyperdrive', 'planned'], ['Aurora PostgreSQL 17 (aws-prod)', 'nw-edge-aurora', 'database', 'planned', 'cloud-data'], ['ElastiCache Valkey, TLS endpoint with AUTH and IP allow list (aws-prod)', 'nw-edge-valkey', 'cache', 'planned', 'cloud-data'], ['R2 bucket, EU jurisdiction', 'nw-edge-blobs', 'bucket', 'in sync', 'cloud-data']],
+    'lab-do': [['VPC', 'lab-vpc', 'network', 'planned'], ['App Platform app, 2 containers', 'lab-app', 'containers', 'planned'], ['Managed PostgreSQL 17', 'lab-pg', 'database', 'planned', 'cloud-data'], ['Managed Valkey', 'lab-valkey', 'cache', 'planned', 'cloud-data'], ['Spaces bucket', 'lab-blobs-example', 'bucket', 'planned'], ['Cloudflare DNS and WAF', 'lab.ai.northwind-example.com', 'front door', 'planned']]
+  };
+  const UPGRADE_ROWS = [
+    ['create', 'Node group ng-app-v2 (2.0.1 AMI, m7i.2xlarge)', 'surge replacement for ng-app', '+$380'], ['create', 'Aurora snapshot pre-upgrade-2-0-1', 'taken before the migration', '+$27'], ['create', 'Kubernetes job exprsn-ai-migrate-2.0.1', 'migrate --check, then migrate', '$0'], ['create', 'Cloudflare WAF rule exprsn-v1-rate', 'rate limit for /v1', '+$5'],
+    ['update', 'Helm release exprsn-ai', 'image 2.0.0 → 2.0.1 (sha256:7c1e…example)', '$0'], ['update', 'EKS add-on vpc-cni', 'v1.19.2 → v1.19.5', '$0'], ['update', 'Cloudflare Tunnel config', 'ingress rule for /readyz', '$0'],
+    ['replace', 'Launch template lt-gpu-l40s', 'new AMI forces a new version; nodes roll one at a time', '$0']
+  ];
+  const money = (n) => n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US');
+  const statePill = (d) => UI.pill(d.state, /healthy/.test(d.state) ? 'ok' : /blocked|failed|destroy/.test(d.state) ? 'danger' : /applying|upgrading|ready/.test(d.state) ? 'info' : 'warn');
+  const kindPill = (k) => UI.pill(k, k === 'create' ? 'ok' : k === 'delete' ? 'danger' : k === 'replace' ? 'warn' : 'info');
+
+  const init = (st) => {
+    if (st.deploys) return;
+    st.deploys = DEPLOYS0(); st.sel = 'nw-prod-eu'; st.detail = null; st.tab = 'overview'; st.q = ''; st.wiz = null; st.view = null; st.driftResolved = null; st.throttled = false;
+  };
+  const newWiz = () => ({ step: 1, provider: 'AWS', account: 'aws-prod', region: 'eu-central-1', compute: 'k8s', size: 1, db: 'new', cache: 'new', store: 'new', dataProvider: 'aws-prod', front: 'cloudflare', access: true, name: 'nw-analytics-eu', host: 'analytics.ai.northwind-example.com' });
 
   App.register({
-    id: 'models', title: 'Models', summary: 'Catalog, signed import path, lifecycle approvals, quantization builds', section: 'admin', crumb: ['Admin', 'Models'],
-    commands: [{ label: 'Request model import', sub: 'Models', run(app) { app.stateFor('models').openRequest = true; app.render(); } }, { label: 'Register model server', sub: 'Models', run(app) { app.stateFor('models').openServers = true; app.render(); } },
-      { label: 'Import from cloud catalogue', sub: 'Models, cloud providers', run(app) { app.stateFor('models').openCatalogue = true; app.render(); } }],
+    id: 'deployments', title: 'Deployments', section: 'admin', crumb: (st) => st && st.detail ? ['Admin', 'Deployments', st.detail] : ['Admin', 'Deployments'],
+    summary: 'Exprsn-AI deployed to AWS, Azure, DigitalOcean or Cloudflare: plan, apply, verify, drift, upgrade, destroy',
+    commands: [
+      { label: 'New deployment', sub: 'Deployments', run(app) { const s = app.stateFor('deployments'); init(s); s.detail = null; s.wiz = newWiz(); app.render(); } },
+      { label: 'Check drift on every deployment', sub: 'Deployments', run(app) { app.toast('Drift check queued for 5 deployments (cloud.drift).'); } }
+    ],
     states: [
-      { title: 'Pickle rejected', tone: 'danger', text: 'Import refused: the archive contains a pickle checkpoint. Only GGUF and safetensors are accepted.', apply(ctx) { ctx.state.problem = 'pickle'; ctx.rerender(); } },
-      { title: 'Digest mismatch', tone: 'danger', text: 'The blob digest does not match the approved manifest. The gateway refuses the blob and nothing is registered.', apply(ctx) { ctx.state.problem = 'digest'; ctx.rerender(); } },
-      { title: 'Licence missing', tone: 'warn', text: 'Approve is disabled until the licence field is completed and reviewed.', apply(ctx) { ctx.state.selected = 'qwen2.5-coder:32b-q4_K_M'; ctx.state.licenceMissing = true; ctx.rerender(); } },
-      { title: 'Server model unavailable', tone: 'warn', text: 'The model server lists the model but reports it unavailable (Private Cloud Compute on fm serve). It cannot be registered.', apply(ctx) { ctx.state.openRequest = 'server'; ctx.state.pickUnavailable = true; ctx.rerender(); } },
-      { title: 'Cross-region profile refused', tone: 'danger', text: 'Importing us.amazon.nova-pro-v1:0 at confidential is refused: a cross-region inference profile may run outside the account\'s allowed regions and is capped at internal.', apply(ctx) { ctx.state.problem = 'crossregion'; ctx.state.noB43 = false; ctx.rerender(); } },
-      { title: 'B-43 not installed', tone: 'warn', text: 'Cloud backends need the model server interface from B-43. Without it the cloud rows are listed as unavailable and the Cloud catalogue is disabled.', apply(ctx) { ctx.state.noB43 = true; ctx.state.provider = 'all'; ctx.state.selected = 'amazon.nova-pro-v1:0'; ctx.rerender(); } },
-      { title: 'Retired', tone: 'neutral', text: 'Retired tags stay resolvable for audit and are removed from routing. Shown read-only.', apply(ctx) { ctx.state.lc = ctx.state.lc || {}; ctx.state.lc['llama3:8b-q4_0'] = 'retired'; ctx.state.selected = 'llama3:8b-q4_0'; ctx.state.lifecycle = 'all'; ctx.rerender(); } }
+      { title: 'No deployments', tone: 'neutral', text: 'Nothing is deployed yet. The page explains plan, apply and verify and offers New deployment.', apply(ctx) { init(ctx.state); ctx.state.view = 'empty'; ctx.state.wiz = null; ctx.state.detail = null; ctx.rerender(); } },
+      { title: 'Loading', tone: 'neutral', text: 'Deployments and their last verification load; rows show skeletons.', apply(ctx) { init(ctx.state); ctx.state.view = 'loading'; ctx.state.wiz = null; ctx.state.detail = null; ctx.rerender(); } },
+      { title: 'Plan expired', tone: 'warn', text: 'The reviewed plan is older than 60 minutes or the observed state changed. Apply is disabled until the plan is made again.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = null; st.detail = null; st.wiz = newWiz(); st.wiz.step = 5; st.wiz.expired = true; ctx.rerender(); } },
+      { title: 'Apply failed, rolled back', tone: 'danger', text: 'sandbox-ecs failed at step 7 (RDS StorageQuotaExceeded). Steps 8 to 12 never ran; the app tier was rolled back and the network kept for a retry.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = null; st.wiz = null; const d = st.deploys.find((x) => x.id === 'sandbox-ecs'); d.state = 'failed, rolled back'; st.detail = 'sandbox-ecs'; st.tab = 'operations'; ctx.rerender(); } },
+      { title: 'Budget hard stop', tone: 'danger', text: 'do-team is at 103 % of its budget. The lab-do plan adds $214 a month and is refused with budget_exceeded; an override needs a second cloud admin.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = null; st.wiz = null; st.detail = 'lab-do'; st.tab = 'overview'; ctx.rerender(); } },
+      { title: 'Drift detected', tone: 'warn', text: 'sg-0example1 on nw-prod-eu gained inbound 0.0.0.0/0 on port 22 out of band. Revert, adopt or ignore the field.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = null; st.wiz = null; st.driftResolved = null; st.deploys.find((x) => x.id === 'nw-prod-eu').drift = 1; st.detail = 'nw-prod-eu'; st.tab = 'drift'; ctx.rerender(); } },
+      { title: 'Permission denied', tone: 'danger', text: 'A cloud reader without cloud:deploy sees deployments read-only; New deployment, Upgrade and Destroy are disabled with the reason.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = 'readonly'; st.wiz = null; st.detail = null; ctx.rerender(); } },
+      { title: 'Throttled, retrying', tone: 'warn', text: 'AWS answers ThrottlingException during the sandbox-ecs apply. The step waits with backoff (attempt 3 of 8) and carries on; nothing is created twice.', apply(ctx) { init(ctx.state); const st = ctx.state; st.view = null; st.wiz = null; st.throttled = true; const d = st.deploys.find((x) => x.id === 'sandbox-ecs'); d.state = 'applying'; st.detail = 'sandbox-ecs'; st.tab = 'operations'; ctx.rerender(); } }
     ],
     render(root, ctx) {
-      const st = ctx.state;
-      st.selected = st.selected || 'qwen2.5-coder:32b-q4_K_M'; st.query = st.query || ''; st.lifecycle = st.lifecycle || 'all'; st.cap = st.cap || 'all';
-      st.lc = st.lc || {}; st.extra = st.extra || []; st.reveal = st.reveal || {}; st.servers = st.servers || SERVERS.slice(); st.provider = st.provider || 'all';
-      if (ctx.params.model) { st.selected = ctx.params.model; delete ctx.params.model; }
-      if (ctx.params.provider && st.provHash !== location.hash) { st.provHash = location.hash; st.provider = ctx.params.provider; if (st.provider === 'cloud') st.selected = 'amazon.nova-pro-v1:0'; }
-      const all = MODELS.concat(CLOUD, st.extra);
-      const provOf = (m) => m.provider || 'Ollama';
-      const provOk = (m) => st.provider === 'all' || (st.provider === 'cloud' ? provOf(m) !== 'Ollama' : provOf(m) === st.provider);
-      const lcOf = (m) => st.lc[m.id] || m.lifecycle;
-      const q = st.query.toLowerCase();
-      const rows = all.filter((m) => (!q || (m.id + ' ' + m.family + ' ' + m.caps.join(' ')).toLowerCase().includes(q)) && (st.lifecycle === 'all' || lcOf(m) === st.lifecycle) && (st.cap === 'all' || m.caps.includes(st.cap)) && provOk(m));
-      const sel = all.find((m) => m.id === st.selected) || all[0];
-      const lc = lcOf(sel);
-      const licenceMissing = st.licenceMissing && sel.id === 'qwen2.5-coder:32b-q4_K_M';
-      const readOnly = lc === 'retired';
+      const st = ctx.state; init(st);
+      if (ctx.params.id) { if (st.deploys.some((d) => d.id === ctx.params.id)) { st.sel = ctx.params.id; st.detail = ctx.params.id; st.wiz = null; } delete ctx.params.id; }
+      if (ctx.params.tab) { st.tab = ctx.params.tab; delete ctx.params.tab; }
+      const style = '<style>'
+        + '.dep-steps{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:12px}.dep-steps span{display:inline-flex;align-items:center;gap:6px;padding:0 6px;height:26px;color:var(--muted);font-weight:500}.dep-steps .cur{color:var(--fg);font-weight:700}.dep-steps .done{color:var(--fg2)}.dep-steps .na{text-decoration:line-through}.dep-steps i{font-style:normal;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);font-size:11px}.dep-steps .cur i{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}.dep-steps .done i{background:var(--fg2);color:var(--bg);border-color:var(--fg2)}.dep-steps .sep{color:var(--faint)}'
+        + '.dep-tiles{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}.dep-tile{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);text-align:left;cursor:pointer;font-size:12px;color:var(--fg2)}.dep-tile b{font-size:13px;color:var(--fg)}.dep-tile.on{border-color:var(--accent);background:var(--accent-tint)}.dep-tile[disabled]{opacity:.6;cursor:not-allowed}'
+        + '.dep-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}.dep-fb{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line);flex-wrap:wrap}'
+        + '</style>';
+      const example = '<span class="muted" style="font-size:12px">Example data. IDs and prices are illustrative.</span>';
+      const ro = st.view === 'readonly';
 
-      const stepper = '<div class="models-steps">' + STEPS.map((s, i) => '<span class="' + (s === lc ? 'cur' : STEPS.indexOf(lc) > i ? 'done' : '') + '">' + s + '</span>' + (i < STEPS.length - 1 ? '<span class="sep">›</span>' : '')).join('') + '</div>';
-      const digest = sel.held ? '<span class="fg2">held by the server, no digest</span>' : st.reveal[sel.id] ? '<span class="mono fg2" style="overflow-wrap:anywhere">' + esc(sel.full) + '</span> <a href="#" data-reveal style="font-size:12px">hide</a>' : '<span class="mono fg2">' + esc(sel.digest) + '</span> <a href="#" data-reveal style="font-size:12px">reveal</a>';
-      const kv = [
-        ['Digest', digest],
-        ['Context length', esc(sel.ctx)],
-        ['Source', esc(sel.source) + (/bundle/.test(sel.source) ? ' <a href="#" data-go="platform" style="font-size:12px">bundle</a>' : /training job/.test(sel.source) ? ' <a href="#" data-go="training" style="font-size:12px">open job</a>' : '')],
-        ['Licence', licenceMissing ? '<span style="color:var(--warn-fg)">not recorded</span> ' + UI.btn('Record licence', { size: 'xs', attrs: 'data-licence' }) : esc(sel.licence)],
-        sel.held ? ['Model server', '<a href="#" data-servers>' + esc(sel.server) + '</a> <span class="muted" style="font-size:12px">model id <span class="mono">' + esc(sel.id) + '</span></span>'] : ['Signed manifest', sel.manifest === 'verified' ? UI.pill('verified', 'ok') : UI.pill(sel.manifest, 'ok')],
-        ['Tested hardware', esc(sel.hw)],
-        ['Tool-calling conformance', sel.confTone ? UI.pill(sel.conf, sel.confTone) : '<span class="fg2">' + esc(sel.conf) + '</span>'],
-        ['Allowed pools', sel.pools.map((p) => /^none/.test(p) ? '<span class="fg2">' + esc(p) + '</span>' : '<a href="#" data-go="pools">' + esc(p) + '</a>').join(', ')],
-        ...(sel.held ? [['Reported by the server', esc(sel.reported.server) + '; tools ' + esc(sel.reported.tools) + '; JSON schema output ' + esc(sel.reported.json) + '; embeddings ' + esc(sel.reported.embeddings)]] : []),
-        ['Used by profiles', sel.profiles.length ? sel.profiles.map((p) => '<a href="#" data-profile="' + esc(p) + '">' + esc(p) + '</a>').join(', ') : '<span class="fg2">' + (sel.guard ? 'guardrails only' : 'none') + '</span>']
-      ];
-      const cl = sel.cloud;
-      if (cl) {
-        kv.splice(0, kv.length,
-          ['Weights', '<span class="fg2">held by the provider, no digest</span>'],
-          ['Provider', esc(provOf(sel)) + ', account <a href="#" data-goacct="' + esc(cl.account) + '" class="mono">' + esc(cl.account) + '</a>'],
-          ['Region', esc(cl.region)],
-          ['Endpoint', esc(cl.endpoint) + '<div class="muted" style="font-size:12px">Catalogue entry <span class="mono">format: server</span>; needs the B-43 model server interface</div>'],
-          ['Price', esc(cl.price) + ' <span class="muted" style="font-size:12px">example</span><div class="muted" style="font-size:12px">Priced into usage_records at metering</div>'],
-          ['Label ceiling', UI.label(sel.label, { sm: true }) + ' <span class="muted" style="font-size:12px">within the region ceiling</span> ' + UI.label(cl.regionCeiling, { sm: true })],
-          ['Residency', esc(cl.residency)],
-          ['Provider guardrail', esc(cl.guardrail)],
-          ['AI Gateway', esc(cl.gateway)],
-          ['Context length', esc(sel.ctx)],
-          ['Tool-calling conformance', sel.confTone ? UI.pill(sel.conf, sel.confTone) : '<span class="fg2">' + esc(sel.conf) + '</span>'],
-          ['Used by profiles', sel.profiles.length ? sel.profiles.map((p) => '<a href="#" data-profile="' + esc(p) + '">' + esc(p) + '</a>').join(', ') : '<span class="fg2">none</span>']);
+      if (st.wiz) { renderWizard(root, ctx, st, style, example); return; }
+      if (st.detail) { renderDetail(root, ctx, st, style, example, ro); return; }
+
+      const head = UI.pagehead('Deployments', 'Exprsn-AI itself on AWS, Azure, DigitalOcean or Cloudflare: plan, apply, verify, drift, upgrade, destroy', UI.btn('Check drift', { icon: 'refresh', attrs: 'data-drift-all', disabled: ro }) + UI.btn('New deployment', { kind: 'primary', icon: 'plus', attrs: 'data-new', disabled: ro, title: ro ? 'Needs cloud:deploy' : '' }));
+      if (st.view === 'empty') {
+        root.innerHTML = style + '<div class="page">' + head + UI.empty('No deployments yet', 'A deployment is Exprsn-AI with its database, cache, object store and front door in one cloud account. Exprsn-AI plans the resources, shows the cost and the diff, applies them through the provider APIs and verifies the result.', UI.btn('New deployment', { kind: 'primary', attrs: 'data-new' }))
+          + '<div class="grid3">' + UI.panel('Plan', '<div class="fg2" style="font-size:12px">The desired resources against what the account has: create, update, replace, delete, with the monthly cost delta.</div>') + UI.panel('Apply', '<div class="fg2" style="font-size:12px">A journal of idempotent steps that survives a restart, within the provider\'s rate limits.</div>') + UI.panel('Verify and watch', '<div class="fg2" style="font-size:12px">/readyz, TLS and database checks after apply; drift checks every hour after that.</div>') + '</div>' + example + '</div>';
+        ctx.on('click', '[data-new]', () => { st.wiz = newWiz(); ctx.rerender(); });
+        return;
       }
-      let notice = '';
-      if (cl && st.noB43) notice = UI.notice('Unavailable: this install has no model server interface (B-43), so provider endpoints cannot be called. The entry is kept and routes again once B-43 is installed.', 'warn');
-      else if (readOnly) notice = UI.notice('Retired on ' + (sel.id === 'llama3:8b-q4_0' ? '20 Sep' : 'today') + '. The tag stays resolvable for audit and is removed from routing. Fields are read-only.', 'info');
-      else if (licenceMissing) notice = UI.notice('Approve is disabled until the licence field is completed and reviewed.', 'warn');
-      else if (sel.warn && lc === 'evaluated') notice = UI.notice(esc(sel.warn), 'warn');
-      else if (sel.evalNote && lc === 'draft') notice = UI.notice(esc(sel.evalNote) + ' <a href="#" data-go="training">Open evals</a>', 'warn');
-      else if (sel.depNote && lc === 'deprecated') notice = UI.notice(esc(sel.depNote), 'warn');
-      else if (sel.held && lc !== 'approved') notice = UI.notice(esc(sel.heldNote), 'info');
-      else if (lc === 'approved' && sel.warn) notice = UI.notice('Approved for chat only. Tools stay withheld until the conformance suite passes.', 'info');
-      let actions = '';
-      if (readOnly) actions = UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'draft') actions = UI.btn('Approve', { kind: 'primary', disabled: true, title: 'Needs an eval record and a passing red-team suite' }) + UI.btn('Build quantization', { attrs: 'data-quant' }) + UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'evaluated') actions = UI.btn('Approve', { kind: 'primary', attrs: 'data-approve', disabled: licenceMissing, title: licenceMissing ? 'Licence not recorded' : '' }) + (sel.held ? '' : UI.btn('Build quantization', { attrs: 'data-quant' })) + UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'approved') actions = UI.btn('Deprecate', { attrs: 'data-deprecate' }) + (sel.held ? '' : UI.btn('Build quantization', { attrs: 'data-quant' })) + UI.btn('Model card', { attrs: 'data-card' });
-      else if (lc === 'deprecated') actions = UI.btn('Retire', { kind: 'danger', attrs: 'data-retire' }) + UI.btn('Model card', { attrs: 'data-card' });
-      if (cl) actions = actions.replace(UI.btn('Build quantization', { attrs: 'data-quant' }), '') + UI.btn('Cloud spend', { attrs: 'data-spend' });
-
-      const problem = st.problem === 'pickle'
-        ? '<div class="vstack gap6">' + UI.problem('Import refused: pickle checkpoint', 'The archive 2026-38-hf-models.tar contains consolidated.00.pth, a pickle checkpoint. Only GGUF and safetensors are accepted. Nothing was written to MinIO and no tag was registered.', '7c1e0b3f9a2d4e6c8b5a7f1e3d9c0b2a') + '<div>' + UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismiss' }) + '</div></div>'
-        : st.problem === 'digest'
-          ? '<div class="vstack gap6">' + UI.problem('Digest mismatch', 'Blob sha256:c07e2a… does not match the approved manifest for qwen2.5:32b-q4_K_M (expected sha256:41ab9c…). The gateway refused the blob on gpu-large-1/1 and nothing is registered.', '3e9a7c1b5d2f4e8a6c0b9d7f1a3e5c2b') + '<div>' + UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismiss' }) + UI.btn('Open import log', { kind: 'ghost', size: 'sm', attrs: 'data-go="platform"' }) + '</div></div>'
-          : st.problem === 'crossregion'
-            ? '<div class="vstack gap6">' + UI.problem('Import refused: cross-region profile above internal', 'us.amazon.nova-pro-v1:0 is a US cross-region inference profile in aws-prod. It may run in Regions outside the account\'s allow list (eu-central-1, us-east-1), and cross-region profiles are capped at internal. The request asked for confidential. Nothing was registered.', '2b8e6c0a4f1d3e5a7c9b1d3f5a7c9e0b') + '<div>' + UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismiss' }) + UI.btn('Import at internal instead', { kind: 'ghost', size: 'sm', attrs: 'data-imp="us.amazon.nova-pro-v1:0" data-acct="aws-prod"' }) + '</div></div>'
-            : '';
-      const b43 = st.noB43 ? UI.notice('<b>Cloud backends unavailable.</b> Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI entries need the model server interface from B-43 (<span class="mono">ModelServer</span>, instance kind <span class="mono">openai</span>, catalogue format <span class="mono">server</span>). Ollama models are not affected.', 'warn') : '';
-
-      root.innerHTML = '<style>'
-        + '.models-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.models-steps span{color:var(--muted);font-weight:500}.models-steps .cur{color:var(--fg);font-weight:700}.models-steps .done{color:var(--fg2)}.models-steps .sep{color:var(--faint)}'
-        + '.models-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
-        + '.models-srv{border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}.models-srv .mono{overflow-wrap:anywhere}'
-        + '.models-pick{display:flex;flex-direction:column;gap:4px}.models-pick label{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:6px}.models-pick label.off{color:var(--muted)}'
-        + '</style>'
-        + '<div class="page">'
-        + UI.pagehead('Model catalog', 'Weights enter only through the signed import path', UI.btn('Browse repositories', { icon: 'search', attrs: 'data-browse' }) + UI.btn('Model servers', { icon: 'pools', attrs: 'data-servers' }) + UI.btn('Cloud catalogue', { attrs: 'data-catalogue', disabled: !!st.noB43, title: st.noB43 ? 'Needs the B-43 model server interface' : '' }) + UI.btn('Import safetensors', { attrs: 'data-import' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }))
-        + problem + b43
-        + '<div class="toolbar">' + UI.search('Filter models', 'data-search', st.query) + '<span class="relative">' + UI.btn('Lifecycle: ' + st.lifecycle, { attrs: 'data-menu="lifecycle"', cls: st.lifecycle !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Capability: ' + st.cap, { attrs: 'data-menu="cap"', cls: st.cap !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Provider: ' + (st.provider === 'cloud' ? 'any cloud' : st.provider), { attrs: 'data-menu="provider"', cls: st.provider !== 'all' ? 'active' : '' }) + '</span><span class="muted right" style="font-size:12px">' + rows.length + ' of ' + all.length + ' models</span></div>'
-        + UI.table(['Model', 'Provider', 'Family', 'Size or region', 'Capabilities', 'Max label', 'Lifecycle'], rows.map((m) => ({ cells: ['<span class="mono">' + esc(m.id) + '</span>', esc(provOf(m)) + (m.cloud && st.noB43 ? ' ' + UI.pill('unavailable', 'warn') : ''), esc(m.family), esc(m.size), esc(m.caps.join(', ')), UI.label(m.label, { sm: true }), UI.pill(lcOf(m))], selected: m.id === sel.id, attrs: 'data-id="' + esc(m.id) + '"' })), { emptyTitle: 'No models match', emptyText: 'Clear the filters or request an import.' })
-        + '<span class="muted" style="font-size:12px">Cloud rows are example data; prices are illustrative, not provider quotes.</span>'
-        + '</div>'
-        + '<aside class="inspector w360"><div class="models-name">' + esc(sel.id) + '</div>' + stepper + UI.kv(kv, 1) + notice + '<div class="hstack wrap gap6">' + actions + '</div></aside>';
-
-      ctx.on('click', 'tr.row', (e, t) => { st.selected = t.dataset.id; ctx.rerender(); });
-      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
-      ctx.on('click', '[data-menu]', (e, t) => {
-        e.stopPropagation();
-        if (t.dataset.menu === 'lifecycle') menu(ctx, t.parentElement, ['all'].concat(STEPS), st.lifecycle, (v) => { st.lifecycle = v; ctx.rerender(); });
-        else if (t.dataset.menu === 'provider') menu(ctx, t.parentElement, PROVIDERS, st.provider, (v) => { st.provider = v; const first = all.find((m) => provOk(m)); if (first && !provOk(sel)) st.selected = first.id; ctx.rerender(); });
-        else menu(ctx, t.parentElement, ['all'].concat(CAPS), st.cap, (v) => { st.cap = v; ctx.rerender(); });
-      });
-      ctx.on('click', '[data-reveal]', (e) => { e.preventDefault(); st.reveal[sel.id] = !st.reveal[sel.id]; ctx.rerender(); });
+      const loading = st.view === 'loading';
+      const q = st.q.toLowerCase();
+      const rows = st.deploys.filter((d) => !q || (d.id + ' ' + d.provider + ' ' + d.account + ' ' + d.region + ' ' + d.target).toLowerCase().includes(q));
+      if (!rows.some((d) => d.id === st.sel) && rows.length) st.sel = rows[0].id;
+      const sel = st.deploys.find((d) => d.id === st.sel);
+      const drifted = st.deploys.filter((d) => d.drift > 0);
+      const table = loading
+        ? '<div class="tablewrap"><table class="dt"><tbody>' + [1, 2, 3, 4, 5].map(() => '<tr><td><div class="skeleton" style="width:110px"></div></td><td><div class="skeleton" style="width:160px"></div></td><td><div class="skeleton" style="width:200px"></div></td><td><div class="skeleton" style="width:80px"></div></td></tr>').join('') + '</tbody></table></div>'
+        : UI.table(['Deployment', 'Account and region', 'Target', 'Data tier', 'Front door', 'Release', 'State', { label: 'Est. a month', right: true }, { label: 'September', right: true }], rows.map((d) => ({ cells: ['<span class="mono" style="font-weight:600">' + esc(d.id) + '</span>', '<span class="pill outline">' + esc(d.provider) + '</span> ' + esc(d.account) + '<div class="muted" style="font-size:11px">' + esc(d.region) + '</div>', esc(d.target), '<span style="font-size:12px">' + esc(d.data) + '</span>', '<span style="font-size:12px">' + esc(d.front) + '</span>', esc(d.release) + (d.upgrade ? ' ' + UI.pill(d.upgrade + ' available', 'info') : ''), statePill(d) + (d.drift ? ' ' + UI.pill('drift ' + d.drift, 'warn') : '') + (d.state === 'applying' ? '<div class="muted" style="font-size:11px">step ' + d.step + ' of 12</div>' : d.wait ? '<div class="muted" style="font-size:11px">' + esc(d.wait) + '</div>' : ''), '<span class="num">' + money(d.est) + '</span>', '<span class="num">' + money(d.mtd) + '</span>'], attrs: 'data-id="' + esc(d.id) + '"', selected: d.id === st.sel })), { minWidth: '1180px', emptyTitle: 'No deployments match', emptyText: 'Clear the filter.' });
+      let insp = '';
+      if (loading) insp = '<div class="skeleton" style="width:60%"></div><div class="skeleton"></div><div class="skeleton" style="width:80%"></div>';
+      else if (sel) {
+        insp = '<div class="hstack"><div class="eyebrow grow">Deployment</div>' + statePill(sel) + '</div><div class="dep-name">' + esc(sel.id) + '</div><a href="#" data-url style="font-size:12px">' + esc(sel.url) + '</a>'
+          + UI.kv([['Account', '<a href="#" data-acct="' + esc(sel.account.split(' ')[0]) + '">' + esc(sel.account) + '</a>'], ['Region', esc(sel.region) + ' ' + UI.label(CEIL[sel.region] || 'internal', { sm: true })], ['Target', esc(sel.target)], ['Data tier', esc(sel.data)], ['Front door', esc(sel.front)], ['Release', esc(sel.release)], ['Estimate', money(sel.est) + ' a month'], ['September to date', money(sel.mtd)]], 1)
+          + (sel.wait ? UI.notice(esc(sel.wait), sel.state === 'blocked' ? 'danger' : 'warn') : '') + (sel.drift ? UI.notice(sel.drift + ' resource drifted from the desired state.', 'warn') : '')
+          + '<div class="hstack wrap gap6">' + UI.btn('Open deployment', { kind: 'primary', size: 'sm', attrs: 'data-open' }) + UI.btn('Cloud spend', { size: 'sm', attrs: 'data-go="finops"' }) + '</div>';
+      }
+      root.innerHTML = style + '<div class="page">' + head
+        + (ro ? UI.notice('<b>Read-only: you need cloud:deploy.</b> Your role (FinOps analyst) grants cloud:read. New deployment, Upgrade and Destroy stay disabled; ask a cloud admin for the Cloud operator role.', 'danger', UI.btn('Back to the board view', { size: 'xs', attrs: 'data-reset' })) : '')
+        + (drifted.length && !loading ? UI.notice('<b>Drift:</b> ' + drifted.map((d) => esc(d.id) + ' (' + d.drift + ')').join(', ') + '. Last drift check 09:00; next 10:00.', 'warn', UI.btn('Review', { size: 'xs', attrs: 'data-review-drift="' + esc(drifted[0].id) + '"' })) : '')
+        + '<div class="toolbar">' + UI.search('Filter deployments', 'data-search', st.q) + '<span class="muted right" style="font-size:12px">' + rows.length + ' of ' + st.deploys.length + ' deployments · estimated ' + money(st.deploys.reduce((a, d) => a + d.est, 0)) + ' a month</span></div>'
+        + table + example + '</div><aside class="inspector w360">' + insp + '</aside>';
+      ctx.on('click', 'tr.row', (e, t) => { if (!t.dataset.id) return; if (st.sel === t.dataset.id) { st.detail = t.dataset.id; st.tab = 'overview'; } st.sel = t.dataset.id; ctx.rerender(); });
+      ctx.on('input', '[data-search]', (e, t) => { st.q = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
+      ctx.on('click', '[data-open]', () => { st.detail = st.sel; st.tab = 'overview'; ctx.rerender(); });
+      ctx.on('click', '[data-review-drift]', (e, t) => { st.detail = t.dataset.reviewDrift; st.tab = 'drift'; ctx.rerender(); });
+      ctx.on('click', '[data-new]', () => { st.wiz = newWiz(); ctx.rerender(); });
+      ctx.on('click', '[data-reset]', () => { st.view = null; ctx.rerender(); });
+      ctx.on('click', '[data-drift-all]', () => ctx.toast('Drift check queued for 5 deployments. Results arrive as each account answers.'));
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
-      ctx.on('click', '[data-profile]', (e, t) => { e.preventDefault(); ctx.navigate('profiles', { profile: t.dataset.profile }); });
-      ctx.on('click', '[data-dismiss]', () => { st.problem = null; ctx.rerender(); });
-      ctx.on('click', '[data-browse]', () => ctx.navigate('import', { kind: 'model', target: 'models' }));
-
-      ctx.on('click', '[data-approve]', async () => {
-        const chatOnly = sel.confTone === 'warn';
-        const ok = await ctx.confirm({ title: 'Approve ' + sel.id, tag: chatOnly ? 'chat only' : 'approved', tone: 'ok', body: '<p style="margin:0" class="fg2">' + (cl ? 'Approval lets profiles route to this provider model. No weights are mirrored: the provider model id and the version it reports are recorded, and a change re-runs the conformance suite.' : 'Approval mirrors the weights into MinIO by digest and allows placement on the allowed pools. Profiles can pin this version from now on.') + (chatOnly ? ' The tools capability stays withheld until the conformance suite passes.' : '') + '</p>', kv: cl ? [['Provider model', '<span class="mono">' + esc(sel.id) + '</span>'], ['Max label', UI.label(sel.label, { sm: true })], ['Account', esc(cl.account)], ['Region', esc(cl.region)]] : [['Digest', sel.held ? 'held by the server, no digest' : '<span class="mono">' + esc(sel.digest) + '</span>'], ['Max label', UI.label(sel.label, { sm: true })], ['Allowed pools', esc(sel.pools.join(', '))], sel.held ? ['Model server', esc(sel.server)] : ['Signed manifest', UI.pill('verified', 'ok')]], ok: 'Approve' });
-        if (!ok) return;
-        st.lc[sel.id] = 'approved'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> approved' + (chatOnly ? ' for chat only' : '') + (cl ? '. Provider model id recorded; audit entry written.' : sel.held ? '. Held by ' + esc(sel.server) + '; nothing to mirror. Audit entry written.' : '. Weights mirrored to MinIO; audit entry written.'), 'ok', 5000);
-      });
-      ctx.on('click', '[data-deprecate]', async () => {
-        const ok = await ctx.confirm({ title: 'Deprecate ' + sel.id, tag: 'deprecated', tone: 'warn', body: '<p style="margin:0" class="fg2">New profiles cannot pick a deprecated tag. Profiles that already pin it keep routing until the retirement date you set here.</p>' + UI.field('Retire on', UI.input('2026-10-31', { type: 'date' })) + (sel.profiles.length ? UI.notice('Still pinned by ' + sel.profiles.map((p) => '<b>' + esc(p) + '</b>').join(', ') + '. Repoint them before retirement.', 'warn') : ''), ok: 'Deprecate' });
-        if (!ok) return;
-        st.lc[sel.id] = 'deprecated'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> deprecated. Retires on 31 Oct unless extended.', 'warn', 5000);
-      });
-      ctx.on('click', '[data-retire]', async () => {
-        const ok = await ctx.confirm({ title: 'Retire ' + sel.id, tag: 'destructive', tone: 'danger', body: '<p style="margin:0" class="fg2">The tag is removed from routing on every pool and unloaded from instances. It stays resolvable for audit and the blob stays in MinIO for the retention period.</p>', kv: [['Loaded on', 'gpu-large-2/0'], ['Requests last 7 days', '0']], ok: 'Retire' });
-        if (!ok) return;
-        st.lc[sel.id] = 'retired'; ctx.rerender(); ctx.toast('<b>' + esc(sel.id) + '</b> retired and removed from routing.', '', 5000);
-      });
-      ctx.on('click', '[data-licence]', () => ctx.modal({ title: 'Record licence for ' + esc(sel.id), body: UI.field('Licence', UI.select(['Apache 2.0', 'MIT', 'Llama 3.1 Community', 'Qwen Research', 'Other, attach text'], 'Apache 2.0')) + UI.field('Source of the licence text', UI.input('LICENSE in the Hugging Face repository, import bundle 2026-37')) + UI.check('Reviewed by legal for commercial internal use', false) + UI.notice('The licence is recorded on the manifest and shown on the model card. Approve becomes available once it is saved.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save licence', { kind: 'primary', attrs: 'data-save' }), onMount(m) { m.querySelector('[data-save]').addEventListener('click', () => { App.closeOverlay(); st.licenceMissing = false; ctx.rerender(); ctx.toast('Licence recorded as Apache 2.0. Approve is available.', 'ok'); }); } }));
-      ctx.on('click', '[data-quant]', () => ctx.modal({ title: 'Build quantization from ' + esc(sel.id), body: '<div class="formgrid" style="--cols:2">' + UI.field('Target quantization', UI.select(['Q4_K_M', 'Q5_K_M', 'Q8_0'], 'Q8_0')) + UI.field('Evals to run', UI.select(['cuda and cpu', 'cuda only', 'cuda, rocm and cpu'], 'cuda and cpu')) + UI.field('Result tag', UI.input(sel.id.replace(/-q[0-9]_[A-Z0-9_]+$/i, '') + '-q8_0', { readonly: true }), 'Registers as a new draft with its own digest') + UI.field('Priority', UI.select(['low, off-peak', 'normal'], 'low, off-peak')) + '</div>' + UI.notice('Runs llama-quantize on the training pool from the mirrored safetensors. The new tag needs its own eval record per hardware class before approval.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Queue build', { kind: 'primary', attrs: 'data-queue' }), onMount(m) { m.querySelector('[data-queue]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Quantization queued on train-1, off-peak. It appears as a draft tag when packaging finishes. <a href="#/training" style="color:inherit">Track it</a>', '', 6000); }); } }));
-      ctx.on('click', '[data-card]', () => ctx.drawer({ title: 'Model card, ' + esc(sel.id), body: '<div class="hstack">' + UI.pill(lc) + UI.label(sel.label, { sm: true }) + '</div>' + UI.kv([['Base digest', sel.held ? 'held by the server, no digest' : '<span class="mono">' + esc(sel.digest) + '</span>'], ['Family, size', esc(sel.family + ', ' + sel.size)], ['Capabilities', esc(sel.caps.join(', '))], ['Context length', esc(sel.ctx)], ['Source', esc(sel.source)], ['Licence', licenceMissing ? 'not recorded' : esc(sel.licence)], ['Tested hardware', esc(sel.hw)], ['Tool-calling conformance', esc(sel.conf)]].concat(sel.held ? [['Server reports', esc('server ' + sel.reported.server + ', tools ' + sel.reported.tools + ', JSON schema output ' + sel.reported.json + ', embeddings ' + sel.reported.embeddings)]] : []).concat(sel.id === 'finance-lora-v3:8b' ? [['Dataset version', 'finance-qa v6, 18,420 rows'], ['Code commit', '<span class="mono">a91f3c2</span>'], ['Container digest', '<span class="mono">sha256:5be0…</span>'], ['Hyperparameters', 'LoRA r=16, alpha=32, lr 2e-4, 3 epochs, seed 1337'], ['Eval scores', 'held-out 0.781, regression 0.974, red-team 0.968 (fail)']] : [['Evals', 'task suite passed per class, red-team 0.991']]), 1) + UI.timeline([{ title: sel.held ? 'Registered from the server' : 'Imported', text: esc(sel.source), meta: sel.held ? 'model id from /v1/models, no pull' : 'signature and digest verified at the diode', tone: 'ok' }, { title: 'Evaluated', text: esc(sel.hw), meta: 'per hardware class', tone: STEPS.indexOf(lc) >= 1 ? 'ok' : '' }, { title: 'Approved', text: STEPS.indexOf(lc) >= 2 ? 'Mara Okafor, model admin' : 'pending', tone: STEPS.indexOf(lc) >= 2 ? 'ok' : '' }]), actions: UI.btn('Download card (JSON)', { icon: 'download', attrs: 'data-dl' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { d.querySelector('[data-dl]').addEventListener('click', () => ctx.toast('Model card exported with the signed manifest attached.')); } }));
-
-      ctx.on('click', '[data-goacct]', (e, t) => { e.preventDefault(); ctx.navigate('cloud', { account: t.dataset.goacct }); });
-      ctx.on('click', '[data-spend]', () => ctx.navigate('finops', { tab: 'tokens' }));
-      const importCloud = (id, account) => {
-        const grp = CATALOGUE.find((g) => g.account === account); const row = grp && grp.rows.find((r) => r[0] === id); if (!row) return;
-        const cross = !!row[3];
-        ctx.modal({ title: 'Import ' + esc(id) + ' as draft', body: UI.kv([['Provider', esc(grp.provider)], ['Account', '<span class="mono">' + esc(account) + '</span>'], ['Where', esc(cross ? row[3] : grp.where)], ['Price per 1M tokens', esc(row[2]) + ' <span class="muted">example</span>']], 2)
-          + UI.field('Requested max label', UI.select(['public', 'internal', 'confidential'], cross ? 'confidential' : 'internal', 'data-f="lbl"'), 'Capped at the region ceiling; cross-region and global endpoints at internal')
-          + (cross ? UI.notice('This is a cross-region inference profile. It may run in Regions outside the account\'s allow list, so it is refused above internal.', 'warn') : '')
-          + UI.notice('The entry registers as a draft with format server and no digest. Licence terms, a conformance run and dual-control approval still apply (B-10504).', 'info'),
-        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Import as draft', { kind: 'primary', attrs: 'data-do' }),
-        onMount(m) { m.querySelector('[data-do]').addEventListener('click', () => {
-          const lbl = m.querySelector('[data-f="lbl"]').value; App.closeOverlay();
-          if (cross && lbl === 'confidential') { st.problem = 'crossregion'; ctx.rerender(); return; }
-          if (!all.some((x) => x.id === id)) st.extra.push(cloudRow({ id, provider: grp.provider, family: grp.provider + ' model', size: cross ? row[3] : grp.where, caps: row[1].split(', '), label: lbl, lifecycle: 'draft', ctx: 'reported by the provider', cloud: { account, region: cross ? row[3] : grp.where, regionCeiling: cross ? 'internal' : 'confidential', price: row[2] === 'neurons' ? 'priced in neurons' : row[2] + ' per 1M tokens', endpoint: grp.provider === 'Bedrock' ? 'Bedrock Converse' : 'kind: openai', residency: cross ? 'Cross-region profile, capped at internal.' : 'As the account\'s region.', guardrail: 'none yet', gateway: 'off' }, evalNote: 'Imported from the cloud catalogue. Run the conformance suite before approval.' }));
-          st.problem = null; st.selected = id; st.lifecycle = 'all'; st.provider = 'all'; ctx.rerender(); ctx.toast('<b>' + esc(id) + '</b> registered as a draft from ' + esc(account) + '. Audit entry models.import.cloud written.', 'ok', 5000);
-        }); } });
-      };
-      const catalogueModal = () => ctx.modal({ title: 'Cloud catalogue', cls: 'wide', body: '<p class="fg2" style="margin:0">Models the connected cloud accounts offer. Importing registers a draft catalogue entry; approval, licence and evaluation work as for any model.</p>'
-        + CATALOGUE.map((g) => '<div class="vstack gap6"><div class="hstack"><span class="eyebrow grow">' + esc(g.provider) + ', ' + esc(g.where) + '</span><span class="mono muted" style="font-size:12px">' + esc(g.account) + '</span></div>'
-          + UI.table(['Model', 'Capabilities', 'Price per 1M in / out', ''], g.rows.map((r) => { const have = all.some((x) => x.id === r[0]); return ['<span class="mono">' + esc(r[0]) + '</span>' + (r[3] ? ' ' + UI.pill(r[3], 'warn') : ''), esc(r[1]), esc(r[2]), have ? UI.pill('imported', 'ok') : UI.btn('Import as draft', { size: 'xs', attrs: 'data-imp="' + esc(r[0]) + '" data-acct="' + esc(g.account) + '"' })]; }), { clickable: false, minWidth: '0' }) + '</div>').join('')
-        + '<span class="muted" style="font-size:12px">Example data. Prices are illustrative, not provider quotes.</span>',
-        actions: UI.btn('Close', { attrs: 'data-close' }),
-        onMount(m) { m.addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (!b) return; const id = b.dataset.imp, acct = b.dataset.acct; App.closeOverlay(); setTimeout(() => importCloud(id, acct), 30); }); } });
-      ctx.on('click', '[data-catalogue]', catalogueModal);
-      ctx.on('click', '[data-imp]', (e, t) => importCloud(t.dataset.imp, t.dataset.acct));
-      if (st.openCatalogue) { st.openCatalogue = false; if (!st.noB43) setTimeout(catalogueModal, 30); }
-      // The import picker: pull from a library, or register a model a server holds (B-43, no pull and no digest).
-      const libraryBody = '<div class="formgrid" style="--cols:2">' + UI.field('Source', UI.select(['Ollama library mirror', 'Hugging Face, safetensors only', 'Internal fine-tune'], 'Ollama library mirror')) + UI.field('Model and tag', UI.input('', { placeholder: 'mistral-small:24b-instruct-q4_K_M', attrs: 'data-f="name"' })) + UI.field('Licence', UI.input('', { placeholder: 'As published by the source; legal reviews before approval' })) + UI.field('Requested max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal')) + UI.field('Capabilities expected', UI.input('chat, tools')) + UI.field('Allowed pools', '<div class="hstack wrap gap12" style="height:30px">' + UI.check('gpu-large', true) + UI.check('cpu-helpers', false) + UI.check('gpu-amd', false) + '</div>') + '<div class="span2">' + UI.field('Why this model', UI.textarea('', { placeholder: 'Which workload it serves and what the current model lacks', rows: 3 })) + '</div></div>' + UI.notice('Requests join the next weekly bundle. Staging fetches, scans and signs the weights; pickle checkpoints are rejected there, and only GGUF or safetensors cross the diode. The tag appears here as a draft once the digest verifies.', 'info');
-      const heldOptions = () => st.servers.reduce((a, s) => a.concat(s.models.map((m) => ({ s, m }))), []);
-      const heldBody = () => {
-        const opts = heldOptions();
-        const first = opts.find((o) => o.m.available && !o.m.catalogued && o.s.health !== 'unreachable');
-        return '<div class="models-pick" role="radiogroup" aria-label="Models the servers hold">' + opts.map((o, i) => {
-          const off = !o.m.available || o.m.catalogued || o.s.health === 'unreachable';
-          const why = !o.m.available ? 'unavailable: ' + o.m.reason : o.m.catalogued ? 'in the catalogue' : o.s.health === 'unreachable' ? 'server not answering' : 'available';
-          return '<label class="' + (off ? 'off' : '') + '"><input type="radio" name="models-held" value="' + i + '"' + (off ? ' disabled' : '') + (o === first ? ' checked' : '') + '><span class="vstack" style="gap:2px"><span class="mono">' + esc(o.m.id) + '</span><span class="muted" style="font-size:12px">' + esc(o.s.name) + ', ' + esc(o.s.server) + ', ' + esc(why) + '</span></span></label>';
-        }).join('') + '</div>'
-          + (st.pickUnavailable ? UI.notice('<b>pcc is unavailable.</b> fm serve lists Private Cloud Compute but refuses it outside Apple\'s own clients, and it would leave the network. It cannot be registered.', 'warn') : '')
-          + '<div class="formgrid" style="--cols:2">' + UI.field('Licence', UI.input('', { placeholder: 'Required before approval', attrs: 'data-f="hlic"' })) + UI.field('Requested max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal')) + '</div>'
-          + UI.notice('Nothing is pulled and there is no digest: the server holds the weights and its model id stands in for the digest. The model is placed warm on the server\'s pool, and the conformance run, the licence and a second approver still apply.', 'info');
-      };
-      const requestModal = (mode) => {
-        mode = mode === 'server' ? 'server' : 'library';
-        ctx.modal({ title: 'Request model import', cls: 'wide', body: UI.seg([{ id: 'library', label: 'Pull from a library' }, { id: 'server', label: 'Held by a model server' }], mode, 'data-src') + '<div data-srcbody>' + (mode === 'server' ? heldBody() : libraryBody) + '</div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(mode === 'server' ? 'Register model' : 'Send request', { kind: 'primary', attrs: 'data-send' }), onMount(m) {
-          // The source switch swaps the form in place; the dialog and its focus stay where they are.
-          m.querySelectorAll('[data-src] [data-seg]').forEach((b) => b.addEventListener('click', () => {
-            if (b.dataset.seg === mode) return;
-            mode = b.dataset.seg;
-            m.querySelectorAll('[data-src] [data-seg]').forEach((x) => x.classList.toggle('active', x.dataset.seg === mode));
-            m.querySelector('[data-srcbody]').innerHTML = mode === 'server' ? heldBody() : libraryBody;
-            m.querySelector('[data-send]').textContent = mode === 'server' ? 'Register model' : 'Send request';
-          }));
-          m.querySelector('[data-send]').addEventListener('click', () => {
-            if (mode === 'server') {
-              const pick = m.querySelector('input[name="models-held"]:checked');
-              if (!pick) { ctx.toast('Choose an available model a server holds.', 'warn'); return; }
-              const o = heldOptions()[Number(pick.value)];
-              App.closeOverlay(); st.pickUnavailable = false;
-              o.m.catalogued = true;
-              st.extra.push({ id: o.m.id, family: o.s.server === 'llama.cpp' ? 'Qwen 2.5' : 'pending', size: 'held by the server', caps: ['chat'], label: 'internal', lifecycle: 'draft', held: true, server: o.s.name, digest: 'held by the server, no digest', full: 'held by the server, no digest', ctx: o.s.ctx, source: 'Model server ' + o.s.name + ', model id ' + o.m.id, licence: (m.querySelector('[data-f="hlic"]').value || 'to be recorded').trim(), manifest: 'not applicable', hw: 'not yet tested', conf: 'not run', confTone: '', pools: [o.s.pool], profiles: [], reported: { server: o.s.server, tools: o.s.tools, json: o.s.json, embeddings: o.s.embeddings }, heldNote: 'Held by the server: nothing is pulled and there is no digest to verify. Run the conformance run on ' + o.s.name + ', record the licence, and have a second administrator approve it.' });
-              st.selected = o.m.id; st.lifecycle = 'all'; ctx.rerender();
-              ctx.toast('<b>' + esc(o.m.id) + '</b> registered from ' + esc(o.s.name) + ' as a draft, placed warm on ' + esc(o.s.pool) + '. Nothing was pulled.', 'ok', 6000);
-              return;
-            }
-            const name = (m.querySelector('[data-f="name"]').value || 'mistral-small:24b-instruct-q4_K_M').trim(); App.closeOverlay(); st.extra.push({ id: name, family: 'pending', size: 'pending', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'draft', digest: 'not yet imported', full: 'not yet imported', ctx: 'pending', source: 'Import request IMP-2026-41, next weekly bundle', licence: 'to be recorded at staging', manifest: 'pending', hw: 'not yet tested', conf: 'not run', confTone: '', pools: ['none until approved'], profiles: [] }); st.selected = name; st.lifecycle = 'all'; ctx.rerender(); ctx.toast('Import request IMP-2026-41 sent to the model admin queue. Bundled with import 2026-39.', 'ok', 5000); 
-          });
-        } });
-      };
-      // ----- model servers (B-43): Chat Completions servers as instances -----
-      const yesNo = (v) => esc(v);
-      const serverCard = (sv) => '<div class="models-srv"><div class="hstack"><b class="mono grow">' + esc(sv.name) + '</b>' + UI.pill(sv.health, sv.health === 'healthy' ? 'ok' : 'danger') + '</div>'
-        + UI.kv([['Pool', esc(sv.pool)], [sv.transport === 'socket' ? 'Unix socket' : 'URL', '<span class="mono">' + esc(sv.target) + '</span>'], ['Bearer token', sv.token ? 'in the vault' : 'none'], ['Server', esc(sv.server)], ['Context length', esc(sv.ctx)], ['Tools', yesNo(sv.tools)], ['JSON schema output', yesNo(sv.json)], ['Embeddings', yesNo(sv.embeddings)], ['Models listed', sv.models.map((m) => '<span class="mono">' + esc(m.id) + '</span>' + (m.available ? '' : ' <span class="muted">(unavailable)</span>')).join(', ')]], 1)
-        + (sv.health === 'unreachable' ? UI.notice('Not answering on /health or /v1/models. Requests route to other instances in the pool.', 'danger') : '')
-        + '<div class="hstack wrap gap6">' + UI.btn('Probe again', { size: 'sm', attrs: 'data-probe="' + esc(sv.name) + '"', disabled: sv.health === 'unreachable', title: sv.health === 'unreachable' ? 'The server is not answering' : '' }) + UI.btn('Import a model', { size: 'sm', attrs: 'data-heldimport' }) + '</div></div>';
-      const serversDrawer = () => ctx.drawer({ title: 'Model servers', body: '<p class="fg2" style="margin:0">Chat Completions servers that join a pool like an Ollama node: Apple\'s fm serve, mlx_lm.server, llama.cpp\'s llama-server. They hold their own models, so load, unload and pull are skipped and recorded as not available; health comes from /health or /v1/models.</p>' + st.servers.map(serverCard).join(''),
-        actions: UI.btn('Register model server', { kind: 'primary', icon: 'plus', attrs: 'data-register' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
-        onMount(d) {
-          d.querySelector('[data-register]').addEventListener('click', () => { App.closeOverlay(); setTimeout(registerModal, 0); });
-          d.querySelectorAll('[data-heldimport]').forEach((b) => b.addEventListener('click', () => { App.closeOverlay(); setTimeout(() => requestModal('server'), 0); }));
-          d.querySelectorAll('[data-probe]').forEach((b) => b.addEventListener('click', () => { ctx.toast('Probing ' + esc(b.dataset.probe) + ': a tool call and JSON schema output on its first model. The answers appear here when the job finishes.', '', 5000); b.disabled = true; }));
-        } });
-      const registerModal = () => ctx.modal({ title: 'Register model server', cls: 'wide', body: '<div class="formgrid" style="--cols:2">'
-          + UI.field('Pool', UI.select(['apple-silicon', 'gpu-large', 'cpu-helpers'], 'apple-silicon', 'data-f="pool"'), 'An Apple silicon pool is accelerator metal')
-          + UI.field('Name', UI.input('', { placeholder: 'mac-studio-2-fm', attrs: 'data-f="name"' }))
-          + UI.field('Kind', UI.select([{ value: 'openai', label: 'Chat Completions server (fm serve, mlx_lm.server, llama-server)' }, { value: 'ollama', label: 'Ollama' }], 'openai', 'data-f="kind"'))
-          + UI.field('Transport', UI.select([{ value: 'socket', label: 'Unix socket on this host' }, { value: 'url', label: 'URL' }], 'socket', 'data-f="transport"'), 'fm serve --socket listens on a socket')
-          + '<div data-w="socket">' + UI.field('Socket path', UI.input('', { placeholder: '/var/run/exprsn/fm.sock', attrs: 'data-f="socket"' }), 'An absolute path; no TLS on a socket') + '</div>'
-          + '<div data-w="url" hidden>' + UI.field('URL', UI.input('', { placeholder: 'http://10.20.4.31:8081', attrs: 'data-f="url"' }), 'Checked against the egress policy') + '</div>'
-          + '<div data-w="token">' + UI.field('Bearer token', UI.input('', { type: 'password', placeholder: 'Optional', attrs: 'data-f="token" autocomplete="off"' }), 'Stored in the vault and never shown again') + '</div>'
-          + UI.field('Deploy', UI.select(['baremetal', 'docker'], 'baremetal')) + '</div>'
-          + UI.notice('After registering, a probe asks the server for a tool call and for JSON schema output, and records what it reports. Its models then appear in the import picker.', 'info'),
-        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Register', { kind: 'primary', attrs: 'data-save' }),
-        onMount(m) {
-          const f = (k) => m.querySelector('[data-f="' + k + '"]');
-          const sync = () => { const ollama = f('kind').value === 'ollama'; if (ollama) f('transport').value = 'url'; f('transport').disabled = ollama; const sock = f('transport').value === 'socket'; m.querySelector('[data-w="socket"]').hidden = !sock; m.querySelector('[data-w="url"]').hidden = sock; m.querySelector('[data-w="token"]').hidden = ollama; };
-          f('kind').addEventListener('change', sync); f('transport').addEventListener('change', sync);
-          m.querySelector('[data-save]').addEventListener('click', () => {
-            const name = (f('name').value || 'mac-studio-2-fm').trim();
-            const kind = f('kind').value, sock = f('transport').value === 'socket';
-            const target = (sock ? f('socket').value || '/var/run/exprsn/fm.sock' : f('url').value || 'http://10.20.4.33:8081').trim();
-            if (sock && target.charAt(0) !== '/') { ctx.toast('A socket path is absolute, such as /var/run/exprsn/fm.sock.', 'warn'); return; }
-            App.closeOverlay();
-            if (kind === 'ollama') { ctx.toast(esc(name) + ' registered as an Ollama instance on ' + esc(f('pool').value) + '. It is managed on the Pools screen.', 'ok', 5000); return; }
-            st.servers.push({ name, pool: f('pool').value, transport: sock ? 'socket' : 'url', target, token: !!f('token').value, health: 'healthy', server: sock ? 'fm serve' : 'chat-completions', ctx: 'not reported', tools: 'work', json: 'works', embeddings: 'not tried', models: [{ id: sock ? 'system' : 'mlx-community/Qwen3-8B-4bit', available: true, catalogued: sock && st.servers.some((x) => x.models.some((y) => y.id === 'system' && y.catalogued)) }] });
-            ctx.toast(esc(name) + ' registered and healthy. Probe queued; its models are in the import picker.' + (f('token').value ? ' The token is in the vault.' : ''), 'ok', 6000);
-            setTimeout(serversDrawer, 0);
-          });
-        } });
-      ctx.on('click', '[data-servers]', (e) => { e.preventDefault(); serversDrawer(); });
-      ctx.on('click', '[data-request]', () => requestModal());
-      if (st.openRequest) { const mode = st.openRequest; st.openRequest = false; setTimeout(() => requestModal(mode), 30); }
-      if (st.openServers) { st.openServers = false; setTimeout(serversDrawer, 30); }
-      ctx.on('click', '[data-import]', () => ctx.modal({ title: 'Import safetensors bundle', cls: 'wide', body: UI.field('Bundle on the import share', UI.select(['2026-38-hf-models.tar, 47.2 GB, received 19 Sep 06:10', '2026-37-ollama-mirror.tar, imported'], '2026-38-hf-models.tar, 47.2 GB, received 19 Sep 06:10')) + UI.table(['Entry', 'Format', 'Size', 'Signature', 'Digest', 'Licence'], [['<span class="mono">mistral-small:24b-instruct</span>', 'safetensors', '47.1 GB', UI.pill('verified', 'ok'), UI.pill('matches manifest', 'ok'), 'Apache 2.0'], ['<span class="mono">tokenizer, config</span>', 'json', '4 MB', UI.pill('verified', 'ok'), UI.pill('matches manifest', 'ok'), '']], { clickable: false, minWidth: '0' }) + UI.notice('Import converts to GGUF on the training pool, records the licence and registers the tag as a draft. Pickle checkpoints in a bundle stop the whole import.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Verify and import', { kind: 'primary', attrs: 'data-do' }), onMount(m) { m.querySelector('[data-do]').addEventListener('click', () => { App.closeOverlay(); st.extra.push({ id: 'mistral-small:24b-instruct-q4_K_M', family: 'Mistral Small', size: '24B', caps: ['chat', 'tools'], label: 'internal', lifecycle: 'draft', digest: 'sha256:6b1d0e8f2a9c4735...a204', full: 'sha256:6b1d0e8f2a9c4735e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2a204', ctx: '32,768', source: 'Hugging Face safetensors, import bundle 2026-38', licence: 'Apache 2.0, recorded', manifest: 'verified', hw: 'not yet tested', conf: 'not run', confTone: '', pools: ['none until approved'], profiles: [], evalNote: 'Converted to GGUF Q4_K_M. Evals have not run yet; queue them under Training before approval.' }); st.selected = 'mistral-small:24b-instruct-q4_K_M'; st.lifecycle = 'all'; ctx.rerender(); ctx.toast('Bundle verified. mistral-small:24b-instruct registered as a draft; GGUF conversion queued.', 'ok', 5000); }); } }));
+      ctx.on('click', '[data-acct]', (e, t) => { e.preventDefault(); ctx.navigate('cloud', { id: t.dataset.acct }); });
+      ctx.on('click', '[data-url]', (e) => { e.preventDefault(); ctx.toast('Opens ' + esc(sel.url) + ' in a new tab in the console.'); });
     }
   });
+
+  // ---------------- detail ----------------
+  function renderDetail(root, ctx, st, style, example, ro) {
+    const d = st.deploys.find((x) => x.id === st.detail);
+    if (!d) { st.detail = null; ctx.rerender(); return; }
+    const res = RESOURCES[d.id] || SANDBOX_STEPS.map((s, i) => [s, i < d.step - 1 ? 'created' : 'not created', 'step ' + (i + 1), i < d.step - 1 ? 'in sync' : i === d.step - 1 ? (/failed/.test(d.state) ? 'failed' : 'creating') : 'planned']);
+    const tabs = UI.tabs([{ id: 'overview', label: 'Overview' }, { id: 'resources', label: 'Resources', count: res.length }, { id: 'drift', label: 'Drift', count: d.drift }, { id: 'operations', label: 'Operations' }], st.tab);
+    let body = '';
+    if (st.tab === 'overview') {
+      let notice = '';
+      if (d.state === 'blocked') notice = '<div class="vstack gap6">' + UI.problem('Plan refused: budget_exceeded', 'do-team is at $4,120 of its $4,000 budget for September (103 %); the forecast is $4,420. This plan adds $214 a month, and plans that add cost are refused past 100 %. Scale-down and destroy still work.', 'a41c7e09b2d84f15c6e3a07b9d2f1e58') + '<div class="hstack gap6">' + UI.btn('Request override', { size: 'sm', attrs: 'data-override', disabled: ro }) + UI.btn('Open Cloud spend', { size: 'sm', kind: 'ghost', attrs: 'data-go="finops"' }) + '</div></div>';
+      else if (d.state === 'plan ready') notice = UI.notice('<b>Plan ready, waiting.</b> The cf-edge token lacks Containers Edit, so the Cloudflare Containers step would fail. Add the permission, then apply. Cloudflare runs the app tier only: Postgres reaches it through Hyperdrive, Redis is a managed Valkey on aws-prod (Workers KV is not a substitute).', 'warn', UI.btn('Open cf-edge', { size: 'xs', attrs: 'data-acct="cf-edge"' }));
+      else if (d.state === 'applying') notice = UI.notice('<b>Applying, step ' + d.step + ' of 12:</b> ' + esc(SANDBOX_STEPS[d.step - 1]) + ', about 9 minutes left.', 'info', UI.btn('Operations', { size: 'xs', attrs: 'data-tabgo="operations"' }));
+      else if (/failed/.test(d.state)) notice = UI.notice('<b>Apply failed at step 7 and was rolled back.</b> RDS answered StorageQuotaExceeded. Steps 8 to 12 never ran; the network from steps 1 to 6 is kept so a retry starts at step 7.', 'danger', UI.btn('Retry from step 7', { size: 'xs', attrs: 'data-retry', disabled: ro }));
+      else if (d.upgrade) notice = UI.notice('Release <b>' + esc(d.upgrade) + '</b> is available. The upgrade plan takes a database snapshot first, then rolls the app tier.', 'info', UI.btn('Plan upgrade', { size: 'xs', attrs: 'data-upgrade', disabled: ro }));
+      const checks = /healthy/.test(d.state) ? [['/readyz over ' + d.url, 'ok'], ['Database reachable from the app', 'ok'], ['TLS chain valid, 71 days left', 'ok'], ['Redis reachable, BullMQ ready', 'ok'], ['Ollama instances healthy', d.id === 'nw-prod-eu' ? '2 of 2' : 'not in this deployment']] : [['/readyz', 'not yet'], ['Database', 'not yet'], ['TLS', 'not yet']];
+      body = notice + '<div class="grid2">' + UI.panel('Deployment', UI.kv([['Account', '<a href="#" data-acct="' + esc(d.account.split(' ')[0]) + '">' + esc(d.account) + '</a>'], ['Region', esc(d.region) + ' ' + UI.label(CEIL[d.region] || 'internal', { sm: true })], ['Target', esc(d.target)], ['Data tier', esc(d.data) + ' <a href="#" data-go="cloud-data" style="font-size:12px">Cloud data</a>'], ['Front door', esc(d.front)], ['Release', esc(d.release)], ['Public URL', '<span class="mono">' + esc(d.url) + '</span>'], ['Cost', money(d.est) + ' a month estimated, ' + money(d.mtd) + ' in September']], 2))
+        + UI.panel('Verification', UI.table(['Check', 'Result'], checks.map((c) => [esc(c[0]), UI.pill(c[1], c[1] === 'ok' || /of/.test(c[1]) ? 'ok' : '')]), { clickable: false, minWidth: '0', cls: 'bare' }) + '<span class="muted" style="font-size:12px">Last verified 09:02 (B-10105).</span>') + '</div>';
+    } else if (st.tab === 'resources') {
+      body = UI.table(['Resource', 'Provider id', 'Kind', 'State'], res.map((r) => [esc(r[0]) + (r[4] ? ' <a href="#" data-go="' + r[4] + '" style="font-size:12px">open</a>' : ''), '<span class="mono" style="font-size:12px">' + esc(r[1]) + '</span>', esc(r[2]), UI.pill(r[3] === 'drifted' && st.driftResolved ? 'in sync' : r[3], r[3] === 'in sync' ? 'ok' : r[3] === 'drifted' && !st.driftResolved ? 'warn' : r[3] === 'failed' ? 'danger' : r[3] === 'creating' ? 'info' : '')]), { clickable: false, minWidth: '760px' })
+        + '<span class="muted" style="font-size:12px">' + (d.id === 'nw-prod-eu' ? '14 of 31 resources shown, grouped. ' : '') + 'Every resource carries the tags exprsn:managed, exprsn:deployment=' + esc(d.id) + ' and exprsn:account.</span>';
+    } else if (st.tab === 'drift') {
+      if (d.drift && !st.driftResolved) {
+        body = UI.notice('<b>sg-0example1</b> gained an inbound rule out of band: TCP 22 from 0.0.0.0/0. It exposes SSH on the app nodes to the internet.', 'warn')
+          + UI.table(['Resource', 'Field', 'Desired', 'Observed', 'Changed by'], [['<span class="mono">sg-0example1</span>', 'ingress', 'TCP 443 from the load balancer only', '<span style="color:var(--warn-fg)">+ TCP 22 from 0.0.0.0/0</span>', 'IAM user ops-break-glass, 27 Sep 22:14 (CloudTrail AuthorizeSecurityGroupIngress, event 1b2c…example)']], { clickable: false, minWidth: '820px' })
+          + '<div class="hstack wrap gap6">' + UI.btn('Revert to desired', { kind: 'primary', size: 'sm', attrs: 'data-drift="revert"', disabled: ro }) + UI.btn('Adopt as desired', { size: 'sm', attrs: 'data-drift="adopt"', disabled: ro }) + UI.btn('Ignore this field', { size: 'sm', kind: 'ghost', attrs: 'data-drift="ignore"', disabled: ro }) + '</div>'
+          + '<span class="muted" style="font-size:12px">Revert makes a plan that removes the rule. Adopt writes the observed rule into the desired state. Ignore stops reporting this field (B-10106).</span>';
+      } else body = UI.empty('No drift', st.driftResolved ? 'Drift ' + st.driftResolved + '. The next check runs at 10:00.' : 'Every managed resource matches its desired state. Last check 09:00.');
+    } else {
+      const journal = d.id === 'sandbox-ecs'
+        ? SANDBOX_STEPS.map((s, i) => { const failed = /failed/.test(d.state); const done = i < d.step - 1; const cur = i === d.step - 1; return { title: (i + 1) + '. ' + esc(s), text: done ? 'done' : cur ? (failed ? 'failed: StorageQuotaExceeded (request 6d2e…example); app tier rolled back' : st.throttled ? 'throttled: ThrottlingException, retry in 4 s, attempt 3 of 8' : 'running, about 9 minutes left') : failed ? 'not run' : 'waiting', meta: done ? 'idempotency key sandbox-ecs/' + (i + 1) + '/a1' : cur ? 'client token sandbox-ecs/7/a1 · attempt ' + (st.throttled ? 3 : 1) : '', tone: done ? 'ok' : cur ? (failed ? 'danger' : 'info') : '' }; })
+        : [{ title: 'cloud.drift check', text: d.drift && !st.driftResolved ? '1 field drifted on sg-0example1' : 'no drift', meta: '28 Sep 09:00 · 31 reads, 0 throttled', tone: d.drift && !st.driftResolved ? 'warn' : 'ok' }, { title: 'cloud.verify', text: 'all checks passed', meta: '28 Sep 09:02', tone: 'ok' }, { title: 'cloud.apply upgrade 1.6.0 → 2.0.0', text: '27 steps, 0 retries', meta: '21 Sep 07:10 to 07:52 · Mara Okafor, approved by Jonas Lindqvist', tone: 'ok' }, { title: 'cloud.plan', text: '4 create, 6 update, 0 replace, 0 delete', meta: '21 Sep 07:02', tone: 'ok' }];
+      body = (st.throttled && d.id === 'sandbox-ecs' ? UI.notice('<b>AWS is throttling this account.</b> The step waits with backoff and jitter and carries on; the client token makes the retry safe (B-10108).', 'warn') : '') + UI.panel('Operation journal', UI.timeline(journal)) + (d.state === 'applying' ? '<div>' + UI.btn('Cancel after the current step', { size: 'sm', attrs: 'data-cancel-apply', disabled: ro }) + '</div>' : '');
+    }
+    root.innerHTML = style + '<div class="page">' + UI.pagehead(d.id, statePill(d) + ' <span class="pill outline">' + esc(d.provider) + '</span> ' + esc(d.account) + ', ' + esc(d.region), UI.btn('All deployments', { attrs: 'data-back' }) + (d.upgrade ? UI.btn('Upgrade to ' + d.upgrade, { attrs: 'data-upgrade', disabled: ro, title: ro ? 'Needs cloud:deploy' : '' }) : '') + (d.state === 'plan ready' ? UI.btn('Apply plan', { kind: 'primary', attrs: 'data-apply-ready', disabled: ro }) : '') + UI.btn('Destroy', { kind: 'danger', attrs: 'data-destroy', disabled: ro, title: ro ? 'Needs cloud:deploy' : '' }))
+      + (ro ? UI.notice('Read-only: you need cloud:deploy to change this deployment.', 'danger') : '') + tabs + body + example + '</div>';
+    ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+    ctx.on('click', '[data-tabgo]', (e, t) => { st.tab = t.dataset.tabgo; ctx.rerender(); });
+    ctx.on('click', '[data-back]', () => { st.detail = null; ctx.rerender(); });
+    ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
+    ctx.on('click', '[data-acct]', (e, t) => { e.preventDefault(); ctx.navigate('cloud', { id: t.dataset.acct }); });
+    ctx.on('click', '[data-retry]', () => { d.state = 'applying'; d.step = 7; ctx.rerender(); ctx.toast('Retry from step 7 queued. Steps 1 to 6 are kept.', 'ok'); });
+    ctx.on('click', '[data-cancel-apply]', async () => { const ok = await ctx.confirm({ title: 'Cancel the apply', tag: 'cancel', tone: 'warn', body: '<p class="fg2" style="margin:0">The running step finishes; later steps do not start. Resources already created stay and the deployment shows as partial.</p>', ok: 'Cancel after step ' + d.step }); if (!ok) return; d.state = 'cancelled, partial'; ctx.rerender(); ctx.toast('Apply stops after step ' + d.step + '.', 'warn'); });
+    ctx.on('click', '[data-apply-ready]', () => ctx.toast('Apply refused: the cf-edge token lacks Containers Edit. Fix the token on Cloud accounts first.', 'danger', 5000));
+    ctx.on('click', '[data-drift]', async (e, t) => {
+      const kind = t.dataset.drift;
+      const text = { revert: 'A plan removes the inbound rule from sg-0example1 and applies at once. SSH access from the internet ends.', adopt: 'The rule becomes part of the desired state. SSH stays open to the internet on the app nodes; this is recorded with your reason.', ignore: 'Drift checks stop reporting the ingress field of sg-0example1. Other fields are still checked.' }[kind];
+      const ok = await ctx.confirm({ title: { revert: 'Revert drift', adopt: 'Adopt drift', ignore: 'Ignore this field' }[kind], tag: kind, tone: kind === 'revert' ? 'info' : 'warn', body: '<p class="fg2" style="margin:0">' + text + '</p>' + (kind !== 'revert' ? UI.field('Reason', UI.input('', { placeholder: 'Recorded in the audit chain' })) : ''), ok: { revert: 'Revert', adopt: 'Adopt', ignore: 'Ignore field' }[kind] });
+      if (!ok) return;
+      d.drift = 0; st.driftResolved = { revert: 'reverted at 09:41 by Mara Okafor', adopt: 'adopted at 09:41 by Mara Okafor', ignore: 'ignored for the ingress field at 09:41' }[kind]; ctx.rerender();
+      ctx.toast({ revert: 'Inbound TCP 22 removed from sg-0example1. Audit entry cloud.drift.reverted.', adopt: 'Observed rule adopted into the desired state. Audit entry cloud.drift.adopted.', ignore: 'The ingress field of sg-0example1 is ignored by drift checks.' }[kind], kind === 'revert' ? 'ok' : 'warn', 5000);
+    });
+    ctx.on('click', '[data-override]', () => ctx.modal({ title: 'Request a budget override for do-team', body: '<p class="fg2" style="margin:0">An override lets plans that add cost apply for a limited time. A second cloud admin approves it.</p>' + UI.field('Reason', UI.textarea('', { placeholder: 'Why this cannot wait for October', rows: 3 })) + UI.field('Valid for', UI.select(['1 day', '3 days', '7 days (maximum)'], '3 days')) + UI.field('Extra monthly spend allowed', UI.input('$214')), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send to a second admin', { kind: 'primary', attrs: 'data-send' }), onMount(m) { m.querySelector('[data-send]').addEventListener('click', () => { App.closeOverlay(); d.wait = 'override requested, waiting for Jonas Lindqvist'; ctx.rerender(); ctx.toast('Override request sent to Jonas Lindqvist.', 'ok'); }); } }));
+    ctx.on('click', '[data-upgrade]', () => ctx.modal({ title: 'Upgrade ' + esc(d.id) + ' to ' + esc(d.upgrade), cls: 'wide', body: '<div class="stats">' + UI.stat('31', 'resources') + UI.stat('4', 'create') + UI.stat('3', 'update') + UI.stat('1', 'replace') + UI.stat('0', 'delete') + UI.stat('+$412', 'a month') + '</div>'
+      + UI.table(['Change', 'Resource', 'Detail', { label: 'Cost', right: true }], UPGRADE_ROWS.map((r) => [kindPill(r[0]), esc(r[1]), esc(r[2]), '<span class="num">' + esc(r[3]) + '</span>']), { clickable: false, minWidth: '0' })
+      + '<span class="muted" style="font-size:12px">23 resources unchanged. The plan expires at 10:41 or when the observed state changes.</span>'
+      + UI.check('Take an Aurora snapshot before the migration (recommended)', true) + UI.notice('The app tier rolls back automatically when verification fails. The database rolls back only by restoring the snapshot, which needs a second cloud admin.', 'info'),
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Apply upgrade', { kind: 'primary', attrs: 'data-go-up' }),
+      onMount(m) { m.querySelector('[data-go-up]').addEventListener('click', () => { App.closeOverlay(); d.state = 'upgrading'; d.release = '2.0.0 → ' + d.upgrade; d.upgrade = null; st.tab = 'operations'; ctx.rerender(); ctx.toast('Upgrade to 2.0.1 started. Snapshot first, then the migration job and a rolling update.', 'ok', 5000); }); } }));
+    ctx.on('click', '[data-destroy]', () => {
+      const prot = (RESOURCES[d.id] || []).filter((r) => /protected/.test(r[0]) || r[2] === 'database');
+      ctx.modal({ title: 'Destroy ' + esc(d.id) + ' ' + UI.pill('destructive', 'danger'), body: '<p class="fg2" style="margin:0">Every resource tagged exprsn:deployment=' + esc(d.id) + ' is deleted in reverse dependency order. Users lose access at once.</p>'
+        + (prot.length ? UI.notice('Protected data: ' + prot.map((r) => '<b>' + esc(r[1]) + '</b>').join(', ') + '. A final snapshot is taken and kept 30 days; a second cloud admin must approve.', 'warn') : '')
+        + UI.field('Type the deployment name to confirm', UI.input('', { placeholder: d.id, attrs: 'data-typed' })),
+        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(prot.length ? 'Propose destroy' : 'Destroy', { kind: 'danger', attrs: 'data-do', disabled: true }),
+        onMount(m) {
+          const inp = m.querySelector('[data-typed]'), btn = m.querySelector('[data-do]');
+          inp.addEventListener('input', () => { btn.disabled = inp.value.trim() !== d.id; });
+          btn.addEventListener('click', () => { App.closeOverlay(); d.state = prot.length ? 'destroy pending approval' : 'destroying'; ctx.rerender(); ctx.toast(prot.length ? 'Destroy proposed. Jonas Lindqvist or another cloud admin must approve; final snapshots are taken first.' : 'Destroy started. Resources are deleted in reverse order.', 'warn', 5000); });
+        } });
+    });
+  }
+
+  // ---------------- new deployment wizard ----------------
+  function renderWizard(root, ctx, st, style, example) {
+    const w = st.wiz;
+    const STEPS = ['Target', 'Compute', 'Data', 'Front door', 'Review', 'Apply'];
+    const onprem = w.provider === 'On-prem', cf = w.provider === 'Cloudflare';
+    const na = (i) => onprem && (i === 2 || i === 3);
+    const steps = '<div class="dep-steps">' + STEPS.map((s, i) => '<span class="' + (i + 1 === w.step ? 'cur' : i + 1 < w.step ? 'done' : '') + (na(i + 1) ? ' na' : '') + '"><i>' + (i + 1) + '</i>' + s + '</span>' + (i < STEPS.length - 1 ? '<span class="sep">›</span>' : '')).join('') + '</div>';
+    const sz = w.size;
+    const lines = [];
+    if (!onprem) {
+      lines.push([cf ? 'Cloudflare Containers, 3 instances, Workers static assets' : COMPUTE[w.provider][w.compute] + ', ' + SIZES[sz], BASE[cf ? 'cfc' : w.compute][sz]]);
+      if (!cf) lines.push(['Network: VPC, subnets, NAT, firewall', NET[sz]]);
+      lines.push([(cf ? 'Aurora PostgreSQL 17 on aws-prod, reached through Hyperdrive' : 'Managed PostgreSQL 17') + (w.db === 'new' ? '' : ' (existing, no new cost)'), w.db === 'new' ? DB[sz] : 0]);
+      lines.push([(cf ? 'ElastiCache Valkey on aws-prod (required; Workers KV is not a substitute)' : 'Managed Redis or Valkey') + (w.cache === 'new' ? '' : ' (existing)'), w.cache === 'new' ? CACHE[sz] : 0]);
+      lines.push([cf ? 'R2 bucket, EU jurisdiction' : 'Object store', STORE[sz]]);
+    }
+    if (w.front === 'cloudflare') lines.push(['Cloudflare front door: DNS, Tunnel, WAF' + (w.access ? ', Access' : ''), w.access ? 32 : 25]);
+    const total = lines.reduce((a, l) => a + l[1], 0);
+    const budgetStop = w.account === 'do-team';
+    let body = '';
+    if (w.step === 1) {
+      const provs = ['AWS', 'Azure', 'DigitalOcean', 'Cloudflare', 'On-prem'];
+      const blurb = { AWS: 'EKS, EC2 or ECS Fargate with RDS, Aurora, ElastiCache, S3', Azure: 'AKS, VMs or Container Apps with Flexible Server, Azure Cache, Blob', DigitalOcean: 'DOKS, Droplets or App Platform with managed databases and Spaces', Cloudflare: 'App tier on Cloudflare Containers; data and GPUs on another provider (hybrid)', 'On-prem': 'Exprsn-AI already runs in your data centre: add a front door only' };
+      body = '<div class="dep-tiles">' + provs.map((p) => '<button type="button" class="dep-tile' + (w.provider === p ? ' on' : '') + '" data-prov="' + p + '"><b>' + esc(p) + '</b><span>' + esc(blurb[p]) + '</span></button>').join('') + '</div>'
+        + '<div class="formgrid" style="--cols:3">' + UI.field('Deployment name', UI.input(w.name, { attrs: 'data-f="name"' })) + UI.field(onprem ? 'Site' : 'Cloud account', UI.select(ACCOUNTS[w.provider], w.account, 'data-f="account"')) + UI.field('Region', UI.select(REGIONS[w.account] || [], w.region, 'data-f="region"'), 'Label ceiling here: ' + UI.label(CEIL[w.region] || 'internal', { sm: true })) + '</div>'
+        + (budgetStop ? UI.notice('do-team is over its September budget. You can plan, but a plan that adds cost will be refused at Review.', 'warn') : '')
+        + (cf ? UI.notice('A Cloudflare deployment is always hybrid. The app tier runs on Cloudflare Containers with the console\'s static assets on Workers; Postgres, Redis and GPUs run on AWS, Azure, DigitalOcean or on-prem.', 'info') : '');
+    } else if (w.step === 2) {
+      if (onprem) body = UI.notice('Not applicable: the app tier already runs on-prem.', 'info');
+      else if (cf) body = '<div class="dep-tiles"><button type="button" class="dep-tile on"><b>Cloudflare Containers</b><span>The Exprsn-AI image, 3 instances behind a Worker; static assets on Workers static assets.</span></button>'
+        + ['Kubernetes', 'Virtual machines', 'GPU pool for Ollama'].map((t) => '<button type="button" class="dep-tile" disabled title="' + esc(CF_REASON) + '"><b>' + esc(t) + '</b><span>' + esc(CF_REASON) + '</span></button>').join('') + '</div>'
+        + UI.field('Size', UI.seg(SIZES.map((s, i) => ({ id: String(i), label: s })), String(w.size), 'data-size'));
+      else body = '<div class="dep-tiles">' + [['k8s', 'Kubernetes', 'Helm chart on a new cluster; best for several replicas and GPU node groups'], ['vm', 'Virtual machines', 'The bare-metal installer from a signed release, under systemd'], ['containers', 'Container platform', 'Managed containers; migrations run as a one-off task']].map((c) => '<button type="button" class="dep-tile' + (w.compute === c[0] ? ' on' : '') + '" data-compute="' + c[0] + '"><b>' + esc(c[1]) + '</b><span class="mono" style="font-size:11px">' + esc(COMPUTE[w.provider][c[0]]) + '</span><span>' + esc(c[2]) + '</span></button>').join('') + '</div>'
+        + UI.field('Size', UI.seg(SIZES.map((s, i) => ({ id: String(i), label: s })), String(w.size), 'data-size'), 'Small: 1 replica. Medium: 2 replicas. Large-HA: 3 replicas across zones, HA database')
+        + '<span class="muted" style="font-size:12px">GPU pools are added on <a href="#" data-go="cloud-compute">Cloud compute</a> once the deployment is healthy.</span>';
+    } else if (w.step === 3) {
+      if (onprem) body = UI.notice('Not applicable: the database, cache and object store stay where they are.', 'info');
+      else {
+        const modes = (key) => UI.seg([{ id: 'new', label: 'Provision new' }, { id: 'existing', label: 'Use existing' }, { id: 'onprem', label: 'On-prem' }], w[key], 'data-mode="' + key + '"');
+        body = (cf ? '<div class="dep-tiles">' + ['PostgreSQL on Cloudflare', 'Redis on Cloudflare', 'GPUs on Cloudflare'].map((t) => '<button type="button" class="dep-tile" disabled title="' + esc(CF_REASON) + '"><b>' + esc(t) + '</b><span>' + esc(CF_REASON) + '</span></button>').join('') + '</div>' + UI.field('Provider for data', UI.select(['aws-prod (eu-central-1)', 'azure-eu (swedencentral)', 'do-team (fra1)', 'on-prem (northwind-dc1, through Tunnel)'], 'aws-prod (eu-central-1)')) : '')
+          + UI.table(['Tier', 'Choice', 'What'], [
+            ['Database', modes('db'), cf ? 'Aurora PostgreSQL 17 with pgvector, reached through Hyperdrive' : w.provider === 'AWS' ? 'Aurora PostgreSQL 17 with pgvector' : w.provider === 'Azure' ? 'PostgreSQL Flexible Server 17, pgvector allow-listed' : 'Managed PostgreSQL 17 with pgvector'],
+            ['Cache (REDIS_URL)', modes('cache'), cf ? 'ElastiCache Valkey 8, TLS with AUTH and an IP allow list; required' : w.provider === 'AWS' ? 'ElastiCache Valkey 8, cluster mode off' : w.provider === 'Azure' ? 'Azure Cache for Redis' : 'Managed Valkey'],
+            ['Object store', modes('store'), cf ? 'R2, EU jurisdiction (BLOB_STORE=s3)' : w.provider === 'AWS' ? 'S3' : w.provider === 'Azure' ? 'Blob storage (BLOB_STORE=azure)' : 'Spaces (S3 compatible)']
+          ], { clickable: false, minWidth: '0' }) + '<span class="muted" style="font-size:12px">Provisioned databases get deletion protection and 14 days of backups. Manage them on <a href="#" data-go="cloud-data">Cloud data</a>.</span>';
+      }
+    } else if (w.step === 4) {
+      if (cf) body = UI.notice('Cloudflare deployments use the Cloudflare front door: DNS, edge TLS, WAF and rate-limit rules are part of the deployment.', 'info') + UI.field('Hostname', UI.input(w.host, { attrs: 'data-f="host"' })) + UI.toggle('Cloudflare Access before the admin console', w.access, 'data-access data-manual');
+      else body = '<div class="dep-tiles">' + [['cloudflare', 'Cloudflare', 'DNS and edge TLS, Tunnel (cloudflared, no inbound ports), WAF and rate-limit rules, optional Access'], ['acme', 'ACME and provider DNS', w.provider === 'AWS' ? 'Route 53 and dns-01 with the existing ACME client' : w.provider === 'Azure' ? 'Azure DNS and dns-01' : w.provider === 'DigitalOcean' ? 'DigitalOcean DNS and dns-01' : 'Your DNS, http-01 or dns-01'], ['byo', 'Bring your own', 'Your load balancer and certificates; Exprsn-AI only checks the URL']].map((f) => '<button type="button" class="dep-tile' + (w.front === f[0] ? ' on' : '') + '" data-front="' + f[0] + '"><b>' + esc(f[1]) + '</b><span>' + esc(f[2]) + '</span></button>').join('') + '</div>'
+        + UI.field('Hostname', UI.input(w.host, { attrs: 'data-f="host"' }))
+        + (w.front === 'cloudflare' ? UI.toggle('Cloudflare Access before the admin console', w.access, 'data-access data-manual') + UI.notice('Access is an extra layer. Exprsn-AI sign-in stays authoritative, and /v1, the OIDC and SAML endpoints, /.well-known and public share links bypass Access so clients and federation keep working.', 'info') : '');
+    } else if (w.step === 5) {
+      const n = lines.length;
+      const creates = onprem ? 4 : cf ? 9 : w.compute === 'k8s' ? 22 : w.compute === 'vm' ? 14 : 12;
+      body = (w.expired ? UI.notice('<b>This plan expired.</b> It is older than 60 minutes or the observed state changed. Make it again before applying.', 'warn', UI.btn('Plan again', { size: 'xs', attrs: 'data-replan' })) : '')
+        + (budgetStop ? UI.problem('Plan refused: budget_exceeded', 'do-team is at 103 % of its September budget. This plan adds ' + money(total) + ' a month. Remove resources, wait for October or request an override.', 'c2e8a41f07b93d56e1a4c08f7b2d9e31') : '')
+        + '<div class="grid2">' + UI.panel('Cost estimate', UI.table(['Item', { label: 'A month', right: true }], lines.map((l) => [esc(l[0]), '<span class="num">' + money(l[1]) + '</span>']).concat([['<b>Total</b>', '<b class="num">' + money(total) + '</b>']]), { clickable: false, minWidth: '0', cls: 'bare' }) + '<span class="muted" style="font-size:12px">From the provider price lists, cached 28 Sep 06:00; 730 hours, 100 GB egress assumed (B-10601).</span>')
+        + UI.panel('Plan', '<div class="stats">' + UI.stat(String(creates), 'create') + UI.stat('0', 'update') + UI.stat('0', 'replace') + UI.stat('0', 'delete') + '</div>' + UI.table(['Change', 'Resource'], (onprem ? ['Cloudflare Tunnel and connector config', 'DNS record ' + w.host, 'WAF and rate-limit rules', 'Access app for the admin console'] : cf ? ['Container app exprsn-ai (3 instances)', 'Worker with static assets', 'Hyperdrive config', 'Aurora cluster ' + w.name + '-aurora', 'ElastiCache Valkey ' + w.name + '-valkey', 'R2 bucket ' + w.name + '-blobs', 'DNS record ' + w.host, 'WAF rules', 'Access app'] : ['Network: VPC, subnets, NAT, firewall', COMPUTE[w.provider][w.compute], 'Database ' + w.name + '-pg', 'Cache ' + w.name + '-cache', 'Object store ' + w.name + '-blobs', w.front === 'cloudflare' ? 'Cloudflare Tunnel, DNS, WAF' : 'DNS record and certificate']).map((r) => [kindPill('create'), esc(r)]), { clickable: false, minWidth: '0', cls: 'bare' }) + '<span class="muted" style="font-size:12px">' + n + ' cost lines, ' + creates + ' resources. Plan hash 3f9c…example, valid until 10:40.</span>') + '</div>';
+    } else {
+      const done = w.applyAt || 0;
+      const list = onprem ? ['Tunnel created', 'Connector config sealed into the vault', 'DNS record', 'WAF rules', 'Access app', 'Verify'] : cf ? ['Aurora cluster (aws-prod)', 'ElastiCache Valkey (aws-prod)', 'R2 bucket', 'Hyperdrive config', 'Container app', 'Worker and static assets', 'DNS, WAF, Access', 'Verify'] : ['Network', 'Object store', 'Cache', 'Database', COMPUTE[w.provider][w.compute], 'Migrations', 'Front door', 'Verify'];
+      body = UI.panel('Applying ' + esc(w.name), UI.timeline(list.map((s, i) => ({ title: (i + 1) + '. ' + esc(s), text: i < done ? 'done' : i === done ? 'running' : 'waiting', meta: i < done ? 'journal entry ' + esc(w.name) + '/' + (i + 1) : '', tone: i < done ? 'ok' : i === done ? 'info' : '' }))))
+        + '<span class="muted" style="font-size:12px">The apply runs as the cloud.apply job; you can leave this page. Each step is idempotent and survives a restart (B-10104).</span>';
+    }
+    let foot = '';
+    if (w.step < 5) foot = (w.step > 1 ? UI.btn('Back', { size: 'sm', attrs: 'data-back' }) : UI.btn('Back', { size: 'sm', disabled: true })) + UI.btn('Cancel', { size: 'sm', kind: 'ghost', attrs: 'data-cancel' }) + '<span class="grow"></span><span class="muted" style="font-size:12px">Estimate ' + money(total) + ' a month</span>' + UI.btn('Next', { kind: 'primary', size: 'sm', attrs: 'data-next' });
+    else if (w.step === 5) foot = UI.btn('Back', { size: 'sm', attrs: 'data-back' }) + UI.btn('Cancel', { size: 'sm', kind: 'ghost', attrs: 'data-cancel' }) + '<span class="grow"></span>' + (budgetStop ? UI.btn('Request override', { size: 'sm', attrs: 'data-override-w' }) : '') + UI.btn('Apply', { kind: 'primary', size: 'sm', attrs: 'data-apply', disabled: budgetStop || w.expired, title: budgetStop ? 'budget_exceeded' : w.expired ? 'Plan expired' : '' });
+    else foot = '<span class="grow"></span>' + UI.btn('Advance one step', { size: 'sm', attrs: 'data-advance' }) + UI.btn('Back to deployments', { kind: 'primary', size: 'sm', attrs: 'data-finish' });
+    root.innerHTML = style + '<div class="page">' + UI.pagehead('New deployment', 'Step ' + w.step + ' of 6, ' + esc(STEPS[w.step - 1]) + ' · ' + esc(w.provider), w.step < 6 ? UI.btn('Cancel', { kind: 'ghost', attrs: 'data-cancel' }) : '')
+      + steps + UI.panel('Step ' + w.step + ' of 6', body + '<div class="dep-fb">' + foot + '</div>') + example + '</div>';
+
+    const skip = (dir) => { w.step += dir; if (onprem && (w.step === 2 || w.step === 3)) w.step = dir > 0 ? 4 : 1; };
+    ctx.on('click', '[data-prov]', (e, t) => { w.provider = t.dataset.prov; w.account = ACCOUNTS[w.provider][0]; w.region = REGIONS[w.account][0]; w.front = w.provider === 'Cloudflare' || w.provider === 'On-prem' ? 'cloudflare' : w.front; w.compute = 'k8s'; ctx.rerender(); });
+    ctx.on('change', '[data-f="account"]', (e, t) => { w.account = t.value; w.region = REGIONS[w.account][0]; ctx.rerender(); });
+    ctx.on('change', '[data-f="region"]', (e, t) => { w.region = t.value; ctx.rerender(); });
+    ctx.on('input', '[data-f="name"]', (e, t) => { w.name = t.value.trim() || w.name; });
+    ctx.on('input', '[data-f="host"]', (e, t) => { w.host = t.value.trim() || w.host; });
+    ctx.on('click', '[data-compute]', (e, t) => { w.compute = t.dataset.compute; ctx.rerender(); });
+    ctx.on('click', '[data-size] [data-seg]', (e, t) => { w.size = +t.dataset.seg; ctx.rerender(); });
+    ctx.on('click', '[data-mode] [data-seg]', (e, t) => { w[t.closest('[data-mode]').dataset.mode] = t.dataset.seg; ctx.rerender(); });
+    ctx.on('click', '[data-front]', (e, t) => { w.front = t.dataset.front; ctx.rerender(); });
+    ctx.on('click', '[data-access]', () => { w.access = !w.access; ctx.rerender(); });
+    ctx.on('click', '.dep-tile[disabled]', () => ctx.toast(esc(CF_REASON) + '.', 'warn'));
+    ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
+    ctx.on('click', '[data-next]', () => { skip(1); ctx.rerender(); });
+    ctx.on('click', '[data-back]', () => { skip(-1); ctx.rerender(); });
+    ctx.on('click', '[data-cancel]', () => { st.wiz = null; ctx.rerender(); });
+    ctx.on('click', '[data-replan]', () => { w.expired = false; ctx.rerender(); ctx.toast('Plan made again against the observed state. Nothing changed; valid until 10:40.', 'ok'); });
+    ctx.on('click', '[data-override-w]', () => ctx.toast('Override request sent to Jonas Lindqvist. The plan applies once it is approved.', 'ok'));
+    ctx.on('click', '[data-apply]', async () => {
+      const ok = await ctx.confirm({ title: 'Apply ' + w.name, tag: 'apply', tone: 'info', body: '<p class="fg2" style="margin:0">Exprsn-AI creates the resources in the plan through the provider APIs and verifies the result. Cancelling later stops after the running step.</p>', kv: [['Account', esc(w.account)], ['Region', esc(w.region)], ['Estimate', money(total) + ' a month'], ['Plan', '3f9c…example']], ok: 'Apply' });
+      if (!ok) return;
+      w.step = 6; w.applyAt = 1;
+      if (!st.deploys.some((d) => d.id === w.name)) st.deploys.push({ id: w.name, provider: w.provider, account: w.account, region: w.region, target: onprem ? 'front door only' : cf ? 'Cloudflare Containers (3)' : COMPUTE[w.provider][w.compute] + ', ' + SIZES[w.size], data: onprem ? 'on-prem, unchanged' : cf ? 'Hyperdrive to Aurora (aws-prod), Valkey, R2' : 'new managed database, cache and object store', front: w.front === 'cloudflare' ? 'Cloudflare DNS, Tunnel, WAF' + (w.access ? ', Access' : '') : w.front === 'acme' ? 'ACME, provider DNS' : 'your own', release: '2.0.0', state: 'applying', step: 1, drift: 0, est: total, mtd: 0, url: 'https://' + w.host });
+      ctx.rerender(); ctx.toast('Apply started for <b>' + esc(w.name) + '</b>.', 'ok');
+    });
+    ctx.on('click', '[data-advance]', () => { w.applyAt = Math.min((w.applyAt || 0) + 1, 8); ctx.rerender(); });
+    ctx.on('click', '[data-finish]', () => { st.sel = w.name; st.wiz = null; ctx.rerender(); });
+  }
 })();
 
 </script>

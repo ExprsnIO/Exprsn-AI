@@ -48,6 +48,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge (1.6.0) | Groups and events, Storage, Apps, Vault, Knowledge, Classifiers | Next |
 | 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
 | 38 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen; release (1.7.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
+| 40–46 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.6.0, which ends at Sprint 39) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
 
 **End-to-end tests (owner, 2026-10-06).** During a sprint, each part runs only the Playwright specs of the screens
 it changes (with their accessibility and reflow checks); CI runs the full suite on every pull request. The full
