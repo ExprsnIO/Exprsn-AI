@@ -245,8 +245,11 @@ export class GroupService {
     return a;
   }
 
-  /** Access with a right (by the acting role); a reader without it gets 403, anyone else 404. */
-  async require(p: Principal, id: string, right: GroupRight): Promise<Access> {
+  /**
+   * Access with a right (by the acting role); a reader without it gets 403, anyone else 404. `reading` marks a call that
+   * only lists what the right shows (requests, cases, invite candidates), which an archived group still answers.
+   */
+  async require(p: Principal, id: string, right: GroupRight, opts: { reading?: boolean } = {}): Promise<Access> {
     const a = await this.access(p, id);
     if (right === 'read') {
       if (!a.read) throw forbidden(clears(p.clearance, a.group.label) ? 'Join the group to see its content.' : `The group is labelled ${a.group.label}, above your clearance of ${p.clearance}.`, { step: clears(p.clearance, a.group.label) ? 'group' : 'clearance' });
@@ -254,7 +257,7 @@ export class GroupService {
     }
     if (!a.read || !roleHas(a.acting, right)) throw forbidden(a.acting ? `Your role in this group (${a.acting}) does not allow this.` : 'Join the group first.', { step: 'group-role', right });
     // 1.6.0 (B-4206): an archived group is read only; its owners may still delete it.
-    if (a.group.state === 'archived' && right !== 'delete') throw conflict('The group is archived; it is read only.');
+    if (a.group.state === 'archived' && right !== 'delete' && !opts.reading) throw conflict('The group is archived; it is read only.');
     return a;
   }
 
@@ -465,7 +468,7 @@ export class GroupService {
    * cleared for its label, not members and without a pending request or invitation. At most 50, matched on the name.
    */
   async candidates(p: Principal, id: string, q?: string) {
-    const a = await this.require(p, id, 'invite');
+    const a = await this.require(p, id, 'invite', { reading: true });
     const g = a.group;
     const like = q ? `%${q.toLowerCase().replace(/[%_\\]/g, '')}%` : null;
     const rows = (await this.db('workspace_members as wm').join('users as u', 'u.id', 'wm.user_id')
@@ -595,7 +598,7 @@ export class GroupService {
 
   /** Pending requests and invitations of a group (moderators). */
   async requests(p: Principal, id: string, state?: RequestRow['state']) {
-    await this.require(p, id, 'decide');
+    await this.require(p, id, 'decide', { reading: true });
     const rows = ((await this.db('group_requests as r').join('users as u', 'u.id', 'r.user_id').where({ 'r.group_id': id, 'r.state': state ?? 'pending' }).orderBy('r.created_at', 'desc').limit(500).select('r.*', 'u.display_name')) as Record<string, unknown>[]);
     const out = [];
     for (const raw of rows) {
@@ -734,7 +737,7 @@ export class GroupService {
 
   /** Flags raised on the group's content (reports and moderation checks through B-19), for its moderators. */
   async cases(p: Principal, id: string, state?: string) {
-    await this.require(p, id, 'cases');
+    await this.require(p, id, 'cases', { reading: true });
     const s = this.s();
     const posts = s.db('group_posts').where({ group_id: id }).select('id');
     const events = s.db('group_events').where({ group_id: id }).select('id');

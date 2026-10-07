@@ -224,6 +224,9 @@ describe('Social and messaging (Sprint 35d, B-4206)', () => {
     const carol = await personIn(h, 'carol', [ws]);
     await carol.post(`/api/groups/${g.id}/join`).expect(409);
     expect((await alice.get(`/api/feed/groups/${g.id}`).expect(200)).body.items.length).toBe(1);
+    // ...and its owner's lists still answer (CI found the Groups screen's request and case lists refused with 409)
+    await bob.get(`/api/groups/${g.id}/requests?state=pending`).expect(200);
+    await bob.get(`/api/groups/${g.id}/cases`).expect(200);
     expect((await ta.get(`${S}/groups`).expect(200)).body.groups.find((x: { id: string }) => x.id === g.id).state).toBe('archived');
     expect(JSON.stringify((await alice.get('/api/me/notifications').expect(200)).body)).toMatch(/was archived/);
   });
