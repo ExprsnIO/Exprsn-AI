@@ -151,6 +151,8 @@ tenant's client.
 | Path (under the issuer) | What it is |
 | --- | --- |
 | `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and the key set (CORS open, cached 5 minutes) |
+| `/.well-known/oauth-authorization-server` | RFC 8414 metadata (the discovery document); also at the path-inserted `/.well-known/oauth-authorization-server/t/<slug>` and `/.well-known/openid-configuration/t/<slug>` on the host (1.6.0) |
+| `/oauth/register` | RFC 7591 dynamic client registration, only when the tenant allows it (1.6.0, see "MCP clients" below) |
 | `/oauth/authorize` | Authorization code flow with the console session; consent page when needed |
 | `/oauth/token` | `authorization_code`, `refresh_token`, `client_credentials`, device code, token exchange (60 requests a minute per address) |
 | `/oauth/userinfo`, `/oauth/revoke`, `/oauth/device_authorization`, `/device` | Userinfo, RFC 7009 revocation, RFC 8628 device authorization and its verification page |
@@ -198,7 +200,8 @@ re-intersected at every refresh. **Claims**: `profile` gives `name` and `preferr
 `groups` gives `groups` (from the user's store), `roles` and `clearance`.
 
 **Tokens.** Access tokens are JWTs (`typ: at+jwt`, ES256, `kid`), 5, 10 or 30 minutes per client, with `aud`
-(`<issuer>/api` unless `audience`/`resource` is given), `scope`, `client_id`, `tenant`, `tid`, `sid` (the grant),
+(`<issuer>/api` unless a `resource` is given: since 1.6.0 the code and refresh grants carry the resource named at the
+authorization endpoint, which must be `<issuer>/api` or one of the tenant's MCP endpoints, RFC 8707), `scope`, `client_id`, `tenant`, `tid`, `sid` (the grant),
 `models` (the client's allowed models) and, after token exchange, `act`. ID tokens add `nonce`, `auth_time`, `amr`
 (`pwd`, `otp`, `hwk`, `kerberos`, `fed`, `mfa`) and `at_hash`. Refresh tokens are opaque, stored as digests, and
 rotated on every use; a family lives 8 hours (24 hours for clients with the device grant) from its first token.
@@ -208,6 +211,34 @@ ends it at the next refresh.
 
 **Token exchange** (RFC 8693) takes an access token from this issuer as `subject_token` and returns a narrower one for
 the calling confidential client, with `act: {sub: <client id>}`.
+
+### MCP clients (1.6.0, B-7102)
+
+Each workspace can publish an MCP server (Identity, **MCP server** tab): `<base>/mcp/<tenant slug>/<workspace id>`,
+where the base is `API_PUBLIC_URL` or the origin of `PUBLIC_URL`. The server is an OAuth 2.1 resource server of the
+tenant's issuer, so an MCP client such as Claude Desktop follows the MCP authorization flow with no secret in the URL:
+
+1. Its first request gets `401` with `WWW-Authenticate: Bearer resource_metadata="…"`. The protected resource metadata
+   (RFC 9728) names this tenant's issuer and the MCP scopes (`tools:invoke agents:run inference:invoke knowledge:read
+   records:read records:write`).
+2. The client reads the issuer's metadata (RFC 8414) and needs a client: an identity admin creates a public client
+   with its redirect URI under OIDC clients, or, with **self-registration** on, the client registers itself at
+   `/oauth/register` (RFC 7591: authorization code with PKCE and refresh only, HTTPS or loopback redirect URIs, the
+   MCP scopes; listed on the MCP server tab and disabled like any client). Self-registration is off by default.
+3. The person signs in to the console (or already is), sees the consent page for the client and the scopes (narrowed
+   by their roles), and the client gets a code, then tokens, naming the server's URL as the `resource` (RFC 8707). The
+   access token's audience is that URL; it is refused by the API and by every other workspace's server, and an API
+   token is refused by the MCP server.
+4. Every call acts as that person, at most at the label the workspace publishes at, and writes wait for the person's
+   approval under Settings, **MCP access**, where the connection URLs are listed too.
+
+A workspace can require DPoP-bound tokens. Before 1.6.0 an MCP client could only reach Exprsn-AI through a separate MCP
+service holding a service account's credential (as the platform-tools service on one deployment does); a workspace's
+MCP server makes that unnecessary, since each person connects as themselves.
+
+The reverse direction, Exprsn-AI connecting each person to someone else's authorization-protected MCP server, is on the
+MCP servers screen (OAuth for users: discovery with RFC 9728, RFC 8414 and RFC 7591, or endpoints and a client entered
+by hand) and in Settings, MCP access (connect and disconnect); see `docs/api.md`, Sprint 37b.
 
 ### Signing in through the console
 

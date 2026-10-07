@@ -4580,3 +4580,135 @@ agents and workflows: `{kbIds (1 to 20), query, k? (1 to 20, default 8), labels?
 `knowledge:read`, searches only published bases shared with the caller (refused otherwise), and searches at most at the
 label of the conversation or run it is called from, capped by the caller's clearance.
 
+
+## Sprint 37b (1.6.0): the MCP server and MCP authorization (B-7101 to B-7103)
+
+Each workspace can publish an MCP server, authorized by the tenant's own issuer, and the MCP client connects each user
+to an authorization-protected MCP server with OAuth. `server/src/mcp/server/` (`resource.ts` the endpoint URLs and
+resource identifiers, `service.ts` `s.mcpServer`: publications, the tool catalogue, calls and held calls),
+`server/src/mcp/oauth.ts` (`s.mcp.oauth`), `server/src/routes/mcp-server-public.ts` (the endpoint and its metadata),
+`server/src/routes/mcp-access.ts` (administration, the user's view, the OAuth start and callback). Migration
+`039b_mcp_server`.
+
+### The MCP server (B-7101)
+
+`POST /mcp/<tenant slug>/<workspace id>`, outside `/api`: one JSON-RPC 2.0 message per request over the streamable HTTP
+transport, answered with JSON (`application/json`; no server-sent event stream). Protocol `2025-06-18` (also
+`2025-03-26`, which the MCP client also speaks). No sessions: `initialize` issues no `Mcp-Session-Id`. Batches are
+refused (`-32600`). `GET` and `DELETE` answer `405`. A request with an `Origin` other than the console's is refused
+(`403`, DNS rebinding); an unsupported `MCP-Protocol-Version` header is `400`.
+
+| Method | What it does |
+| --- | --- |
+| `initialize` | `{protocolVersion, capabilities: {tools: {listChanged: false}}, serverInfo: {name: exprsn-ai, title, version}, instructions}` |
+| `ping` | `{}` |
+| `tools/list` | `{tools: [{name, title, description, inputSchema, annotations: {title, readOnlyHint, destructiveHint, openWorldHint}}]}` |
+| `tools/call` `{name, arguments}` | `{content: [{type: text, text}], structuredContent?, isError}`; an unknown tool is the JSON-RPC error `-32602` |
+| notifications | `202`, no body |
+
+Tool groups (`MCP_GROUPS`), each published per workspace and filtered by the caller's permissions:
+
+| Group | Tools | Needs |
+| --- | --- | --- |
+| `workflows` | `workflow_<name>`: the workspace's published workflows whose trigger has an object schema, run as the caller (`asCallee`, the side-effect class their steps imply) | `agents:run` |
+| `agents` | `agent_<name>`: agents published to the workspace; a run started as the caller (`agent.run.started` with `via: mcp`), awaited for 20 s | `agents:run` and `inference:invoke` |
+| `knowledge` | `knowledge_<name>` `{query, k?}`: one search per published knowledge base the caller may read (tenant-wide or the workspace's), through the built-in `knowledge_search` | `knowledge:read` |
+| `tools` | Registry tools published to the workspace (built-ins, MCP, scripts, workflows published as tools), except the record and knowledge built-ins | `tools:invoke` |
+| `records` | The built-in record tools `records_entities`, `records_query`, `records_count`, `records_aggregate` (read) and `records_create`, `records_update` (write), `records_delete` (destructive) | `records:read`, `records:write` |
+| (any of `workflows`, `agents`) | `exprsn_run_status` `{handle}`: the answer of a run an earlier call left working, for the same user | |
+
+A client narrows the groups with `?groups=records,knowledge` on the endpoint URL (only groups the workspace publishes).
+
+Every call acts as the token's user in the endpoint's workspace (they must be able to act in it), with the token's
+scopes narrowing their roles and their clearance lowered to the label the workspace publishes at (`mcp_publications.
+label`, at most the workspace ceiling): nothing above it comes back, and tools whose ceiling is below it are not
+offered. Calls go through the tool dispatcher: input schema, the tool's ceiling and rate limit, the `tool-call`
+checkpoint, the chain, the `context` checkpoint on the result. **Approval:** a write or destructive call, or one the
+`tool-call` guardrail holds, does not run; the answer is `isError: true` with `structuredContent.held {id, expiresAt}`
+and the user is notified. Once they approve it from a browser session (below), the next call with the same tool and
+the same arguments (by hash, within 15 minutes) runs, once. A workflow that pauses or an agent run still working after
+20 s answers `isError: false` with `structuredContent.pending {handle, kind, id}`; `exprsn_run_status` reads it later.
+Every call is audited `mcp.server.call` (kind `decision`; actor the user and, as service, the OAuth client id; target
+`{workspace, tool}`; detail `{group, outcome: ok|error|denied|held|pending|withheld|unknown, sideEffect, hold, error,
+durationMs}`). At most 600 requests a minute per user.
+
+The record built-ins (seeded by `039b`, ceiling `restricted`, published to every tenant) are also usable from chat
+profiles, agents and workflows. They act through the apps service as the caller: reads see records at most at the label
+of the call (the caller's clearance lowered to it); `records.create` writes at the higher of the entity's label and the
+call's. Arguments: `records.entities {app?}` → `{apps: [{app, title, label, entities: [{entity, title, label, fields:
+[{name, type, title?, required?}], states?}]}]}`; `records.query {app, entity, filter?, sort?, q?, limit? (1 to 100,
+default 25), cursor?}` → `{total, nextCursor, records: [{id, values, label, state, version, updatedAt}]}`;
+`records.count {app, entity, filter?, q?}` → `{count}`; `records.aggregate {app, entity, filter?, q?, groupBy?,
+metrics}` as `POST /api/apps/:app/entities/:entity/records/aggregate`; `records.create {app, entity, values}`;
+`records.update {app, entity, id, values, version?}`; `records.delete {app, entity, id}` → `{deleted}`. Filters are the
+record query filters (B-3601); a field must be indexed to filter or sort on it.
+
+### Authorization (B-7102)
+
+The endpoint is an OAuth 2.1 resource server of the tenant's issuer (`FEDERATION_ISSUER` or `PUBLIC_URL`, `/t/<slug>`
+for other tenants). Its resource identifier is the endpoint URL without query (`<API_PUBLIC_URL or the origin of
+PUBLIC_URL>/mcp/<slug>/<workspace id>`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/oauth-protected-resource/mcp/:tenant/:workspace` | RFC 9728: `{resource, authorization_servers: [issuer], scopes_supported, bearer_methods_supported: [header], resource_name, dpop_signing_alg_values_supported, dpop_bound_access_tokens_required}`; `404` unless the workspace publishes its server |
+| `GET /.well-known/oauth-authorization-server`, `/.well-known/oauth-authorization-server/t/:tenant`, `/t/:tenant/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration/t/:tenant` | RFC 8414 metadata (the discovery document), at the addresses MCP clients try; `registration_endpoint` when the tenant allows dynamic registration; `authorization_response_iss_parameter_supported: true` |
+| `POST /oauth/register`, `/t/:tenant/oauth/register` | RFC 7591, when the tenant allows it (else `404`): `{redirect_uris (1 to 5; https, or http on localhost, 127.0.0.1 or [::1]), client_name?, token_endpoint_auth_method?: none \| client_secret_basic (default) \| client_secret_post, grant_types?: authorization_code [refresh_token], response_types?: [code], scope? (within the MCP scopes, openid, profile, offline_access)}` → `201 {client_id, client_secret? (shown once), client_secret_expires_at, client_id_issued_at, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, scope}`. Errors `400 invalid_redirect_uri` or `invalid_client_metadata`. The client is `public` (or `third_party` with a secret), PKCE required, `dynamic: true`; a taken name gets a suffix; at most 500 per tenant. Audited `oidc.client.registered`; throttled like the token endpoint |
+
+Without a token the endpoint answers `401` with `WWW-Authenticate: Bearer resource_metadata="<metadata URL>",
+scope="<MCP scopes>"` (and a `DPoP` challenge when the workspace requires DPoP). A token that is not from the tenant's
+issuer, expired, revoked, or issued for another resource (the API, another workspace) is `401` with
+`error="invalid_token"` and the same `resource_metadata`; a token without any of the MCP scopes is `403` with
+`error="insufficient_scope"`. Failed tokens count towards the per-address limit of bearer failures. DPoP-bound tokens are
+checked like the API's (proof, nonce, `htu` the endpoint URL); with `requireDpop` a bearer token is refused.
+
+RFC 8707 at the tenant's issuer: `resource` (or `audience`) at `/oauth/authorize` (and in pushed requests) must be
+`<issuer>/api` or one of the tenant's MCP endpoints, else the redirect carries `error=invalid_target`. The resource is
+stored with the code (`oidc_codes.resource`) and the refresh token family (`oidc_refresh_tokens.resource`) and becomes
+the access token's `aud`; a `resource` at the token endpoint (code or refresh grant) must name the same one, else `400
+invalid_target`. No resource is the API, as before. The API accepts only `<issuer>/api` tokens; an MCP endpoint only its
+own URL.
+
+The MCP scopes (`MCP_SCOPES`): `tools:invoke agents:run inference:invoke knowledge:read records:read records:write`
+(plus `offline_access` for a refresh token). Scopes never widen a role.
+
+### Administration (`identity:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/mcp-server` | `{issuer, scopes, groups, dynamicRegistration, registrationEndpoint, publications: [{workspaceId, workspace, ceiling, url, enabled, groups, label, requireDpop, updatedAt}], clients: [{id, clientId, name, type, redirectUris, scopes, status, lastUsedAt, createdAt}]}` (every active workspace; `clients` are the self-registered ones) |
+| `PUT /api/admin/mcp-server/settings` `{dynamicRegistration}` | Audited `mcp.server.settings.updated` |
+| `PUT /api/admin/mcp-server/workspaces/:workspaceId` `{enabled?, groups?, label?, requireDpop?}` | `{workspaceId, url, enabled, groups, label, requireDpop, updatedAt}`; a label above the workspace ceiling is `409`. Audited `mcp.server.published`, `mcp.server.unpublished` or `mcp.server.publication.updated` |
+| `GET /api/admin/mcp-server/workspaces/:workspaceId/tools` | What the workspace publishes as the admin would see it over MCP, in every group: `{asYou, label, groups, tools: [{name, title, group, sideEffect, description, published}]}` |
+
+### The user's MCP access
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/mcp-server` | `{servers: [{workspaceId, workspace, url, groups, label, requireDpop}], holds}`: the enabled servers of the workspaces the caller may act in, and their held calls |
+| `GET /api/me/mcp-holds?state=pending\|all` | `{holds: [{id, workspaceId, workspace, client, tool, sideEffect, label, reason, state: pending\|approved\|rejected\|used\|expired, arguments, createdAt, expiresAt, decidedAt}]}` (arguments sealed at rest) |
+| `POST /api/me/mcp-holds/:id/decide` `{decision: approve\|reject}` | A browser session only: the token that asked can never approve. A pending call waits one hour; an approval is usable for 15 minutes, once. `404` for another user's call, `409` when decided or expired. Audited `mcp.server.hold.approved` or `rejected` |
+
+### MCP client OAuth (B-7103)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/mcp-servers/:id/oauth/discover` (`mcp:manage`) | For a per-user server: an unauthenticated `initialize` and its `401` challenge (`resource_metadata`, `scope`), the RFC 9728 metadata (from the challenge, else the path-inserted and root well-known addresses; its `resource` must be the server's URL), the authorization server's RFC 8414 metadata (path-inserted, then OpenID discovery; `issuer` must match; PKCE `S256` when it lists methods), then RFC 7591 registration of a public client (`token_endpoint_auth_method: none`, redirect `<PUBLIC_URL>/api/mcp-oauth/callback`) unless the server has a client for that issuer. `{oauth, steps: [{check, result, detail}]}`; a failed step is `422` with `reason` and `steps`. Audited `mcp.oauth.discovered` or `mcp.oauth.discovery.failed` |
+| `PUT /api/admin/mcp-servers/:id/oauth` (`mcp:manage`) `{authorizationEndpoint, tokenEndpoint, revocationEndpoint?, clientId, clientSecret?, scopes?, resource?}` | The manual fallback (`mode: manual`); the secret is sealed (omitted keeps it, `null` clears it). Audited `mcp.oauth.configured` |
+| `DELETE /api/admin/mcp-servers/:id/oauth` (`mcp:manage`) | `204`. Audited `mcp.oauth.removed` |
+| `POST /api/mcp-oauth/start` (`tools:invoke`, browser session) `{server, returnTo?: settings\|mcp-servers}` | `{authorizeUrl}`: the authorization code request with PKCE `S256`, `state`, the configured scopes and `resource` (the server's URL); sets the cookie `exai_mcpoauth` (HttpOnly, SameSite=Lax, path `/api/mcp-oauth`, ten minutes) that binds the request to this browser. Audited `mcp.oauth.started` |
+| `GET /api/mcp-oauth/callback?state&code` (public) | The state (single use, ten minutes) and the cookie identify the user and request; `iss`, when sent, must be the authorization server asked (RFC 9207); the code is exchanged with the verifier and `resource`. Redirects to `/#/settings?tab=mcp&server=<id>&result=connected` (or `/#/mcp-servers?tab=authorization…`), or `result=failed&reason=…`. Audited `mcp.oauth.connected` |
+
+`GET /api/admin/mcp-servers/:id` adds `oauth: {mode, resource, issuer, authorizationEndpoint, tokenEndpoint,
+registrationEndpoint, revocationEndpoint, clientId, hasSecret, registered, scopes, updatedAt} | null` and
+`callbackUrl`; its `connections` add `source: manual|oauth`. `GET /api/mcp/servers` adds `url`, `oauth` (configured),
+`source`, `refreshable` and `refreshedAt`.
+
+Tokens from the flow are stored like pasted ones (`mcp_tokens`, sealed with the tenant key, `source: oauth`) with the
+refresh token sealed too. A token within 30 s of its expiry is refreshed before the call (the `resource` sent again;
+one refresh per server and user at a time on an instance), and a `401` from the server gets one refresh and one more
+try; audited `mcp.oauth.refreshed`. A refused refresh (`invalid_grant`) deletes the token, notifies the user and is
+audited `mcp.oauth.expired`. `DELETE /api/mcp/servers/:id/token` revokes the refresh and access tokens at the
+authorization server (RFC 7009, when it names a revocation endpoint) before deleting them; the audit entry
+`mcp.token.removed` records `revoked`. Metadata, registration, token and revocation requests go through the same
+internal-hosts dispatcher as MCP calls (`MCP_ALLOWED_HOSTS`); only the browser visits the authorization endpoint.

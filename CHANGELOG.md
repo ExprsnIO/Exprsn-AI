@@ -10,6 +10,36 @@
   expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
   instance poll.
 
+### The MCP server and MCP authorization (Sprint 37b, B-7101 to B-7103)
+
+- Migration `039b_mcp_server`: `mcp_publications`, `mcp_server_settings`, `mcp_server_holds`, `mcp_oauth`,
+  `mcp_oauth_states`; `oidc_codes.resource`, `oidc_refresh_tokens.resource`, `oidc_clients.dynamic`;
+  `mcp_tokens.refresh_token`, `source`, `refreshed_at`; the `records.*` built-in tools.
+- An MCP server per workspace (B-7101) at `/mcp/<tenant>/<workspace>` over streamable HTTP (protocol 2025-06-18, JSON
+  answers): the workspace's published workflows, its agents, one search tool per knowledge base, its registry tools and
+  the record tools over low-code apps (list, query, count, aggregate, create, update, delete), in groups a client picks
+  with `?groups=`. Each call acts as the person who signed in, at most at the label the workspace publishes at, through
+  the tool dispatcher, guardrails and audit (`mcp.server.call`); writes wait for the person's approval from a browser
+  session (`/api/me/mcp-holds`). The record tools (`records.entities`, `records.query`, `records.count`,
+  `records.aggregate`, `records.create`, `records.update`, `records.delete`) are built-ins for chat, agents and
+  workflows too. A separate MCP service with a service account is no longer needed to reach Exprsn-AI from an MCP client.
+- MCP authorization (B-7102): the endpoint is an OAuth 2.1 resource server of the tenant's issuer, with RFC 9728
+  protected resource metadata, `WWW-Authenticate` naming it on 401, RFC 8707 audiences (the resource named at the
+  authorization endpoint is kept with the code and the refresh token family and becomes `aud`; `invalid_target` for a
+  resource the issuer does not serve) and DPoP, optionally required per workspace. The issuer publishes RFC 8414
+  metadata at the addresses MCP clients try and, when an identity admin turns it on, RFC 7591 dynamic client
+  registration (`POST /oauth/register`, off by default). Discovery documents announce `authorization_response_iss_
+  parameter_supported`.
+- MCP client OAuth (B-7103): for per-user MCP servers, discovery (the 401 challenge, RFC 9728, RFC 8414, RFC 7591
+  registration) or endpoints and a client entered by hand; each person connects with the authorization code and PKCE
+  (state bound to the browser), tokens are sealed with the tenant key, refreshed before they expire and on a 401, and
+  revoked at the authorization server on disconnect.
+- Console: Identity gains the MCP server tab (publish per workspace, tool groups, label, DPoP, a preview, self-
+  registration and the clients that registered themselves); Settings gains MCP access (connection URLs, held calls,
+  connect and disconnect); MCP servers gains OAuth for users. Prototype boards first; `e2e/tests/mcp-server.spec.ts`.
+- Fixed: Identity's PKCE switch for a public client is `aria-disabled`, so axe-core's enhanced contrast check no longer
+  flags its dimmed label.
+
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 
 - Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,

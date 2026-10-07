@@ -152,6 +152,42 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   with the caller, at most at the label of the conversation or run it is called from (and never above the caller's
   clearance), so a result never carries data above the context it lands in.
 
+## The MCP server and MCP authorization (1.6.0, Sprint 37b)
+
+- **Per-user access without a service account (B-7101).** Before 1.6.0 Exprsn-AI was an MCP client only, so reaching
+  its workflows or records from an MCP client meant a separate MCP service holding a service account's credential,
+  which acted with that account's rights for everyone. Each workspace's MCP server now acts as the person who signed
+  in: their roles narrowed by the token's scopes, their clearance lowered to the label the workspace publishes at, the
+  workspace membership, and the same dispatcher, label ceilings, rate limits and `tool-call` and `context` checkpoints
+  as a call from the console. Nothing is published until an identity admin turns a workspace's server on, and only the
+  groups chosen there.
+- **Writes wait for the person (B-7101).** A write or destructive call, and any call the `tool-call` guardrail holds,
+  does not run: it is held with its arguments sealed (`mcp-hold:<id>`) and the person is notified. Only a browser
+  session decides (the decide route is session-only, and an MCP token is refused by the API anyway), so a client, or a
+  prompt injected into its model, cannot approve its own call. An approval covers that tool with exactly those
+  arguments (compared by hash), once, for 15 minutes; a pending call lapses after an hour.
+- **A resource server of the tenant's issuer (B-7102).** The endpoint accepts only access tokens from the tenant's own
+  issuer whose audience is that endpoint's URL (RFC 8707): the resource named at the authorization endpoint is checked
+  against the tenant's endpoints, kept with the code and the refresh token family, and becomes the `aud`. A token for
+  the API, another workspace or another tenant is refused with `401` and the protected resource metadata URL (RFC
+  9728); the API refuses tokens for an MCP endpoint, so a token handed to an MCP client cannot be replayed against the
+  console's API. Revocation, disabled clients and users, ended sessions and the deny-list apply as to any token from
+  the issuer. DPoP-bound tokens are checked with a proof per request and can be required per workspace. Requests with
+  a foreign `Origin` are refused (DNS rebinding), failed tokens count towards the per-address bearer-failure limit,
+  and each user has at most 600 requests a minute.
+- **Dynamic client registration is off by default (B-7102).** When an identity admin turns it on, any client that
+  reaches the issuer can register (RFC 7591), but only with the authorization code grant, PKCE required, redirect URIs
+  on HTTPS or a loopback address, and the MCP scopes; each such client is third-party or public, so every person is
+  asked for consent before it acts as them, and an admin can disable it like any client. At most 500 per tenant.
+- **OAuth for the MCP client (B-7103).** Each person connects to an authorization-protected MCP server with the
+  authorization code grant and PKCE (`S256`), naming the server as the resource. The `state` is single use and bound to
+  the browser that started the flow by an HttpOnly cookie (so a code obtained by someone else cannot be attached to
+  another account), the verifier is sealed at rest, and an `iss` in the answer must be the authorization server asked
+  (RFC 9207). Access and refresh tokens are sealed with the tenant key (`mcp-token:` and `mcp-refresh:` associated
+  data), refreshed before they expire, deleted when a refresh is refused, and revoked at the authorization server when
+  the person disconnects. Metadata, registration, token and revocation requests use the internal-hosts dispatcher of
+  MCP calls; tokens never enter model context.
+
 ## Deployment hardening
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
@@ -159,6 +195,19 @@ the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, emp
 filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
+
+- The MCP server and MCP authorization (1.6.0, Sprint 37b, B-7101 to B-7103). The server offers no sessions, no
+  event stream and no resources or prompts: a long agent run or a workflow paused on an approval answers with a handle
+  after 20 s, and the client asks again with `exprsn_run_status`. Held calls are matched by the arguments' hash, so a
+  client that changes any argument asks again; the approval is per call, with no "trust this client" setting. Agents
+  published to a workspace run as tools with their own approvals inside the run (decided on the Runs screen, as in the
+  console), not with a held call. The DNS-rebinding check refuses any foreign `Origin`, so a browser-based MCP client
+  on another origin cannot use the endpoint. Dynamically registered clients are not removed when unused. On the client
+  side, refreshes are serialised per server and user on one instance only: two instances refreshing the same rotating
+  refresh token at once can make the authorization server revoke the grant, and the person then connects again.
+  Discovery and token requests reach internal hosts only (or those `MCP_ALLOWED_HOSTS` names), so an MCP server whose
+  authorization server is public needs that host allow-listed. A server's OAuth configuration removed or rediscovered
+  for another issuer leaves tokens users already connected until they expire or are disconnected.
 
 - Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
   server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers

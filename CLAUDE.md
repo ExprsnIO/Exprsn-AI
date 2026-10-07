@@ -257,6 +257,13 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   (`knowledge_doc_labels`) and the jobs `knowledge.classify` and `knowledge.reclassify` in `knowledge/service.ts`; the
   `vision` classifier engine and image eval cases in `guardrails/classifiers.ts`; the built-in tool `knowledge_search`.
   The fake Ollama answers image prompts from a picture's text chunks (`markedPng` in `server/test/fake-ollama.ts`).
+- 1.6.0 Sprint 37b: `mcp/server/` (B-7101, B-7102: `resource.ts` the endpoint URL and resource identifier per
+  workspace, `service.ts` `s.mcpServer`: publications, the tool catalogue by group, calls through the dispatcher and
+  held calls) behind `routes/mcp-server-public.ts` (`/mcp/<tenant>/<workspace>` and its RFC 9728 metadata, outside
+  `/api`) and `routes/mcp-access.ts`; `mcp/oauth.ts` (`s.mcp.oauth`, B-7103: discovery, registration, the authorization
+  code with PKCE, refresh and revocation for per-user MCP servers); RFC 8707 resources and RFC 7591 registration in
+  `federation/oidc.ts`; the `records.*` built-ins in `registry/builtin/`. `server/test/sprint37b-fakes.ts` has an
+  authorization server for `fake-mcp.ts`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
