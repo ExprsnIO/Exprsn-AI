@@ -8,6 +8,8 @@ import { flagRef } from '../guardrails/flags.js';
 import type { ModeratedObject } from '../moderation/registry.js';
 import { TOPICS, type IntegrationEvent } from '../platform/bus.js';
 import type { Services } from '../services.js';
+import { GroupDepth } from './depth.js';
+import { distanceKm, narrow, validPoint, type Near } from './geo.js';
 
 /*
  * Groups (B-2501) and group posts with their moderation (B-2505). A group lives inside one workspace, and workspace
@@ -19,8 +21,13 @@ import type { Services } from '../services.js';
  *   and managers. A group's label is the highest label of its content: nobody below it sees the content or joins.
  * - join modes: open (join at once), request (a moderator accepts), invite (only by invitation). Requests and
  *   invitations expire (GROUP_REQUEST_DAYS, GROUP_INVITE_DAYS).
- * - roles: owner (settings, roles, delete), moderator (requests, invitations, members, posts, events, check-in, cases),
- *   member (post, RSVP). Holders of `groups:manage` act as owner on every group in the workspaces they may act in.
+ * - roles: owner (settings, roles, delete), moderator (requests, invitations, members, posts, events, check-in, cases,
+ *   channels), member (post, RSVP). Holders of `groups:manage` act as owner on every group in the workspaces they may act in.
+ * - channels (1.6.0, B-4401): a group may hold channels, groups one level down (`parent_id`) with their own members,
+ *   roles and posts. The group is a channel's outer boundary as the workspace is a group's: only those who read the
+ *   group see its channels, only its members join them, and leaving the group leaves its channels. The group's owners
+ *   act as owners of its channels. A channel's label is never below its group's (the floor); raising the group's
+ *   label raises its channels'.
  */
 
 export const GROUP_ROLES = ['owner', 'moderator', 'member'] as const;
@@ -31,11 +38,11 @@ export const JOIN_MODES = ['open', 'request', 'invite'] as const;
 export type JoinMode = (typeof JOIN_MODES)[number];
 
 /** What each role may do; a role includes the rights of those below it. */
-export type GroupRight = 'read' | 'post' | 'rsvp' | 'invite' | 'decide' | 'remove-members' | 'moderate' | 'events' | 'check-in' | 'cases' | 'settings' | 'roles' | 'delete';
+export type GroupRight = 'read' | 'post' | 'rsvp' | 'invite' | 'decide' | 'remove-members' | 'moderate' | 'events' | 'check-in' | 'cases' | 'channels' | 'settings' | 'roles' | 'delete';
 const RIGHTS: Record<GroupRole, readonly GroupRight[]> = {
   member: ['read', 'post', 'rsvp'],
-  moderator: ['read', 'post', 'rsvp', 'invite', 'decide', 'remove-members', 'moderate', 'events', 'check-in', 'cases'],
-  owner: ['read', 'post', 'rsvp', 'invite', 'decide', 'remove-members', 'moderate', 'events', 'check-in', 'cases', 'settings', 'roles', 'delete']
+  moderator: ['read', 'post', 'rsvp', 'invite', 'decide', 'remove-members', 'moderate', 'events', 'check-in', 'cases', 'channels'],
+  owner: ['read', 'post', 'rsvp', 'invite', 'decide', 'remove-members', 'moderate', 'events', 'check-in', 'cases', 'channels', 'settings', 'roles', 'delete']
 };
 export const roleHas = (role: GroupRole | null, right: GroupRight): boolean => !!role && RIGHTS[role].includes(right);
 
@@ -57,6 +64,14 @@ export interface GroupRow {
   created_by: string | null;
   created_at: number;
   updated_at: number;
+  /** 1.6.0 (B-4401): the group a channel belongs to; null for a group. */
+  parent_id: string | null;
+  /** 1.6.0 (B-4405): the tenant's category, or null (uncategorised). */
+  category_id: string | null;
+  /** 1.6.0 (B-4403): the place name (sealed) and the point, all optional. */
+  location: string | null;
+  lat: number | null;
+  lon: number | null;
 }
 
 export interface MemberRow {
@@ -97,6 +112,13 @@ export interface PostRow {
   updated_at: number;
 }
 
+/** A group's place as given (B-4403): a name, a point, or both. */
+export interface LocationInput {
+  name?: string | null | undefined;
+  lat?: number | null | undefined;
+  lon?: number | null | undefined;
+}
+
 /** Who is acting: the principal, the address and the request's trace id (for the audit chain). */
 export interface Ctx {
   p: Principal;
@@ -117,28 +139,52 @@ export interface Access {
   see: boolean;
   /** May read its content (posts, events, members). */
   read: boolean;
+  /** For a channel: the caller's standing in its group. */
+  parent?: Access | null;
 }
 
 const num = (v: unknown) => Number(v);
-const groupFrom = (r: Record<string, unknown>): GroupRow => ({ ...(r as unknown as GroupRow), label: isLabel(r.label) ? r.label : 'internal', created_at: num(r.created_at), updated_at: num(r.updated_at) });
+const numOrNull = (v: unknown) => (v == null ? null : Number(v));
+export const groupFrom = (r: Record<string, unknown>): GroupRow => ({
+  ...(r as unknown as GroupRow),
+  label: isLabel(r.label) ? r.label : 'internal',
+  created_at: num(r.created_at),
+  updated_at: num(r.updated_at),
+  parent_id: (r.parent_id as string | null | undefined) ?? null,
+  category_id: (r.category_id as string | null | undefined) ?? null,
+  location: (r.location as string | null | undefined) ?? null,
+  lat: numOrNull(r.lat),
+  lon: numOrNull(r.lon)
+});
 const memberFrom = (r: Record<string, unknown>): MemberRow => ({ ...(r as unknown as MemberRow), joined_at: num(r.joined_at) });
 const requestFrom = (r: Record<string, unknown>): RequestRow => ({ ...(r as unknown as RequestRow), created_at: num(r.created_at), expires_at: num(r.expires_at), decided_at: r.decided_at == null ? null : num(r.decided_at) });
 const postFrom = (r: Record<string, unknown>): PostRow => ({ ...(r as unknown as PostRow), label: isLabel(r.label) ? r.label : 'internal', created_at: num(r.created_at), updated_at: num(r.updated_at) });
 
-export const groupView = (g: GroupRow, description: string | null, a?: Pick<Access, 'role' | 'acting' | 'read'>, counts?: { members: number }) => ({
+/** What a reader sees of a group's place (B-4403): the name and point, only for readers of its content. */
+export interface PlaceView {
+  name: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+
+export const groupView = (g: GroupRow, description: string | null, a?: Pick<Access, 'role' | 'acting' | 'read'>, counts?: { members: number; channels?: number }, place?: PlaceView | null) => ({
   id: g.id,
   workspaceId: g.workspace_id,
+  parentId: g.parent_id,
   name: g.name,
   description: a && !a.read ? null : description,
   visibility: g.visibility,
   joinMode: g.join_mode,
   label: g.label,
   state: g.state,
+  categoryId: g.category_id,
+  // B-4403: a group's place is shown to the readers of its content, like its description.
+  location: a && !a.read ? null : place ?? null,
   createdBy: g.created_by,
   createdAt: g.created_at,
   updatedAt: g.updated_at,
   ...(a ? { role: a.role, actingRole: a.acting } : {}),
-  ...(counts ? { members: counts.members } : {})
+  ...(counts ? { members: counts.members, ...(counts.channels !== undefined ? { channels: counts.channels } : {}) } : {})
 });
 
 export const requestView = (r: RequestRow, extra: { groupName?: string; userName?: string | null } = {}) => ({
@@ -159,11 +205,15 @@ export const requestView = (r: RequestRow, extra: { groupName?: string; userName
 
 export class GroupService {
   private started = false;
+  /** 1.6.0 (B-4402, B-4404, B-4405): discovery, trending groups and the tenant's categories. */
+  readonly depth: GroupDepth;
 
   constructor(
     private readonly s: () => Services,
     private readonly o: { inviteDays: number; requestDays: number }
-  ) {}
+  ) {
+    this.depth = new GroupDepth(s);
+  }
 
   private get db() {
     return this.s().db;
@@ -181,6 +231,7 @@ export class GroupService {
       return a?.read ? { label: a.group.label, workspaceId: a.group.workspace_id } : null;
     });
     this.registerModeration();
+    this.depth.registerJobs();
   }
 
   private async audit(ctx: Ctx, action: string, target: Record<string, unknown>, detail?: Record<string, unknown>, label?: Label): Promise<void> {
@@ -201,6 +252,18 @@ export class GroupService {
     return g.description ? ((await this.s().keys.open(g.tenant_id, g.description, `group:${g.id}`)) ?? null) : null;
   }
 
+  /** The group's place for a reader (B-4403), or null when it has none. */
+  async place(g: GroupRow): Promise<PlaceView | null> {
+    const name = g.location ? ((await this.s().keys.open(g.tenant_id, g.location, `group-location:${g.id}`)) ?? null) : null;
+    if (!name && g.lat == null) return null;
+    return { name, lat: g.lat, lon: g.lon };
+  }
+
+  /** The full view of a group for a caller with this access (description and place for readers). */
+  async present(g: GroupRow, a: Pick<Access, 'role' | 'acting' | 'read'>, counts?: { members: number; channels?: number }) {
+    return groupView(g, a.read ? await this.openDescription(g) : null, a, counts, a.read ? await this.place(g) : null);
+  }
+
   // ---------- access ----------
 
   async row(tenantId: string, id: string): Promise<GroupRow | null> {
@@ -219,13 +282,20 @@ export class GroupService {
   }
 
   /** The caller's standing in a group, or null when they may not know it exists (outside its workspace, deleted…). */
-  async accessOrNull(p: Principal, id: string, workspaces?: string[]): Promise<Access | null> {
-    const g = await this.row(p.tenantId, id);
+  async accessOrNull(p: Principal, id: string, workspaces?: string[], row?: GroupRow): Promise<Access | null> {
+    const g = row ?? (await this.row(p.tenantId, id));
     if (!g || g.state === 'deleted') return null;
     const ws = workspaces ?? (await this.workspaceIds(p));
     // The outer boundary: nothing of a group is visible outside its workspace.
     if (!ws.includes(g.workspace_id)) return null;
-    const manager = effectivePermissions(p).has('groups:manage');
+    // B-4401: a channel's outer boundary is its group: nothing of it is visible to those who do not read the group.
+    let parent: Access | null = null;
+    if (g.parent_id) {
+      parent = await this.accessOrNull(p, g.parent_id, ws);
+      if (!parent?.read) return null;
+    }
+    // The group's owners (and groups:manage) act as owners of its channels.
+    const manager = effectivePermissions(p).has('groups:manage') || parent?.acting === 'owner';
     const m = await this.member(g.id, p.userId);
     const role = m?.role ?? null;
     const acting: GroupRole | null = manager ? 'owner' : role;
@@ -236,7 +306,7 @@ export class GroupService {
     if (!see && g.visibility === 'hidden') see = !!(await this.pendingFor(g.id, p.userId, 'invite'));
     if (!see) return null;
     const read = cleared && (manager || !!role || g.visibility === 'public');
-    return { group: g, role, manager, acting, see, read };
+    return { group: g, role, manager, acting, see, read, ...(g.parent_id ? { parent } : {}) };
   }
 
   async access(p: Principal, id: string): Promise<Access> {
@@ -284,47 +354,104 @@ export class GroupService {
     if (!p) return { ok: false, why: 'There is no active user with that id in this tenant.' };
     if (!(await this.workspaceIds(p)).includes(g.workspace_id)) return { ok: false, why: 'The user is not a member of the group’s workspace.' };
     if (!clears(p.clearance, g.label)) return { ok: false, why: `The user is not cleared for ${g.label}.` };
+    // B-4401: only members of the group join its channels.
+    if (g.parent_id && !(await this.member(g.parent_id, userId))) return { ok: false, why: 'The user is not a member of the channel’s group.' };
     return { ok: true };
   }
 
   // ---------- groups ----------
 
-  async list(p: Principal, q: { workspaceId?: string | null; mine?: boolean }) {
+  /**
+   * The groups the caller may know of. Groups only, unless `parentId` names a group (its channels) or `includeChannels`
+   * is set (the caller's own calendars over DAV). 1.6.0: `category` (an id, or `none` for uncategorised) and `near` (a
+   * distance filter, B-4403: only groups whose place the caller may read, nearest first, with `distanceKm`).
+   */
+  async list(p: Principal, q: { workspaceId?: string | null; mine?: boolean; parentId?: string | null; includeChannels?: boolean; category?: string | null; near?: Near | null }) {
     const ws = await this.workspaceIds(p);
     const scope = q.workspaceId ? ws.filter((w) => w === q.workspaceId) : ws;
     if (!scope.length) return [];
+    if (q.parentId) {
+      const pa = await this.require(p, q.parentId, 'read', { reading: true });
+      if (pa.group.parent_id) return [];
+    }
     const manager = effectivePermissions(p).has('groups:manage');
     const memberships = new Map(((await this.db('group_members').where({ tenant_id: p.tenantId, user_id: p.userId }).select('group_id', 'role')) as { group_id: string; role: GroupRole }[]).map((m) => [m.group_id, m.role]));
     const invited = new Set(((await this.db('group_requests').where({ tenant_id: p.tenantId, user_id: p.userId, kind: 'invite', state: 'pending' }).andWhere('expires_at', '>', Date.now()).select('group_id')) as { group_id: string }[]).map((r) => r.group_id));
-    const rows = ((await this.db('social_groups').where({ tenant_id: p.tenantId }).whereIn('workspace_id', scope).whereNot({ state: 'deleted' }).orderBy('name')) as Record<string, unknown>[]).map(groupFrom);
-    const counts = await this.memberCounts(rows.map((g) => g.id));
+    const qb = this.db('social_groups as g').where({ 'g.tenant_id': p.tenantId }).whereIn('g.workspace_id', scope).whereNot({ 'g.state': 'deleted' });
+    if (q.parentId) qb.andWhere({ 'g.parent_id': q.parentId });
+    else if (!q.includeChannels) qb.whereNull('g.parent_id');
+    if (q.category === 'none') qb.whereNull('g.category_id');
+    else if (q.category) qb.andWhere({ 'g.category_id': q.category });
+    if (q.near) await narrow(this.db, qb, 'g', q.near);
+    const rows = ((await qb.orderBy('g.name').select('g.*')) as Record<string, unknown>[]).map(groupFrom);
+    const ids = rows.map((g) => g.id);
+    const counts = await this.memberCounts(ids);
+    const channels = q.parentId ? new Map<string, number>() : await this.channelCounts(ids);
     const out = [];
+    const parents = new Map<string, Access | null>();
     for (const g of rows) {
-      const role = memberships.get(g.id) ?? null;
-      if (q.mine && !role) continue;
-      if (g.state === 'hidden' && !manager && role !== 'owner') continue;
-      const cleared = clears(p.clearance, g.label);
-      const see = manager || !!role || (g.visibility !== 'hidden' && cleared) || (g.visibility === 'hidden' && invited.has(g.id));
-      if (!see) continue;
-      const read = cleared && (manager || !!role || g.visibility === 'public');
-      out.push(groupView(g, read ? await this.openDescription(g) : null, { role, acting: manager ? 'owner' : role, read }, { members: counts.get(g.id) ?? 0 }));
+      let a: Pick<Access, 'role' | 'acting' | 'read'> | null;
+      if (g.parent_id) {
+        // A channel: decided against its group's standing (cached per group).
+        if (!parents.has(g.parent_id)) parents.set(g.parent_id, await this.accessOrNull(p, g.parent_id, ws));
+        const pa = parents.get(g.parent_id);
+        a = pa?.read ? await this.accessOrNull(p, g.id, ws, g) : null;
+        if (a && q.mine && !a.role) a = null;
+      } else {
+        const role = memberships.get(g.id) ?? null;
+        if (q.mine && !role) continue;
+        if (g.state === 'hidden' && !manager && role !== 'owner') continue;
+        const cleared = clears(p.clearance, g.label);
+        const see = manager || !!role || (g.visibility !== 'hidden' && cleared) || (g.visibility === 'hidden' && invited.has(g.id));
+        a = see ? { role, acting: manager ? 'owner' : role, read: cleared && (manager || !!role || g.visibility === 'public') } : null;
+      }
+      if (!a) continue;
+      let distance: number | null = null;
+      if (q.near) {
+        // The place is the readers' (B-4403): a group whose place the caller may not read never matches a distance.
+        if (!a.read || g.lat == null || g.lon == null) continue;
+        distance = distanceKm(q.near, { lat: g.lat, lon: g.lon });
+        if (distance > q.near.km) continue;
+      }
+      const base = await this.present(g, a, { members: counts.get(g.id) ?? 0, ...(g.parent_id ? {} : { channels: channels.get(g.id) ?? 0 }) });
+      // A channel names its group (and the label floor it keeps).
+      const pg = g.parent_id ? parents.get(g.parent_id)?.group : null;
+      const view = pg ? { ...base, parentName: pg.name, parentLabel: pg.label } : base;
+      out.push(distance == null ? view : { ...view, distanceKm: Math.round(distance * 1000) / 1000 });
     }
+    if (q.near) out.sort((x, y) => ((x as { distanceKm?: number }).distanceKm ?? 0) - ((y as { distanceKm?: number }).distanceKm ?? 0) || x.name.localeCompare(y.name));
     return out;
   }
 
-  private async memberCounts(ids: string[]): Promise<Map<string, number>> {
-    if (!ids.length) return new Map();
-    const rows = (await this.db('group_members').whereIn('group_id', ids).groupBy('group_id').select('group_id').count({ n: '*' })) as { group_id: string; n: number | string }[];
-    return new Map(rows.map((r) => [r.group_id, Number(r.n)]));
+  /** How many live channels each group holds. */
+  private async channelCounts(ids: string[]): Promise<Map<string, number>> {
+    const m = new Map<string, number>();
+    for (let i = 0; i < ids.length; i += 500) {
+      const rows = (await this.db('social_groups').whereIn('parent_id', ids.slice(i, i + 500)).whereNot({ state: 'deleted' }).groupBy('parent_id').select('parent_id').count({ n: '*' })) as { parent_id: string; n: number | string }[];
+      for (const r of rows) m.set(r.parent_id, Number(r.n));
+    }
+    return m;
+  }
+
+  async memberCounts(ids: string[]): Promise<Map<string, number>> {
+    const m = new Map<string, number>();
+    for (let i = 0; i < ids.length; i += 500) {
+      const rows = (await this.db('group_members').whereIn('group_id', ids.slice(i, i + 500)).groupBy('group_id').select('group_id').count({ n: '*' })) as { group_id: string; n: number | string }[];
+      for (const r of rows) m.set(r.group_id, Number(r.n));
+    }
+    return m;
   }
 
   async view(p: Principal, id: string) {
     const a = await this.access(p, id);
     const counts = await this.memberCounts([id]);
-    return groupView(a.group, a.read ? await this.openDescription(a.group) : null, a, { members: counts.get(id) ?? 0 });
+    // A group shows how many of its channels the caller may know of; a channel names its group.
+    const channels = a.group.parent_id ? undefined : a.read ? (await this.list(p, { parentId: id })).length : 0;
+    const view = await this.present(a.group, a, { members: counts.get(id) ?? 0, ...(channels !== undefined ? { channels } : {}) });
+    return a.group.parent_id && a.parent ? { ...view, parentName: a.parent.group.name, parentLabel: a.parent.group.label } : view;
   }
 
-  async create(ctx: Ctx, input: { workspaceId?: string | null | undefined; name: string; description?: string | null | undefined; visibility?: Visibility | undefined; joinMode?: JoinMode | undefined; label?: Label | undefined }) {
+  async create(ctx: Ctx, input: { workspaceId?: string | null | undefined; name: string; description?: string | null | undefined; visibility?: Visibility | undefined; joinMode?: JoinMode | undefined; label?: Label | undefined; categoryId?: string | null | undefined; location?: LocationInput | null | undefined }) {
     const s = this.s();
     const p = ctx.p;
     const wsId = input.workspaceId ?? p.workspaceId ?? null;
@@ -339,28 +466,81 @@ export class GroupService {
     const label = input.label ?? (labelRank(w.label_ceiling) < labelRank('internal') ? w.label_ceiling : 'internal');
     if (labelRank(label) > labelRank(w.label_ceiling)) throw new HttpProblem(422, 'Label above the workspace ceiling', `The workspace allows content up to ${w.label_ceiling}.`);
     if (!clears(p.clearance, label)) throw forbidden(`You are not cleared for ${label}.`, { step: 'clearance' });
+    if (input.categoryId) await this.depth.category(p.tenantId, input.categoryId);
     const id = ulid();
     const t = Date.now();
-    const row: GroupRow = { id, tenant_id: p.tenantId, workspace_id: w.id, name: input.name, description: input.description ? await s.keys.seal(p.tenantId, input.description, `group:${id}`) : null, visibility: input.visibility!, join_mode: input.joinMode!, label, state: 'active', created_by: p.userId, created_at: t, updated_at: t };
+    const row: GroupRow = { id, tenant_id: p.tenantId, workspace_id: w.id, name: input.name, description: input.description ? await s.keys.seal(p.tenantId, input.description, `group:${id}`) : null, visibility: input.visibility!, join_mode: input.joinMode!, label, state: 'active', created_by: p.userId, created_at: t, updated_at: t, parent_id: null, category_id: input.categoryId ?? null, ...(await this.locationColumns(p.tenantId, id, input.location ?? null)) };
     await s.db.transaction(async (trx) => {
       await trx('social_groups').insert(row);
       await trx('group_members').insert({ group_id: id, tenant_id: p.tenantId, user_id: p.userId, role: 'owner', added_by: p.userId, joined_at: t });
     });
-    await this.audit(ctx, 'group.created', { group: id, workspace: w.id }, { name: row.name, visibility: row.visibility, joinMode: row.join_mode }, label);
+    await this.audit(ctx, 'group.created', { group: id, workspace: w.id }, { name: row.name, visibility: row.visibility, joinMode: row.join_mode, ...(row.category_id ? { category: row.category_id } : {}), ...(row.lat != null ? { located: true } : {}) }, label);
     this.event(p.tenantId, 'group.created', label, { group: id, workspace: w.id, actor: p.userId });
     this.event(p.tenantId, 'group.member.added', label, { group: id, workspace: w.id, actor: p.userId, user: p.userId, role: 'owner' });
-    return groupView(row, input.description ?? null, { role: 'owner', acting: 'owner', read: true }, { members: 1 });
+    return this.present(row, { role: 'owner', acting: 'owner', read: true }, { members: 1, channels: 0 });
   }
 
-  async update(ctx: Ctx, id: string, patch: { name?: string | undefined; description?: string | null | undefined; visibility?: Visibility | undefined; joinMode?: JoinMode | undefined; label?: Label | undefined }) {
+  /** The sealed place name and the point of a group (B-4403); a point needs both coordinates. */
+  private async locationColumns(tenantId: string, id: string, loc: LocationInput | null): Promise<Pick<GroupRow, 'location' | 'lat' | 'lon'>> {
+    if (!loc) return { location: null, lat: null, lon: null };
+    const point = loc.lat != null || loc.lon != null ? { lat: loc.lat ?? null, lon: loc.lon ?? null } : null;
+    if (point && !validPoint(point)) throw new HttpProblem(422, 'Not a place', 'Give both a latitude (−90 to 90) and a longitude (−180 to 180), or neither.', { extensions: { step: 'location' } });
+    if (!point && !loc.name) return { location: null, lat: null, lon: null };
+    return { location: loc.name ? await this.s().keys.seal(tenantId, loc.name, `group-location:${id}`) : null, lat: point?.lat ?? null, lon: point?.lon ?? null };
+  }
+
+  /**
+   * A channel inside a group (B-4401): its own members (the creator becomes its owner), roles and posts. Its label is
+   * at least the group's (the floor) and at most the workspace ceiling; a public channel is read by everyone who reads
+   * the group, a private one by its members, a hidden one is known only to them. Channels do not nest.
+   */
+  async createChannel(ctx: Ctx, parentId: string, input: { name: string; description?: string | null | undefined; visibility?: Visibility | undefined; joinMode?: JoinMode | undefined; label?: Label | undefined }) {
+    const s = this.s();
+    const p = ctx.p;
+    const pa = await this.require(p, parentId, 'channels');
+    const parent = pa.group;
+    if (parent.parent_id) throw new HttpProblem(422, 'Channels do not nest', 'A channel belongs to a group, not to another channel.', { extensions: { step: 'parent' } });
+    if (parent.state !== 'active') throw conflict('The group is not active.');
+    const label = input.label ?? parent.label;
+    if (labelRank(label) < labelRank(parent.label)) throw new HttpProblem(422, 'Label below the group’s', `A channel of ${parent.name} is labelled at least ${parent.label}.`, { extensions: { step: 'label-floor' } });
+    const w = await s.tenants.workspace(parent.tenant_id, parent.workspace_id);
+    if (w && labelRank(label) > labelRank(w.label_ceiling)) throw new HttpProblem(422, 'Label above the workspace ceiling', `The workspace allows content up to ${w.label_ceiling}.`);
+    if (!clears(p.clearance, label)) throw forbidden(`You are not cleared for ${label}.`, { step: 'clearance' });
+    const id = ulid();
+    const t = Date.now();
+    const row: GroupRow = { id, tenant_id: parent.tenant_id, workspace_id: parent.workspace_id, name: input.name, description: input.description ? await s.keys.seal(parent.tenant_id, input.description, `group:${id}`) : null, visibility: input.visibility ?? 'public', join_mode: input.joinMode ?? 'open', label, state: 'active', created_by: p.userId, created_at: t, updated_at: t, parent_id: parent.id, category_id: null, location: null, lat: null, lon: null };
+    await s.db.transaction(async (trx) => {
+      await trx('social_groups').insert(row);
+      await trx('group_members').insert({ group_id: id, tenant_id: parent.tenant_id, user_id: p.userId, role: 'owner', added_by: p.userId, joined_at: t });
+    });
+    await this.audit(ctx, 'group.channel.created', { group: parent.id, channel: id, workspace: parent.workspace_id }, { name: row.name, visibility: row.visibility, joinMode: row.join_mode }, label);
+    this.event(parent.tenant_id, 'group.created', label, { group: id, workspace: parent.workspace_id, actor: p.userId });
+    this.event(parent.tenant_id, 'group.member.added', label, { group: id, workspace: parent.workspace_id, actor: p.userId, user: p.userId, role: 'owner' });
+    this.room(parent, 'group.channel.created', { channelId: id });
+    return { ...(await this.present(row, { role: 'owner', acting: 'owner', read: true }, { members: 1 })), parentName: parent.name, parentLabel: parent.label };
+  }
+
+  /** The live channels of a group (ids), for cascades. */
+  private async channelIds(groupId: string): Promise<string[]> {
+    return ((await this.db('social_groups').where({ parent_id: groupId }).whereNot({ state: 'deleted' }).select('id')) as { id: string }[]).map((r) => r.id);
+  }
+
+  async update(ctx: Ctx, id: string, patch: { name?: string | undefined; description?: string | null | undefined; visibility?: Visibility | undefined; joinMode?: JoinMode | undefined; label?: Label | undefined; categoryId?: string | null | undefined; location?: LocationInput | null | undefined }) {
     const s = this.s();
     const a = await this.require(ctx.p, id, 'settings');
     const g = a.group;
+    if (g.parent_id && (patch.categoryId !== undefined || patch.location !== undefined)) throw new HttpProblem(422, 'Not for a channel', 'Categories and places belong to the group, not to its channels.', { extensions: { step: 'parent' } });
+    // B-4401: a channel's label is never below its group's.
+    if (g.parent_id && patch.label !== undefined && a.parent && labelRank(patch.label) < labelRank(a.parent.group.label)) throw new HttpProblem(422, 'Label below the group’s', `A channel of ${a.parent.group.name} is labelled at least ${a.parent.group.label}.`, { extensions: { step: 'label-floor' } });
+    if (patch.categoryId) await this.depth.category(g.tenant_id, patch.categoryId);
     const upd: Record<string, unknown> = { updated_at: Date.now() };
     if (patch.name !== undefined) upd.name = patch.name;
     if (patch.description !== undefined) upd.description = patch.description ? await s.keys.seal(g.tenant_id, patch.description, `group:${g.id}`) : null;
     if (patch.visibility !== undefined) upd.visibility = patch.visibility;
     if (patch.joinMode !== undefined) upd.join_mode = patch.joinMode;
+    if (patch.categoryId !== undefined) upd.category_id = patch.categoryId;
+    if (patch.location !== undefined) Object.assign(upd, await this.locationColumns(g.tenant_id, g.id, patch.location));
+    let raisedChannels: string[] = [];
     if (patch.label !== undefined) {
       const w = await s.tenants.workspace(g.tenant_id, g.workspace_id);
       if (w && labelRank(patch.label) > labelRank(w.label_ceiling)) throw new HttpProblem(422, 'Label above the workspace ceiling', `The workspace allows content up to ${w.label_ceiling}.`);
@@ -369,31 +549,49 @@ export class GroupService {
       if (labelRank(patch.label) > labelRank(g.label)) {
         await s.db('group_posts').where({ group_id: g.id }).update({ label: patch.label });
         await s.db('group_events').where({ group_id: g.id }).update({ label: patch.label });
+        // B-4401: the group's label is its channels' floor: those below it rise with it (with their posts and events).
+        if (!g.parent_id) {
+          const below = (await s.db('social_groups').where({ parent_id: g.id }).whereNot({ state: 'deleted' }).select('id', 'label')) as { id: string; label: string }[];
+          raisedChannels = below.filter((c) => labelRank(isLabel(c.label) ? c.label : 'internal') < labelRank(patch.label!)).map((c) => c.id);
+          if (raisedChannels.length) {
+            await s.db('social_groups').whereIn('id', raisedChannels).update({ label: patch.label, updated_at: Date.now() });
+            await s.db('group_posts').whereIn('group_id', raisedChannels).update({ label: patch.label });
+            await s.db('group_events').whereIn('group_id', raisedChannels).update({ label: patch.label });
+          }
+        }
       }
       upd.label = patch.label;
     }
     await s.db('social_groups').where({ id: g.id }).update(upd);
     const after = (await this.row(g.tenant_id, g.id))!;
     const changed = Object.keys(patch).filter((k) => (patch as Record<string, unknown>)[k] !== undefined);
-    await this.audit(ctx, 'group.updated', { group: g.id, workspace: g.workspace_id }, { changed, before: { name: g.name, visibility: g.visibility, joinMode: g.join_mode, label: g.label }, after: { name: after.name, visibility: after.visibility, joinMode: after.join_mode, label: after.label } }, after.label);
+    await this.audit(ctx, 'group.updated', { group: g.id, workspace: g.workspace_id }, { changed, before: { name: g.name, visibility: g.visibility, joinMode: g.join_mode, label: g.label, category: g.category_id }, after: { name: after.name, visibility: after.visibility, joinMode: after.join_mode, label: after.label, category: after.category_id }, ...(raisedChannels.length ? { channelsRaised: raisedChannels } : {}) }, after.label);
     this.event(g.tenant_id, 'group.updated', after.label, { group: g.id, workspace: g.workspace_id, actor: ctx.p.userId });
     // Who may be in the room can change with the visibility or label: everyone there is checked again.
-    if (patch.visibility !== undefined || patch.label !== undefined) s.rooms.accessChanged({ tenantId: g.tenant_id, kind: 'group', id: g.id, ...(patch.label ? { label: patch.label } : {}) });
+    if (patch.visibility !== undefined || patch.label !== undefined) {
+      s.rooms.accessChanged({ tenantId: g.tenant_id, kind: 'group', id: g.id, ...(patch.label ? { label: patch.label } : {}) });
+      // Who reads a group decides who reads its channels: their rooms are checked again too.
+      for (const c of g.parent_id ? [] : await this.channelIds(g.id)) s.rooms.accessChanged({ tenantId: g.tenant_id, kind: 'group', id: c, ...(raisedChannels.includes(c) && patch.label ? { label: patch.label } : {}) });
+    }
     this.room(after, 'group.updated', { name: after.name, visibility: after.visibility, joinMode: after.join_mode, label: after.label });
-    return groupView(after, await this.openDescription(after), a);
+    return this.present(after, a);
   }
 
   async remove(ctx: Ctx, id: string) {
     const s = this.s();
     const a = await this.require(ctx.p, id, 'delete');
     const g = a.group;
-    await s.db('social_groups').where({ id: g.id }).update({ state: 'deleted', updated_at: Date.now() });
-    await s.db('group_requests').where({ group_id: g.id, state: 'pending' }).update({ state: 'cancelled', pending_key: null, decided_by: ctx.p.userId, decided_at: Date.now() });
-    const cancelled = await s.calendar.cancelRemindersForGroup(g.tenant_id, g.id);
-    await this.audit(ctx, 'group.deleted', { group: g.id, workspace: g.workspace_id }, { name: g.name, remindersCancelled: cancelled }, g.label);
-    this.event(g.tenant_id, 'group.deleted', g.label, { group: g.id, workspace: g.workspace_id, actor: ctx.p.userId });
-    s.rooms.accessChanged({ tenantId: g.tenant_id, kind: 'group', id: g.id });
-    return { id: g.id, state: 'deleted' as const };
+    // B-4401: a group's channels go with it.
+    const channels = g.parent_id ? [] : await this.channelIds(g.id);
+    const all = [g.id, ...channels];
+    await s.db('social_groups').whereIn('id', all).update({ state: 'deleted', updated_at: Date.now() });
+    await s.db('group_requests').whereIn('group_id', all).andWhere({ state: 'pending' }).update({ state: 'cancelled', pending_key: null, decided_by: ctx.p.userId, decided_at: Date.now() });
+    let cancelled = 0;
+    for (const x of all) cancelled += await s.calendar.cancelRemindersForGroup(g.tenant_id, x);
+    await this.audit(ctx, g.parent_id ? 'group.channel.deleted' : 'group.deleted', { group: g.parent_id ?? g.id, ...(g.parent_id ? { channel: g.id } : {}), workspace: g.workspace_id }, { name: g.name, remindersCancelled: cancelled, ...(channels.length ? { channels: channels.length } : {}) }, g.label);
+    for (const x of all) this.event(g.tenant_id, 'group.deleted', g.label, { group: x, workspace: g.workspace_id, actor: ctx.p.userId });
+    for (const x of all) s.rooms.accessChanged({ tenantId: g.tenant_id, kind: 'group', id: x });
+    return { id: g.id, state: 'deleted' as const, ...(channels.length ? { channels: channels.length } : {}) };
   }
 
   // ---------- administration (1.6.0, B-4206: Social and messaging) ----------
@@ -440,8 +638,12 @@ export class GroupService {
     if (g.state !== 'active') throw conflict(`The group is ${g.state}; moderation decides on it.`);
     const n = await s.db('social_groups').where({ id: g.id, state: 'active' }).update({ state: 'archived', updated_at: Date.now() });
     if (!n) throw conflict('The group changed meanwhile.');
-    const cancelledRequests = await s.db('group_requests').where({ group_id: g.id, state: 'pending' }).update({ state: 'cancelled', pending_key: null, decided_by: ctx.p.userId, decided_at: Date.now() });
-    const cancelledReminders = await s.calendar.cancelRemindersForGroup(g.tenant_id, g.id);
+    // B-4401: its channels are archived with it.
+    const channels = g.parent_id ? [] : await this.channelIds(g.id);
+    if (channels.length) await s.db('social_groups').whereIn('id', channels).andWhere({ state: 'active' }).update({ state: 'archived', updated_at: Date.now() });
+    const cancelledRequests = await s.db('group_requests').whereIn('group_id', [g.id, ...channels]).andWhere({ state: 'pending' }).update({ state: 'cancelled', pending_key: null, decided_by: ctx.p.userId, decided_at: Date.now() });
+    let cancelledReminders = 0;
+    for (const x of [g.id, ...channels]) cancelledReminders += await s.calendar.cancelRemindersForGroup(g.tenant_id, x);
     const members = ((await this.db('group_members').where({ group_id: g.id }).select('user_id')) as { user_id: string }[]).map((r) => r.user_id);
     await this.audit(ctx, 'group.archived', { group: g.id, workspace: g.workspace_id }, { name: g.name, members: members.length, requestsCancelled: cancelledRequests, remindersCancelled: cancelledReminders }, g.label);
     this.event(g.tenant_id, 'group.updated', g.label, { group: g.id, workspace: g.workspace_id, actor: ctx.p.userId });
@@ -475,6 +677,7 @@ export class GroupService {
       .where({ 'wm.workspace_id': g.workspace_id, 'u.tenant_id': g.tenant_id, 'u.state': 'active' })
       .whereNotIn('u.id', this.db('group_members').where({ group_id: g.id }).select('user_id'))
       .whereNotIn('u.id', this.db('group_requests').where({ group_id: g.id, state: 'pending' }).andWhere('expires_at', '>', Date.now()).select('user_id'))
+      .modify((qb) => { if (g.parent_id) qb.whereIn('u.id', this.db('group_members').where({ group_id: g.parent_id }).select('user_id')); })
       .modify((qb) => { if (like) qb.andWhere((w) => { void w.whereRaw('lower(u.username) like ?', [like]).orWhereRaw('lower(u.display_name) like ?', [like]); }); })
       .distinct('u.id', 'u.username', 'u.display_name', 'u.clearance').orderBy('u.display_name').limit(200)) as { id: string; username: string; display_name: string | null; clearance: string }[];
     return rows.filter((u) => isLabel(u.clearance) && clears(u.clearance, g.label)).slice(0, 50).map((u) => ({ userId: u.id, username: u.username, displayName: u.display_name ?? u.username }));
@@ -513,13 +716,20 @@ export class GroupService {
     if (!m) throw notFound('Member');
     if (!self && m.role !== 'member' && !roleHas(a.acting, 'roles')) throw forbidden('Only an owner removes owners and moderators.', { step: 'group-role' });
     if (m.role === 'owner' && (await this.owners(id)) <= 1) throw conflict('The last owner cannot leave; make someone else owner or delete the group.');
-    await s.db('group_members').where({ group_id: id, user_id: userId }).delete();
-    await this.audit(ctx, self ? 'group.member.left' : 'group.member.removed', { group: id, user: userId }, { role: m.role }, a.group.label);
+    // B-4401: leaving a group leaves its channels.
+    const channels = a.group.parent_id ? [] : ((await s.db('group_members as m').join('social_groups as c', 'c.id', 'm.group_id').where({ 'c.parent_id': id, 'm.user_id': userId }).select('m.group_id')) as { group_id: string }[]).map((r) => r.group_id);
+    await s.db.transaction(async (trx) => {
+      await trx('group_members').where({ group_id: id, user_id: userId }).delete();
+      if (channels.length) await trx('group_members').whereIn('group_id', channels).andWhere({ user_id: userId }).delete();
+    });
+    await this.audit(ctx, self ? 'group.member.left' : 'group.member.removed', { group: id, user: userId }, { role: m.role, ...(channels.length ? { channels: channels.length } : {}) }, a.group.label);
     this.event(a.group.tenant_id, 'group.member.removed', a.group.label, { group: id, workspace: a.group.workspace_id, actor: ctx.p.userId, user: userId });
+    for (const c of channels) this.event(a.group.tenant_id, 'group.member.removed', a.group.label, { group: c, workspace: a.group.workspace_id, actor: ctx.p.userId, user: userId });
     // B-2101: their sockets leave the group's room at once (and stay out unless the group is public to them).
     s.rooms.accessChanged({ tenantId: a.group.tenant_id, kind: 'group', id, userIds: [userId] });
+    for (const c of await this.channelIds(id)) s.rooms.accessChanged({ tenantId: a.group.tenant_id, kind: 'group', id: c, userIds: [userId] });
     this.room(a.group, 'group.member.removed', { userId });
-    return { userId, removed: true };
+    return { userId, removed: true, ...(channels.length ? { channels: channels.length } : {}) };
   }
 
   // ---------- joining, requests, invitations ----------
@@ -533,6 +743,8 @@ export class GroupService {
     if (a.role) throw conflict('You are already a member of this group.');
     if (!clears(p.clearance, g.label)) throw forbidden(`The group is labelled ${g.label}, above your clearance of ${p.clearance}.`, { step: 'clearance' });
     if (g.state !== 'active') throw conflict('The group is not accepting members.');
+    // B-4401: only the group's members join its channels (a manager acting as owner is not a member).
+    if (g.parent_id && !a.parent?.role) throw forbidden('Join the group first; its channels are for its members.', { step: 'parent' });
     const invite = await this.pendingFor(g.id, p.userId, 'invite');
     if (invite) {
       const out = await this.decide(ctx, invite.id, 'accept');

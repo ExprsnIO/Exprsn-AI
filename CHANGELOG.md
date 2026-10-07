@@ -110,6 +110,30 @@
   `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
   refused signals instead of a backlog, as the server reports them.
 
+### Groups depth (Sprint 36a, B-4401 to B-4405)
+
+- Channels inside a group (B-4401): groups one level down with their own members, roles, posts and events, created by
+  the group's owners and moderators (`POST /api/groups/:id/channels`). The group is a channel's outer boundary: only
+  its readers see its channels, only its members join them, leaving the group leaves them, and archiving or deleting
+  the group takes them along. The group's owners act as owners of its channels. A channel's label is never below its
+  group's; raising the group's label raises the channels below it. The feed's group scope and fan-out follow the same
+  rule. Migration `038_groups2`.
+- Discovery (B-4402): `GET /api/groups/discover` lists the groups the caller may join, ranked by shared members and
+  activity of the last 30 days, and never one labelled above the caller's clearance.
+- Places (B-4403): an optional place on groups (a sealed name and a point) and a point on events, with distance
+  filters (`near`, `km`) on the group list, discovery and the calendar. PostGIS narrows on PostgreSQL when the
+  extension is there (the migration creates it and a GiST index when the role may), a bounding box elsewhere; one
+  great-circle distance decides, so the three databases return the same groups.
+- Trending groups (B-4404): the `groups.trending` job counts joins and posts per group like trending hashtags;
+  `GET /api/groups/trending` and Recount now on Social and messaging.
+- Group categories (B-4405, decision Q6): a tenant-managed list on Social and messaging
+  (`/api/admin/social/group-categories`), a category per group, and category filters on Groups and Discover; removing
+  a category leaves its groups uncategorised, never hidden.
+- Screens: Groups gains Discover (ranked), Trending, category and distance filters, a group's category and place, a
+  Channels tab and channel pages, and points on events; Social and messaging gains Group categories and Trending
+  groups. Boards first in `design/prototype/`, then live; `e2e/tests/groups-depth.spec.ts` checks them with axe-core,
+  the in-page checker and reflow.
+
 ### Tenant provisioning templates (Sprint 35d, B-4501)
 
 - Tenants are created from a template (decision Q11): **Create from template** on the Tenants screen (system

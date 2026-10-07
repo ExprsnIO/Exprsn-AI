@@ -92,7 +92,33 @@ export function socialAdminRoutes(s: Services): Router {
   // ---------- groups and events ----------
 
   r.get('/social/groups', manage, async (req, res) => {
-    res.json(await a.groups(principalOf(req)));
+    const p = principalOf(req);
+    // 1.6.0 (B-4404, B-4405): the tenant's group categories with their counts, and the trending groups.
+    const [view, categories, trending] = await Promise.all([a.groups(p), s.groups.depth.categories(p.tenantId, p), s.groups.depth.trending(p, { limit: 10 })]);
+    res.json({ ...view, categories, trending });
+  });
+
+  // ---------- group categories (1.6.0, B-4405, decision Q6) ----------
+
+  const categoryName = z.string().trim().min(1).max(80);
+  const categoryDescription = z.string().trim().max(300).nullable().optional();
+
+  r.post('/social/group-categories', manage, async (req, res) => {
+    const body = parseBody(z.object({ name: categoryName, description: categoryDescription, position: z.number().int().min(0).max(10_000).optional() }).strict(), req.body);
+    res.status(201).json(await s.groups.depth.createCategory(ctx(req), body));
+  });
+
+  r.patch('/social/group-categories/:id', manage, async (req, res) => {
+    const body = parseBody(z.object({ name: categoryName.optional(), description: categoryDescription, position: z.number().int().min(0).max(10_000).optional() }).strict(), req.body);
+    res.json(await s.groups.depth.updateCategory(ctx(req), idOf(req), body));
+  });
+
+  r.delete('/social/group-categories/:id', manage, async (req, res) => {
+    res.json(await s.groups.depth.removeCategory(ctx(req), idOf(req)));
+  });
+
+  r.post('/social/groups/trending/run', manage, async (req, res) => {
+    res.status(202).json(await s.groups.depth.runTrending(ctx(req)));
   });
 
   r.get('/social/groups/:id/members', manage, async (req, res) => {

@@ -238,6 +238,9 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   relations read, the tenant's digest and summary settings, trending exclusions, legal-hold conversation exports under
   dual control as the job `messaging.conversation.export`, realtime counts from `RoomStats` in `realtime/rooms.ts`)
   with `routes/admin/social.ts`; `tenancy/templates.ts` (B-4501: tenant provisioning templates).
+- 1.6.0 Sprint 36a: `groups/depth.ts` (`s.groups.depth`: tenant group categories, discovery, the `groups.trending`
+  job, B-4402, B-4404, B-4405) and `groups/geo.ts` (distance filters: PostGIS `ST_DWithin` or a bounding box, one
+  haversine deciding, B-4403); channels are groups with a `parent_id` (B-4401) in `groups/service.ts`.
 
 - 1.6.0 Sprint 35b: `ops/instances.ts` (`s.instances`: every server process's heartbeat row in `platform_instances`, the
   `readiness` checks `/readyz` shares, drain), `ops/overview.ts` (`s.overview`: computed alerts, acknowledgements,

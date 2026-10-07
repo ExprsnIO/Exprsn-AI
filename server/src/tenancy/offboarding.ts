@@ -10,7 +10,7 @@ const KNOWLEDGE_TABLES = ['knowledge_bindings', 'knowledge_doc_labels', 'knowled
 // 1.6.0 (B-4601): the tenant's shared objects (`file_blobs`) go with them.
 const FILE_TABLES = ['file_shares', 'file_tags', 'file_previews', 'file_versions', 'file_blobs', 'files', 'file_folders', 'file_quotas'] as const;
 // Sprint 27c: groups and events (posts, titles and descriptions are sealed with the tenant key).
-const GROUP_TABLES = ['calendar_feeds', 'group_event_reminders', 'group_event_rsvps', 'group_events', 'group_posts', 'group_requests', 'group_members', 'social_groups'] as const;
+const GROUP_TABLES = ['calendar_feeds', 'group_event_reminders', 'group_event_rsvps', 'group_events', 'group_posts', 'group_requests', 'group_members', 'group_trending', 'social_groups', 'group_categories'] as const;
 // Sprint 28a (B-23): customer-service channels and their sealed transcripts.
 const CHANNEL_TABLES = ['channel_bounces', 'channel_outbox', 'channel_threads', 'channel_imap_cursors', 'channel_messages', 'channel_sessions', 'channels'] as const;
 // Sprint 28b: messaging (bodies and titles sealed) and social relations (blocks, mutes, follows, lists, contact rules).

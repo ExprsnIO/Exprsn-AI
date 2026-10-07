@@ -10,6 +10,7 @@ import { loadPrincipal } from '../http/middleware.js';
 import { conflict, HttpProblem, notFound } from '../http/problem.js';
 import type { Services } from '../services.js';
 import { renderCalendar, type IcsEvent } from './ical.js';
+import { distanceKm, narrow, validPoint, type Near } from './geo.js';
 import { roleHas, type Access, type Ctx, type GroupRow } from './service.js';
 import { describeTime, isTimeZone, localIso, parseEventTime, TimeInputError } from './time.js';
 
@@ -58,6 +59,9 @@ export interface EventRow {
   created_by: string;
   created_at: number;
   updated_at: number;
+  /** 1.6.0 (B-4403): the event's point for distance filters (WGS 84 degrees), optional. */
+  lat: number | null;
+  lon: number | null;
 }
 
 interface RsvpRow {
@@ -110,6 +114,17 @@ export interface EventInput {
   capacity?: number | null | undefined;
   maxGuests?: number | undefined;
   reminders?: number[] | undefined;
+  /** 1.6.0 (B-4403): the point of the place (both or neither; null clears it). */
+  lat?: number | null | undefined;
+  lon?: number | null | undefined;
+}
+
+/** Both coordinates or neither (B-4403); 422 otherwise. */
+function pointOf(lat: number | null | undefined, lon: number | null | undefined): { lat: number | null; lon: number | null } {
+  if (lat == null && lon == null) return { lat: null, lon: null };
+  const p = { lat: lat ?? null, lon: lon ?? null };
+  if (!validPoint(p)) throw new HttpProblem(422, 'Not a place', 'Give both a latitude (−90 to 90) and a longitude (−180 to 180), or neither.', { extensions: { step: 'location' } });
+  return p;
 }
 
 const num = (v: unknown) => Number(v);
@@ -124,7 +139,9 @@ const eventFrom = (r: Record<string, unknown>): EventRow => ({
   label: isLabel(r.label) ? r.label : 'internal',
   sequence: num(r.sequence ?? 0),
   created_at: num(r.created_at),
-  updated_at: num(r.updated_at)
+  updated_at: num(r.updated_at),
+  lat: r.lat == null ? null : num(r.lat),
+  lon: r.lon == null ? null : num(r.lon)
 });
 const rsvpFrom = (r: Record<string, unknown>): RsvpRow => ({ ...(r as unknown as RsvpRow), guests: num(r.guests ?? 0), checked_in_at: r.checked_in_at == null ? null : num(r.checked_in_at), created_at: num(r.created_at), updated_at: num(r.updated_at) });
 const reminderFrom = (r: Record<string, unknown>): ReminderRow => ({ ...(r as unknown as ReminderRow), minutes_before: num(r.minutes_before), fire_at: num(r.fire_at), recipients: r.recipients == null ? null : num(r.recipients), sent_at: r.sent_at == null ? null : num(r.sent_at), created_at: num(r.created_at) });
@@ -190,6 +207,8 @@ export class CalendarService {
       title: (await this.open(e.tenant_id, e.title, `event-title:${e.id}`)) ?? '',
       description: await this.open(e.tenant_id, e.description, `event-description:${e.id}`),
       location: await this.open(e.tenant_id, e.location, `event-location:${e.id}`),
+      lat: e.lat,
+      lon: e.lon,
       startsAt: new Date(e.starts_at).toISOString(),
       endsAt: new Date(e.ends_at).toISOString(),
       timeZone: e.time_zone,
@@ -271,7 +290,8 @@ export class CalendarService {
       id, tenant_id: g.tenant_id, group_id: g.id, workspace_id: g.workspace_id,
       title: (await seal(input.title, 'title'))!, description: await seal(input.description, 'description'), location: await seal(input.location, 'location'),
       starts_at: start, ends_at: end, time_zone: input.timeZone, all_day: !!input.allDay, capacity: capacity ?? null, max_guests: input.maxGuests ?? 0,
-      reminders: JSON.stringify(reminders), label: g.label, state: 'scheduled', sequence: 0, cancel_reason: null, created_by: ctx.p.userId, created_at: t, updated_at: t
+      reminders: JSON.stringify(reminders), label: g.label, state: 'scheduled', sequence: 0, cancel_reason: null, created_by: ctx.p.userId, created_at: t, updated_at: t,
+      ...pointOf(input.lat, input.lon)
     };
     await s.db('group_events').insert(row);
     const e = eventFrom(row);
@@ -299,16 +319,25 @@ export class CalendarService {
     return Promise.all(rows.map((e) => this.eventView(e, a)));
   }
 
-  /** The caller's own calendar: events of groups they belong to, and events they said they would attend. */
-  async mine(p: Principal, q: { from: number; to: number }) {
-    return Promise.all((await this.visibleFor(p, q)).map(({ e, a }) => this.eventView(e, a)));
+  /**
+   * The caller's own calendar: events of groups they belong to, and events they said they would attend. 1.6.0
+   * (B-4403): `near` keeps the events whose point is within the distance, nearest first, with `distanceKm`.
+   */
+  async mine(p: Principal, q: { from: number; to: number; near?: Near | null }) {
+    const rows = await this.visibleFor(p, q);
+    if (!q.near) return Promise.all(rows.map(({ e, a }) => this.eventView(e, a)));
+    const near = q.near;
+    const hits = rows.map((x) => ({ ...x, d: distanceKm(near, { lat: x.e.lat!, lon: x.e.lon! }) })).filter((x) => x.d <= near.km).sort((x, y) => x.d - y.d || x.e.starts_at - y.e.starts_at);
+    return Promise.all(hits.map(async ({ e, a, d }) => ({ ...(await this.eventView(e, a)), distanceKm: Math.round(d * 1000) / 1000 })));
   }
 
-  private async visibleFor(p: Principal, q: { from: number; to: number; includeCancelled?: boolean }): Promise<{ e: EventRow; a: Access }[]> {
+  private async visibleFor(p: Principal, q: { from: number; to: number; includeCancelled?: boolean; near?: Near | null }): Promise<{ e: EventRow; a: Access }[]> {
     const s = this.s();
     const groupIds = ((await this.db('group_members').where({ tenant_id: p.tenantId, user_id: p.userId }).select('group_id')) as { group_id: string }[]).map((r) => r.group_id);
     const rsvped = this.db('group_event_rsvps').where({ tenant_id: p.tenantId, user_id: p.userId }).whereIn('response', ['going', 'maybe']).select('event_id');
-    const rows = ((await this.db('group_events')
+    const base = this.db('group_events');
+    if (q.near) await narrow(this.db, base, 'group_events', q.near);
+    const rows = ((await base
       .where({ tenant_id: p.tenantId })
       .andWhere((qb) => qb.whereIn('group_id', groupIds.length ? groupIds : ['-']).orWhereIn('id', rsvped))
       .whereIn('state', q.includeCancelled ? ['scheduled', 'cancelled'] : ['scheduled'])
@@ -338,6 +367,7 @@ export class CalendarService {
     if (patch.location !== undefined) upd.location = await seal(patch.location, 'location');
     if (patch.capacity !== undefined) upd.capacity = patch.capacity;
     if (patch.maxGuests !== undefined) upd.max_guests = patch.maxGuests;
+    if (patch.lat !== undefined || patch.lon !== undefined) Object.assign(upd, pointOf(patch.lat === undefined ? e.lat : patch.lat, patch.lon === undefined ? e.lon : patch.lon));
     const timeChanged = patch.start !== undefined || patch.end !== undefined || patch.timeZone !== undefined || patch.durationMinutes !== undefined || patch.allDay !== undefined;
     if (timeChanged) {
       const tz = patch.timeZone ?? e.time_zone;
@@ -348,7 +378,7 @@ export class CalendarService {
       Object.assign(upd, { starts_at: start, ends_at: end, time_zone: tz, all_day: allDay });
     }
     if (patch.reminders !== undefined) upd.reminders = JSON.stringify([...new Set(patch.reminders)].sort((x, y) => y - x));
-    const visible = timeChanged || patch.title !== undefined || patch.location !== undefined || patch.description !== undefined;
+    const visible = timeChanged || patch.title !== undefined || patch.location !== undefined || patch.description !== undefined || patch.lat !== undefined || patch.lon !== undefined;
     if (visible) upd.sequence = e.sequence + 1;
     await s.db('group_events').where({ id }).update(upd);
     const after = (await this.row(e.tenant_id, id))!;

@@ -4267,6 +4267,68 @@ messages, error, downloadedAt, createdAt, mine, canDecide}`. Platform admins see
 their own. The job writes the CSV sealed with the tenant key (`exports/<tenant>/messaging/<id>.sealed`) and audits
 `messaging.conversation.exported {reason, requestedBy, approvedBy, messages, truncated}`; the members are not told.
 
+## Sprint 36a (1.6.0): groups depth (B-4401 to B-4405)
+
+Channels inside groups, discovery, places with distance filters, trending groups and the tenant's group categories.
+Migration `038_groups2`; `server/src/groups/service.ts` (channels, places, the list filters), `groups/depth.ts`
+(`s.groups.depth`: categories, discovery, trending) and `groups/geo.ts` (the distance filter). Permissions are the
+groups' own (`groups:read`, `groups:write`; what a member may do inside a group is their group role) and
+`social:manage` for the categories (decision Q6).
+
+**Channels (B-4401)** are groups one level down (`parentId`), with their own members, roles, posts and events: every
+`/api/groups/:id/...` route works on a channel. The group is a channel's outer boundary as the workspace is a group's:
+someone who does not read the group gets `404` for its channels; only the group's members join a channel (`403 step
+parent` otherwise; the invitation picker offers them alone, and inviting anyone else is `422 step workspace`); leaving
+or being removed from the group leaves its channels (`channels` in the answer and the audit detail); archiving or
+deleting the group archives or deletes its channels. The group's owners (and `groups:manage`) act as owners of its
+channels. A channel's label is at least its group's (the floor, `422 step label-floor`) and at most the workspace
+ceiling; raising a group's label raises its channels below it with their posts and events (`channelsRaised` in the
+audit detail) and re-checks their rooms. Channels do not nest (`422 step parent`); categories and places belong to
+groups (`422 step parent` on a channel). `GET /api/groups` lists groups only; a group's view has `channels` (how many
+the caller may know of), a channel's has `parentName` and `parentLabel`. The feed's group scope and fan-out follow the
+same rule (a channel's post reaches readers of the channel and of its group).
+
+**Places (B-4403)**: a group may have `location: {name?, lat?, lon?}` (the name sealed; a point needs both coordinates,
+WGS 84 degrees, `422 step location` otherwise; `null` clears it) and an event `lat`, `lon` beside its `location` text
+(moving the point moves the event's `sequence`). A group's place is shown to readers of its content, like its
+description (an open decision in `Backlog-1.6.0.md` asks whether it should be members only); a distance filter only
+matches places the caller may read. `near=<lat>,<lon>&km=<radius>` (default 25 km, at most 20 016) on `GET
+/api/groups`, `GET /api/groups/discover` and `GET /api/calendar/events` keeps the rows within the radius, nearest
+first, each with `distanceKm`. PostgreSQL with PostGIS narrows with `ST_DWithin` on the point as a geography (the GiST
+index of `038_groups2`); without PostGIS (and on MySQL and SQLite) a bounding box on `lat` and `lon` does, across the
+antimeridian and over the poles; either way the great-circle distance on the PostGIS sphere (radius 6 371.0088 km)
+decides, so the three databases return the same rows. A malformed `near` is `400`.
+
+**Categories (B-4405)**: one list per tenant, managed from Social and messaging. `categoryId` on `POST /api/groups` and
+`PATCH /api/groups/:id` (an unknown id is `422 step category`; `null` uncategorises); `category=<id>` or
+`category=none` filters `GET /api/groups`, `/discover` and `/trending`. Removing a category sets its groups'
+`categoryId` to null in the same transaction: they stay listed.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups?workspace=&mine=&category=&near=&km=` | As before, groups only (not channels); 1.6.0 adds `parentId`, `categoryId`, `location` (readers only, else `null`), `channels`, and with `near` `distanceKm` |
+| `POST /api/groups` `{…, categoryId?, location?: {name?, lat?, lon?} \| null}` | 1.6.0 adds the category and the place. Audited `group.created` (`category`, `located` in the detail) |
+| `PATCH /api/groups/:id` `{…, categoryId?, location?}` | 1.6.0 adds both (groups only) and the label floor of a channel. Audited `group.updated` (`category` before and after, `channelsRaised`) |
+| `GET /api/groups/discover?workspace=&category=&near=&km=&limit=` | B-4402: `{groups: [group + {sharedMembers, activity: {posts, joins}, score, invited, requested}], windowDays: 30, total}`. The groups the caller may join now: groups (not channels) they see and are not a member of, active, open or by request, or invite-only with an invitation waiting for them; **never labelled above the caller's clearance**, even for a `groups:manage` holder who sees such a group in the list. Ranked by `3 × sharedMembers + 2 × joins + posts` (members of the group the caller shares another group or channel with; joins and published posts in the last 30 days), then members and name; with `near`, nearest first |
+| `GET /api/groups/trending?workspace=&category=&limit=` | B-4404: `{groups: [group + {trend: {joins, posts, score}}], computedAt, windowStart, hours}` as the `groups.trending` job last counted them, the caller's workspaces, groups they may see and are cleared for |
+| `GET /api/group-categories` | B-4405: `[{id, name, description, position, createdAt, updatedAt}]` in order |
+| `GET /api/groups/:id/channels` | B-4401: the group's channels the caller may know of (a public channel is read by everyone who reads the group, a private one by its members and listed to the group's readers, a hidden one known only to its members); `403` for someone who sees the group but does not read it |
+| `POST /api/groups/:id/channels` `{name, description?, visibility?: public, joinMode?: open, label?}` | `201` channel; the creator is its owner. Needs the `channels` group right (owners and moderators). The label defaults to the group's. Audited `group.channel.created {group, channel}`; the catalogue events `group.created` and `group.member.added` with the channel's id; `group.channel.created` in the group's room |
+| `DELETE /api/groups/:id` | On a group, its channels are deleted too (`channels` in the answer); on a channel, audited `group.channel.deleted` |
+| `DELETE /api/groups/:id/members/:userId` | On a group, also leaves its channels (`channels` in the answer) |
+| `GET /api/calendar/events?from=&to=&near=&km=` | 1.6.0 adds the distance filter; events carry `lat`, `lon` |
+| `POST /api/groups/:id/events`, `PATCH /api/calendar/events/:id` `{…, lat?, lon?}` | The event's point (both or neither, `422 step location`) |
+| `POST /api/admin/social/group-categories` `{name: 1 to 80, description?, position?}` | `social:manage`. `201` category with `groups: 0`. Names are unique in the tenant whatever the case (`409`). Audited `group.category.created` |
+| `PATCH /api/admin/social/group-categories/:id` `{name?, description?, position?}` | `social:manage`. Audited `group.category.updated {before, after}` |
+| `DELETE /api/admin/social/group-categories/:id` | `social:manage`. `{id, removed: true, uncategorised}`: its groups stay, uncategorised. Audited `group.category.removed {name, uncategorised}` |
+| `POST /api/admin/social/groups/trending/run` | `social:manage`. `202 {jobId}`: the `groups.trending` job for the tenant now (requests within the same minute share one job). Audited `group.trending.requested` |
+| `GET /api/admin/social/groups` | 1.6.0 adds `categories: {categories: [category + {groups}], uncategorised}` (groups, not channels, at labels the caller is cleared for) and `trending` (as `GET /api/groups/trending`, ten at most); each group row names `parentId` (a channel) and `categoryId` |
+
+**The `groups.trending` job** runs every `FEED_TRENDING_MINUTES` (with the hashtags' `feed.trending`; 0 turns both
+off) per active tenant and counts, over the last `FEED_TRENDING_HOURS`, the joins (`group_members.joined_at`) and
+published posts of each active, not hidden group (channels never trend): `score = 3 × joins + posts`, the top 50 per
+workspace with a score, kept in `group_trending` (replaced each run, so it is idempotent).
+
 ## Sprint 35b (1.6.0): the Overview and Jobs and queues (B-4202, B-4203)
 
 The two admin screens read and act on what already exists: the instances' readiness, the one `JobQueue`, the

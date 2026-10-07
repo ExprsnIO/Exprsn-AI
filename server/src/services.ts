@@ -835,6 +835,7 @@ export function startSchedules(s: Services): void {
   s.workflowTriggers.schedule(s.scheduler); // 1.5.0, Sprint 32b (B-3903): workflow schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
+  s.groups.depth.schedule(s.scheduler, activeTenants); // 1.6.0, Sprint 36a (B-4404): trending groups
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation
   s.imports.schedule(s.scheduler, activeTenants); // 1.5.0, Sprint 30 (B-3801, B-3803): due harvests, promoted bundles
   s.apps.forms.held.schedule(s.scheduler); // 1.6.0, Sprint 36b (B-4701): decided held submissions purged
