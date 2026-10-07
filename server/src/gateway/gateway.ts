@@ -44,6 +44,11 @@ interface Runtime {
   expectedGone: Set<string>;
   /** B-4303: (model, options) pairs already recorded as dropped, so each is noted once per client. */
   dropped: Set<string>;
+  /**
+   * The keep-alive each placed model's requests carry (-1 pinned, the instance's keep-alive warm), refreshed on every
+   * poll. Ollama resets a model's expiry on every request, so a request without one would unpin a pinned model.
+   */
+  keepAlive: Map<string, string | number>;
 }
 
 export interface Lease {
@@ -169,8 +174,10 @@ export class Gateway {
     }
     if (!r) {
       const dropped = new Set<string>();
-      r = { row, client: this.serverFor(row, dropped), ps: [], tags: [], latencyMs: null, firstTokenMs: null, inflight: 0, waiting: [], loading: new Set(), unloading: new Set(), expectedGone: new Set(), dropped };
+      r = { row, client: this.serverFor(row, dropped), ps: [], tags: [], latencyMs: null, firstTokenMs: null, inflight: 0, waiting: [], loading: new Set(), unloading: new Set(), expectedGone: new Set(), dropped, keepAlive: new Map() };
       this.runtimes.set(row.id, r);
+      const rt = r;
+      if (rt.client instanceof OllamaClient) rt.client.keepAliveFor = (model) => [...rt.keepAlive].find(([name]) => sameModel(name, model))?.[1];
     } else {
       r.row = { ...row, health: r.row.health, health_detail: r.row.health_detail, version: r.row.version, last_seen_at: r.row.last_seen_at };
     }
@@ -231,6 +238,7 @@ export class Gateway {
       r.expectedGone.clear();
       r.ps = ps;
       r.tags = tags;
+      r.keepAlive = await this.keepAlives(r.row);
       await this.keepReport(r);
       const health = r.latencyMs > this.o.timeoutMs / 2 ? 'degraded' : 'healthy';
       const detail = health === 'degraded' ? `Slow to answer (${r.latencyMs} ms)` : null;
@@ -244,6 +252,19 @@ export class Gateway {
       Object.assign(r.row, { health: 'unreachable', health_detail: detail });
       if (changed) await this.repo.updateInstance(r.row.id, { health: 'unreachable', health_detail: detail });
     }
+  }
+
+  /** The keep-alive per placed model on an instance's pool: -1 for pinned, the instance's keep-alive for warm, none for cold. */
+  private async keepAlives(row: InstanceRow): Promise<Map<string, string | number>> {
+    const models = new Map((await this.repo.models()).map((m) => [m.id, m.name]));
+    const out = new Map<string, string | number>();
+    for (const p of await this.repo.placements()) {
+      const name = models.get(p.model_id);
+      if (p.pool_id !== row.pool_id || !name) continue;
+      if (p.residency === 'pinned') out.set(name, -1);
+      else if (p.residency === 'warm') out.set(name, row.settings.keepAlive ?? '30m');
+    }
+    return out;
   }
 
   /** B-4302: what a Chat Completions server reported goes into the instance's settings when it changes. */

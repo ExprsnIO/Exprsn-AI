@@ -110,6 +110,8 @@ export async function* ndjson<T>(body: AsyncIterable<Uint8Array>): AsyncGenerato
  */
 export class OllamaClient implements ModelServer {
   readonly kind = 'ollama' as const;
+  /** The gateway's keep-alive for a model (its placement's residency), sent with every chat and embedding request. */
+  keepAliveFor?: (model: string) => string | number | undefined;
   private readonly dispatcher: Dispatcher | undefined;
   private readonly base: string;
   /** Set when the instance's mTLS files cannot be read: every request fails with it, so only this instance is affected. */
@@ -255,7 +257,7 @@ export class OllamaClient implements ModelServer {
     let res;
     try {
       try {
-        res = await runInSpan(span, () => this.req('POST', '/api/chat', { ...request, stream: true }, { timeoutMs: null, signal: AbortSignal.any([signal, headers.signal]) }));
+        res = await runInSpan(span, () => this.req('POST', '/api/chat', { ...this.keepAlive(request.model, request.keep_alive), ...request, stream: true }, { timeoutMs: null, signal: AbortSignal.any([signal, headers.signal]) }));
       } finally {
         clearTimeout(timer);
       }
@@ -275,7 +277,13 @@ export class OllamaClient implements ModelServer {
 
   /** Embeddings for a batch of inputs (`/api/embed`), truncated to the model's context. */
   async embed(model: string, input: string[], signal?: AbortSignal): Promise<EmbedResult> {
-    return (await (await this.req('POST', '/api/embed', { model, input, truncate: true }, { timeoutMs: this.loadTimeoutMs, ...(signal ? { signal } : {}) })).json()) as EmbedResult;
+    return (await (await this.req('POST', '/api/embed', { ...this.keepAlive(model), model, input, truncate: true }, { timeoutMs: this.loadTimeoutMs, ...(signal ? { signal } : {}) })).json()) as EmbedResult;
+  }
+
+  /** `{ keep_alive }` when the request or the gateway names one: Ollama would otherwise reset the model's expiry to its default. */
+  private keepAlive(model: string, own?: string | number): { keep_alive?: string | number } {
+    const k = own ?? this.keepAliveFor?.(model);
+    return k === undefined ? {} : { keep_alive: k };
   }
 
   async close(): Promise<void> {
