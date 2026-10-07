@@ -5430,6 +5430,7 @@ table.dt .actions{white-space:nowrap}
         + '#main > .page > *{flex-shrink:0}'
         + '#main .gr-list{display:flex;flex-direction:column;gap:2px}'
         + '#main mark{border-radius:2px;padding:0 1px}'
+        + '#main .reviewbar{flex-wrap:wrap}'
         + '</style>'
         + '<div class="leftpane"><div class="eyebrow">Profile: ' + esc(profile.name) + ' v' + profile.version + '</div>'
         + UI.select(PROFILES.map((p) => ({ value: p.id, label: p.name + ' v' + p.version + ' (' + p.status + ')' })), profile.id, 'data-profile aria-label="Profile"')

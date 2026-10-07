@@ -17,7 +17,8 @@
     label: p.label, thinkDefault: p.thinkDefault, thinkCeiling: p.thinkCeiling, systemPrompt: p.systemPrompt || '',
     fbProfile: p.fallback ? p.fallback.profileId : '', fbWait: p.fallback ? String(p.fallback.afterQueueWaitMs / 1000) : '8',
     calculate: (p.tools || []).indexOf('calculate') >= 0,
-    others: (p.tools || []).filter((t) => t !== 'calculate')
+    others: (p.tools || []).filter((t) => t !== 'calculate'),
+    trustMarking: p.trustMarking !== false
   });
   const num = (v, what, int) => {
     if (String(v).trim() === '') return null;
@@ -31,7 +32,8 @@
     numCtx: num(f.numCtx, 'num_ctx', true), temperature: num(f.temperature, 'temperature'), label: f.label,
     thinkDefault: f.thinkDefault, thinkCeiling: f.thinkCeiling, systemPrompt: f.systemPrompt.trim() ? f.systemPrompt : null,
     fallback: f.fbProfile ? { profileId: f.fbProfile, afterQueueWaitMs: Math.round((num(f.fbWait, 'Queue wait') || 0) * 1000) } : null,
-    tools: (f.calculate ? ['calculate'] : []).concat(f.others || [])
+    tools: (f.calculate ? ['calculate'] : []).concat(f.others || []),
+    trustMarking: !!f.trustMarking
   });
 
   function cur(st) { return (st.profiles || []).find((x) => x.id === st.sel) || null; }
@@ -249,6 +251,7 @@
           + '\nfallback: ' + (p.fallback ? '{ profile: ' + (byId(p.fallback.profileId) || { name: '?' }).name + ', afterQueueWait: ' + p.fallback.afterQueueWaitMs / 1000 + 's }' : 'none')
           + '\ncanary: ' + (p.canary ? '{ model: ' + (p.canaryModel || '?') + ', percent: ' + p.canary.percent + ' }' : 'none')
           + '\ntools: [' + p.tools.join(', ') + ']'
+          + '\ntrustMarking: ' + (p.trustMarking !== false ? 'on' : 'off')
           + '\nsystemPrompt: ' + (p.systemPrompt ? '|\n  ' + p.systemPrompt.split('\n').join('\n  ') : 'none');
 
         const statusBtns = (p.status !== 'published' ? UI.btn('Publish', { attrs: 'data-status="published"', disabled: dirty, title: dirty ? 'Save or reset your changes first' : '' }) : '')
@@ -277,7 +280,8 @@
           + '</div>'
           + UI.field('System prompt', UI.textarea(f.systemPrompt, { placeholder: 'None: the model\'s own template applies', attrs: 'data-f="systemPrompt" maxlength="20000" spellcheck="false"', rows: 4 }))
           + '<div class="formgrid" style="--cols:2">' + UI.field('Description', UI.input(f.description, { placeholder: 'What this profile is for', attrs: 'data-f="description" maxlength="500"' }))
-          + UI.field('Built-in tools', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('calculate, exact arithmetic', f.calculate, 'data-f="calculate" data-key="calculate"') + '</div>', esc(TOOL_NOTE)) + '</div>'
+          + UI.field('Built-in tools', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('calculate, exact arithmetic', f.calculate, 'data-f="calculate" data-key="calculate"') + '</div>', esc(TOOL_NOTE))
+          + UI.field('Untrusted content', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Mark retrieved and tool text as data', f.trustMarking, 'data-f="trustMarking" data-key="trustMarking"') + '</div>', 'Knowledge chunks, crawled pages, tool, MCP and HTTP results reach the model in delimiters with their words joined by a marker, so instructions in them read as data. On by default.') + '</div>'
           + '<div class="cols"><div class="grow vstack gap12" style="min-width:0">'
           + UI.panel('Publishing checks', '<div class="vstack gap4">' + checks.map((c) => '<div class="pf-check">' + UI.pill(c.ok ? 'passes' : 'fails', c.ok ? 'ok' : 'danger') + '<span>' + esc(c.text) + '</span></div>').join('') + '</div>'
             + '<div class="muted" style="font-size:12px">' + (failing ? failing + ' check' + (failing === 1 ? '' : 's') + ' would stop publishing. ' : 'Publishing would pass these checks. ') + 'The server runs them again and has the final word; ' + (dirty ? 'these include your unsaved changes.' : 'they reflect the saved version.') + '</div>')
@@ -386,8 +390,8 @@
         ctx.on('click', '[data-save]', () => {
           let body; let before;
           try { body = bodyOf(f); before = bodyOf(formOf(p)); } catch (err) { toast(esc(err.message), 'danger'); return; }
-          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools' };
-          const show = (k, v) => { if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
+          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools', trustMarking: 'Untrusted content marking' };
+          const show = (k, v) => { if (k === 'trustMarking') return v ? 'on' : 'off'; if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
           const patch = {}; const kv = [];
           Object.keys(body).forEach((k) => { if (JSON.stringify(body[k]) !== JSON.stringify(before[k])) { patch[k] = body[k]; kv.push([LBL[k], esc(show(k, before[k])) + ' → <b>' + esc(show(k, body[k])) + '</b>']); } });
           if (!kv.length) { delete st.form[p.id]; ctx.rerender(); return; }

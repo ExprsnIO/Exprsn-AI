@@ -6,7 +6,13 @@
   const STATUSES = ['draft', 'in_review', 'published', 'deprecated', 'retired'];
   const statusText = (s) => String(s || '').replace('_', ' ');
   const SIDE = { read: 'read-only', write: 'write', destructive: 'destructive' };
-  const IMPL = { builtin: 'Built-in', mcp: 'MCP server tool', script: 'Script-backed', archive: 'Versioned archive', agent: 'Agent definition', workflow: 'Workflow' };
+  const IMPL = { builtin: 'Built-in', mcp: 'MCP server tool', script: 'Script-backed', archive: 'Versioned archive', agent: 'Agent definition', workflow: 'Workflow', http: 'HTTP request' };
+  const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  /** `name=value` and `Name: value` lines to an object, and back. */
+  const linesTo = (text, sep) => { const out = {}; String(text || '').split('\n').forEach((l) => { const i = l.indexOf(sep); if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + sep.length).trim(); }); return out; };
+  const toLines = (obj, sep) => Object.keys(obj || {}).map((k) => k + sep + obj[k]).join('\n');
+  /** The `{name}` placeholders of a URL template. */
+  const placeholders = (u) => (String(u || '').match(/\{([A-Za-z_][\w-]*)\}/g) || []).map((x) => x.slice(1, -1)).filter((x, i, a) => a.indexOf(x) === i);
   const sidePill = (s) => UI.pill(SIDE[s] || s || 'not applicable', s === 'read' ? 'ok' : s === 'write' ? 'warn' : s === 'destructive' ? 'danger' : 'outline');
   const statusPill = (s) => UI.pill(statusText(s), s === 'published' ? 'ok' : s === 'in_review' ? 'info' : s === 'deprecated' ? 'warn' : s === 'retired' ? 'danger' : '');
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
@@ -40,7 +46,9 @@
       { title: 'Deprecated', tone: 'warn', text: 'Deprecated tools stay callable with a warning in run details and a replacement link.', apply(ctx) { ctx.state.demo = 'deprecated'; ctx.rerender(); } },
       { title: 'Retire refused: still in use', tone: 'danger', text: 'Retiring the last callable version of an entry a published agent, skill or workflow uses is refused, naming them. The used-by view lists every referrer and how it reaches the entry.', apply(ctx) { ctx.state.demo = 'usedby'; ctx.rerender(); } },
       { title: 'Chain reference not published', tone: 'danger', text: 'An agent that delegates to an agent, or a skill that builds on a skill, which is not published fails the Chain references check; Approve stays disabled until it is published or removed.', apply(ctx) { ctx.state.demo = 'chainref'; ctx.rerender(); } },
-      { title: 'Test harness', tone: 'info', text: 'Runs the tool once with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.demo = 'harness'; ctx.rerender(); } }
+      { title: 'Test harness', tone: 'info', text: 'Runs the tool once with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.demo = 'harness'; ctx.rerender(); } },
+      { title: 'HTTP host refused', tone: 'danger', text: 'A test call to a host that resolves to a cloud metadata address, an internal host the operator has not named, or a public host off the tenant\'s list is refused before anything is sent.', apply(ctx) { ctx.state.demo = 'egress'; ctx.rerender(); } },
+      { title: 'Literal credential refused', tone: 'danger', text: 'Saving an HTTP tool with a literal Authorization header, API key query parameter or secret body field is refused: credentials go in as vault references, resolved at call time.', apply(ctx) { ctx.state.demo = 'literal'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -93,6 +101,13 @@
         } else if (d === 'chainref') {
           const e = list.find((x) => (x.checks || []).some((c) => c.name === 'Chain references' && !c.ok));
           if (e) { st.sel = e.id; st.tab = e.status === 'in_review' ? 'review' : e.kind + 's'; } else st.demoNote = 'Every agent and skill passes its Chain references check: each delegate, sub-skill and listed workflow is published and within the ceiling.';
+        } else if (d === 'egress') {
+          const e = list.find((x) => x.impl === 'http' && x.sideEffect === 'read' && x.status !== 'retired');
+          if (e) { st.sel = e.id; st.tab = 'tools'; st.harnessOpen = true; st.harnessRun = true; st.demoNote = 'The test call goes through the outbound address guard. A host off the tenant\'s list (Allowed hosts), an internal host the operator has not named, or a metadata address comes back as egress_refused and nothing is sent.'; }
+          else st.demoNote = 'No read-only HTTP tool yet. Create one with Submit entry, kind Tool (HTTP request), and run its test harness: a host off the tenant\'s list comes back as egress_refused and nothing is sent.';
+        } else if (d === 'literal') {
+          if (App.can('tools:manage')) st.openLiteral = true;
+          else st.demoNote = 'Creating HTTP tools needs tools:manage. A literal credential in a header, query parameter or body field is refused on save.';
         } else if (d === 'harness') {
           const e = list.find((x) => x.name === 'calculate' && x.platform) || list.find((x) => x.kind === 'tool');
           if (e) { st.sel = e.id; st.tab = 'tools'; st.harnessOpen = true; st.harnessRun = true; }
@@ -148,7 +163,7 @@
             ['Rate limit', sel.ratePerHour ? esc(sel.ratePerHour + ' per user per hour') : 'none'],
             ['Publish scope', sel.publishScope === 'workspace' ? esc((d.workspaces || []).map((w) => w.name).join(', ') || sel.publishWorkspaces.length + ' workspaces') : esc(sel.publishScope || 'not published')],
             ['Reviewed by', sel.reviewedBy ? esc(sel.reviewedBy + ', ' + when(sel.reviewedAt)) : 'not yet'],
-          ].concat(chainRows(sel)).concat([['Used by', esc(((d.profiles || []).map((p) => 'profile ' + p).concat((d.referencedBy || []).map((r) => r.kind + ' ' + r.name + ' ' + r.version))).join(', ') || 'nothing yet') + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
+          ].concat(httpRows(sel, d)).concat(chainRows(sel)).concat([['Used by', esc(((d.profiles || []).map((p) => 'profile ' + p).concat((d.referencedBy || []).map((r) => r.kind + ' ' + r.name + ' ' + r.version))).join(', ') || 'nothing yet') + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
           + '<div class="hstack"><div class="eyebrow grow">Automated checks</div>' + (canManage(sel) ? UI.btn('Re-run', { kind: 'ghost', size: 'xs', icon: 'refresh', attrs: 'data-recheck' }) : '') + '</div>'
           + '<div class="vstack gap4">' + sel.checks.map((c) => '<div class="hstack" style="align-items:flex-start;color:var(--' + (c.ok ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c.ok ? 'check' : 'x', 14) + '<span style="color:var(--fg)"><b style="font-weight:600">' + esc(c.name) + '</b><span class="fg2" style="display:block;font-size:12px">' + esc(c.detail) + '</span></span></div>').join('') + (sel.checkedAt ? '<div class="muted" style="font-size:12px">Checked ' + esc(when(sel.checkedAt)) + '</div>' : '') + '</div>'
           + '<div class="hstack wrap">'
@@ -171,7 +186,7 @@
       inspector += '</aside>';
 
       root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
-        + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit', disabled: !App.can('tools:manage') && !App.can('agents:manage') }))
+        + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', (App.can('tenant:manage') ? UI.btn('Allowed hosts', { attrs: 'data-hosts' }) : '') + UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit', disabled: !App.can('tools:manage') && !App.can('agents:manage') }))
         + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
         + UI.tabs([{ id: 'tools', label: 'Tools', count: ofKind('tool').length }, { id: 'skills', label: 'Skills', count: ofKind('skill').length }, { id: 'agents', label: 'Agents', count: ofKind('agent').length }, { id: 'review', label: 'Review queue', count: review.length }], st.tab)
         + '<div class="toolbar">' + UI.search('Search by name, owner or tool', 'data-search', st.query) + UI.seg([{ id: 'all', label: 'All' }].concat(STATUSES.map((v) => ({ id: v, label: statusText(v) }))), st.filter, 'data-statusseg') + '<span class="muted right" style="font-size:12px">Lifecycle: draft, in review, published, deprecated, retired</span></div>'
@@ -223,11 +238,41 @@
       ctx.on('click', '[data-editentry]', () => entryForm(sel));
       ctx.on('click', '[data-goworkflow]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { id: t.dataset.goworkflow }); });
       ctx.on('click', '[data-submit]', () => entryForm(null));
+      ctx.on('click', '[data-hosts]', () => hostsDrawer());
 
       if (st.openSubmit) { st.openSubmit = false; setTimeout(() => entryForm(null), 30); }
+      if (st.openLiteral) { st.openLiteral = false; setTimeout(() => entryForm(null, { kind: 'http', literal: true }), 30); }
       if (st.openScope) { const e = list.find((x) => x.id === st.openScope); st.openScope = null; if (e) setTimeout(() => publishScope(e, e.status === 'in_review' ? 'review' : 'publish'), 30); }
       if (st.harnessRun) { st.harnessRun = false; setTimeout(runHarness, 30); }
       if (st.openUsedBy) { const o = st.openUsedBy; st.openUsedBy = null; const e = list.find((x) => x.id === o.id); if (e) setTimeout(() => usedByModal(e, o.mode), 30); }
+
+      /** B-8901: an HTTP tool's request, credentials (vault references only), mapping and its calls over the last day. */
+      function httpRows(e, d) {
+        if (e.impl !== 'http' || !e.definition) return [];
+        const x = e.definition; const c = d && d.httpCalls;
+        const refs = Object.keys(x.headers || {}).map((k) => k + ': ' + x.headers[k]).concat(Object.keys(x.query || {}).filter((k) => /vault:/.test(x.query[k])).map((k) => k + '=' + x.query[k]));
+        return [['Request', '<span class="mono" style="overflow-wrap:anywhere">' + esc(x.method + ' ' + x.url) + '</span>'], ['Parameters', esc(placeholders(x.url).concat(Object.keys(x.query || {})).join(', ') || 'none') + (x.body && x.body.mode !== 'none' ? ' <span class="muted">(body: ' + esc(x.body.mode === 'args' ? 'the other arguments as JSON' : 'template') + ')</span>' : '')], ['Headers', refs.length ? '<span class="mono" style="overflow-wrap:anywhere">' + esc(refs.join('; ')) + '</span>' : 'none'], ['Response', esc((x.response && x.response.pointer ? 'JSON pointer ' + x.response.pointer : 'the whole body') + ', at most ' + Math.round(((x.response && x.response.maxBytes) || 65536) / 1024) + ' KB, ' + Math.round((x.timeoutMs || 10000) / 1000) + ' s timeout')], ['Calls, last day', c ? esc(c.calls + ' call' + (c.calls === 1 ? '' : 's') + ', ' + c.failed + ' failed' + (c.refused ? ' (' + c.refused + ' refused by the address guard)' : '') + (c.medianMs != null ? ', median ' + c.medianMs + ' ms' : '') + (c.last ? '; last ' + c.last.status + ' ' + c.last.outcome + ' from ' + c.last.host : '')) : 'none yet'], ['Outbound guard', 'resolved once, every address checked, connection pinned, redirects not followed']];
+      }
+
+      /** B-8904: the tenant's list of allowed hosts (GET and PUT /api/admin/integrations/hosts). */
+      async function hostsDrawer() {
+        let cur0;
+        try { cur0 = await App.get('/api/admin/integrations/hosts'); } catch (err) { App.fail(err, 'Allowed hosts could not be loaded'); return; }
+        let hosts = cur0.hosts.slice();
+        const draw = () => '<div class="vstack gap6">' + (hosts.length ? hosts.map((h, i) => '<div class="hstack"><span class="mono grow" style="overflow-wrap:anywhere">' + esc(h) + '</span>' + UI.btn('Remove', { kind: 'ghost', size: 'xs', attrs: 'data-rmhost="' + i + '" aria-label="Remove ' + esc(h) + '"' }) + '</div>').join('') : UI.empty('No public hosts', 'HTTP tools reach only the internal hosts the operator names.')) + '</div>'
+          + '<div class="hstack gap6">' + UI.input('', { placeholder: 'api.example.com, *.example.com or 203.0.113.0/24', attrs: 'data-newhost aria-label="Host to allow"' }) + UI.btn('Add', { size: 'sm', attrs: 'data-addhost' }) + '</div>'
+          + UI.notice('HTTP tools call a public host only when it is on this list. Internal hosts need the operator\'s SERVICE_ALLOWED_HOSTS; cloud metadata addresses are always refused. Workflow HTTP steps and webhooks read the same list: when it has entries, they reach only hosts on it.', 'info');
+        ctx.drawer({ title: 'Allowed hosts', body: '<div data-hostsbody>' + draw() + '</div>', actions: UI.btn('Close', { attrs: 'data-close' }),
+          onMount(dr) {
+            const body = dr.querySelector('[data-hostsbody]');
+            const save = async (next, msg) => { try { const r = await App.api('PUT', '/api/admin/integrations/hosts', { hosts: next }); hosts = r.hosts.slice(); body.innerHTML = draw(); toast(msg, 'ok'); } catch (err) { App.fail(err, 'Allowed hosts not saved'); } };
+            body.addEventListener('click', (ev) => {
+              const rm = ev.target.closest('[data-rmhost]');
+              if (rm) { const h = hosts[Number(rm.dataset.rmhost)]; save(hosts.filter((x, i) => i !== Number(rm.dataset.rmhost)), esc(h) + ' removed. Audited tenant.hosts.updated.'); return; }
+              if (ev.target.closest('[data-addhost]')) { const v = body.querySelector('[data-newhost]').value.trim().toLowerCase(); if (!v) return; save(hosts.concat([v]), esc(v) + ' added. Audited tenant.hosts.updated.'); }
+            });
+          } });
+      }
 
       /** Inspector rows for the chain fields (B-4102 to B-4104): an agent's delegates, workflows and schemas, a skill's dependencies. */
       function chainRows(e) {
@@ -310,19 +355,39 @@
         });
       }
 
-      function entryForm(e) {
-        const kind = e ? e.kind : App.can('tools:manage') ? 'skill' : 'agent';
+      function entryForm(e, opts) {
+        const o = opts || {};
+        const kind = o.kind || (e ? (e.impl === 'http' ? 'http' : e.kind) : App.can('tools:manage') ? 'skill' : 'agent');
+        const hd = e && e.impl === 'http' ? e.definition || {} : { method: 'GET', url: 'https://api.example.com/v1/items/{id}', query: {}, headers: o.literal ? { Authorization: 'Bearer 9f3ab21c7d4e5f6a8b9c' } : { Authorization: 'Bearer vault:apis/example#token' }, body: { mode: 'none' }, response: { pointer: '/data', maxBytes: 65536 }, timeoutMs: 10000 };
         const d = e ? e.definition || {} : {};
         const b = d.budgets || { steps: 20, tokens: 10000, wallSeconds: 120, toolCalls: 8 };
         const published = list.filter((x) => x.kind === 'tool' && (x.status === 'published' || x.status === 'deprecated')).map((x) => x.name);
         const uniq = (a) => a.filter((x, i) => a.indexOf(x) === i);
         const kinds = [];
-        if (App.can('tools:manage')) kinds.push({ value: 'skill', label: 'Skill' }, { value: 'tool', label: 'Tool (script-backed)' });
+        if (App.can('tools:manage')) kinds.push({ value: 'skill', label: 'Skill' }, { value: 'tool', label: 'Tool (script-backed)' }, { value: 'http', label: 'Tool (HTTP request)' });
         if (App.can('agents:manage')) kinds.push({ value: 'agent', label: 'Agent' });
         const fields = (k) => {
           const common = UI.field('Name', UI.input(e ? e.name : '', { placeholder: k === 'agent' ? 'Data analyst' : 'namespace.operation', attrs: 'data-name' + (e ? ' readonly' : '') })) + UI.field('Version', UI.input(e ? e.version : '0.1.0', { attrs: 'data-version' + (e ? ' readonly' : '') }))
             + '<div class="span2">' + UI.field('Description', UI.textarea(e ? e.description || '' : '', { rows: 2, attrs: 'data-desc', placeholder: 'What it does, when to use it and what it returns' }), 'At least 40 characters: a model reads this to decide when to use it.') + '</div>'
             + UI.field('Max label', UI.select(LABELS.filter((l) => !me.clearance || rank(l) <= rank(me.clearance)), e ? e.label : 'internal', 'data-label'));
+          if (k === 'http') {
+            const schema0 = e && e.inputSchema ? e.inputSchema : { type: 'object', properties: placeholders(hd.url).reduce((a, n) => { a[n] = { type: 'string' }; return a; }, {}), required: placeholders(hd.url) };
+            const side = e ? e.sideEffect : 'read';
+            return common + UI.field('Method', UI.select(METHODS, hd.method, 'data-hmethod'), 'GET is read; other methods are write, or destructive if you choose it')
+              + UI.field('Side-effect class', UI.select([{ value: 'write', label: 'write' }, { value: 'destructive', label: 'destructive' }], side === 'destructive' ? 'destructive' : 'write', 'data-hside' + (hd.method === 'GET' ? ' disabled' : '')), hd.method === 'GET' ? 'A GET tool is read-only' : 'write and destructive require confirmation')
+              + '<div class="span2">' + UI.field('URL template', UI.input(hd.url, { attrs: 'class="input mono" data-hurl' }).replace('class="input" ', ''), 'The host is fixed; {name} in the path or query takes the argument of that name, percent-encoded') + '</div>'
+              + '<div class="span2">' + UI.field('Input schema (JSON Schema)', UI.textarea(pretty(schema0), { rows: 4, attrs: 'data-in' }), 'Every {name} must be one of its properties. ' + UI.btn('Fill from the URL', { kind: 'ghost', size: 'xs', attrs: 'data-hfill' })) + '</div>'
+              + UI.field('Query parameters', UI.textarea(toLines(hd.query, '='), { rows: 2, attrs: 'class="textarea mono" data-hquery', placeholder: 'fields={fields}' }).replace('class="textarea" ', ''), 'One name=value per line')
+              + UI.field('Headers', UI.textarea(toLines(hd.headers, ': '), { rows: 2, attrs: 'class="textarea mono" data-hheaders', placeholder: 'Authorization: Bearer vault:apis/example#token' }).replace('class="textarea" ', ''), 'One Name: value per line. Credentials only as vault:path#key, resolved at call time as you')
+              + UI.field('Vault reference', '<div class="hstack gap6 wrap"><select class="select" data-hvault aria-label="Vault secret" style="flex:1;min-width:0"><option value="">' + (App.can('secrets:read') ? 'Loading vault paths…' : 'Needs secrets:read') + '</option></select>' + UI.input('token', { attrs: 'data-hkey aria-label="Key in the secret" style="width:90px"' }) + UI.btn('Insert', { size: 'sm', attrs: 'data-hinsert' }) + '</div>', 'Adds Authorization: Bearer vault:path#key to the headers')
+              + UI.field('Body', UI.select([{ value: 'none', label: 'none' }, { value: 'args', label: 'the other arguments as JSON' }, { value: 'template', label: 'a template' }], (hd.body && hd.body.mode) || 'none', 'data-hbody'), 'A GET tool sends no body')
+              + '<div class="span2">' + UI.field('Body template', UI.textarea(hd.body && hd.body.mode === 'template' ? hd.body.template : '', { rows: 2, attrs: 'class="textarea mono" data-htemplate', placeholder: '{ "title": {title}, "api_key": "{vault:apis/example#key}" }' }).replace('class="textarea" ', ''), '{name} becomes the argument as JSON; secret fields take {vault:path#key}') + '</div>'
+              + UI.field('Response mapping (JSON pointer)', UI.input((hd.response && hd.response.pointer) || '', { attrs: 'class="input mono" data-hptr', placeholder: '/data/name' }).replace('class="input" ', ''), 'Empty returns the whole body')
+              + UI.field('Answer cap, KB', UI.input(String(Math.round(((hd.response && hd.response.maxBytes) || 65536) / 1024)), { type: 'number', attrs: 'data-hcap min="1" max="16384"' }))
+              + UI.field('Timeout, seconds', UI.input(String(Math.round((hd.timeoutMs || 10000) / 1000)), { type: 'number', attrs: 'data-htimeout min="1" max="120"' }))
+              + UI.field('Output schema (optional)', UI.textarea(e && e.outputSchema ? pretty(e.outputSchema) : '', { rows: 2, attrs: 'data-out' }))
+              + '<div class="span2">' + (o.literal ? UI.notice('<b>A literal credential is refused.</b> Saving this draft as it is fails: the Authorization header holds a value, not a vault reference. Pick a vault reference and insert it.', 'danger') : UI.notice('Every call goes through the outbound address guard (resolved once, every address checked, the connection pinned, redirects not followed): internal hosts only as the operator names them, public hosts only from the tenant\'s Allowed hosts. Test it from the harness once it is saved.', 'info')) + '</div>';
+          }
           if (k === 'skill') return common + '<div class="span2">' + UI.field('Instructions', UI.textarea(d.instructions || '', { rows: 5, attrs: 'data-instructions' })) + '</div>' + UI.field('Tools it uses', UI.input((d.tools || []).join(', '), { attrs: 'data-tools list="registry-tools"', placeholder: 'calculate, ledger.query' }), 'Published tools only') + UI.field('Skills it builds on', UI.input(listOfNames(d.skills).join(', '), { attrs: 'data-subskills list="registry-skills"', placeholder: 'variance-analysis' }), 'Loading this skill loads them first, each once, and offers the tools of the whole closure');
           if (k === 'agent') return common + UI.field('Model profile', UI.input(d.profile || '', { attrs: 'data-profile', placeholder: 'general' }), 'A profile of this tenant; its model must support tools if the agent has any') + '<div class="span2">' + UI.field('Tools', UI.input((d.tools || []).join(', '), { attrs: 'data-tools list="registry-tools"', placeholder: 'calculate, jira.create_issue' }), 'Published tools only; write and destructive calls pause the run for approval') + UI.field('Skills', UI.input((d.skills || []).join(', '), { attrs: 'data-skills list="registry-skills"' })) + UI.field('System prompt', UI.textarea(d.systemPrompt || '', { rows: 3, attrs: 'data-prompt' })) + '</div>'
             + UI.field('Delegates (agents it may call)', UI.input(listOfNames(d.agents).join(', '), { attrs: 'data-delegates list="registry-agents"', placeholder: 'Close broker, Clerk' }), 'Each is offered as the tool agent:<name> and runs as a child run in the chain, within this run\'s remaining budget') + UI.field('Workflows (it may start and await)', UI.input(listOfNames(d.workflows).join(', '), { attrs: 'data-workflows', placeholder: 'quarterly-variance' }), 'By name or id, in the run\'s workspace; offered as workflow:<name> without publishing them as tools')
@@ -339,7 +404,7 @@
           body: '<datalist id="registry-tools">' + published.map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>'
             + '<datalist id="registry-agents">' + uniq(list.filter((x) => x.kind === 'agent' && (!e || x.name !== e.name) && x.status !== 'retired').map((x) => x.name)).map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>'
             + '<datalist id="registry-skills">' + uniq(list.filter((x) => x.kind === 'skill' && (!e || x.name !== e.name) && x.status !== 'retired').map((x) => x.name)).map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>'
-            + (e ? '' : UI.field('Kind', UI.select(kinds, kind, 'data-kind'), 'Tools come from promoted scripts and approved MCP servers; this form creates script-backed tools.'))
+            + (e ? '' : UI.field('Kind', UI.select(kinds, kind, 'data-kind'), 'Tools come from promoted scripts, HTTP requests and approved MCP servers; this form creates script-backed and HTTP tools.'))
             + '<div class="formgrid" data-fields>' + fields(kind) + '</div>'
             + UI.notice(e ? 'Saving re-runs the automated checks.' : 'Submitting creates a <b>draft</b> and runs the automated checks. A tool admin other than you reviews it after you submit it. Nothing reaches a tenant before review.', 'info'),
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(e ? 'Save and re-run checks' : 'Save draft and run checks', { kind: 'primary', attrs: 'data-ok' }),
@@ -350,9 +415,23 @@
               if (!App.can('scripts:run')) { s.innerHTML = '<option value="">Needs scripts:run to list scripts</option>'; return; }
               App.get('/api/scripts').then((rows) => { const ok = rows.filter((x) => x.status === 'tested' || x.status === 'promoted'); s.innerHTML = ok.length ? ok.map((x) => '<option value="' + esc(x.id) + '">' + esc(x.name + ' v' + x.version + ', ' + x.status) + '</option>').join('') : '<option value="">No tested scripts in this workspace</option>'; }).catch(() => { s.innerHTML = '<option value="">Scripts could not be loaded</option>'; });
             };
+            const fillVault = () => {
+              const s2 = m.querySelector('[data-hvault]'); if (!s2 || !App.can('secrets:read')) return;
+              App.get('/api/vault/kv').then((r) => { const paths = (r.secrets || []).map((x) => x.path); s2.innerHTML = paths.length ? paths.map((x) => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('') : '<option value="">No secrets you may read</option>'; }).catch(() => { s2.innerHTML = '<option value="">The vault could not be listed</option>'; });
+            };
+            const wireHttp = () => {
+              const fill = m.querySelector('[data-hfill]');
+              if (fill) fill.addEventListener('click', () => { const names = placeholders(m.querySelector('[data-hurl]').value); m.querySelector('[data-in]').value = pretty({ type: 'object', properties: names.reduce((a, n) => { a[n] = { type: 'string' }; return a; }, {}), required: names }); });
+              const ins = m.querySelector('[data-hinsert]');
+              if (ins) ins.addEventListener('click', () => { const path = m.querySelector('[data-hvault]').value; const key = m.querySelector('[data-hkey]').value.trim() || 'token'; if (!path) { toast('Pick a vault path first.', 'warn'); return; } const h = m.querySelector('[data-hheaders]'); const kept = h.value.split('\n').filter((l) => l.trim() && !/^authorization\s*:/i.test(l)); h.value = kept.concat(['Authorization: Bearer vault:' + path + '#' + key]).join('\n'); });
+              const meth = m.querySelector('[data-hmethod]');
+              if (meth) meth.addEventListener('change', () => { const sd = m.querySelector('[data-hside]'); sd.disabled = meth.value === 'GET'; if (meth.value === 'GET') m.querySelector('[data-hbody]').value = 'none'; });
+              fillVault();
+            };
             const kindSel = m.querySelector('[data-kind]');
-            if (kindSel) kindSel.addEventListener('change', () => { k = kindSel.value; m.querySelector('[data-fields]').innerHTML = fields(k); fillScripts(); });
+            if (kindSel) kindSel.addEventListener('change', () => { k = kindSel.value; m.querySelector('[data-fields]').innerHTML = fields(k); fillScripts(); wireHttp(); });
             fillScripts();
+            wireHttp();
             const val = (sel2) => { const x = m.querySelector(sel2); return x ? x.value : ''; };
             const listOf = (sel2) => val(sel2).split(',').map((x) => x.trim()).filter(Boolean);
             m.querySelector('[data-ok]').addEventListener('click', async () => {
@@ -367,13 +446,18 @@
                   if (inS) body.inputSchema = JSON.parse(inS); else if (!e) body.inputSchema = null;
                   body.outputSchema = outS ? JSON.parse(outS) : null;
                 }
+                else if (k === 'http') {
+                  const method = val('[data-hmethod]'); const mode = val('[data-hbody]'); const ptr = val('[data-hptr]').trim();
+                  const definition = { method: method, url: val('[data-hurl]').trim(), query: linesTo(val('[data-hquery]'), '='), headers: linesTo(val('[data-hheaders]'), ':'), body: mode === 'template' ? { mode: 'template', template: val('[data-htemplate]') } : { mode: mode }, response: { pointer: ptr || null, maxBytes: Math.max(1, Number(val('[data-hcap]')) || 64) * 1024 }, timeoutMs: Math.max(1, Number(val('[data-htimeout]')) || 10) * 1000 };
+                  body = Object.assign(common, { sideEffect: method === 'GET' ? 'read' : val('[data-hside]'), inputSchema: JSON.parse(val('[data-in]') || '{}'), outputSchema: val('[data-out]').trim() ? JSON.parse(val('[data-out]')) : null, definition: definition });
+                }
                 else body = Object.assign(common, { sideEffect: val('[data-side]'), inputSchema: JSON.parse(val('[data-in]') || '{}'), outputSchema: val('[data-out]').trim() ? JSON.parse(val('[data-out]')) : null, definition: { scriptId: val('[data-script]') } });
               } catch (err) { toast('A schema is not valid JSON: ' + esc(err.message), 'danger'); return; }
               App.closeOverlay();
               if (e) { await act(() => App.patch('/api/admin/registry/' + e.id, body), 'Draft ' + esc(e.name) + ' saved. Checks re-ran.'); return; }
-              Object.assign(body, { kind: k, name: val('[data-name]').trim(), version: val('[data-version]').trim() || '0.1.0' });
+              Object.assign(body, { kind: k === 'http' ? 'tool' : k, name: val('[data-name]').trim(), version: val('[data-version]').trim() || '0.1.0' }, k === 'http' ? { impl: 'http' } : {});
               const r = await act(() => App.post('/api/admin/registry', body), 'Draft ' + esc(body.name) + ' ' + esc(body.version) + ' saved. Its checks ran.');
-              if (r && r.id) { st.sel = r.id; st.tab = k === 'tool' ? 'tools' : k + 's'; }
+              if (r && r.id) { st.sel = r.id; st.tab = k === 'tool' || k === 'http' ? 'tools' : k + 's'; }
             });
           }
         });
