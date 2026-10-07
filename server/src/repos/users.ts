@@ -1,5 +1,5 @@
 import { ulid } from 'ulid';
-import type { Db } from '../db/knex.js';
+import { json, type Db } from '../db/knex.js';
 import { highest, isLabel, type Label } from '../authz/labels.js';
 
 export interface UserRow {
@@ -131,6 +131,15 @@ export class UserRepo {
 
   async identitiesFor(userId: string): Promise<{ provider_id: string; external_id: string; last_seen_at: number }[]> {
     return this.db('user_identities').where({ user_id: userId }).select('provider_id', 'external_id', 'last_seen_at');
+  }
+
+  /**
+   * 1.6.0 (B-7201): the user's links to SCIM stores, with the store's configuration and the SCIM groups recorded on
+   * the link (a SCIM store governs the users it provisioned: their groups decide their mapped roles).
+   */
+  async scimLinks(userId: string): Promise<{ providerId: string; groups: string[]; config: Record<string, unknown> }[]> {
+    const rows = (await this.db('user_identities as i').join('identity_providers as p', 'p.id', 'i.provider_id').where({ 'i.user_id': userId, 'p.kind': 'scim' }).select('i.provider_id', 'i.groups', 'p.config')) as { provider_id: string; groups: string; config: unknown }[];
+    return rows.map((r) => ({ providerId: r.provider_id, groups: json<string[]>(r.groups, []), config: typeof r.config === 'string' ? json<Record<string, unknown>>(r.config, {}) : ((r.config as Record<string, unknown>) ?? {}) }));
   }
 
   /**

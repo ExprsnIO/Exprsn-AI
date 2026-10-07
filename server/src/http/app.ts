@@ -69,6 +69,7 @@ import { messagingRoutes } from '../routes/messaging.js';
 import { feedRoutes } from '../routes/feed.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
+import { scimAdminRoutes, scimPublicRoutes } from '../routes/scim.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
 import { mediaHostGuard, mediaOriginRoutes } from '../media/origin.js';
 import { sendBytes } from '../routes/media.js';
@@ -191,6 +192,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(davRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
+  // 1.6.0, Sprint 37c (B-7201): SCIM 2.0 at /scim/v2. SCIM tokens only, SCIM-shaped errors, its own rate limit.
+  app.use(scimPublicRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
@@ -222,6 +225,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.5.0, Sprint 30 (B-3101): app passwords for DAV clients.
   api.use('/me', appPasswordRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
+  api.use('/admin', scimAdminRoutes(s)); // 1.6.0, Sprint 37c (B-7201): SCIM tokens and status
   api.use('/admin', userAdminRoutes(s));
   api.use('/admin', auditAdminRoutes(s));
   api.use('/admin', tenantAdminRoutes(s));

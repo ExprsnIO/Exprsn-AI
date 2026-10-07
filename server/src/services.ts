@@ -104,6 +104,8 @@ import { DatabaseLeases } from './vault/leases.js';
 import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
 import { RotationNotices } from './vault/rotation.js';
 import { RevealWatch } from './vault/anomalies.js';
+import { VaultShares } from './vault/shares.js';
+import { ScimService } from './identity/scim/service.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
@@ -258,6 +260,10 @@ export interface Services {
   rotation: RotationNotices;
   /** 1.6.0, Sprint 36b (B-4803): reveal history and anomaly flags for secret owners. */
   revealWatch: RevealWatch;
+  /** 1.6.0, Sprint 37c (B-4801): KV secrets shared with a principal, as policy grants. */
+  vaultShares: VaultShares;
+  /** 1.6.0, Sprint 37c (B-7201, B-7202): SCIM 2.0 users and groups pushed to a tenant's SCIM store. */
+  scim: ScimService;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
   /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
@@ -571,6 +577,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     revealWatch: new RevealWatch(() => s),
+    vaultShares: new VaultShares(() => s),
+    scim: new ScimService(() => s),
     atproto: new AtprotoService(() => s),
     atprotoAccounts: new AtprotoAccounts(() => s),
     // 1.4.0, Sprint 26d: the file store.
@@ -695,6 +703,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.dbLeases.registerJobs();
   s.rotation.registerJobs();
   s.revealWatch.registerJobs(); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
+  s.vaultShares.registerJobs(); // 1.6.0, Sprint 37c (B-4801): expired shares removed
+  s.scim.registerJobs(); // 1.6.0, Sprint 37c (B-7202): group mappings re-applied to a SCIM store
   {
     const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
@@ -825,6 +835,7 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.revealWatch.schedule(s.scheduler); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
+  s.vaultShares.schedule(s.scheduler); // 1.6.0, Sprint 37c (B-4801)
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
   s.feedGenerators.schedule(s.scheduler); // Sprint 31 (B-3003): feed indexes pruned to their retention
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge

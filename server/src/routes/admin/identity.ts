@@ -4,7 +4,7 @@ import { actorFrom } from '../../audit/chain.js';
 import { clears, highest, LABELS, type Label } from '../../authz/labels.js';
 import { canGrant, isRole } from '../../authz/permissions.js';
 import { LoginThrottle } from '../../identity/lockout.js';
-import { PROVIDER_KINDS, parseProviderConfig, type GitHubConfig, type Step } from '../../identity/providers/types.js';
+import { isFederatedKind, PROVIDER_KINDS, parseProviderConfig, type GitHubConfig, type ScimConfig, type Step } from '../../identity/providers/types.js';
 import { vaultRefsIn } from '../../identity/secrets.js';
 import { resolveMappings } from '../../repos/users.js';
 import type { ProviderRow } from '../../repos/providers.js';
@@ -67,6 +67,21 @@ export function identityAdminRoutes(s: Services): Router {
     if (!others.length) throw conflict('This is the only enabled user store; nobody could sign in without it.');
   };
 
+  /** 1.6.0 (B-7201): a SCIM store's sign-in stores are upstream stores (OIDC, SAML, GitHub) of the same tenant. */
+  const checkScim = async (tenantId: string, config: Record<string, unknown>) => {
+    let cfg: ScimConfig;
+    try {
+      cfg = parseProviderConfig('scim', config) as ScimConfig;
+    } catch (err) {
+      throw configProblem(err);
+    }
+    const stores = await s.providers.list(tenantId);
+    for (const id of cfg.signInStores) {
+      const row = stores.find((x) => x.id === id);
+      if (!row || !isFederatedKind(row.kind)) throw badRequest(`${id} is not an OIDC, SAML or GitHub store of this tenant; SCIM users sign in through one of those.`, { errors: [{ path: 'config.signInStores', message: 'Name upstream stores' }] });
+    }
+  };
+
   r.get('/identity-providers', async (req, res) => {
     res.json((await s.providers.list(principalOf(req).tenantId)).map(providerView));
   });
@@ -81,6 +96,7 @@ export function identityAdminRoutes(s: Services): Router {
         throw badRequest(`The GitHub address was refused: ${err.message}`, { reason: 'service_url' });
       });
       if (body.kind === 'local' && (await s.providers.list(p.tenantId)).some((x) => x.kind === 'local')) throw conflict('A tenant has one local user store.');
+      if (body.kind === 'scim') await checkScim(p.tenantId, body.config);
       // Sprint 25 (B-1705): vault references must be readable by the admin saving them; they resolve as that admin.
       const refs = vaultRefsIn(body.config);
       await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
@@ -115,6 +131,7 @@ export function identityAdminRoutes(s: Services): Router {
         throw badRequest(`The GitHub address was refused: ${err.message}`, { reason: 'service_url' });
       });
     }
+    if (body.config !== undefined && current.kind === 'scim') await checkScim(p.tenantId, body.config);
     if (body.config !== undefined) {
       const refs = vaultRefsIn(body.config);
       await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
@@ -136,6 +153,8 @@ export function identityAdminRoutes(s: Services): Router {
     if (current.managed_by === 'config') throw conflict('This store is managed by the configuration file; remove it there.');
     if (current.enabled) await assertAnotherEnabled(p.tenantId, current.id);
     await s.providers.remove(p.tenantId, current.id);
+    // 1.6.0 (B-7201): a SCIM store's records and tokens go with it.
+    if (current.kind === 'scim') await s.scim.forget(p.tenantId, current.id);
     await audit(req, 'identity.provider.deleted', { provider: current.id, name: current.name, kind: current.kind });
     res.status(204).end();
   });

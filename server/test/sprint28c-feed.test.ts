@@ -132,7 +132,7 @@ describe('the workspace feed (Sprint 28c)', () => {
     expect(ids((await bob.get('/api/feed/bookmarks').expect(200)).body)).toEqual([post.id]);
 
     const seen = (await bob.get(`/api/feed/posts/${post.id}`).expect(200)).body;
-    expect(seen.counts).toEqual({ comments: 2, reposts: 3, reactions: { like: 1, celebrate: 1 } });
+    expect(seen.counts).toEqual({ comments: 2, reposts: 3, quotes: 0, reactions: { like: 1, celebrate: 1 } });
     expect(seen.mine).toEqual({ reactions: ['like'], bookmarked: true, reposted: true });
     await bob.del(`/api/feed/posts/${post.id}/reactions/like`).expect(200);
     await bob.del(`/api/feed/posts/${post.id}/repost`).expect(200);

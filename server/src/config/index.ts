@@ -513,6 +513,20 @@ const base = z.object({
     VAULT_ANOMALY_HISTORY_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     VAULT_ANOMALY_MIN_HISTORY: z.coerce.number().int().min(1).max(10_000).default(20),
     /**
+     * 1.6.0, Sprint 37c (B-4801): the longest a KV secret may be shared with a principal, in days; every share then
+     * carries an expiry within it (the default expiry when none is asked). 0: shares may be open-ended.
+     */
+    VAULT_SHARE_MAX_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
+    /**
+     * 1.6.0, Sprint 37c (B-7201): SCIM 2.0 provisioning at /scim/v2. A list answers at most IDENTITY_SCIM_MAX_RESULTS
+     * resources a page (ServiceProviderConfig `filter.maxResults`); each address is limited to
+     * IDENTITY_SCIM_RATE_PER_MINUTE requests; new SCIM tokens expire after IDENTITY_SCIM_TOKEN_MAX_DAYS at most (0: a
+     * token may be open-ended, until it is revoked).
+     */
+    IDENTITY_SCIM_MAX_RESULTS: z.coerce.number().int().min(1).max(1000).default(200),
+    IDENTITY_SCIM_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(1200),
+    IDENTITY_SCIM_TOKEN_MAX_DAYS: z.coerce.number().int().min(0).max(3650).default(365),
+    /**
      * Sprint 25 (B-1608 to B-1611): AT-Protocol trust. ATPROTO_PUBLIC_URL is the base the platform's did:web and the
      * tenants' path-form DIDs and labeler endpoints live under (default PUBLIC_URL); ATPROTO_PLC_URL is the PLC
      * directory did:plc operations go to and are resolved from (through the service URL checks). The public DID,
