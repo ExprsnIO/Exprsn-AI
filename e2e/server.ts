@@ -214,6 +214,16 @@ async function main() {
   const profile = (id: string, name: string, display: string, model: string): ProfileRow => ({ id, tenant_id: tenantId, name, display_name: display, description: `${display} profile for the end-to-end suite`, alias_of: null, model_id: models[model]!, pool_id: pool.id, num_ctx: 8192, temperature: 0.2, think_default: 'off', think_ceiling: 'off', system_prompt: 'Be brief.', fallback: null, canary: null, tools: [], label: 'confidential', status: 'published', version: 1, updated_by: null, created_at: t, updated_at: t });
   await repo.createProfile(profile('GENERAL'.padEnd(26, '0'), 'general', 'General', 'llama3.1:8b'));
   await repo.createProfile(profile('ANALYST'.padEnd(26, '0'), 'analyst', 'Analyst', 'qwen2.5:7b'));
+  // 1.6.0 (B-8801 to B-8804): a model that reads images behind the profile `vision` (the fake answers image prompts
+  // from the picture's text chunks), and a published vision classifier for the knowledge-images spec.
+  ollama.addAvailable({ name: 'llava:7b', size: 4 * GB, capabilities: ['completion', 'vision'] });
+  const vision = await repo.createModel({ name: 'llava:7b', source: 'Ollama library', expectedDigest: null, license: { name: 'Llama 2 Community' }, label: 'confidential', notes: null, requestedBy: 'e2e', requestedTenant: tenantId });
+  await repo.updateModel(vision.id, { state: 'approved', import_state: 'pulled', capabilities: ['completion', 'vision'], size_bytes: 4 * GB });
+  await repo.place(vision.id, pool.id, 'cold', 'e2e');
+  models['llava:7b'] = vision.id;
+  await repo.createProfile(profile('VISION'.padEnd(26, '0'), 'vision', 'Vision', 'llava:7b'));
+  const imageKinds = await s.guard.classifiers.create(tenantId, { name: 'Image kinds', engine: 'vision', labels: ['receipt', 'screenshot'], profile: 'vision', description: 'Whether an image is a receipt or a screenshot, scored by the vision profile.' }, { userId: root.id, name: 'Mara Okafor' });
+  await s.db('classifiers').where({ id: imageKinds.id }).update({ status: 'published' });
   await s.gateway.pollAll();
 
   // ---- HTTP ----

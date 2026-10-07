@@ -173,9 +173,10 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   the caption is shown beside it. The label filter chips are buttons with `aria-pressed` and their document counts in
   text. Label scores are numbers with the threshold state in words ("above threshold", "below threshold"), never by
   colour alone. The image document drawer keeps the description in text: the caption, and the image's text as a
-  labelled block, so nothing is only in the picture. Re-classify and the classifier setting on a knowledge base are
-  labelled controls in the base's settings dialog, with a disabled control saying why in text (a draft classifier, no
-  vision profile). The Classifiers screen offers `vision` in the engine select of New classifier, and a vision
+  labelled block, so nothing is only in the picture. The vision profile and the image classifiers are
+  labelled controls in the base's Image settings dialog (the classifiers in a fieldset with a legend), and a disabled
+  classifier says why in its label (a draft); Re-classify is a labelled button beside the chips and in the image
+  drawer. The Classifiers screen offers `vision` in the engine select of New classifier, and a vision
   classifier's test dialog takes an image file through a labelled file input. `e2e/tests/knowledge-images.spec.ts` runs
   axe-core and the in-page checker on the image documents, the drawer, the filter chips and the settings dialog, and
   checks each for sideways scrolling at 320 and 640 px.
