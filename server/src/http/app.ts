@@ -40,6 +40,8 @@ import { operationsAdminRoutes } from '../routes/admin/operations.js';
 import { platformSettingsRoutes } from '../routes/admin/platform-settings.js';
 import { storageAdminRoutes } from '../routes/admin/storage.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
+import { mcpServerPublicRoutes } from '../routes/mcp-server-public.js';
+import { mcpAccessRoutes } from '../routes/mcp-access.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
 import { trainerWorkerRoutes } from '../routes/trainer-worker.js';
@@ -167,6 +169,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(mediaOriginRoutes(s, sendBytes));
   // OIDC, SAML and device-flow protocol endpoints: public paths with their own parsing and checks.
   app.use(federationPublicRoutes(s));
+  // 1.6.0, Sprint 37b (B-7101, B-7102): each workspace's MCP server and its protected resource metadata.
+  app.use(mcpServerPublicRoutes(s));
   // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
   app.use(acmeChallengeRoutes(s));
   // Sprint 19: published webhook signing keys and the Stripe webhook (public; signatures are the authentication).
@@ -231,6 +235,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(guardrailRoutes(s));
   api.use('/admin', registryAdminRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
+  api.use(mcpAccessRoutes(s)); // 1.6.0, Sprint 37b (B-7101 to B-7103): MCP server admin, held calls, client OAuth
   api.use(agentRoutes(s));
   api.use(chainRoutes(s));
   api.use(scriptRoutes(s));

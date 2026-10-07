@@ -199,12 +199,37 @@ export function federationPublicRoutes(s: Services): Router {
 
   // ---------- OIDC discovery and keys ----------
 
-  r.get('/.well-known/openid-configuration', async (req, res) => {
+  /** Sprint 37b (B-7102): the discovery document, with the registration endpoint when the tenant allows it. */
+  const metadata = async (req: Request, res: Response) => {
     const t = await tenantOf(req);
     if (!t) return void res.status(404).json({ error: 'not_found' });
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.json(fed().oidc.discovery(t));
+    res.json({ ...fed().oidc.discovery(t), ...((await s.mcpServer.dynamicRegistration(t.id)) ? { registration_endpoint: `${t.issuer}/oauth/register` } : {}) });
+  };
+  r.get('/.well-known/openid-configuration', metadata);
+  // RFC 8414: OAuth authorization server metadata, also at the path-inserted addresses MCP clients try first.
+  r.get('/.well-known/oauth-authorization-server', metadata);
+  root.get('/.well-known/oauth-authorization-server/t/:tenant', metadata);
+  root.get('/.well-known/openid-configuration/t/:tenant', metadata);
+
+  /**
+   * RFC 7591 dynamic client registration (Sprint 37b, B-7102), for MCP clients meeting the tenant for the first time.
+   * Off unless an identity admin turns it on for the tenant (Identity, MCP server); then it answers here and is named
+   * in the discovery document. Throttled per address like the token endpoint.
+   */
+  r.post('/oauth/register', express.json({ limit: '32kb' }), async (req, res) => {
+    if (await limited(req, res)) return;
+    const t = await tenantOf(req);
+    if (!t || !(await s.mcpServer.dynamicRegistration(t.id))) return void res.status(404).json({ error: 'not_found', error_description: 'This tenant does not register clients dynamically.' });
+    try {
+      const out = await fed().oidc.registerClient(t, req.body);
+      await s.audit.append({ tenantId: t.id, action: 'oidc.client.registered', kind: 'auth', actor: { ip: req.ip ?? null }, target: { client: out.client.client_id, name: out.client.name }, detail: { type: out.client.type, redirectUris: out.client.redirect_uris, scopes: out.client.scopes, dynamic: true }, traceId: req.traceId });
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(201).json(out.response);
+    } catch (err) {
+      oauthError(res, err, req);
+    }
   });
 
   r.get('/.well-known/jwks.json', async (req, res) => {

@@ -6,6 +6,7 @@ import { labelRank, LABELS } from '../../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { conflict, forbidden, notFound } from '../../http/problem.js';
 import { serverView, toolView, type ServerRow } from '../../mcp/service.js';
+import { oauthProblem, oauthView } from '../../mcp/oauth.js';
 import { SIDE_EFFECTS } from '../../registry/service.js';
 import type { ProfileRow } from '../../gateway/repo.js';
 import type { Services } from '../../services.js';
@@ -50,7 +51,7 @@ export function mcpAdminRoutes(s: Services): Router {
       const m = models.find((y) => y.id === x.model_id);
       return { profileId: x.id, profile: x.name, model: m?.name ?? null, toolsCapable: !!m?.capabilities.includes('tools'), label: x.label, tools: x.tools.filter((t) => t.startsWith(`${srv.name}.`)).map((t) => t.slice(srv.name.length + 1)), toolCount: x.tools.length, status: x.status };
     });
-    res.json({ ...serverView(srv), tools: tools.map(toolView), events, bindings, connections, myToken: mine });
+    res.json({ ...serverView(srv), tools: tools.map(toolView), events, bindings, connections, myToken: mine, oauth: oauthView(await mcp.oauth.config(srv.id)), callbackUrl: mcp.oauth.callbackUrl });
   });
 
   r.post('/mcp-servers', manage, async (req, res) => {
@@ -111,6 +112,43 @@ export function mcpAdminRoutes(s: Services): Router {
     await mcp.rotateCredential(srv, b.secret, principalOf(req).userId);
     await audit(req, 'mcp.credential.rotated', srv);
     res.json({ ok: true });
+  });
+
+  // ---------- B-7103: how users of a per-user server get their tokens (OAuth) ----------
+
+  /** Discovery: the server's challenge and resource metadata, its authorization server's metadata, client registration. */
+  r.post('/mcp-servers/:id/oauth/discover', manage, async (req, res) => {
+    const p = principalOf(req);
+    const srv = await load(req);
+    if (srv.auth !== 'user') throw conflict('Only servers with per-user tokens use OAuth.');
+    const t = await s.tenants.byId(p.tenantId);
+    try {
+      const out = await mcp.oauth.discover(srv, p.userId, t?.name ?? p.tenantSlug);
+      await audit(req, 'mcp.oauth.discovered', srv, { issuer: out.row.issuer, clientId: out.row.client_id, registered: out.row.registered });
+      res.json({ oauth: oauthView(out.row), steps: out.steps });
+    } catch (err) {
+      await audit(req, 'mcp.oauth.discovery.failed', srv, { reason: (err as Error).message });
+      throw oauthProblem(err);
+    }
+  });
+
+  /** The manual fallback: endpoints and a client entered by hand. */
+  r.put('/mcp-servers/:id/oauth', manage, async (req, res) => {
+    const p = principalOf(req);
+    const srv = await load(req);
+    if (srv.auth !== 'user') throw conflict('Only servers with per-user tokens use OAuth.');
+    const b = parseBody(z.object({ authorizationEndpoint: urlSchema, tokenEndpoint: urlSchema, revocationEndpoint: urlSchema.nullable().optional(), clientId: z.string().trim().min(1).max(300), clientSecret: z.string().min(1).max(4096).nullable().optional(), scopes: z.string().trim().max(500).nullable().optional(), resource: urlSchema.nullable().optional() }).strict(), req.body);
+    const row = await mcp.oauth.setManual(srv, b, p.userId);
+    await audit(req, 'mcp.oauth.configured', srv, { mode: 'manual', clientId: row.client_id, secret: b.clientSecret === undefined ? 'unchanged' : b.clientSecret ? 'set' : 'none' });
+    res.json({ oauth: oauthView(row) });
+  });
+
+  r.delete('/mcp-servers/:id/oauth', manage, async (req, res) => {
+    const srv = await load(req);
+    if (!(await mcp.oauth.config(srv.id))) throw notFound('OAuth configuration');
+    await mcp.oauth.remove(srv.id);
+    await audit(req, 'mcp.oauth.removed', srv);
+    res.status(204).end();
   });
 
   /** Binds the server's approved tools to a profile (a new profile version). The model must support tools. */

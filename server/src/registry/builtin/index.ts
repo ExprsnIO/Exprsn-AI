@@ -2,6 +2,9 @@ import { clears, highest, labelRank, type Label } from '../../authz/labels.js';
 import { authorize, type Principal } from '../../authz/policy.js';
 import type { Permission } from '../../authz/permissions.js';
 import type { Services } from '../../services.js';
+import { parseBody } from '../../http/middleware.js';
+import { aggregateSchema, filterSchema, sortSchema } from '../../apps/query.js';
+import { HttpProblem } from '../../http/problem.js';
 import type { ToolCallContext } from '../dispatch.js';
 import type { EntryRow } from '../service.js';
 import { BUILTIN_NAMES } from './catalog.js';
@@ -124,8 +127,86 @@ export class BuiltinTools {
           hits: out.hits.map((h) => ({ kb: h.kb, document: h.document, documentId: h.documentId, section: h.heading, label: h.label, score: h.rerank ?? h.fused, ...(h.withheld ? { withheld: h.withheld } : { text: h.text ?? '' }), ...(h.image ? { image: h.image } : {}) }))
         };
       }
+      case 'records.entities':
+      case 'records.query':
+      case 'records.count':
+      case 'records.aggregate':
+      case 'records.create':
+      case 'records.update':
+      case 'records.delete':
+        return this.records(ctx, String(entry.definition.builtin).slice('records.'.length), args);
       default:
         throw new Error(`Unknown built-in ${String(entry.definition.builtin)}.`);
+    }
+  }
+
+  /**
+   * Sprint 37b (B-7101): the record built-ins. Reads see records at most at the label of the call (the caller's
+   * clearance lowered to it), so nothing above the conversation, run or MCP call they answer comes back; a record
+   * created from a call is at least at its label. Problems the apps service reports (a value that fails the entity's
+   * validation, a stale version) come back to the caller as data.
+   */
+  private async records(ctx: ToolCallContext, op: string, args: Record<string, unknown>): Promise<unknown> {
+    const s = this.s();
+    const p = ctx.principal;
+    this.need(p, op === 'entities' || op === 'query' || op === 'count' || op === 'aggregate' ? 'records:read' : 'records:write');
+    const reader: Principal = labelRank(p.clearance) > labelRank(ctx.label) ? { ...p, clearance: ctx.label } : p;
+    const str = (k: string): string | undefined => (typeof args[k] === 'string' ? (args[k] as string) : undefined);
+    const actor = { principal: p, source: 'api' as const, ip: null };
+    try {
+      switch (op) {
+        case 'entities': {
+          const apps = (await s.apps.list(reader)).filter((a) => !str('app') || a.name === str('app') || a.id === str('app'));
+          return {
+            apps: await Promise.all(
+              apps.map(async (a) => ({
+                app: a.name,
+                title: a.title,
+                label: a.label,
+                entities: (await s.apps.entities(a)).map((e) => ({ entity: e.name, title: e.title, label: e.label, fields: e.definition.fields.map((f) => ({ name: f.name, type: f.type, ...(f.title ? { title: f.title } : {}), ...((f as { required?: boolean }).required ? { required: true } : {}) })), ...(e.definition.states ? { states: e.definition.states.states.map((x) => x.name) } : {}) }))
+              }))
+            )
+          };
+        }
+        case 'query': {
+          const out = await s.apps.query(reader, String(args.app), String(args.entity), {
+            ...(args.filter ? { filter: parseBody(filterSchema, args.filter) } : {}),
+            ...(args.sort ? { sort: parseBody(sortSchema, args.sort) } : {}),
+            ...(str('q') ? { q: str('q') } : {}),
+            limit: typeof args.limit === 'number' ? args.limit : 25,
+            ...(str('cursor') ? { cursor: str('cursor') } : {})
+          });
+          return { total: out.total, nextCursor: out.nextCursor, records: out.records.map((r) => ({ id: r.id, values: r.values, label: r.label, state: r.state, version: r.version, updatedAt: r.updatedAt })) };
+        }
+        case 'count': {
+          const out = await s.apps.query(reader, String(args.app), String(args.entity), { ...(args.filter ? { filter: parseBody(filterSchema, args.filter) } : {}), ...(str('q') ? { q: str('q') } : {}), limit: 1 });
+          return { count: Number(out.total ?? 0) };
+        }
+        case 'aggregate': {
+          const input = parseBody(aggregateSchema, { ...(args.filter ? { filter: args.filter } : {}), ...(str('q') ? { q: str('q') } : {}), ...(str('groupBy') ? { groupBy: str('groupBy') } : {}), metrics: args.metrics });
+          return await s.apps.aggregate(reader, String(args.app), String(args.entity), input);
+        }
+        case 'create': {
+          const { app, entity } = await s.apps.resolve(p, String(args.app), String(args.entity));
+          const r = await s.apps.createRecord(actor, app, entity, { values: (args.values ?? {}) as Record<string, unknown>, label: highest(entity.label, ctx.label) });
+          return { id: r.id, values: r.values, label: r.label, version: r.version };
+        }
+        case 'update': {
+          const { app, entity } = await s.apps.resolve(p, String(args.app), String(args.entity));
+          const r = await s.apps.updateRecord(actor, app, entity, String(args.id), { values: (args.values ?? {}) as Record<string, unknown>, ...(typeof args.version === 'number' ? { version: args.version } : {}) });
+          return { id: r.id, values: r.values, label: r.label, version: r.version };
+        }
+        case 'delete': {
+          const { app, entity } = await s.apps.resolve(p, String(args.app), String(args.entity));
+          const r = await s.apps.removeRecord(actor, app, entity, String(args.id));
+          return { deleted: r.id };
+        }
+        default:
+          throw new Error(`Unknown built-in records.${op}.`);
+      }
+    } catch (err) {
+      if (err instanceof HttpProblem) throw new BuiltinRefused(`${err.title}: ${err.detail ?? ''}`.trim());
+      throw err;
     }
   }
 }

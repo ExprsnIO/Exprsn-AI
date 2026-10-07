@@ -2,9 +2,9 @@
   const { UI, esc, DATA } = App;
 
   const ACCOUNTS0 = [
-    { id: 'gitlab', system: 'GitLab on-prem', scopes: 'read_api, write_repository', last: 'today 11:40', state: 'connected', tools: 'gitlab.create_mr, gitlab.read_file', vault: 'vault/users/mokafor/gitlab' },
-    { id: 'jira', system: 'Jira internal', scopes: 'read, write:issue', last: 'today 14:02', state: 'connected', tools: 'jira-internal.create_issue, jira-internal.search', vault: 'vault/users/mokafor/jira' },
-    { id: 'erp', system: 'ERP', scopes: 'ledger:read, cards:read', last: '', state: 'not connected', tools: 'ledger.query, cards.query', vault: 'vault/users/mokafor/erp' }
+    { id: 'gitlab', system: 'GitLab on-prem', scopes: 'read_api, write_repository', last: 'today 11:40', state: 'connected', tools: 'gitlab.create_mr, gitlab.read_file', vault: 'vault/users/mokafor/gitlab', how: 'oauth', issuer: 'https://gitlab.northwind.internal', expires: 'refreshed 11:40, every 2 h' },
+    { id: 'jira', system: 'Jira internal', scopes: 'read, write:issue', last: 'today 14:02', state: 'connected', tools: 'jira-internal.create_issue, jira-internal.search', vault: 'vault/users/mokafor/jira', how: 'token', expires: '31 Dec 2026' },
+    { id: 'erp', system: 'ERP', scopes: 'ledger:read, cards:read', last: '', state: 'not connected', tools: 'ledger.query, cards.query', vault: 'vault/users/mokafor/erp', how: 'oauth', issuer: 'https://sso.northwind.internal/realms/erp' }
   ];
   const KEYS0 = [
     { id: 'k1', name: 'notebook-laptop', scopes: 'inference:invoke', models: 'analyst, fast', expires: '18 Dec 2026', last: '1 h ago', state: 'active', prefix: 'exai_k1_7f3a' },
@@ -29,6 +29,15 @@
     { id: 'a2', name: 'Work Mac', scopes: ['caldav'], created: '5 Oct 2026', last: 'today 09:02', lastFrom: '10.20.1.33, macOS/27.0 CalendarAgent', expires: '3 Jan 2027', state: 'active', prefix: 'exai_d1_8d02e6b41a9f' },
     { id: 'a3', name: 'Old Android', scopes: ['caldav', 'carddav'], created: '2 Sep 2026', last: '20 Sep 2026', lastFrom: '10.20.9.4, DAVx5/4.5', expires: 'never', state: 'revoked', prefix: 'exai_d1_c71b5e09d3a2', revokedOn: '21 Sep 2026' }
   ];
+  // 1.6.0 (B-7101): the MCP servers of one's workspaces, and calls they hold for one's approval.
+  const MCPSRV = [
+    { ws: 'Finance Ops', url: 'https://ai.northwind.local/mcp/northwind/01J8FINOPS0000000000000AAA', groups: 'workflows, knowledge, records', label: 'internal' },
+    { ws: 'People Ops', url: 'https://ai.northwind.local/mcp/northwind/01J8PEOPLE0000000000000BBB', groups: 'agents, knowledge', label: 'confidential', dpop: true }
+  ];
+  const HOLDS0 = [
+    { id: 'h1', tool: 'records_create', ws: 'Finance Ops', client: 'Claude', side: 'write', args: '{"app": "close", "entity": "task", "values": {"title": "Reconcile the card feed", "due": "2026-10-09"}}', asked: 'today 10:41', expires: '11:41', state: 'pending' },
+    { id: 'h2', tool: 'records_delete', ws: 'Finance Ops', client: 'Claude', side: 'destructive', args: '{"app": "close", "entity": "task", "id": "01J8TASK0000000000000000QQ"}', asked: 'today 10:44', expires: '11:44', state: 'pending' }
+  ];
   const NOTIFS = [['jobs', 'Finished jobs and workflow runs', true], ['approvals', 'Approvals waiting for me', true], ['flags', 'New flags in my queues', true], ['quota', 'Quota warnings', false]];
 
   const applyContrast = (mode) => {
@@ -38,10 +47,13 @@
   };
 
   App.register({
-    id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
+    id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, MCP access (server URLs, held calls), connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     states: [
       { title: 'Key revealed once', tone: 'warn', text: 'The new key is shown once with a copy action. Afterwards only its name, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); if (!st.keys.some((k) => k.id === 'k3')) st.keys.unshift({ id: 'k3', name: 'notebook-desk', scopes: 'inference:invoke chat:read', models: 'analyst', expires: '19 Mar 2027', last: 'never', state: 'active', prefix: 'exai_k3_4d2e' }); st.revealed = { name: 'notebook-desk', key: 'exai_k3_4d2e9b1f7c0a5e83d6f2b4a19c7e0d5f' }; ctx.rerender(); } },
+      // 1.6.0 (B-7101, B-7103): MCP access.
+      { title: 'MCP call held for approval', tone: 'warn', text: 'An MCP client asked to create a record in Finance Ops. Nothing runs until you approve here; the client then calls again with the same arguments within 15 minutes, once.', apply(ctx) { ctx.state.holds = HOLDS0.map((h) => Object.assign({}, h)); ctx.state.holdNote = true; ctx.rerender(); } },
+      { title: 'Connected through OAuth', tone: 'ok', text: 'Back from the MCP server\'s authorization server: the code was exchanged with the PKCE verifier and the tokens are sealed with the tenant key. Tools from that server now act as you.', apply(ctx) { const st = ctx.state; st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a)); const a = st.accounts.find((x) => x.id === 'erp'); a.state = 'connected'; a.last = 'just now'; a.expires = 'refreshed when it expires'; st.oauthBack = 'ERP'; ctx.rerender(); } },
       { title: 'Re-consent needed', tone: 'warn', text: 'GitLab revoked the grant. The row shows reconnect and tools that depend on it are paused.', apply(ctx) { const st = ctx.state; st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a)); st.accounts.find((a) => a.id === 'gitlab').state = 're-consent needed'; ctx.rerender(); } },
       { title: 'Key expired', tone: 'neutral', text: 'Expired keys stay listed for 30 days for audit, then disappear.', apply(ctx) { ctx.state.expiredNote = true; ctx.rerender(); } },
       { title: 'Trusted devices forgotten', tone: 'neutral', text: 'Forgetting every trusted device makes the next sign-in from each browser ask for the second factor again. Audited as auth.trusted_device.removed.', apply(ctx) { ctx.state.devices = []; ctx.rerender(); ctx.toast('2 trusted devices forgotten. Audit entry written.', 'ok'); } },
@@ -61,6 +73,8 @@
     render(root, ctx) {
       const st = ctx.state;
       st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a));
+      st.holds = st.holds || HOLDS0.map((h) => Object.assign({}, h));
+      if (ctx.params.result === 'connected') { st.oauthBack = 'the MCP server'; delete ctx.params.result; }
       st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k));
       st.sessions = st.sessions || SESSIONS0.map((s) => Object.assign({}, s));
       st.notifs = st.notifs || NOTIFS.reduce((o, n) => { o[n[0]] = n[2]; return o; }, {});
@@ -107,12 +121,22 @@
         const reconsent = a.state === 're-consent needed';
         const scopes = connected || reconsent ? '<span class="mono">' + esc(a.scopes) + '</span>' : '<span class="muted" style="font-size:12px">not connected</span>';
         const action = connected ? UI.btn('Disconnect', { kind: 'ghost', size: 'sm', attrs: 'data-disconnect="' + a.id + '"' }) : reconsent ? UI.pill('re-consent needed', 'warn') + ' ' + UI.btn('Reconnect', { kind: 'primary', size: 'sm', attrs: 'data-connect="' + a.id + '"' }) : UI.btn('Connect', { size: 'sm', attrs: 'data-connect="' + a.id + '"' });
-        return { cells: [esc(a.system), scopes, connected ? esc(a.last) : reconsent ? '<span style="color:var(--warn-fg)">grant revoked ' + esc(a.last.replace('today', 'today')) + '</span>' : '', '<span class="hstack gap6" style="justify-content:flex-end">' + action + '</span>'], attrs: 'data-account="' + a.id + '"' };
+        const how = a.how === 'oauth' ? UI.pill('OAuth', 'outline') : UI.pill('token', 'outline');
+        return { cells: [esc(a.system) + ' ' + how, scopes, connected ? esc(a.last) + (a.expires ? '<div class="muted" style="font-size:11px">' + esc(a.expires) + '</div>' : '') : reconsent ? '<span style="color:var(--warn-fg)">grant revoked ' + esc(a.last.replace('today', 'today')) + '</span>' : '', '<span class="hstack gap6" style="justify-content:flex-end">' + action + '</span>'], attrs: 'data-account="' + a.id + '"' };
       });
       const reconsent = st.accounts.find((a) => a.state === 're-consent needed');
-      const accounts = UI.panel('Connected accounts', (reconsent ? UI.notice('<b>' + esc(reconsent.system) + ' revoked the grant.</b> Tools that depend on it are paused until you reconnect: <span class="mono">' + esc(reconsent.tools) + '</span>. Agents that call them get a clear refusal, not a stale token.', 'warn') : '')
+      const accounts = UI.panel('Connected accounts', (st.oauthBack ? UI.notice('<b>Connected to ' + esc(st.oauthBack) + ' through OAuth.</b> The tokens are sealed with your tenant\'s key and refreshed when they expire; tools from that server now act as you.', 'ok') : '') + (reconsent ? UI.notice('<b>' + esc(reconsent.system) + ' revoked the grant.</b> Tools that depend on it are paused until you reconnect: <span class="mono">' + esc(reconsent.tools) + '</span>. Agents that call them get a clear refusal, not a stale token.', 'warn') : '')
         + UI.table(['System', 'Scopes', 'Last used', { label: '', right: true }], acctRows, { minWidth: '0', cls: 'bare' })
-        + '<span class="muted" style="font-size:12px">Tokens are held in the vault and are never placed in model context.</span>');
+        + '<span class="muted" style="font-size:12px">Tokens are held in the vault and are never placed in model context. OAuth connections use the authorization code with PKCE, name the MCP server as the resource, refresh themselves, and are revoked at the authorization server when you disconnect.</span>');
+
+      // B-7101: the MCP servers of one's workspaces, and calls they hold for one's approval.
+      const pendingHolds = st.holds.filter((h) => h.state === 'pending');
+      const mcpAccess = UI.panel('MCP access', '<div class="fg2" style="font-size:12px">Add a URL to an MCP client such as Claude Desktop. It signs you in here and acts as you: your roles, your clearance (at most the label shown), guardrails and approvals apply.</div>'
+        + UI.table(['Workspace', 'Connection URL', 'Tool groups', 'Label', { label: '', right: true }], MCPSRV.map((m) => [esc(m.ws), '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(m.url) + '</span>' + (m.dpop ? '<div class="muted" style="font-size:11px">DPoP-bound tokens only</div>' : ''), esc(m.groups), UI.label(m.label, { sm: true }), '<span class="hstack" style="justify-content:flex-end">' + UI.iconbtn('copy', 'Copy the URL for ' + m.ws, { attrs: 'data-mcpcopy="' + esc(m.url) + '"', cls: 'sm ghost' }) + '</span>']), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No MCP servers', emptyText: 'None of your workspaces publishes one. An identity admin publishes them under Identity, MCP server.' })
+        + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Calls waiting for your approval</div>' + (pendingHolds.length ? UI.pill(pendingHolds.length + ' waiting', 'warn') : '') + '</div>'
+        + (st.holdNote ? UI.notice('<b>Claude asked to change data in Finance Ops.</b> Nothing ran. Approve only calls you asked for: an approval covers one call with exactly these arguments, for 15 minutes.', 'warn') : '')
+        + UI.table(['Tool', 'Client', 'Arguments', 'Asked', { label: '', right: true }], st.holds.map((h) => ({ cells: ['<span class="mono">' + esc(h.tool) + '</span> ' + UI.pill(h.side, h.side === 'write' ? 'warn' : 'danger') + '<div class="muted" style="font-size:11px">' + esc(h.ws) + '</div>', esc(h.client), '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(h.args) + '</span>', esc(h.asked) + '<div class="muted" style="font-size:11px">expires ' + esc(h.expires) + '</div>', '<span class="hstack gap6" style="justify-content:flex-end">' + (h.state === 'pending' ? UI.btn('Reject', { size: 'sm', kind: 'ghost', attrs: 'data-holdreject="' + h.id + '" aria-label="Reject ' + esc(h.tool) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-holdapprove="' + h.id + '" aria-label="Approve ' + esc(h.tool) + '"' }) : UI.pill(h.state, h.state === 'approved' ? 'ok' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'Nothing waiting', emptyText: 'Write and destructive calls from MCP clients wait here for you.' })
+        + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls. Audited mcp.server.hold.approved and rejected.</span>');
 
       const keyRows = st.keys.map((k) => {
         const expired = k.state === 'expired'; const revoked = k.state === 'revoked';
@@ -160,7 +184,7 @@
 
       root.innerHTML = '<div class="page">' + UI.pagehead('Settings', 'Personal settings for ' + esc(u.name) + ' in ' + esc(DATA.tenant.workspace))
         + '<style>#main .settings-avatar{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:18px;font-weight:700;flex-shrink:0}#main .settings-avatar.pic{background:var(--accent-tint);color:var(--accent)}</style>'
-        + '<div class="grid2"><div class="vstack gap12" style="gap:14px">' + profile + publicProfile + statusPanel + appearance + notifs + '</div><div class="vstack" style="gap:14px">' + security + davPanel + accounts + keys + atproto + '</div></div>'
+        + '<div class="grid2"><div class="vstack gap12" style="gap:14px">' + profile + publicProfile + statusPanel + appearance + notifs + '</div><div class="vstack" style="gap:14px">' + security + davPanel + mcpAccess + accounts + keys + atproto + '</div></div>'
         + sessions
         + '</div>';
 
@@ -178,11 +202,22 @@
       ctx.on('click', '[data-disconnect]', async (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.disconnect);
         const ok = await ctx.confirm({ title: 'Disconnect ' + a.system + '?', tag: 'revokes token', tone: 'danger', body: '<div class="fg2">The token is deleted from the vault and the grant is revoked at ' + esc(a.system) + '. Tools that use it will refuse until you reconnect.</div>', kv: [['Scopes', '<span class="mono">' + esc(a.scopes) + '</span>'], ['Tools affected', '<span class="mono">' + esc(a.tools) + '</span>'], ['Vault path', '<span class="mono">' + esc(a.vault) + '</span>'], ['Acting as', esc(u.name)]], ok: 'Disconnect' });
-        if (!ok) return; a.state = 'not connected'; a.last = ''; ctx.rerender(); ctx.toast(esc(a.system) + ' disconnected. Token removed from the vault and audit entry written.', 'ok');
+        if (!ok) return; a.state = 'not connected'; a.last = ''; a.expires = ''; ctx.rerender(); ctx.toast(esc(a.system) + ' disconnected. ' + (a.how === 'oauth' ? 'Its tokens were revoked at ' + esc(a.issuer) + ' and removed' : 'Token removed') + ' from the vault; audit entry written.', 'ok');
+      });
+      ctx.on('click', '[data-mcpcopy]', (e, t) => { if (navigator.clipboard) navigator.clipboard.writeText(t.dataset.mcpcopy).then(() => ctx.toast('Copied.', 'ok'), () => ctx.toast('Copy failed; select the URL instead.', 'warn')); else ctx.toast('Copy failed; select the URL instead.', 'warn'); });
+      ctx.on('click', '[data-holdapprove]', async (e, t) => {
+        const h = st.holds.find((x) => x.id === t.dataset.holdapprove);
+        const ok = await ctx.confirm({ title: 'Approve ' + h.tool + '?', tag: h.side, tone: h.side === 'destructive' ? 'danger' : 'warn', body: '<div class="fg2">' + esc(h.client) + ' may run this call once, with exactly these arguments, in the next 15 minutes. It runs as you.</div>' + UI.code(h.args, 'json'), kv: [['Workspace', esc(h.ws)], ['Asked', esc(h.asked)]], ok: 'Approve' });
+        if (!ok) return; h.state = 'approved'; st.holdNote = false; ctx.rerender(); ctx.toast(esc(h.tool) + ' approved. It runs when ' + esc(h.client) + ' calls it again.', 'ok');
+      });
+      ctx.on('click', '[data-holdreject]', async (e, t) => {
+        const h = st.holds.find((x) => x.id === t.dataset.holdreject);
+        const ok = await ctx.confirm({ title: 'Reject ' + h.tool + '?', tone: 'danger', body: '<div class="fg2">The call never runs; the client gets the same answer if it asks again.</div>', ok: 'Reject' });
+        if (!ok) return; h.state = 'rejected'; st.holdNote = false; ctx.rerender(); ctx.toast(esc(h.tool) + ' rejected.', 'ok');
       });
       ctx.on('click', '[data-connect]', (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.connect);
-        ctx.modal({ title: (a.state === 're-consent needed' ? 'Reconnect ' : 'Connect ') + esc(a.system), body: '<div class="fg2">' + esc(a.system) + ' will ask you to sign in and approve these scopes. The token comes back to the vault at <span class="mono">' + esc(a.vault) + '</span> and is used only by tools acting as you.</div>' + '<div class="vstack gap6">' + a.scopes.split(', ').map((s) => UI.check(s, true, 'disabled')).join('') + '</div>' + UI.kv([['Tools that will work', '<span class="mono">' + esc(a.tools) + '</span>'], ['Label ceiling', UI.label(u.clearance, { sm: true })]], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Continue to ' + a.system, { kind: 'primary', attrs: 'data-close data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { a.state = 'connected'; a.last = 'just now'; ctx.rerender(); ctx.toast(esc(a.system) + ' connected. Token stored in the vault.', 'ok'); }); } });
+        ctx.modal({ title: (a.state === 're-consent needed' ? 'Reconnect ' : 'Connect ') + esc(a.system), body: '<div class="fg2">' + (a.how === 'oauth' ? 'You are sent to <span class="mono">' + esc(a.issuer) + '</span> to sign in and approve these scopes (authorization code with PKCE, for this MCP server only). ' : '') + esc(a.system) + ' will ask you to sign in and approve these scopes. The token comes back to the vault at <span class="mono">' + esc(a.vault) + '</span> and is used only by tools acting as you.</div>' + '<div class="vstack gap6">' + a.scopes.split(', ').map((s) => UI.check(s, true, 'disabled')).join('') + '</div>' + UI.kv([['Tools that will work', '<span class="mono">' + esc(a.tools) + '</span>'], ['Label ceiling', UI.label(u.clearance, { sm: true })]], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Continue to ' + a.system, { kind: 'primary', attrs: 'data-close data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => { a.state = 'connected'; a.last = 'just now'; ctx.rerender(); ctx.toast(esc(a.system) + ' connected. Token stored in the vault.', 'ok'); }); } });
       });
       ctx.on('click', '[data-revoke]', async (e, t) => {
         const k = st.keys.find((x) => x.id === t.dataset.revoke);

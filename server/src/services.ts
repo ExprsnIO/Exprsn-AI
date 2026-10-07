@@ -41,6 +41,7 @@ import type { Guardrails } from './guardrails/types.js';
 import { createGuardrails, type GuardrailModule } from './guardrails/index.js';
 import { RegistryService } from './registry/service.js';
 import { ToolDispatcher } from './registry/dispatch.js';
+import { McpServerService } from './mcp/server/service.js';
 import { McpService } from './mcp/service.js';
 import { ScriptService } from './scripts/service.js';
 import { createScriptRunner } from './scripts/runner.js';
@@ -306,6 +307,8 @@ export interface Services {
   feed: FeedService;
   /** 1.6.0 (B-4206): the Social and messaging screen: workspace policies, digest settings, legal-hold exports, realtime counts. */
   socialAdmin: SocialAdmin;
+  /** 1.6.0, Sprint 37b (B-7101): each workspace's MCP server: publications, the tool catalogue, calls and held calls. */
+  mcpServer: McpServerService;
   /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
   customRoles: CustomRoleService;
   /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
@@ -423,7 +426,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const registry = new RegistryService(db);
   const chainRefs = new ChainRefs(db, registry);
   registry.useRefs(chainRefs);
-  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
+  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS, secret: cfg.SESSION_SECRET, callbackUrl: `${cfg.PUBLIC_URL.replace(/\/+$/, '')}/api/mcp-oauth/callback` });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
@@ -624,6 +627,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
     socialAdmin: new SocialAdmin(() => s),
+    mcpServer: new McpServerService(() => s),
     // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),

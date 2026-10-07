@@ -8,6 +8,7 @@ import type { Services } from '../services.js';
 import type { SigningKeys } from './keys.js';
 import { halfHash, JwtError, pkceChallenge, publicJwk, signJwtWith, verifyDpopProof, verifyJwt, type Claims, type Jwk } from './jose.js';
 import { expandAllowed, grantScopes, isKnownScope, parseScope } from './scopes.js';
+import { canonicalResource, MCP_SCOPES, parseMcpResource } from '../mcp/server/resource.js';
 
 export const CLIENT_TYPES = ['first_party', 'public', 'service', 'third_party'] as const;
 export type ClientType = (typeof CLIENT_TYPES)[number];
@@ -65,6 +66,8 @@ export interface ClientRow {
   dpop_required: boolean;
   /** Sprint 17 (B-806): `any` lets a resource server introspect every client's access tokens (set under dual control). */
   introspect: 'own' | 'any';
+  /** Sprint 37b (B-7102): the client registered itself (RFC 7591). */
+  dynamic: boolean;
   created_by: string | null;
   last_used_at: number | null;
   created_at: number;
@@ -84,6 +87,7 @@ const clientFromRow = (r: Record<string, unknown>): ClientRow => ({
   par_required: !!r.par_required,
   dpop_required: !!r.dpop_required,
   introspect: r.introspect === 'any' ? 'any' : 'own',
+  dynamic: !!r.dynamic,
   secret_created_at: r.secret_created_at == null ? null : Number(r.secret_created_at),
   access_ttl: Number(r.access_ttl),
   refresh_ttl: Number(r.refresh_ttl),
@@ -196,6 +200,8 @@ interface RefreshRow {
   used_at: number | null;
   revoked_at: number | null;
   dpop_jkt: string | null;
+  /** Sprint 37b (B-7102): the resource (RFC 8707) the grant was issued for; null is the API. */
+  resource: string | null;
 }
 
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
@@ -264,6 +270,8 @@ export class OidcProvider {
       scopes_supported: ['openid', 'profile', 'email', 'groups', 'offline_access'],
       claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'auth_time', 'nonce', 'amr', 'azp', 'at_hash', 'sid', 'name', 'preferred_username', 'email', 'groups', 'roles', 'clearance', 'tenant'],
       prompt_values_supported: ['none', 'login', 'consent'],
+      // RFC 9207: authorization responses carry iss.
+      authorization_response_iss_parameter_supported: true,
       claims_parameter_supported: false,
       // RFC 9101 request objects (signed with a key the client registered) and RFC 9126 pushed requests.
       request_parameter_supported: true,
@@ -278,6 +286,90 @@ export class OidcProvider {
       frontchannel_logout_session_supported: true,
       backchannel_logout_supported: true,
       backchannel_logout_session_supported: true
+    };
+  }
+
+  // ---------- resources (Sprint 37b, B-7102) ----------
+
+  /**
+   * RFC 8707: the canonical form of a resource this tenant's tokens may be issued for (the API at `<issuer>/api`, or
+   * one of the tenant's MCP endpoints), or null when it names anything else.
+   */
+  resourceFor(t: TenantCtx, raw: string): string | null {
+    const c = canonicalResource(raw);
+    if (!c) return null;
+    if (c === `${t.issuer}/api`) return c;
+    const mcp = parseMcpResource(this.s().cfg, c);
+    return mcp && mcp.tenantSlug === t.slug ? c : null;
+  }
+
+  /** A resource named at the token endpoint must be the one the grant was issued for (null: the API). */
+  private sameResource(t: TenantCtx, asked: string | undefined, granted: string | null): void {
+    if (asked === undefined) return;
+    if (this.resourceFor(t, asked) !== (granted ?? `${t.issuer}/api`)) throw new OAuthError(400, 'invalid_target', 'The resource does not match the one this grant was issued for.');
+  }
+
+  // ---------- dynamic client registration (Sprint 37b, B-7102, RFC 7591) ----------
+
+  /**
+   * Registers a client that asked for itself (an MCP client meeting this tenant for the first time), when the tenant
+   * allows it. Only what an MCP client needs: the authorization code grant with PKCE (and refresh), redirect URIs on
+   * HTTPS or a loopback address, and the MCP scopes (narrowed by each user's roles at consent). Public clients
+   * (`none`) and confidential ones (a secret, shown once in the response) are both accepted; every one asks each
+   * user's consent. At most `max` dynamic clients per tenant.
+   */
+  async registerClient(t: TenantCtx, body: unknown, max = 500): Promise<{ client: ClientRow; response: Record<string, unknown> }> {
+    const fail = (error: string, why: string): never => {
+      throw new OAuthError(400, error, why);
+    };
+    if (!body || typeof body !== 'object' || Array.isArray(body)) fail('invalid_client_metadata', 'Send the client metadata as a JSON object.');
+    const m = body as Record<string, unknown>;
+    const strings = (v: unknown, what: string, most: number): string[] | undefined => {
+      if (v === undefined) return undefined;
+      if (!Array.isArray(v) || !v.length || v.length > most || v.some((x) => typeof x !== 'string' || x.length > 500)) return fail('invalid_client_metadata', `${what} must be a list of at most ${most} strings.`);
+      return v as string[];
+    };
+    const redirects = strings(m.redirect_uris, 'redirect_uris', 5) ?? fail('invalid_redirect_uri', 'redirect_uris is required.');
+    for (const raw of redirects) {
+      let u: URL;
+      try {
+        u = new URL(raw);
+      } catch {
+        return fail('invalid_redirect_uri', `${raw} is not a URL.`);
+      }
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+      if (u.hash || u.username || u.password || !(u.protocol === 'https:' || (u.protocol === 'http:' && loopback))) fail('invalid_redirect_uri', `${raw} must be an https URL, or http on a loopback address, without a fragment or credentials.`);
+    }
+    const method = m.token_endpoint_auth_method === undefined ? 'client_secret_basic' : m.token_endpoint_auth_method;
+    if (method !== 'none' && method !== 'client_secret_basic' && method !== 'client_secret_post') fail('invalid_client_metadata', 'token_endpoint_auth_method must be none, client_secret_basic or client_secret_post.');
+    const grants = strings(m.grant_types, 'grant_types', 2) ?? ['authorization_code'];
+    if (!grants.includes('authorization_code') || grants.some((g) => g !== 'authorization_code' && g !== 'refresh_token')) fail('invalid_client_metadata', 'grant_types may be authorization_code and refresh_token only.');
+    const responses = strings(m.response_types, 'response_types', 1) ?? ['code'];
+    if (responses[0] !== 'code') fail('invalid_client_metadata', 'response_types must be [code].');
+    const allowed = [...MCP_SCOPES, 'openid', 'profile', 'offline_access'] as string[];
+    const requested = m.scope === undefined ? [...MCP_SCOPES] : typeof m.scope === 'string' ? parseScope(m.scope) : fail('invalid_client_metadata', 'scope is a space-separated string.');
+    const scopes = requested.filter((x) => allowed.includes(x));
+    if (!scopes.length) fail('invalid_client_metadata', `Ask for some of: ${allowed.join(' ')}.`);
+    const asked = typeof m.client_name === 'string' && m.client_name.trim() ? m.client_name.trim().replace(/\p{Cc}/gu, '').slice(0, 90) : 'MCP client';
+    // Client names are unique in a tenant: a second "Claude" gets a short suffix.
+    const name = (await this.db('oidc_clients').where({ tenant_id: t.id, name: asked }).first('id')) ? `${asked} ${randomBytes(3).toString('hex')}` : asked;
+    const n = (await this.db('oidc_clients').where({ tenant_id: t.id, dynamic: true }).count({ n: '*' }).first()) as { n: number | string } | undefined;
+    if (Number(n?.n ?? 0) >= max) throw new OAuthError(400, 'invalid_client_metadata', 'This tenant has registered as many MCP clients as it allows; ask an identity admin to remove unused ones.');
+    const type: ClientType = method === 'none' ? 'public' : 'third_party';
+    const { client, secret } = await this.createClient(t.id, { name, type, redirectUris: redirects, grants: grants as Grant[], scopes, pkceRequired: true, accessTtl: 600, refreshTtl: 30 * 24 * 3600, models: null, serviceUserId: null, dynamic: true }, null);
+    return {
+      client,
+      response: {
+        client_id: client.client_id,
+        ...(secret ? { client_secret: secret, client_secret_expires_at: 0 } : {}),
+        client_id_issued_at: Math.floor(client.created_at / 1000),
+        client_name: client.name,
+        redirect_uris: client.redirect_uris,
+        grant_types: client.grants,
+        response_types: ['code'],
+        token_endpoint_auth_method: method,
+        scope: client.scopes.join(' ')
+      }
     };
   }
 
@@ -303,7 +395,7 @@ export class OidcProvider {
 
   async createClient(
     tenantId: string,
-    input: { name: string; type: ClientType; redirectUris: string[]; grants: Grant[]; scopes: string[]; pkceRequired: boolean; accessTtl: number; refreshTtl: number; models: string | null; serviceUserId: string | null } & ClientExtras,
+    input: { name: string; type: ClientType; redirectUris: string[]; grants: Grant[]; scopes: string[]; pkceRequired: boolean; accessTtl: number; refreshTtl: number; models: string | null; serviceUserId: string | null; dynamic?: boolean } & ClientExtras,
     createdBy: string | null
   ): Promise<{ client: ClientRow; secret: string | null }> {
     const t = Date.now();
@@ -330,6 +422,7 @@ export class OidcProvider {
       jwks: input.jwks?.length ? JSON.stringify({ keys: input.jwks }) : null,
       par_required: input.parRequired ?? false,
       dpop_required: input.dpopRequired ?? false,
+      dynamic: input.dynamic ?? false,
       status: 'active',
       created_by: createdBy,
       last_used_at: null,
@@ -459,7 +552,11 @@ export class OidcProvider {
       maxAge = typeof maxAgeRaw === 'number' ? maxAgeRaw : typeof maxAgeRaw === 'string' && /^\d{1,9}$/.test(maxAgeRaw) ? Number(maxAgeRaw) : NaN;
       if (!Number.isInteger(maxAge) || maxAge < 0) throw new AuthorizeError('invalid_request', 'max_age must be a whole number of seconds.', true);
     }
-    return { clientId: client.client_id, redirectUri, scopes, state: str('state'), nonce: str('nonce'), codeChallenge: challenge, prompt: prompts.join(' ') || null, audience: str('audience') ?? str('resource'), maxAge };
+    // Sprint 37b (B-7102, RFC 8707): the resource the token is for: the API, or one of this tenant's MCP endpoints.
+    const asked = str('resource') ?? str('audience');
+    const audience = asked == null ? null : this.resourceFor(t, asked);
+    if (asked != null && !audience) throw new AuthorizeError('invalid_target', 'The resource is not one this issuer issues tokens for.', true);
+    return { clientId: client.client_id, redirectUri, scopes, state: str('state'), nonce: str('nonce'), codeChallenge: challenge, prompt: prompts.join(' ') || null, audience, maxAge };
   }
 
   /**
@@ -578,7 +675,8 @@ export class OidcProvider {
       auth_time: user.authTime,
       expires_at: Date.now() + 60_000,
       used_at: null,
-      family_id: null
+      family_id: null,
+      resource: req.audience ?? null
     });
     if (user.sessionId) await this.recordRpSession(t.id, user.sessionId, user.userId, client.client_id);
     return code;
@@ -646,7 +744,8 @@ export class OidcProvider {
         expires_at: (grant.familyCreatedAt ?? created) + client.refresh_ttl * 1000,
         used_at: null,
         revoked_at: null,
-        dpop_jkt: grant.dpopJkt ?? null
+        dpop_jkt: grant.dpopJkt ?? null,
+        resource: grant.audience ?? null
       });
     }
     const access = await signJwtWith(
@@ -774,6 +873,8 @@ export class OidcProvider {
     if (Number(row.expires_at) < Date.now()) throw new OAuthError(400, 'invalid_grant', 'The authorization code has expired.');
     if (row.client_id !== client.client_id) throw new OAuthError(400, 'invalid_grant', 'The code was issued to another client.');
     if (form.redirect_uri !== row.redirect_uri) throw new OAuthError(400, 'invalid_grant', 'redirect_uri does not match the authorization request.');
+    const resource = (row.resource as string | null | undefined) ?? null;
+    this.sameResource(t, form.resource, resource);
     if (row.code_challenge) {
       const verifier = form.code_verifier;
       if (!verifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || !safeEqual(pkceChallenge(verifier), String(row.code_challenge))) throw new OAuthError(400, 'invalid_grant', 'The PKCE code verifier does not match.');
@@ -785,7 +886,7 @@ export class OidcProvider {
     const [amr, method] = String(row.amr).split('|');
     const familyId = ulid();
     await this.db('oidc_codes').where({ id }).update({ family_id: familyId });
-    const response = await this.mint(t, client, { userId, scopes: String(row.scopes).split(' ').filter(Boolean), nonce: row.nonce as string | null, authTime: Number(row.auth_time), amr: (amr ?? 'pwd').split(' '), method: method ?? '', sessionId: (row.session_id as string | null) ?? null, familyId, refresh: true, dpopJkt: jkt });
+    const response = await this.mint(t, client, { userId, scopes: String(row.scopes).split(' ').filter(Boolean), nonce: row.nonce as string | null, authTime: Number(row.auth_time), amr: (amr ?? 'pwd').split(' '), method: method ?? '', sessionId: (row.session_id as string | null) ?? null, familyId, refresh: true, dpopJkt: jkt, audience: resource });
     return { response, client, userId, grant: 'authorization_code' };
   }
 
@@ -801,8 +902,9 @@ export class OidcProvider {
     const id = this.digest('refresh', token);
     const raw = (await this.db('oidc_refresh_tokens').where({ id, tenant_id: t.id }).first()) as Record<string, unknown> | undefined;
     if (!raw) throw new OAuthError(400, 'invalid_grant', 'Unknown refresh token.');
-    const row = { ...(raw as unknown as RefreshRow), used_at: num(raw.used_at), revoked_at: num(raw.revoked_at), expires_at: Number(raw.expires_at), family_created_at: Number(raw.family_created_at), auth_time: Number(raw.auth_time), dpop_jkt: (raw.dpop_jkt as string | null) ?? null };
+    const row = { ...(raw as unknown as RefreshRow), used_at: num(raw.used_at), revoked_at: num(raw.revoked_at), expires_at: Number(raw.expires_at), family_created_at: Number(raw.family_created_at), auth_time: Number(raw.auth_time), dpop_jkt: (raw.dpop_jkt as string | null) ?? null, resource: (raw.resource as string | null | undefined) ?? null };
     if (row.client_id !== client.client_id) throw new OAuthError(400, 'invalid_grant', 'The token was issued to another client.');
+    this.sameResource(t, form.resource, row.resource);
     // A refresh token issued with a DPoP proof only refreshes with a proof from the same key (RFC 9449 5).
     if (row.dpop_jkt && row.dpop_jkt !== jkt) throw new OAuthError(400, 'invalid_dpop_proof', 'This refresh token is bound to a DPoP key; send a proof made with that key.');
     if (row.revoked_at != null) throw new OAuthError(400, 'invalid_grant', 'The grant was revoked.');
@@ -831,7 +933,7 @@ export class OidcProvider {
     }
     // Scopes are re-intersected with the user's current roles, so a removed role takes effect at the next refresh.
     scopes = grantScopes(scopes, client.scopes, permissionsFor(await this.s().users.roleIds(row.user_id)));
-    const response = await this.mint(t, client, { userId: row.user_id, scopes, authTime: row.auth_time, amr: row.amr.split(' '), method: row.method, sessionId: row.session_id, familyId: row.family_id, familyCreatedAt: row.family_created_at, refresh: true, dpopJkt: row.dpop_jkt ?? jkt });
+    const response = await this.mint(t, client, { userId: row.user_id, scopes, authTime: row.auth_time, amr: row.amr.split(' '), method: row.method, sessionId: row.session_id, familyId: row.family_id, familyCreatedAt: row.family_created_at, refresh: true, dpopJkt: row.dpop_jkt ?? jkt, audience: row.resource });
     return { response, client, userId: row.user_id, grant: 'refresh_token' };
   }
 

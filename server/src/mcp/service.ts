@@ -14,6 +14,7 @@ import { schemaHash } from '../registry/schema.js';
 import type { RegistryService, SideEffect } from '../registry/service.js';
 import { McpClient, McpError, type McpCallResult, type McpToolInfo } from './client.js';
 import { checkUrl, guardedAgent, HostRefused, parseAllowList, type AllowList } from './hosts.js';
+import { McpOAuth, OAuthFailure, type TokenSet } from './oauth.js';
 
 export type ServerHealth = 'registering' | 'healthy' | 'changed' | 'unreachable' | 'incompatible';
 export type ToolState = 'pending' | 'approved' | 'changed' | 'rejected' | 'removed';
@@ -134,6 +135,9 @@ const hashTool = (t: McpToolInfo) => schemaHash({ name: t.name, description: t.d
 export class McpService {
   readonly allow: AllowList;
   private readonly agent: Agent;
+  /** Sprint 37b (B-7103): OAuth per user for servers that are authorization-protected. */
+  readonly oauth: McpOAuth;
+  private readonly refreshing = new Map<string, Promise<string | null>>();
 
   constructor(
     private readonly db: Db,
@@ -142,10 +146,11 @@ export class McpService {
     private readonly audit: AuditLog,
     private readonly notifications: Notifications,
     private readonly log: Logger,
-    private readonly o: { allowedHosts: string; timeoutMs: number }
+    private readonly o: { allowedHosts: string; timeoutMs: number; secret: string; callbackUrl: string }
   ) {
     this.allow = parseAllowList(o.allowedHosts);
     this.agent = guardedAgent(this.allow, o.timeoutMs);
+    this.oauth = new McpOAuth(db, keys, this.agent, this.allow, log, { timeoutMs: o.timeoutMs, secret: o.secret, callbackUrl: o.callbackUrl });
   }
 
   async close(): Promise<void> {
@@ -382,6 +387,7 @@ export class McpService {
   async deregister(s: ServerRow): Promise<void> {
     await this.db('mcp_servers').where({ id: s.id }).update({ state: 'deregistered', updated_at: Date.now() });
     await this.db('mcp_tokens').where({ server_id: s.id }).delete();
+    await this.oauth.remove(s.id);
     for (const e of await this.registry.mcpEntries(s.tenant_id, s.id)) if (e.status === 'published') await this.registry.setStatus(e, 'deprecated', { replacement: null });
     await this.event(s.id, 'Deregistered', 'Tools removed from routing; registry entries deprecated; user tokens deleted.', 'danger');
   }
@@ -397,31 +403,91 @@ export class McpService {
 
   async setToken(p: Principal, s: ServerRow, token: string, input: { scopes?: string | null; expiresAt?: number | null }): Promise<void> {
     if (s.auth !== 'user') throw conflict('This server does not use per-user tokens.');
-    const row = { id: ulid(), server_id: s.id, tenant_id: p.tenantId, user_id: p.userId, token: '', scopes: input.scopes ?? null, expires_at: input.expiresAt ?? null, created_at: Date.now() };
+    const row = { id: ulid(), server_id: s.id, tenant_id: p.tenantId, user_id: p.userId, token: '', scopes: input.scopes ?? null, expires_at: input.expiresAt ?? null, created_at: Date.now(), source: 'manual', refresh_token: null };
     row.token = await this.keys.seal(p.tenantId, token, `mcp-token:${s.id}:${p.userId}`);
     await this.db('mcp_tokens').where({ server_id: s.id, user_id: p.userId }).delete();
     await this.db('mcp_tokens').insert(row);
   }
 
   async removeToken(p: Principal, s: ServerRow): Promise<boolean> {
-    return (await this.db('mcp_tokens').where({ server_id: s.id, user_id: p.userId }).delete()) > 0;
+    return (await this.disconnect(p.userId, s)).removed;
+  }
+
+  /**
+   * Sprint 37b (B-7103): stores a user's tokens from the OAuth flow (sealed; the refresh token too), replacing any
+   * token they had for the server.
+   */
+  async storeOAuthTokens(tenantId: string, s: ServerRow, userId: string, t: TokenSet): Promise<void> {
+    if (s.auth !== 'user') throw conflict('This server does not use per-user tokens.');
+    const row = { id: ulid(), server_id: s.id, tenant_id: tenantId, user_id: userId, token: await this.keys.seal(tenantId, t.access, `mcp-token:${s.id}:${userId}`), refresh_token: t.refresh ? await this.keys.seal(tenantId, t.refresh, `mcp-refresh:${s.id}:${userId}`) : null, scopes: t.scopes, expires_at: t.expiresAt, created_at: Date.now(), source: 'oauth', refreshed_at: null };
+    await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).delete();
+    await this.db('mcp_tokens').insert(row);
+  }
+
+  /**
+   * Disconnects a user: a token from the OAuth flow is revoked at the authorization server first (RFC 7009, when it
+   * has a revocation endpoint), then the stored token is deleted either way.
+   */
+  async disconnect(userId: string, s: ServerRow): Promise<{ removed: boolean; revoked: boolean | null }> {
+    const r = (await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).first('token', 'refresh_token', 'source')) as { token: string; refresh_token: string | null; source: string | null } | undefined;
+    if (!r) return { removed: false, revoked: null };
+    let revoked: boolean | null = null;
+    if (r.source === 'oauth') {
+      const access = await this.keys.open(s.tenant_id, r.token, `mcp-token:${s.id}:${userId}`).catch(() => null);
+      const refresh = r.refresh_token ? await this.keys.open(s.tenant_id, r.refresh_token, `mcp-refresh:${s.id}:${userId}`).catch(() => null) : null;
+      revoked = await this.oauth.revoke(s.id, { access, refresh });
+    }
+    await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).delete();
+    return { removed: true, revoked };
   }
 
   /** Who has connected a token (never the token). */
   async connections(serverId: string) {
-    const rows = (await this.db('mcp_tokens as t').join('users as u', 'u.id', 't.user_id').where({ 't.server_id': serverId }).select('t.user_id', 'u.display_name', 't.scopes', 't.expires_at', 't.created_at')) as { user_id: string; display_name: string; scopes: string | null; expires_at: number | null; created_at: number }[];
-    return rows.map((r) => ({ userId: r.user_id, name: r.display_name, scopes: r.scopes, expiresAt: num(r.expires_at), connectedAt: Number(r.created_at), expired: r.expires_at != null && Number(r.expires_at) < Date.now() }));
+    const rows = (await this.db('mcp_tokens as t').join('users as u', 'u.id', 't.user_id').where({ 't.server_id': serverId }).select('t.user_id', 'u.display_name', 't.scopes', 't.expires_at', 't.created_at', 't.source', 't.refresh_token')) as { user_id: string; display_name: string; scopes: string | null; expires_at: number | null; created_at: number; source: string | null; refresh_token: string | null }[];
+    return rows.map((r) => ({ userId: r.user_id, name: r.display_name, scopes: r.scopes, expiresAt: num(r.expires_at), connectedAt: Number(r.created_at), source: r.source ?? 'manual', expired: r.expires_at != null && Number(r.expires_at) < Date.now() && !r.refresh_token }));
   }
 
   async tokenStatus(p: Principal, serverId: string) {
-    const r = (await this.db('mcp_tokens').where({ server_id: serverId, user_id: p.userId }).first('scopes', 'expires_at', 'created_at')) as { scopes: string | null; expires_at: number | null; created_at: number } | undefined;
-    return r ? { connected: true, scopes: r.scopes, expiresAt: num(r.expires_at), expired: r.expires_at != null && Number(r.expires_at) < Date.now(), connectedAt: Number(r.created_at) } : { connected: false };
+    const r = (await this.db('mcp_tokens').where({ server_id: serverId, user_id: p.userId }).first('scopes', 'expires_at', 'created_at', 'source', 'refresh_token', 'refreshed_at')) as { scopes: string | null; expires_at: number | null; created_at: number; source: string | null; refresh_token: string | null; refreshed_at: number | null } | undefined;
+    // An expired OAuth token with a refresh token is renewed at the next call, so it still counts as connected.
+    return r ? { connected: true, source: r.source ?? 'manual', scopes: r.scopes, expiresAt: num(r.expires_at), expired: r.expires_at != null && Number(r.expires_at) < Date.now() && !r.refresh_token, refreshable: !!r.refresh_token, refreshedAt: num(r.refreshed_at), connectedAt: Number(r.created_at) } : { connected: false };
   }
 
-  private async userToken(s: ServerRow, userId: string): Promise<string | null> {
-    const r = (await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).first('token', 'expires_at')) as { token: string; expires_at: number | null } | undefined;
-    if (!r || (r.expires_at != null && Number(r.expires_at) < Date.now())) return null;
+  private async userToken(s: ServerRow, userId: string, opts: { forceRefresh?: boolean } = {}): Promise<string | null> {
+    const r = (await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).first('token', 'expires_at', 'refresh_token', 'source')) as { token: string; expires_at: number | null; refresh_token: string | null; source: string | null } | undefined;
+    if (!r) return null;
+    // B-7103: an OAuth token close to its expiry (or refused by the server) is refreshed first.
+    if (r.source === 'oauth' && r.refresh_token && (opts.forceRefresh || (r.expires_at != null && Number(r.expires_at) < Date.now() + 30_000))) return this.refreshToken(s, userId);
+    if (r.expires_at != null && Number(r.expires_at) < Date.now()) return null;
     return this.keys.open(s.tenant_id, r.token, `mcp-token:${s.id}:${userId}`);
+  }
+
+  /** One refresh per server and user at a time in this process; a refused grant forgets the token (reconnect). */
+  private refreshToken(s: ServerRow, userId: string): Promise<string | null> {
+    const key = `${s.id}:${userId}`;
+    const running = this.refreshing.get(key);
+    if (running) return running;
+    const work = (async () => {
+      const r = (await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).first('refresh_token')) as { refresh_token: string | null } | undefined;
+      if (!r?.refresh_token) return null;
+      const refresh = await this.keys.open(s.tenant_id, r.refresh_token, `mcp-refresh:${s.id}:${userId}`);
+      try {
+        const t = await this.oauth.refresh(s.id, refresh);
+        await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).update({ token: await this.keys.seal(s.tenant_id, t.access, `mcp-token:${s.id}:${userId}`), refresh_token: t.refresh ? await this.keys.seal(s.tenant_id, t.refresh, `mcp-refresh:${s.id}:${userId}`) : null, expires_at: t.expiresAt, scopes: t.scopes, refreshed_at: Date.now() });
+        await this.audit.append({ tenantId: s.tenant_id, action: 'mcp.oauth.refreshed', kind: 'system', actor: { service: 'mcp', user: userId }, target: { mcpServer: s.id, name: s.name } });
+        return t.access;
+      } catch (err) {
+        if (!(err instanceof OAuthFailure)) throw err;
+        if (err.code === 'invalid_grant') {
+          await this.db('mcp_tokens').where({ server_id: s.id, user_id: userId }).delete();
+          await this.audit.append({ tenantId: s.tenant_id, action: 'mcp.oauth.expired', kind: 'system', actor: { service: 'mcp', user: userId }, target: { mcpServer: s.id, name: s.name }, detail: { reason: err.message } });
+          await this.notifications.notify({ tenantId: s.tenant_id, userIds: [userId], kind: 'mcp', title: `Reconnect ${s.name}`, body: 'Its authorization server no longer accepts your connection. Connect again under Settings, MCP access.', route: 'settings?tab=mcp' }).catch(() => undefined);
+        } else this.log.warn({ err: err.message, server: s.id }, 'mcp oauth refresh failed');
+        return null;
+      }
+    })().finally(() => this.refreshing.delete(key));
+    this.refreshing.set(key, work);
+    return work;
   }
 
   // ---------- calls ----------
@@ -442,9 +508,21 @@ export class McpService {
     if (why) throw new McpError(why, null, 'refused');
     const s = (await this.db('mcp_servers').where({ id: serverId }).first()) as ServerRow;
     const token = s.auth === 'user' ? await this.userToken(s, p.userId) : await this.serviceToken(s);
-    const client = await this.client(s, token);
-    await client.initialize(signal);
-    return client.callTool(toolName, args, signal);
+    try {
+      const client = await this.client(s, token);
+      await client.initialize(signal);
+      return await client.callTool(toolName, args, signal);
+    } catch (err) {
+      // B-7103: a server that refuses the user's OAuth token gets one refreshed token and one more try.
+      if (!(err instanceof McpError && err.code === 401 && s.auth === 'user')) throw err;
+      const src = (await this.db('mcp_tokens').where({ server_id: s.id, user_id: p.userId }).first('source')) as { source: string | null } | undefined;
+      if (src?.source !== 'oauth') throw err;
+      const fresh = await this.userToken(s, p.userId, { forceRefresh: true });
+      if (!fresh) throw new McpError(`Your connection to ${s.name} has ended; connect again under Settings, MCP access.`, 401, 'http');
+      const client = await this.client(s, fresh);
+      await client.initialize(signal);
+      return client.callTool(toolName, args, signal);
+    }
   }
 
   assertTenant(s: ServerRow, p: Principal): void {

@@ -10911,6 +10911,223 @@
         }
       }
     },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 authorization server metadata of the default tenant: the OpenID discovery document, with registration_endpoint when the tenant allows dynamic client registration (Identity, MCP server) (B-7102)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server/t/{tenant}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 metadata of another tenant at the path-inserted address MCP clients try first (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/openid-configuration/t/{tenant}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The OpenID discovery document of another tenant at the path-inserted address (RFC 8414 section 5 style) (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp/{tenant}/{workspace}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "RFC 9728 protected resource metadata of a workspace's MCP server: resource (the endpoint URL), authorization_servers (the tenant's issuer), scopes_supported, bearer_methods_supported [header], dpop_signing_alg_values_supported, dpop_bound_access_tokens_required. 404 unless the workspace publishes it (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/mcp/{tenant}/{workspace}": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "A workspace's MCP server (B-7101, B-7102): one JSON-RPC 2.0 message per POST over the streamable HTTP transport, answered with JSON (protocol 2025-06-18 or 2025-03-26; no sessions, no batches): initialize, ping, tools/list, tools/call; notifications get 202. Authorization: an access token from the tenant's issuer whose audience is this URL (RFC 8707), as Bearer or DPoP (required when the workspace says so). Without one: 401 with WWW-Authenticate Bearer resource_metadata=..., scope=...; a token for another resource: 401 error=invalid_token; no usable scope: 403 error=insufficient_scope. The query ?groups=workflows,agents,knowledge,tools,records narrows the tool groups. Calls act as the user with their clearance lowered to the workspace's published label, through the tool dispatcher, guardrails and approval; write calls answer isError with structuredContent.held {id, expiresAt} until the user approves them; every call is audited mcp.server.call",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jsonrpc": {
+                    "const": "2.0"
+                  },
+                  "id": {
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "method"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "405: no server-sent event stream is offered (B-7101)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "405: there are no sessions to end (B-7101)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/atproto/accounts": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -14051,6 +14268,126 @@
         }
       }
     },
+    "/api/admin/mcp-servers/{id}/oauth": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-servers"
+        ],
+        "summary": "mcp:manage. The manual OAuth fallback for a per-user server (B-7103): {authorizationEndpoint, tokenEndpoint, revocationEndpoint?, clientId, clientSecret? (sealed; omitted keeps it, null clears it), scopes?, resource?}. Audited mcp.oauth.configured",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "authorizationEndpoint": {
+                    "type": "string"
+                  },
+                  "tokenEndpoint": {
+                    "type": "string"
+                  },
+                  "revocationEndpoint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "clientSecret": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "scopes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "resource": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "authorizationEndpoint",
+                  "tokenEndpoint",
+                  "clientId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-servers"
+        ],
+        "summary": "mcp:manage. Removes the server's OAuth configuration (204); stored user tokens stay until they expire or users disconnect. Audited mcp.oauth.removed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-servers/{id}/oauth/discover": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-servers"
+        ],
+        "summary": "mcp:manage. OAuth discovery for a per-user server (B-7103): the unauthenticated 401 challenge and its RFC 9728 metadata, the authorization server's RFC 8414 (or OpenID) metadata, and RFC 7591 registration of a public client with this server's callback. Answers {oauth, steps [{check, result, detail}]}; 422 with reason and steps when a step fails. Audited mcp.oauth.discovered or mcp.oauth.discovery.failed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/mcp-servers/{id}/tools/{tool}/approve": {
       "post": {
         "tags": [
@@ -14130,6 +14467,140 @@
           },
           {
             "name": "tool",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. The MCP server page (B-7101, B-7102): issuer, scopes, groups, dynamicRegistration and registrationEndpoint, publications (every active workspace with workspaceId, workspace, ceiling, url, enabled, groups, label, requireDpop, updatedAt) and the clients that registered themselves",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/settings": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. {dynamicRegistration}: whether MCP clients may register themselves with the tenant's issuer (RFC 7591). Audited mcp.server.settings.updated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dynamicRegistration": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "dynamicRegistration"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/workspaces/{workspaceId}": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. Publishes a workspace's MCP server: {enabled?, groups?, label? (at most the workspace ceiling), requireDpop?}. Answers {workspaceId, url, enabled, groups, label, requireDpop, updatedAt}. Audited mcp.server.published, mcp.server.unpublished or mcp.server.publication.updated",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "workflows",
+                        "agents",
+                        "knowledge",
+                        "tools",
+                        "records"
+                      ]
+                    }
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "requireDpop": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/workspaces/{workspaceId}/tools": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. What the workspace publishes, as the admin would see it over MCP (their roles and clearance, lowered to the label), in every group so a change of groups can be previewed: {asYou, label, groups (the published ones), tools [{name, title, group, sideEffect, description, published}]}",
+        "parameters": [
+          {
+            "name": "workspaceId",
             "in": "path",
             "required": true,
             "schema": {
@@ -26512,6 +26983,133 @@
         }
       }
     },
+    "/api/mcp-oauth/start": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp"
+        ],
+        "summary": "tools:invoke, browser session. Starts the user's OAuth connection to a per-user MCP server (B-7103): {server, returnTo?: settings|mcp-servers} answers {authorizeUrl} (authorization code with PKCE S256, resource the server's URL) and sets a short-lived cookie binding the request to this browser. Audited mcp.oauth.started",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "server": {
+                    "type": "string"
+                  },
+                  "returnTo": {
+                    "type": "string",
+                    "enum": [
+                      "settings",
+                      "mcp-servers"
+                    ]
+                  }
+                },
+                "required": [
+                  "server"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/mcp-oauth/callback": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp"
+        ],
+        "summary": "The redirect back from the MCP server's authorization server (B-7103): the state (single use, ten minutes) and the binding cookie identify the user; the code is exchanged with the PKCE verifier and the tokens stored sealed. Redirects to /#/settings?tab=mcp&server=...&result=connected, or result=failed&reason=.... Audited mcp.oauth.connected",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's MCP access (B-7101): servers (the enabled MCP servers of their workspaces: workspaceId, workspace, url, groups, label, requireDpop) and holds (their calls waiting for approval)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-holds": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's held MCP calls, ?state=pending|all: id, workspace, client, tool, sideEffect, label, reason, state (pending, approved, rejected, used, expired), arguments, createdAt, expiresAt, decidedAt (B-7101)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-holds/{id}/decide": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Browser session only (never the token that asked). {decision: approve|reject}; an approved call runs when the client calls again with the same arguments within 15 minutes, once. 404 for another user's call, 409 when decided or expired. Audited mcp.server.hold.approved or rejected (B-7101)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/me": {
       "get": {
         "tags": [
@@ -35976,6 +36574,62 @@
         }
       }
     },
+    "/oauth/register": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 7591 dynamic client registration of the default tenant, when it allows it (else 404): redirect_uris (https, or http on a loopback address), token_endpoint_auth_method none (public) or client_secret_basic/client_secret_post (a secret in the answer, shown once), grant_types authorization_code [refresh_token], scope within the MCP scopes. 201 with client_id; audited oidc.client.registered (B-7102)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "redirect_uris": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "client_name": {
+                    "type": "string"
+                  },
+                  "token_endpoint_auth_method": {
+                    "type": "string"
+                  },
+                  "grant_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "response_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "scope": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "redirect_uris"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/oauth/userinfo": {
       "get": {
         "tags": [
@@ -37167,6 +37821,54 @@
           "t"
         ],
         "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/t/{tenant}/oauth/register": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 7591 dynamic client registration of another tenant (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/t/{tenant}/.well-known/oauth-authorization-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 authorization server metadata of another tenant under its issuer path (B-7102)",
         "parameters": [
           {
             "name": "tenant",

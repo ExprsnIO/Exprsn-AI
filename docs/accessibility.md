@@ -245,6 +245,27 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   ("Untrusted content marking: on → off") and the saved YAML shows `trustMarking`. `e2e/tests/profiles.spec.ts`
   switches it off as a new version.
 
+- **Identity: MCP server; Settings: MCP access; MCP servers: OAuth for users** (B-7101 to B-7103, Sprint 37b): the
+  Identity tab list gains MCP server with its published count in text. Each workspace is a table row whose state is a
+  word ("published", "off"), never only a colour; Edit and the copy button carry the workspace's name in their
+  accessible names ("Edit the MCP server of Finance Ops", "Copy the URL of Finance Ops"). The edit drawer is a labelled
+  form: Published and Require DPoP-bound tokens are switches (`role="switch"`, `aria-checked`), the tool groups are
+  checkboxes in a fieldset with a legend, each saying what the group publishes, and the label select has a hint naming
+  the workspace ceiling; the preview below it is a table that updates as groups change. Self-registration is a switch
+  whose state is repeated in text (the registration endpoint, or "not offered"), and turning it on asks for
+  confirmation in a dialog. In Settings, MCP access is one panel of tables with column headers: the connection URLs
+  (copy buttons named per workspace), the calls waiting for approval (Approve and Reject named with the tool, the side
+  effect as a word, the arguments in text, and the approval dialog repeating them in a code block), and the MCP servers
+  that act as you (the connection as words, Connect and Disconnect named per server; Connect opens a dialog that says
+  where the browser will go before it leaves). On MCP servers, OAuth for users is a key-value list with Discover, Enter
+  by hand and Remove buttons; discovery reports each step in a table with the result in words; Enter OAuth by hand is
+  a dialog of labelled fields with hints. Identity's PKCE switch for a public client, which cannot be changed, is now
+  `aria-disabled` (the toast still explains why). `e2e/tests/mcp-server.spec.ts` runs axe-core (Standard and Enhanced)
+  and the in-page checker in light and dark on the MCP server tab and its drawer, MCP access and its approval dialog,
+  the Connect dialog, the OAuth panel, the discovery result and the manual dialog, and checks each for sideways
+  scrolling at 320 and 640 px; the new design states (three on Identity, two on Settings, one on MCP servers) are in
+  the `y-accessibility.spec.ts` sweep.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

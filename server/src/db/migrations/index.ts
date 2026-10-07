@@ -62,6 +62,7 @@ import * as m038 from './038_groups2.js';
 import * as m038b from './038b_dedup_held_vault.js';
 import * as m038c from './038c_knowledge_images.js';
 import * as m039 from './039_tools_injection.js';
+import * as m039b from './039b_mcp_server.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -132,7 +133,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '038_groups2': m038,
   '038b_dedup_held_vault': m038b,
   '038c_knowledge_images': m038c,
-  '039_tools_injection': m039
+  '039_tools_injection': m039,
+  '039b_mcp_server': m039b
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {
