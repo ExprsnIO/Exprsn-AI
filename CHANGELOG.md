@@ -165,6 +165,36 @@
   `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
   and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
 
+### Blob deduplication, held form values and reveal anomalies (Sprint 36b, B-4601, B-4701, B-4803)
+
+- Reference-counted blobs in the file store, within one tenant only (B-4601): migration `038b_dedup_held_vault`
+  (`file_blobs`, `file_versions.blob_id`). When a version passes its scan and the tenant already stores the same
+  content (SHA-256 of the plaintext), the version reads the existing sealed object and the quarantined copy is
+  deleted; otherwise its object becomes a blob later uploads share. The trash purge releases references and deletes
+  an object with its last reader; offboarding deletes the tenant's blob rows. Every upload still stores and scans its
+  full bytes, and quotas still count each version's own size. The migration registers the first ready copy of each
+  content per tenant. `GET /api/admin/storage/usage` adds `dedup` (objects, shared objects, references, bytes held,
+  bytes stored, bytes saved, per tenant), shown on Storage, Usage. The integrity check, orphan deletion, purges and
+  blob store migration see shared objects through `file_blobs.blob_key`. `file.version.ready` names the shared blob.
+- Held form values (B-4701, closing the B-2205 known gap): a public form value the `user-input` guardrail holds no
+  longer refuses the submission. It waits as a held submission (values sealed, `app_form_holds`) with a hold flag of
+  source kind `app-form-submission`, routed to moderation queues like any flag; the submitter gets `202 {held: true}`.
+  `GET /api/apps/held`, `GET /api/apps/held/:id` and `POST /api/apps/held/:id/decide` (`flags:review` or
+  `moderation:review`) list, read and accept (into a record, written by no one, `source: form`) or reject it; the
+  Flags decide route does the same for these flags and shows the values. Moderation shows the held submission in the
+  queue inspector with Accept and Reject. At most `APPS_HELD_MAX_PER_FORM` (200) wait per form; decided ones go
+  `APPS_HELD_KEEP_DAYS` (30) after the decision (`apps.held.purge`). Audited `app.form.held`,
+  `app.form.held.accepted`, `app.form.held.rejected`.
+- Anomaly detection on vault reveals (B-4803): reveals of KV secrets over the API are kept (`vault_reveals`,
+  `VAULT_ANOMALY_HISTORY_DAYS`) and each is compared with the secret's history before it is answered: a new address,
+  an odd hour of the day (once it has `VAULT_ANOMALY_MIN_HISTORY` reveals) or a burst (`VAULT_ANOMALY_BURST` reveals by
+  one caller within `VAULT_ANOMALY_BURST_SECONDS`) opens a flag for the secret's owner (`vault_reveal_flags`), with a
+  notification and email. `GET /api/vault/reveal-flags`, `GET /api/vault/reveal-flags/:id` and `POST
+  /api/vault/reveal-flags/:id/resolve` (`secrets:read`; the owner or `secrets:admin`) list and resolve them as expected
+  or suspicious; Vault has a Reveal flags tab. Detection never refuses a reveal; `VAULT_ANOMALY_BURST=0` turns it off.
+  Audited `vault.reveal.flagged`, `vault.reveal.flag.updated`, `vault.reveal.flag.resolved`; `vault.reveals.prune`
+  drops old reveals hourly.
+
 ## 1.5.0
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)

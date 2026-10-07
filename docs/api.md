@@ -2717,7 +2717,7 @@ Public (no session, at `/api/public`, `X-Robots-Tag: noindex`; the token travels
 | Method and path | What it does |
 | --- | --- |
 | `POST /api/public/forms/open` `{token}` | What the form shows (`{title, submitLabel, fields}`), never other fields of the entity. `404` for an unknown or private link |
-| `POST /api/public/forms/submit` `{token, values}` | Limited per address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form (`ratePerMinute`), then `429` with `Retry-After`. The record is written by no one (`createdBy: null`, `source: form`). Audited `app.form.submitted` with `public: true`, the address and the dropped field names. `201 {submitted: true, message, dropped}` |
+| `POST /api/public/forms/submit` `{token, values}` | Limited per address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form (`ratePerMinute`), then `429` with `Retry-After`. The record is written by no one (`createdBy: null`, `source: form`). Audited `app.form.submitted` with `public: true`, the address and the dropped field names. `201 {submitted: true, held: false, message, dropped}`; since 1.6.0 (B-4701) `202 {submitted: true, held: true, message, dropped}` when a value the `user-input` guardrail holds makes the submission wait for review (Sprint 36b below) |
 
 ### Triggers and workflow record steps (B-2206)
 
@@ -4366,3 +4366,69 @@ next `restart`, whether it may be overridden, and the description from the comme
 New settings: `PLATFORM_SETTINGS_OVERRIDES` (default `true`), `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`
 (30), `BLOBS_VERIFY_MINUTES` (1440; 0 turns the schedule off), `BLOBS_ORPHAN_GRACE_HOURS` (24) and
 `BLOBS_DRY_RUN_MINUTES` (60).
+
+## Sprint 36b (1.6.0): blob deduplication, held form values and reveal anomalies (B-4601, B-4701, B-4803)
+
+Migration `038b_dedup_held_vault`. New settings: `APPS_HELD_MAX_PER_FORM` (200), `APPS_HELD_KEEP_DAYS` (30),
+`VAULT_ANOMALY_BURST` (5; 0 turns detection off), `VAULT_ANOMALY_BURST_SECONDS` (60), `VAULT_ANOMALY_HISTORY_DAYS`
+(30) and `VAULT_ANOMALY_MIN_HISTORY` (20).
+
+### Blob deduplication (B-4601)
+
+No new route. `server/src/files/dedup.ts` (`s.files.dedup`): identical content in one tenant's file store is stored
+once. Every upload still streams its full bytes, sealed under a key of its own, into quarantine and is scanned; when
+the scan releases a version whose plaintext SHA-256 the tenant already stores (`file_blobs`), the version reads that
+object (`file_versions.blob_id`), the blob's `refs` goes up and the quarantined copy is deleted. Otherwise the version's
+object moves into the store as before and is registered as a blob. The trash purge releases references in the
+transaction that deletes the version rows and deletes an object only with its last reader. Two tenants never share an
+object (the lookup is keyed by tenant, and each tenant's key seals its own copy). Quotas still count every version's
+own size. `file.version.ready` names the blob it shares in `detail.sharedWith`. The migration registers the first
+ready version of each content per tenant as a blob, so later uploads share what was stored before 1.6.0.
+
+| Method and path | What changes |
+| --- | --- |
+| `GET /api/admin/storage/usage` | Adds `dedup: {blobs, shared, references, logicalBytes, storedBytes, savedBytes, tenants: [{tenantId, tenant, blobs, shared, references, logicalBytes, storedBytes, savedBytes}]}`: objects, those read by more than one version, the versions reading them, the bytes the versions hold, the bytes stored and the difference |
+
+The integrity check (`ops.blobs.verify`) sees `file_blobs.blob_key` like any other key column, so a shared object is
+referenced while any version or blob row names it; blob store migrations copy it once.
+
+### Held form values (B-4701)
+
+`server/src/apps/forms-held.ts` (`s.apps.forms.held`). A public form submission with a value the `user-input`
+guardrail holds (a `require-approval` rule in enforce; a hold from a check that could not run stays a refusal) is
+kept: its screened values sealed with the tenant key (`app_form_holds`), a hold flag on the `user-input` checkpoint
+with source kind `app-form-submission` (routed to a moderation queue like any flag; the Flags screen shows the values
+in `held.content`). The submitter gets `202 {held: true}`. At most `APPS_HELD_MAX_PER_FORM` wait per form; past that a
+held value is refused as before (`422 step held-queue-full`). Signed-in submissions are still refused (`422`).
+Audited `app.form.held` (system, with the address).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/held?state=held\|accepted\|rejected\|all` | `flags:review` or `moderation:review`. `{items: [Held]}` in the caller's workspaces and clearance (default `held`, oldest first); a Held is `{id, state, label, workspaceId, app: {id, name, title}, form: {id, name, title}, held: [{field, rule, reason}], dropped, flag: {id, ref, state, queueId} \| null, recordId, decidedBy, decidedAt, reason, createdAt}` |
+| `GET /api/apps/held/:id` | Held plus `values` (the screened values, null once decided). `404` outside the caller's workspaces or clearance |
+| `POST /api/apps/held/:id/decide` `{decision: accept \| reject, reason?}` | `{recordId, state, flag: {id, ref, state}}`. Through the flag queue's hold decision (the flag becomes `approved` or `rejected`): accepting writes the record as an unheld public submission would (by no one, `source: form`, the entity's own validation; a refusal there puts the submission back to `held` and answers the entity's problem), rejecting writes nothing. The values are dropped either way. `409` when already decided. Audited `app.form.held.accepted` (with the record) or `app.form.held.rejected` |
+| `POST /api/flags/:ref/decide` `{decision: approved \| rejected}` | For an `app-form-submission` hold flag: the same as accept and reject above |
+
+The job `apps.held.purge` (every 6 h) deletes decided submissions `APPS_HELD_KEEP_DAYS` after their decision.
+
+### Reveal anomalies (B-4803)
+
+`server/src/vault/anomalies.ts` (`s.revealWatch`). Every reveal of a KV secret over the API (`GET
+/api/vault/kv/data/*path`, with the caller's address) is kept in `vault_reveals` for `VAULT_ANOMALY_HISTORY_DAYS`
+and, before the value is answered, compared with the secret's history: a **new address** (revealed from other
+addresses in that time, never from this one), an **odd hour** (at least `VAULT_ANOMALY_MIN_HISTORY` reveals and none
+in this UTC hour of the day), a **burst** (the `VAULT_ANOMALY_BURST`-th reveal by one principal within
+`VAULT_ANOMALY_BURST_SECONDS`). A signal opens a flag for the secret's owner (its owner, else its creator), who gets a
+notification (kind `vault`, with email) routed to `vault?tab=flags&flag=<id>`; one flag stays open per secret and
+principal, later signals of a new kind are added to it (and tell the owner again), later reveals are counted on it.
+Detection never refuses a reveal. Values the server resolves at use for `vault:` references carry no address and are
+not watched. Audited `vault.reveal.flagged` and `vault.reveal.flag.updated` (system, signal kinds and principal;
+never the value).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/vault/reveal-flags?state=open\|expected\|suspicious\|all` | `secrets:read`. `{flags: [Flag]}`: the flags on secrets the caller owns, or every flag for `secrets:admin`, within their clearance (default `open`). A Flag is `{id, path, label, ownerId, principal: user:<id> \| key:<id>, principalName, ip, signals: [{kind: new-address \| odd-hour \| burst, detail, at}], reveals, state: open \| expected \| suspicious, resolvedBy, resolvedAt, note, createdAt, updatedAt}` |
+| `GET /api/vault/reveal-flags/:id` | Flag plus `recent: [{principal, ip, hour, at, version, flagged}]`: the secret's reveals from a day before the flag on (at most 100). `404` for anyone but the owner and `secrets:admin` |
+| `POST /api/vault/reveal-flags/:id/resolve` `{decision: expected \| suspicious, note?}` | The Flag, resolved by the owner or a vault administrator. `409` when already resolved. Audited `vault.reveal.flag.resolved`. A suspicious reveal calls for rotating the secret (a new version) and reviewing the path policies |
+
+The job `vault.reveals.prune` (hourly) drops reveals older than `VAULT_ANOMALY_HISTORY_DAYS`.

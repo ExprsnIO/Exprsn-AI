@@ -221,6 +221,46 @@ filter, private `/tmp`, only the state directory writable.
   store the environment names, so after a migration update `BLOB_STORE` and its settings in the environment. The quarantine's Rescan re-queues the existing scan jobs and Delete removes held
   bytes; neither releases anything without a clean scan.
 
+- Blob deduplication (1.6.0, Sprint 36b, B-4601). Identical content is shared only within one tenant: the lookup is
+  keyed by tenant and SHA-256, and each tenant's content is sealed with its own key, so deduplication across tenants
+  is deliberately not done (it would need content encrypted under a key derived from the content, which lets anyone
+  who can guess a file confirm that a tenant holds it, and would tie one tenant's deletion to another's object).
+  Within a tenant the usual side channels of deduplication are closed as far as they reach a user: every upload
+  stores and scans its full bytes (no faster or smaller upload for known content), the shared object is chosen only
+  by the scan job afterwards, the quota counts each version's own size, and nothing a member sees says that a version
+  is shared; only platform admins see the savings on Storage, per tenant, and `file.version.ready` names the blob in
+  the audit chain. A tenant's database rows reveal which of its versions have the same content (they did before, by
+  `sha256`). A shared object keeps the content key and associated data of the version that first stored it; deleting
+  that version leaves the object to the others, and the object goes with its last reader. An object whose last
+  reference is being released is never adopted (the count is only raised while above zero), but a version could
+  adopt an object an operator deleted by hand outside the server; the integrity check reports that object missing for
+  every version reading it, and one restore brings them all back. Versions stored before 1.6.0 share only from the
+  first ready copy of each content onwards; older duplicates keep their own objects until they are deleted.
+
+- Held form values (1.6.0, Sprint 36b, B-4701). A public submission with a held value waits, its screened values
+  sealed with the tenant key and AD `app-form-hold:<id>`, until a reviewer (`flags:review` or `moderation:review`, in
+  the app's workspace and cleared for the entity's label) accepts or rejects it; the values are dropped at the
+  decision and the row is deleted `APPS_HELD_KEEP_DAYS` later. The submitter learns that the submission was held
+  (`202`), which tells an anonymous visitor that some rule matched, as a refusal did before. At most
+  `APPS_HELD_MAX_PER_FORM` wait per form, so the queue cannot be flooded past the per-address and per-form limits; past
+  it a held value is refused. The submitter's address is kept only as an HMAC (with `SESSION_SECRET`), and in the
+  `app.form.held` audit entry as every public submission's is. Accepting writes the record exactly as an unheld
+  submission would (by no one), so the reviewer's decision, not their permissions, is what lets it in; the entity's
+  validation runs at that moment. Signed-in submissions are still refused on a hold (the person can edit and resend).
+
+- Reveal anomalies (1.6.0, Sprint 36b, B-4803). Detection informs, it never refuses: a stolen session revealing a
+  secret still gets the value, and the owner learns about it afterwards (by notification and email) to rotate it.
+  Only reveals over the API carry an address and are watched; values the server resolves for `vault:` references
+  (workflows, connections, user stores) are not, and neither are transit decryptions or dynamic database credentials.
+  The address is the one the server sees after `TRUST_PROXY`, so behind a proxy that is not trusted every reveal
+  comes from the proxy and new-address detection is blind. Odd hours are hours of the day in UTC, learnt from the
+  secret's own reveals once it has `VAULT_ANOMALY_MIN_HISTORY` of them; a secret revealed rarely never has odd hours.
+  A burst is counted per principal and secret, so a caller spreading reveals across many secrets, or under the
+  threshold, is not flagged; an attacker who first reveals from the owner's usual network is not new. The history
+  holds addresses for `VAULT_ANOMALY_HISTORY_DAYS`; it is readable by the owner and vault administrators through the
+  flag's detail and dropped by `vault.reveals.prune`. A flag on a secret without an owner or creator goes to no one but
+  vault administrators.
+
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
   CardDAV-only password gets `403` there. A PUT waits for its scan (run in the request on the database queue, up to 30
@@ -970,8 +1010,8 @@ filter, private `/tmp`, only the state directory writable.
   empty, recorded in `aiError` and audited) and are cleared when their inputs change until the job fills them again; a
   record written by a public form is filled with no person behind it (only the profile's label is checked). Public
   forms take only listed, visible fields, never files, references or user, workspace or record lookups, are limited per
-  address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form, and screen every text value at `user-input`; a held value is
-  refused rather than held for review. A form's link token is shown once and stored as an HMAC with `SESSION_SECRET`,
+  address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form, and screen every text value at `user-input`; since 1.6.0
+  (B-4701) a held value makes a public submission wait for review (see Sprint 36b below). A form's link token is shown once and stored as an HMAC with `SESSION_SECRET`,
   so rotating that secret ends every public form link. Triggers run as their owner with what the owner holds when they
   fire; chains stop at `APPS_TRIGGER_MAX_DEPTH`, and a workflow's own record steps never fire its own triggers, but two
   workflows that update each other's entities stop only at that depth. A trigger's run input holds the record's values,

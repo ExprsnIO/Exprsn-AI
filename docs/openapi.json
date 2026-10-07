@@ -19033,7 +19033,7 @@
         "tags": [
           "admin/storage"
         ],
-        "summary": "platform:manage. Bytes by workspace (files, versions, trash, media, knowledge uploads, attachments, the file quota and what it counts), by user and by kind",
+        "summary": "platform:manage. Bytes by workspace (files, versions, trash, media, knowledge uploads, attachments, the file quota and what it counts), by user and by kind, and (B-4601) what blob deduplication within each tenant saves",
         "responses": {
           "200": {
             "description": "OK",
@@ -19064,6 +19064,35 @@
                       "type": "array",
                       "items": {
                         "type": "string"
+                      }
+                    },
+                    "dedup": {
+                      "type": "object",
+                      "properties": {
+                        "blobs": {
+                          "type": "integer"
+                        },
+                        "shared": {
+                          "type": "integer"
+                        },
+                        "references": {
+                          "type": "integer"
+                        },
+                        "logicalBytes": {
+                          "type": "integer"
+                        },
+                        "storedBytes": {
+                          "type": "integer"
+                        },
+                        "savedBytes": {
+                          "type": "integer"
+                        },
+                        "tenants": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
                       }
                     }
                   }
@@ -32189,6 +32218,458 @@
         }
       }
     },
+    "/api/vault/reveal-flags": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read. B-4803: flags on unusual reveals (new address, odd hour, burst) of secrets the caller owns, or every flag for secrets:admin",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "expected",
+                "suspicious",
+                "all"
+              ],
+              "default": "open"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "flags": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "ownerId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "principal": {
+                            "type": "string"
+                          },
+                          "principalName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ip": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "signals": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "new-address",
+                                    "odd-hour",
+                                    "burst"
+                                  ]
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "integer"
+                                }
+                              }
+                            }
+                          },
+                          "reveals": {
+                            "type": "integer"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "expected",
+                              "suspicious"
+                            ]
+                          },
+                          "resolvedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "resolvedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          },
+                          "updatedAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/vault/reveal-flags/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read (the owner or secrets:admin). B-4803: a reveal flag with the secret's recent reveals",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "ownerId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "principal": {
+                          "type": "string"
+                        },
+                        "principalName": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "ip": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "signals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "new-address",
+                                  "odd-hour",
+                                  "burst"
+                                ]
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "integer"
+                              }
+                            }
+                          }
+                        },
+                        "reveals": {
+                          "type": "integer"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "expected",
+                            "suspicious"
+                          ]
+                        },
+                        "resolvedBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolvedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "integer"
+                        },
+                        "updatedAt": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "recent": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "principal": {
+                                "type": "string"
+                              },
+                              "ip": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "hour": {
+                                "type": "integer"
+                              },
+                              "at": {
+                                "type": "integer"
+                              },
+                              "version": {
+                                "type": "integer"
+                              },
+                              "flagged": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/vault/reveal-flags/{id}/resolve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read (the owner or secrets:admin). B-4803: resolve a reveal flag as expected or suspicious. Audited vault.reveal.flag.resolved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "expected",
+                      "suspicious"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "ownerId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "principal": {
+                      "type": "string"
+                    },
+                    "principalName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ip": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "signals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "new-address",
+                              "odd-hour",
+                              "burst"
+                            ]
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "reveals": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "expected",
+                        "suspicious"
+                      ]
+                    },
+                    "resolvedBy": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "resolvedAt": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "integer"
+                    },
+                    "updatedAt": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/vault/policies": {
       "get": {
         "tags": [
@@ -36901,6 +37382,463 @@
         }
       }
     },
+    "/api/apps/held": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "apps"
+        ],
+        "summary": "flags:review or moderation:review. B-4701: public form submissions held by the user-input guardrail, in the caller's workspaces and clearance",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "held",
+                "accepted",
+                "rejected",
+                "all"
+              ],
+              "default": "held"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "held",
+                              "accepted",
+                              "rejected"
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "workspaceId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "app": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "title": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "form": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "title": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "held": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string"
+                                },
+                                "rule": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "dropped": {
+                            "type": "integer"
+                          },
+                          "flag": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string"
+                              },
+                              "queueId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "recordId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "decidedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "decidedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "reason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/held/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "apps"
+        ],
+        "summary": "flags:review or moderation:review. B-4701: a held submission with its screened values (null once decided)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "held",
+                            "accepted",
+                            "rejected"
+                          ]
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "workspaceId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "app": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "title": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "form": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "title": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "held": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "rule": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "dropped": {
+                          "type": "integer"
+                        },
+                        "flag": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "ref": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string"
+                            },
+                            "queueId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "recordId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "values": {
+                          "type": [
+                            "object",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/held/{id}/decide": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "apps"
+        ],
+        "summary": "flags:review or moderation:review. B-4701: accept a held submission into a record (written by no one, source form) or reject it; the hold flag records the decision. Audited app.form.held.accepted or app.form.held.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "accept",
+                      "reject"
+                    ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recordId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "flag": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/apps/transfers/{id}": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -38447,7 +39385,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "Public, no session. B-2205: a submission, rate-limited per address and per form; only listed, visible fields are written, every text value passes the user-input guardrail. Audited app.form.submitted",
+        "summary": "Public, no session. B-2205: a submission, rate-limited per address and per form; only listed, visible fields are written, every text value passes the user-input guardrail. Audited app.form.submitted. Since 1.6.0 (B-4701) a value the guardrail holds makes the submission wait for review: 202 with held true",
         "security": [],
         "requestBody": {
           "required": true,
@@ -38488,6 +39426,9 @@
                     },
                     "dropped": {
                       "type": "integer"
+                    },
+                    "held": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -38502,6 +39443,36 @@
           },
           "default": {
             "$ref": "#/components/responses/Default"
+          },
+          "202": {
+            "description": "Accepted: held for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "submitted": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "dropped": {
+                      "type": "integer"
+                    },
+                    "held": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "submitted",
+                    "message",
+                    "dropped"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
